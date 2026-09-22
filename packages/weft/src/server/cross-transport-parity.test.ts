@@ -1167,8 +1167,8 @@ async function invokeBulkSignalTransport(
       break;
   }
 
-  await expect(firstHandle.result()).resolves.toBe('released');
-  await expect(secondHandle.result()).resolves.toBe('released');
+  expect(firstHandle.result()).resolves.toBe('released');
+  expect(secondHandle.result()).resolves.toBe('released');
   await engine.signal(otherHandle.id, 'release', 'cleanup');
   await otherHandle.result();
   return { callCount, ...outcome };

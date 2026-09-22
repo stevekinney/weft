@@ -86,21 +86,7 @@ describe('definitionSchemaToJsonSchema', () => {
   });
 
   describe('Valibot vendor adapter', () => {
-    // Bun's test runner refuses `require('@valibot/to-json-schema')` mid-suite
-    // ("Unexpected require target") even though the package is installed and
-    // the same call works outside the test runner and in single-file runs.
-    // Skip the live conversion when running as part of the broader suite by
-    // probing the loader behaviour first; this keeps the standalone-file run
-    // fully exercised while letting the suite move on.
-    let canLoadValibot = false;
-    try {
-      definitionSchemaToJsonSchema(v.object({ probe: v.string() }));
-      canLoadValibot = true;
-    } catch {
-      canLoadValibot = false;
-    }
-
-    it.skipIf(!canLoadValibot)('converts a Valibot schema via dynamic import', () => {
+    it('converts a Valibot schema via dynamic import', () => {
       const schema = v.object({ name: v.string() });
       const result = definitionSchemaToJsonSchema(schema);
       expect(result).toMatchObject({

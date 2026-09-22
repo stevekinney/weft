@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { bulkTagOutputSchema } from './bulk-output-schemas.ts';
+import {
+  assertOperationEngineMethods,
+  engineFailureFault,
+  faultMessage,
+  invalidParamsFault,
+  readOptionalJsonBody,
+} from './operation-helpers.ts';
 
 import { BulkOperationConfirmationError, type Engine } from '../../core/engine.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
@@ -11,19 +19,15 @@ import type {
 } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
+import { bulkListFilterInputSchema } from './bulk-filter-input.ts';
 import {
-  bulkListFilterInputSchema,
   bulkOperationControlInputSchema,
   bulkOperationOptionsFromInput,
   bulkOperatorAccessPolicy,
-  engineFailureFault,
-  faultMessage,
-  parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
-  readOptionalJsonBody,
-} from './bulk-filter-helpers.ts';
+} from './bulk-operation-controls.ts';
 import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkMutateWorkflowTagsInput = z
   .object({
@@ -32,27 +36,24 @@ const bulkMutateWorkflowTagsInput = z
     operation: z.enum(['add', 'remove']),
   })
   .merge(bulkOperationControlInputSchema);
-const bulkMutateWorkflowTagsOutput = z.unknown();
 
 export type BulkMutateWorkflowTagsInput = z.infer<typeof bulkMutateWorkflowTagsInput>;
 export type BulkMutateWorkflowTagsOutput = BulkTagResult | BulkOperationDryRunResult;
 
-export const bulkMutateWorkflowTagsOperation = defineOperation<
-  BulkMutateWorkflowTagsInput,
-  BulkMutateWorkflowTagsOutput
->({
+export const bulkMutateWorkflowTagsOperation = defineOperation({
   name: 'weft.workflows.bulk.tags',
   mcpExposable: false,
   summary: 'Add or remove workflow tags in bulk',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkMutateWorkflowTagsInput,
-  outputSchema: bulkMutateWorkflowTagsOutput as z.ZodType<BulkMutateWorkflowTagsOutput>,
+  outputSchema: bulkTagOutputSchema,
   access: bulkOperatorAccessPolicy,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }): Promise<BulkMutateWorkflowTagsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['tagAll', 'untagAll']);
+    const e = engine;
 
     const filter = validatedListFilterFromBulkInput(input.filter ?? {});
 
@@ -83,7 +84,7 @@ export const bulkMutateWorkflowTagsOperation = defineOperation<
 });
 
 async function executeBulkTagMutation(
-  engine: Engine,
+  engine: Pick<Engine, 'tagAll' | 'untagAll'>,
   filter: ListFilter,
   tags: string[],
   operation: 'add' | 'remove',
@@ -116,7 +117,7 @@ export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Request body must be a JSON object');
     }
 
-    const body = raw as Record<string, unknown>;
+    const body = raw;
     let filter: ListFilter;
     try {
       filter = { ...parseBulkListFilterFromBody(body) };
@@ -126,12 +127,12 @@ export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
 
     let tags: string[];
     try {
-      tags = coerceStartWorkflowTags(body['tags'], 'Field "tags"');
+      tags = coerceStartWorkflowTags(Reflect.get(body, 'tags'), 'Field "tags"');
     } catch (error) {
       throw invalidParamsFault(faultMessage(error));
     }
 
-    const operation = body['operation'];
+    const operation = Reflect.get(body, 'operation');
     if (operation !== 'add' && operation !== 'remove') {
       throw invalidParamsFault('Field "operation" must be "add" or "remove"');
     }

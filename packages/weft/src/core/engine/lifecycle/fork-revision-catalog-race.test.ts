@@ -171,7 +171,7 @@ describe('fork() vs. a concurrent removeWorkflowRevision() — WFT-21 Codex revi
         expect(await storage.get(KEYS.catalogEntry(type, revisionV2))).toBeNull();
 
         await engineA.signal(sourceHandle.id, 'go', 'done');
-        await expect(sourceHandle.result()).resolves.toBe('done');
+        expect(sourceHandle.result()).resolves.toBe('done');
       } finally {
         engineB[Symbol.dispose]();
       }
@@ -311,8 +311,8 @@ describe('fork() legacy-dynamic-source default fork — WFT-21 Codex review roun
 
       await engine.signal(sourceHandle.id, 'go', 'done');
       await engine.signal(forked.id, 'go', 'done');
-      await expect(sourceHandle.result()).resolves.toBe('done');
-      await expect(forked.result()).resolves.toBe('done');
+      expect(sourceHandle.result()).resolves.toBe('done');
+      expect(forked.result()).resolves.toBe('done');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -422,7 +422,7 @@ describe('fork() legacy-dynamic-source resolver race — WFT-21 Codex review rou
       expect(getInternals(engineB).inFlightStartsByRevision.size).toBe(0);
 
       await engineB.signal(forked.id, 'go', 'done');
-      await expect(forked.result()).resolves.toBe('done');
+      expect(forked.result()).resolves.toBe('done');
     } finally {
       engineB[Symbol.dispose]();
     }
@@ -541,8 +541,8 @@ describe('fork() legacy-dynamic-source double-reservation — WFT-21 Codex revie
 
       await engine.signal(sourceHandle.id, 'go', 'done');
       await engine.signal(forked.id, 'go', 'done');
-      await expect(sourceHandle.result()).resolves.toBe('done');
-      await expect(forked.result()).resolves.toBe('done');
+      expect(sourceHandle.result()).resolves.toBe('done');
+      expect(forked.result()).resolves.toBe('done');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -585,7 +585,7 @@ describe('fork() vs. a concurrent start-new replacement of the SOURCE — WFT-21
     replacementCheckpointBytes['workflowExecutionToken'] = 'replacement-checkpoint-token';
     await storage.put(KEYS.checkpoint(sourceHandle.id), encode(replacementCheckpointBytes));
 
-    await expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
+    expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
   });
 
   it('rejects with ForkSourceReplacedError when the source is replaced AFTER the checkpoint correlates cleanly but BEFORE the pre-commit revalidation', async () => {
@@ -634,7 +634,7 @@ describe('fork() vs. a concurrent start-new replacement of the SOURCE — WFT-21
     replacedState['revision'] = 'sha256:replacement-revision-before-commit';
     storage.armReplacement(encode(replacedState));
 
-    await expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
+    expect(engine.fork(sourceHandle.id)).rejects.toThrow(ForkSourceReplacedError);
   });
 
   it('tolerates a source checkpoint with no workflowExecutionToken (a pre-upgrade record) — the correlation check has nothing to compare, so the fork proceeds', async () => {
@@ -665,7 +665,7 @@ describe('fork() vs. a concurrent start-new replacement of the SOURCE — WFT-21
     await storage.put(KEYS.checkpoint(sourceHandle.id), encode(legacyCheckpoint));
 
     const forkHandle = await engine.fork(sourceHandle.id);
-    await expect(forkHandle.result()).resolves.toBe('done');
+    expect(forkHandle.result()).resolves.toBe('done');
   });
 
   it('tolerates a source WorkflowState with no workflowExecutionToken (a pre-upgrade record) — the pre-commit revalidation has nothing to compare, so the fork proceeds', async () => {
@@ -703,7 +703,7 @@ describe('fork() vs. a concurrent start-new replacement of the SOURCE — WFT-21
     await storage.put(KEYS.workflow(sourceHandle.id), encode(legacyState));
 
     const forkHandle = await engine.fork(sourceHandle.id);
-    await expect(forkHandle.result()).resolves.toBe('done');
+    expect(forkHandle.result()).resolves.toBe('done');
   });
 });
 
@@ -798,7 +798,7 @@ describe('catalog.install() vs. a concurrent removeCatalogEntry() tombstone — 
     expect(await storage.get(KEYS.catalogEntry(type, revisionV2))).toBeNull();
 
     await engine.signal(sourceHandle.id, 'go', 'done');
-    await expect(sourceHandle.result()).resolves.toBe('done');
+    expect(sourceHandle.result()).resolves.toBe('done');
   });
 
   it('refuses to resurrect a revision from a DIFFERENT engine instance racing the exact window a concurrent removal has deleted the entry and written its tombstone, but not yet finalized it (items 1 & 3 — catalog.install() itself, the shared root cause of both the legacy fork resolver hook and the explicit-revision fork load)', async () => {

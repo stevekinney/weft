@@ -40,20 +40,12 @@
 
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
-import { raiseFault } from '../operation-catalog/raise-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { commitTaskLedgerDelete } from '../runtime/task-ledger-runtime.ts';
-import { canClearDeadLetteredTask } from '../task-ledger-transitions.ts';
-import { decodeRemoteTaskRecord, type RemoteTaskRecord } from '../task-ledger.ts';
 import type { TaskQueue } from '../task-queue.ts';
-import {
-  calculateExecutionLatencyMs,
-  calculateHeartbeatAgeMs,
-  calculateQueueLatencyMs,
-} from '../task-state.ts';
+import { requireOperationStorage } from './operation-helpers.ts';
+import { collectTaskDiagnostics } from './task-diagnostics-collector.ts';
 
 const DEFAULT_STALE_QUEUED_AFTER_MS = 60_000;
 const DEFAULT_STALE_HEARTBEAT_AFTER_MS = 60_000;
@@ -167,12 +159,6 @@ const getTaskDiagnosticsInput = z.object({
   limit: z.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
-const clearTaskDeadLetterInput = z.object({
-  operationId: z.string().min(1),
-});
-
-const okOutput = z.object({ ok: z.literal(true) }).strict();
-
 export type GetTaskDiagnosticsInput = z.infer<typeof getTaskDiagnosticsInput>;
 
 export type TaskDiagnosticKind = z.infer<typeof taskDiagnosticKindSchema>;
@@ -183,25 +169,14 @@ export type TaskDiagnosticsSummary = z.infer<typeof taskDiagnosticsSummarySchema
 
 export type GetTaskDiagnosticsOutput = z.infer<typeof getTaskDiagnosticsOutput>;
 
-export type ClearTaskDeadLetterInput = z.infer<typeof clearTaskDeadLetterInput>;
-
-export type ClearTaskDeadLetterOutput = z.infer<typeof okOutput>;
-
 interface GetTaskDiagnosticsOptions {
   registry?: WorkerRegistry | undefined;
   taskQueue?: TaskQueue | undefined;
   now?: (() => number) | undefined;
 }
 
-const restOnlyTaskDiagnosticsTransports = {
-  http: true,
-  jsonRpcHttp: false,
-  jsonRpcWebSocket: false,
-  jsonRpcStdio: false,
-} as const;
-
 export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOptions = {}) {
-  return defineOperation<GetTaskDiagnosticsInput, GetTaskDiagnosticsOutput>({
+  return defineOperation({
     name: 'weft.tasks.diagnostics',
     mcpExposable: false,
     summary: 'Get bounded task latency and stuck-work diagnostics',
@@ -219,8 +194,9 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
     invoke: async ({ input, engine }): Promise<GetTaskDiagnosticsOutput> => {
       const currentTime = options.now?.() ?? Date.now();
+      const storage = requireOperationStorage(engine, ['scan']);
       return collectTaskDiagnostics({
-        engine: engine as Engine,
+        engine: { storage },
         input,
         currentTime,
         registry: options.registry,
@@ -231,393 +207,6 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
 }
 
 export const getTaskDiagnosticsOperation = createGetTaskDiagnosticsOperation();
-
-export const clearTaskDeadLetterOperation = defineOperation<
-  ClearTaskDeadLetterInput,
-  ClearTaskDeadLetterOutput
->({
-  name: 'weft.tasks.diagnostics.deadletters.clear',
-  mcpExposable: false,
-  summary: 'Clear a task-result dead-letter diagnostic entry',
-  destructive: true,
-  tags: ['Observability'],
-  inputSchema: clearTaskDeadLetterInput,
-  outputSchema: okOutput,
-  access: {
-    kind: 'scoped',
-    scopes: { kind: 'anyOf', scopes: ['system:admin'] },
-  },
-  producibleFaults: ['NotFound'],
-  discoverable: true,
-  transports: restOnlyTaskDiagnosticsTransports,
-  unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ClearTaskDeadLetterOutput> => {
-    const typedEngine = engine as Engine;
-    const deleted = await commitTaskLedgerDelete(
-      typedEngine.storage,
-      input.operationId,
-      canClearDeadLetteredTask,
-      1,
-    );
-    if (!deleted.ok) {
-      raiseFault(clearTaskDeadLetterOperation, {
-        code: 'NotFound',
-        message: `No dead-lettered task found for operation "${input.operationId}"`,
-        data: { resource: 'task', identifier: input.operationId },
-      });
-    }
-    return { ok: true };
-  },
-});
-
-async function collectTaskDiagnostics({
-  engine,
-  input,
-  currentTime,
-  registry,
-  taskQueue,
-}: {
-  engine: Engine;
-  input: GetTaskDiagnosticsInput;
-  currentTime: number;
-  registry?: WorkerRegistry | undefined;
-  taskQueue?: TaskQueue | undefined;
-}): Promise<GetTaskDiagnosticsOutput> {
-  const items: TaskDiagnosticItem[] = [];
-  const summary: TaskDiagnosticsSummary = {
-    stuckQueued: 0,
-    staleInflight: 0,
-    retryStorms: 0,
-    allWorkersAtCapacity: 0,
-    deadLettered: 0,
-    delayed: 0,
-    unadoptedTerminal: 0,
-  };
-  const relevantQueues = new Set<string>();
-
-  const addItem = (item: TaskDiagnosticItem): void => {
-    incrementSummary(summary, item.kind);
-    if (items.length < input.limit) {
-      items.push(item);
-    }
-  };
-
-  for await (const [, value] of engine.storage.scan('task-ledger:')) {
-    const decoded = decodeRemoteTaskRecord(value);
-    if (decoded === null) continue;
-    if (!matchesTaskRecordFilter(decoded, input)) continue;
-    relevantQueues.add(decoded.queue);
-    addRecordDiagnostics(decoded, input, currentTime, addItem);
-  }
-
-  addCapacityDiagnostics({
-    registry,
-    taskQueue,
-    input,
-    queues: relevantQueues,
-    addItem,
-  });
-
-  return { items, summary, limit: input.limit };
-}
-
-function addRecordDiagnostics(
-  decoded: RemoteTaskRecord,
-  input: GetTaskDiagnosticsInput,
-  currentTime: number,
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  switch (decoded.state) {
-    case 'queued':
-      if (input.includeExpectedDelayed && decoded.availableAt > currentTime) {
-        addDelayedDiagnostic(decoded, addItem);
-      }
-      if (decoded.availableAt <= currentTime) {
-        addQueuedDiagnostics(decoded, input, currentTime, addItem);
-      }
-      addRetryStormDiagnostic(decoded, 'queued', input, addItem);
-      return;
-    case 'leased':
-    case 'completing':
-    case 'cancelling':
-      addInflightDiagnostics(decoded, input, currentTime, addItem);
-      addRetryStormDiagnostic(decoded, 'inflight', input, addItem);
-      return;
-    case 'terminal':
-      // No RemoteTaskAttemptFields (retryCount/requeueCount) on terminal
-      // records — WFT-25 deliberately did not carry attempt-count history
-      // past resolution, so retry-storm detection cannot apply here.
-      addUnadoptedTerminalDiagnostic(decoded, input, currentTime, addItem);
-      return;
-    case 'deadLettered':
-      addDeadLetterDiagnostics(decoded, addItem);
-      return;
-    default: {
-      // Exhaustiveness guard: adding a new RemoteTaskRecord state without a
-      // case above must fail this typecheck.
-      const exhaustive: never = decoded;
-      void exhaustive;
-    }
-  }
-}
-
-function addDelayedDiagnostic(
-  record: RemoteTaskRecord & { state: 'queued' },
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  addItem({
-    kind: 'delayed',
-    state: 'queued',
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    queue: record.queue,
-    retryCount: record.retryCount,
-    requeueCount: record.requeueCount,
-    availableAt: record.availableAt,
-    evidence: [`Task is delayed until ${record.availableAt} on queue "${record.queue}"`],
-  });
-}
-
-function addUnadoptedTerminalDiagnostic(
-  record: RemoteTaskRecord & { state: 'terminal' },
-  input: GetTaskDiagnosticsInput,
-  currentTime: number,
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  if (record.adopted || record.terminalAt > currentTime - input.unadoptedAfterMs) return;
-  addItem({
-    kind: 'unadopted-terminal',
-    state: 'resolved',
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    queue: record.queue,
-    terminalAt: record.terminalAt,
-    adopted: false,
-    evidence: [`Terminal task has remained unadopted for ${currentTime - record.terminalAt}ms`],
-  });
-}
-
-function addQueuedDiagnostics(
-  record: RemoteTaskRecord & { state: 'queued' },
-  input: GetTaskDiagnosticsInput,
-  currentTime: number,
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  const queueLatencyMs = Math.max(0, currentTime - record.lastQueuedAt);
-  if (queueLatencyMs < input.staleQueuedAfterMs) return;
-  addItem({
-    kind: 'stuck-queued',
-    state: 'queued',
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    activityName: record.activityName,
-    queue: record.queue,
-    retryCount: record.retryCount,
-    requeueCount: record.requeueCount,
-    queueLatencyMs,
-    lastRequeueReason: record.lastRequeueReason,
-    evidence: [
-      `Task has waited ${queueLatencyMs}ms in queue "${record.queue}" without a worker claim`,
-    ],
-  });
-}
-
-function addInflightDiagnostics(
-  record: RemoteTaskRecord & { state: 'leased' | 'completing' | 'cancelling' },
-  input: GetTaskDiagnosticsInput,
-  currentTime: number,
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  const heartbeatAgeMs = calculateHeartbeatAgeMs(record, currentTime) ?? 0;
-  if (heartbeatAgeMs < input.staleHeartbeatAfterMs) return;
-  addItem({
-    kind: 'stale-inflight',
-    state: 'inflight',
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    activityName: record.activityName,
-    queue: record.queue,
-    workerId: record.workerSessionId,
-    retryCount: record.retryCount,
-    requeueCount: record.requeueCount,
-    queueLatencyMs: calculateQueueLatencyMs(record),
-    executionLatencyMs: calculateExecutionLatencyMs(record, currentTime),
-    heartbeatAgeMs,
-    lastRequeueReason: record.lastRequeueReason,
-    evidence: [
-      `Worker "${record.workerSessionId}" has not sent a heartbeat for ${heartbeatAgeMs}ms on queue "${record.queue}"`,
-    ],
-  });
-}
-
-function addDeadLetterDiagnostics(
-  record: RemoteTaskRecord & { state: 'deadLettered' },
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  addItem({
-    kind: 'dead-lettered',
-    state: 'dead-lettered',
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    activityName: record.activityName,
-    queue: record.queue,
-    retryCount: record.retryCount,
-    requeueCount: record.requeueCount,
-    lastRequeueReason: record.lastRequeueReason,
-    deadLetteredAt: record.deadLetteredAt,
-    deadLetterReason: 'result-resolution-storage-exhausted',
-    storageError: record.persistenceFailureReason,
-    evidence: [
-      `Task result could not be durably persisted (${record.persistenceFailureReason}); reconciliation will not re-dispatch operation "${record.operationId}" until the dead-letter entry is cleared`,
-    ],
-  });
-}
-
-/**
- * Retry-storm detection only applies to `queued`, `leased`, `completing`,
- * and `cancelling` records — the only states carrying `RemoteTaskAttemptFields`
- * (`retryCount`/`requeueCount`). `terminal` records do not: WFT-25
- * deliberately did not carry attempt-count history past resolution.
- */
-function addRetryStormDiagnostic(
-  record: RemoteTaskRecord & { state: 'queued' | 'leased' | 'completing' | 'cancelling' },
-  state: 'queued' | 'inflight',
-  input: GetTaskDiagnosticsInput,
-  addItem: (item: TaskDiagnosticItem) => void,
-): void {
-  const { retryCount, requeueCount } = record;
-  if (
-    retryCount < input.retryStormMinimumAttempts &&
-    requeueCount < input.retryStormMinimumAttempts
-  ) {
-    return;
-  }
-
-  addItem({
-    kind: 'retry-storm',
-    state,
-    operationId: record.operationId,
-    workflowId: record.workflowId,
-    activityName: record.activityName,
-    queue: record.queue,
-    workerId: 'workerSessionId' in record ? record.workerSessionId : undefined,
-    retryCount,
-    requeueCount,
-    queueLatencyMs: calculateQueueLatencyMs(record),
-    lastRequeueReason: record.lastRequeueReason,
-    evidence: [
-      `Task has ${retryCount} retries and ${requeueCount} requeues, meeting retry storm threshold ${input.retryStormMinimumAttempts}`,
-    ],
-  });
-}
-
-function addCapacityDiagnostics({
-  registry,
-  taskQueue,
-  input,
-  queues,
-  addItem,
-}: {
-  registry?: WorkerRegistry | undefined;
-  taskQueue?: TaskQueue | undefined;
-  input: GetTaskDiagnosticsInput;
-  queues: ReadonlySet<string>;
-  addItem: (item: TaskDiagnosticItem) => void;
-}): void {
-  if (registry === undefined || taskQueue === undefined) return;
-
-  const workersByQueue = groupWorkersByQueue(registry);
-  const candidateQueues = selectCapacityDiagnosticQueues(input, queues, workersByQueue);
-
-  for (const queue of candidateQueues) {
-    const diagnostic = buildCapacityDiagnostic(queue, workersByQueue, taskQueue);
-    if (diagnostic === null) continue;
-    addItem(diagnostic);
-  }
-}
-
-function groupWorkersByQueue(
-  registry: WorkerRegistry,
-): Map<string, ReturnType<WorkerRegistry['getAll']>> {
-  const workersByQueue = new Map<string, ReturnType<WorkerRegistry['getAll']>>();
-  for (const worker of registry.getAll()) {
-    const workers = workersByQueue.get(worker.queue) ?? [];
-    workers.push(worker);
-    workersByQueue.set(worker.queue, workers);
-  }
-  return workersByQueue;
-}
-
-function selectCapacityDiagnosticQueues(
-  input: GetTaskDiagnosticsInput,
-  queues: ReadonlySet<string>,
-  workersByQueue: ReadonlyMap<string, ReturnType<WorkerRegistry['getAll']>>,
-): string[] {
-  if (input.queue !== undefined) return [input.queue];
-  if (queues.size > 0) return [...queues];
-  if (input.operationId !== undefined || input.workflowId !== undefined) return [];
-  return [...workersByQueue.keys()];
-}
-
-function buildCapacityDiagnostic(
-  queue: string,
-  workersByQueue: ReadonlyMap<string, ReturnType<WorkerRegistry['getAll']>>,
-  taskQueue: TaskQueue,
-): TaskDiagnosticItem | null {
-  const workers = workersByQueue.get(queue) ?? [];
-  const pendingCount = taskQueue.pendingCount(queue);
-  if (workers.length === 0 || pendingCount === 0) return null;
-  const totalCapacity = workers.reduce((sum, worker) => sum + worker.concurrency, 0);
-  const totalInFlight = workers.reduce((sum, worker) => sum + worker.inFlight, 0);
-  if (totalCapacity === 0 || totalInFlight < totalCapacity) return null;
-
-  return {
-    kind: 'all-workers-at-capacity',
-    state: 'capacity',
-    queue,
-    retryCount: 0,
-    requeueCount: 0,
-    evidence: [
-      `Queue "${queue}" has ${pendingCount} pending tasks and all ${workers.length} workers at capacity`,
-    ],
-  };
-}
-
-function matchesTaskRecordFilter(
-  record: RemoteTaskRecord,
-  input: GetTaskDiagnosticsInput,
-): boolean {
-  if (input.operationId !== undefined && record.operationId !== input.operationId) return false;
-  if (input.workflowId !== undefined && record.workflowId !== input.workflowId) return false;
-  if (input.queue !== undefined && record.queue !== input.queue) return false;
-  return true;
-}
-
-function incrementSummary(summary: TaskDiagnosticsSummary, kind: TaskDiagnosticKind): void {
-  switch (kind) {
-    case 'stuck-queued':
-      summary.stuckQueued += 1;
-      return;
-    case 'stale-inflight':
-      summary.staleInflight += 1;
-      return;
-    case 'retry-storm':
-      summary.retryStorms += 1;
-      return;
-    case 'all-workers-at-capacity':
-      summary.allWorkersAtCapacity += 1;
-      return;
-    case 'dead-lettered':
-      summary.deadLettered += 1;
-      return;
-    case 'delayed':
-      summary.delayed += 1;
-      return;
-    case 'unadopted-terminal':
-      summary.unadoptedTerminal += 1;
-      return;
-  }
-}
 
 function parseOptionalNumber(value: string | null): number | undefined {
   return value === null || value.length === 0 ? undefined : Number(value);
@@ -662,19 +251,5 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
       limit: parseOptionalNumber(url.searchParams.get('limit')),
     };
   },
-  success: { kind: 'json', status: 200 },
-};
-
-export const clearTaskDeadLetterRestBinding: UnknownRestBinding = {
-  method: 'DELETE',
-  path: '/v1/tasks/diagnostics/dead-letter/:operationId',
-  pathParamNames: ['operationId'],
-  operationName: 'weft.tasks.diagnostics.deadletters.clear',
-  inputSources: {
-    operationId: { kind: 'path', pathParam: 'operationId' },
-  },
-  extractInput: async (_request, pathParams) => ({
-    operationId: pathParams['operationId'] ?? '',
-  }),
   success: { kind: 'json', status: 200 },
 };

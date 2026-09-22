@@ -1,4 +1,4 @@
-import type { BatchOperation } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
 import type {
@@ -8,10 +8,10 @@ import type {
   ScheduleSpec,
   ScheduleState,
   ScheduleSummary,
+  ScheduleTransitionOptions,
   ScheduleUpdateOptions,
   WorkflowState,
 } from '../types.ts';
-import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import {
@@ -22,25 +22,20 @@ import {
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
-import { applyBlockedScheduleOccurrence, drainQueuedScheduleRun } from './schedule-overlap.ts';
-import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import {
-  clearScheduleCurrentWorkflow,
   createScheduleTimerId,
   matchesScheduleFilter,
   paginateScheduleSummaries,
 } from './state-utilities.ts';
 import {
-  loadScheduleState,
   requireScheduleState,
   runSerializedScheduleStateOperation,
   writeScheduleState,
 } from './storage-io.ts';
+import { decodeScheduleState } from './validation/schedule-decode.ts';
 import {
   coerceScheduleId,
-  decodeScheduleState,
-  isValidScheduleIdentifier,
   normalizeScheduleFilter,
   normalizeScheduleOptions,
   normalizeScheduleSpec,
@@ -135,6 +130,7 @@ export async function schedule(
       updatedAt: now,
       nextFireAt: getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
       missedFireCount: 0,
+      skippedCount: 0,
       queuedRuns: [],
     };
     await writeScheduleState(
@@ -213,7 +209,45 @@ export function toScheduleSummary(state: ScheduleState): ScheduleSummary {
   return projectedSummary;
 }
 
-export async function pauseSchedule(internals: EngineInternals, scheduleId: string): Promise<void> {
+/**
+ * Project a caller-supplied {@link ScheduleTransitionOptions} onto the subset
+ * of {@link writeScheduleState}'s options it forwards to. Built with
+ * conditional spreads — rather than `{ additionalOperations:
+ * options?.additionalOperations, ... }` — because `exactOptionalPropertyTypes`
+ * forbids assigning an explicit `undefined` to an optional property whose type
+ * does not itself include `undefined`; omitting an absent key entirely is the
+ * only way to pass an "unset" option through untyped.
+ */
+function scheduleTransitionWriteOptions(options: ScheduleTransitionOptions | undefined): {
+  additionalOperations?: BatchOperation[];
+  extraConditions?: ConditionalBatchCondition[];
+  onExtraConditionsLost?: () => Error;
+} {
+  return {
+    ...(options?.additionalOperations !== undefined && {
+      additionalOperations: options.additionalOperations,
+    }),
+    ...(options?.extraConditions !== undefined && {
+      extraConditions: options.extraConditions,
+    }),
+    ...(options?.onExtraConditionsLost !== undefined && {
+      onExtraConditionsLost: options.onExtraConditionsLost,
+    }),
+  };
+}
+
+/**
+ * `options` (COR-67) lets a caller keeping its own durable projection in step
+ * with the engine's schedule state fold `additionalOperations`/`extraConditions`
+ * into this SAME storage commit — see {@link ScheduleTransitionOptions}. Every
+ * existing caller passes neither and gets byte-for-byte the pre-COR-67 commit
+ * shape.
+ */
+export async function pauseSchedule(
+  internals: EngineInternals,
+  scheduleId: string,
+  options?: ScheduleTransitionOptions,
+): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
   const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status !== 'active') return;
@@ -229,12 +263,17 @@ export async function pauseSchedule(internals: EngineInternals, scheduleId: stri
     nextFireAt: getNextScheduleOccurrence(state, now),
     queuedRuns: [],
   };
-  await writeScheduleState(internals, updatedState, { includeTimer: false });
+  await writeScheduleState(internals, updatedState, {
+    includeTimer: false,
+    ...scheduleTransitionWriteOptions(options),
+  });
 }
 
+/** `options` (COR-67) — see {@link pauseSchedule}'s doc comment. */
 export async function resumeSchedule(
   internals: EngineInternals,
   scheduleId: string,
+  options?: ScheduleTransitionOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
   const state = await requireScheduleState(internals, normalizedScheduleId);
@@ -249,12 +288,16 @@ export async function resumeSchedule(
     updatedAt: now,
     nextFireAt: getNextScheduleOccurrence(state, now),
   };
-  await writeScheduleState(internals, updatedState);
+  await writeScheduleState(internals, updatedState, {
+    ...scheduleTransitionWriteOptions(options),
+  });
 }
 
+/** `options` (COR-67) — see {@link pauseSchedule}'s doc comment. */
 export async function cancelSchedule(
   internals: EngineInternals,
   scheduleId: string,
+  options?: ScheduleTransitionOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
   const state = await requireScheduleState(internals, normalizedScheduleId);
@@ -271,7 +314,10 @@ export async function cancelSchedule(
     nextFireAt: null,
     queuedRuns: [],
   };
-  await writeScheduleState(internals, updatedState, { includeTimer: false });
+  await writeScheduleState(internals, updatedState, {
+    includeTimer: false,
+    ...scheduleTransitionWriteOptions(options),
+  });
 }
 
 export async function updateSchedule(
@@ -348,151 +394,4 @@ export async function updateSchedule(
       ...(await buildPinnedRevisionWriteOptions(internals, state.workflowType, pinnedRevision)),
     });
   });
-}
-
-/**
- * Whether a schedule's current run still occupies the schedule slot for overlap
- * purposes. A `'suspended'` run is non-terminal and resumable — it has NOT
- * finished, so it must keep the slot occupied exactly like `'running'`/`'pending'`,
- * otherwise the next occurrence would start an overlapping run under a non-`allow`
- * overlap policy (skip/queue/cancel-running) while the paused run still exists.
- * This is deliberately a wider set than `workflowStatusCanRetainLocalOwnership`
- * (which excludes `'suspended'` so recoverAll skips it): "occupies the schedule
- * slot" is "not terminal", not "locally owned".
- */
-function scheduledRunOccupiesSlot(
-  currentWorkflowState: WorkflowState | null | undefined,
-): currentWorkflowState is WorkflowState {
-  const status = currentWorkflowState?.status;
-  return status === 'running' || status === 'pending' || status === 'suspended';
-}
-
-export async function refreshScheduledWorkflowState(
-  internals: EngineInternals,
-  state: ScheduleState,
-  callbacks: Pick<ScheduleCallbacks, 'loadWorkflowState'>,
-): Promise<RefreshedScheduleState> {
-  if (!state.currentWorkflowId) {
-    return { state, currentWorkflowState: null };
-  }
-  const currentWorkflowState = await callbacks.loadWorkflowState(state.currentWorkflowId);
-  if (scheduledRunOccupiesSlot(currentWorkflowState)) {
-    return { state, currentWorkflowState };
-  }
-  await internals.storage.delete(KEYS.scheduleRun(state.currentWorkflowId));
-  return {
-    state: clearScheduleCurrentWorkflow(state),
-    currentWorkflowState: currentWorkflowState ?? null,
-  };
-}
-
-function hasActiveScheduledWorkflow(
-  currentWorkflowState: WorkflowState | null | undefined,
-): boolean {
-  return scheduledRunOccupiesSlot(currentWorkflowState);
-}
-
-export async function applyScheduleOccurrence(
-  internals: EngineInternals,
-  state: ScheduleState,
-  callbacks: ScheduleCallbacks,
-  occurrence?: number,
-): Promise<ScheduleState> {
-  const { state: refreshedState, currentWorkflowState } =
-    await callbacks.refreshScheduledWorkflowState(state);
-  let stateForOccurrence = refreshedState;
-  let hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
-
-  if (!hasActiveWorkflow && stateForOccurrence.queuedRuns.length > 0) {
-    stateForOccurrence = await drainQueuedScheduleRun(stateForOccurrence, callbacks);
-    hasActiveWorkflow = true;
-  }
-
-  if (stateForOccurrence.overlap === 'allow') {
-    await callbacks.startScheduledRun(stateForOccurrence, {
-      ...(occurrence !== undefined && { occurrence }),
-    });
-    return stateForOccurrence;
-  }
-
-  return applyBlockedScheduleOccurrence(
-    internals,
-    stateForOccurrence,
-    hasActiveWorkflow,
-    callbacks,
-    occurrence,
-  );
-}
-
-export async function settleBackfillScheduleState(
-  internals: EngineInternals,
-  state: ScheduleState,
-  callbacks: Pick<
-    ScheduleCallbacks,
-    'flushQueuedInlineWorkflowStartsDirectly' | 'refreshScheduledWorkflowState'
-  >,
-): Promise<ScheduleState> {
-  if (!state.currentWorkflowId) {
-    return state;
-  }
-
-  await callbacks.flushQueuedInlineWorkflowStartsDirectly();
-
-  const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(state.currentWorkflowId);
-  if (pendingTurn) {
-    await pendingTurn;
-  }
-
-  const refreshed = await callbacks.refreshScheduledWorkflowState(state);
-  return refreshed.state;
-}
-
-export async function handleScheduledWorkflowTerminal(
-  internals: EngineInternals,
-  workflowId: string,
-  callbacks: ScheduleCallbacks,
-): Promise<void> {
-  const scheduleRunBytes = await internals.storage.get(KEYS.scheduleRun(workflowId));
-  if (!scheduleRunBytes) {
-    return;
-  }
-  const metadata = decodeScheduleRunMetadata(scheduleRunBytes);
-  if (metadata === null || !isValidScheduleIdentifier(metadata.id)) {
-    await deleteTransientScheduleRunMetadata(internals, workflowId);
-    return;
-  }
-  const scheduleId = metadata.id;
-  const state = await loadScheduleState(internals, scheduleId);
-  if (!state || state.currentWorkflowId !== workflowId) {
-    await deleteTransientScheduleRunMetadata(internals, workflowId);
-    return;
-  }
-  const now = internals.options.getNow();
-  const clearedState: ScheduleState = {
-    ...clearScheduleCurrentWorkflow(state),
-    updatedAt: now,
-  };
-  // Queue entries are accepted work. Keep draining them even if a later update
-  // changes overlap; the new policy governs only future occurrences.
-  if (clearedState.status === 'active' && clearedState.queuedRuns.length > 0) {
-    await drainQueuedScheduleRun({ ...clearedState, updatedAt: now }, callbacks, workflowId);
-    return;
-  }
-  await writeScheduleState(internals, clearedState, {
-    includeTimer: false,
-    additionalOperations: [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
-  });
-}
-
-async function deleteTransientScheduleRunMetadata(
-  internals: EngineInternals,
-  workflowId: string,
-): Promise<void> {
-  await commitFencedEngineWrite(
-    internals,
-    workflowId,
-    [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
-    [],
-    () => new Error(`Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`),
-  );
 }

@@ -409,9 +409,9 @@ describe('engine.start idempotency', () => {
   it('throws when the storage backend lacks conditionalBatch', async () => {
     const engine = createEngine(new CompressedStorage(new MemoryStorage()));
     try {
-      await expect(
-        engine.start('wait-for-release', null, { idempotencyKey: 'no-cas' }),
-      ).rejects.toThrow(/conditionalBatch/);
+      expect(engine.start('wait-for-release', null, { idempotencyKey: 'no-cas' })).rejects.toThrow(
+        /conditionalBatch/,
+      );
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -526,7 +526,7 @@ describe('engine.start idempotency', () => {
   it('rejects supplying both id and idempotencyKey', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.start('wait-for-release', null, { id: 'fixed', idempotencyKey: 'k' }),
       ).rejects.toThrow(/mutually exclusive/);
     } finally {
@@ -537,7 +537,7 @@ describe('engine.start idempotency', () => {
   it('rejects an empty idempotencyKey', async () => {
     const engine = createEngine();
     try {
-      await expect(engine.start('wait-for-release', null, { idempotencyKey: '' })).rejects.toThrow(
+      expect(engine.start('wait-for-release', null, { idempotencyKey: '' })).rejects.toThrow(
         /must not be empty/,
       );
     } finally {
@@ -548,7 +548,7 @@ describe('engine.start idempotency', () => {
   it('throws when startWithIdempotency is invoked without an idempotency key (white-box)', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         startWithIdempotency(getInternals(engine), 'wait-for-release', null, {}, {} as never),
       ).rejects.toThrow('startWithIdempotency requires options.idempotencyKey');
     } finally {
@@ -559,7 +559,7 @@ describe('engine.start idempotency', () => {
   it('rejects an idempotencyKey longer than the byte cap', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.start('wait-for-release', null, { idempotencyKey: 'k'.repeat(118) }),
       ).rejects.toThrow(/at most 117 UTF-8 bytes/);
     } finally {
@@ -577,7 +577,7 @@ describe('engine.start idempotency', () => {
       // The run is terminal; purge deletes its record but leaves the mapping.
       await engine.purge({ idPrefix: first.id });
 
-      await expect(
+      expect(
         engine.start('completes-immediately', null, { idempotencyKey: 'purge-me' }),
       ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
@@ -609,7 +609,7 @@ describe('engine.start idempotency', () => {
       await first.result();
       await engine.purge({ idPrefix: first.id });
 
-      await expect(
+      expect(
         engine.start('completes-immediately', null, { idempotencyKey: 'start-cas-purged' }),
       ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
@@ -623,7 +623,7 @@ describe('engine.start idempotency', () => {
       // The keyed path commits via the idempotency CAS; an unregistered type
       // throws WorkflowNotRegisteredError, which is NOT a lost-race sentinel and
       // must surface rather than being mistaken for a concurrent winner.
-      await expect(
+      expect(
         engine.start('not-registered', null, { idempotencyKey: 'unregistered-key' }),
       ).rejects.toThrow(/No workflow registered/);
     } finally {
@@ -813,7 +813,7 @@ describe('engine.startOrSignal', () => {
       const completed = await engine.start('completes-immediately', null, { id: 'sos-terminal' });
       expect(await completed.result()).toBe('done');
 
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -865,7 +865,7 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       const failed = await engine.start('throws-immediately', null, { id: 'sos-restart-failed' });
-      await expect(failed.result()).rejects.toThrow('boom');
+      expect(failed.result()).rejects.toThrow('boom');
 
       const { handle, outcome } = await engine.startOrSignal(
         'wait-for-release',
@@ -963,7 +963,7 @@ describe('engine.startOrSignal', () => {
   it('rejects idempotencyKey with restart-capable startOrSignal', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -979,7 +979,7 @@ describe('engine.startOrSignal', () => {
   it('rejects restart-capable startOrSignal without a deterministic signalId', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -1044,7 +1044,7 @@ describe('engine.startOrSignal', () => {
       });
       expect(await completed.result()).toBe('done');
 
-      await expect(
+      expect(
         resolveCallerIdWinnerOrRetry(
           getInternals(engine),
           'sos-restart-stale-terminal',
@@ -1072,7 +1072,7 @@ describe('engine.startOrSignal', () => {
       });
       expect(await completed.result()).toBe('done');
 
-      await expect(
+      expect(
         resolveCallerIdWinnerOrRetry(
           getInternals(engine),
           'sos-terminal-conflict',
@@ -1137,7 +1137,7 @@ describe('engine.startOrSignal', () => {
         return present;
       };
 
-      await expect(
+      expect(
         resolveCallerIdWinnerOrRetry(
           getInternals(engine),
           workflowId,
@@ -1161,7 +1161,7 @@ describe('engine.startOrSignal', () => {
   it('requires a signalId or idempotencyKey for convergence', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.startOrSignal('wait-for-release', null, { name: 'release', payload: 'x' }, {}),
       ).rejects.toThrow(/signalId or options\.idempotencyKey/);
     } finally {
@@ -1175,7 +1175,7 @@ describe('engine.startOrSignal', () => {
     // would silently re-introduce double-delivery. Reject rather than pick one.
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -1264,7 +1264,7 @@ describe('engine.startOrSignal', () => {
   it('throws when the storage backend lacks conditionalBatch', async () => {
     const engine = createEngine(new CompressedStorage(new MemoryStorage()));
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -1385,7 +1385,7 @@ describe('engine.startOrSignal', () => {
   it('rejects supplying both id and idempotencyKey', async () => {
     const engine = createEngine();
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -1410,7 +1410,7 @@ describe('engine.startOrSignal', () => {
       await created.result();
       await engine.purge({ idPrefix: created.id });
 
-      await expect(
+      expect(
         engine.startOrSignal(
           'completes-immediately',
           null,
@@ -1429,7 +1429,7 @@ describe('engine.startOrSignal', () => {
       // The absent-target branch attempts to create via the conditional batch; an
       // unregistered type throws WorkflowNotRegisteredError, which is neither a
       // mapping-CAS loss nor a caller-id collision, so it must surface unchanged.
-      await expect(
+      expect(
         engine.startOrSignal(
           'not-registered',
           null,
@@ -1598,7 +1598,7 @@ describe('engine.startOrSignal', () => {
       await created.result();
       await engine.purge({ idPrefix: created.id });
 
-      await expect(
+      expect(
         engine.startOrSignal(
           'completes-immediately',
           null,
@@ -1619,7 +1619,7 @@ describe('engine.startOrSignal', () => {
         encode({ workflowId: 'other-winner' }),
       );
 
-      await expect(
+      expect(
         resolveWinnerWithSignal(
           getInternals(engine),
           'missing-winner',
@@ -1637,7 +1637,7 @@ describe('engine.startOrSignal', () => {
   it('throws when the winner idempotency mapping vanishes after a lost compare-and-swap', async () => {
     const engine = createEngine();
     try {
-      await expect(requireWinnerId(getInternals(engine), 'missing-key')).rejects.toThrow(
+      expect(requireWinnerId(getInternals(engine), 'missing-key')).rejects.toThrow(
         /vanished after a lost compare-and-swap/,
       );
     } finally {
@@ -1718,7 +1718,7 @@ describe('engine.startOrSignal', () => {
       // The winner's start rejects with the injected abort; the loser recovers by
       // retrying its own create (the wrapper lets the second conditionalBatch
       // through) and resolves to a real run.
-      await expect(winnerPromise).rejects.toThrow(/injected winner abort/);
+      expect(winnerPromise).rejects.toThrow(/injected winner abort/);
       const { handle: loser } = await loserPromise;
       expect(loser.id).toBe('sos-abort');
       expect(await countWorkflowRecords(engine)).toBe(1);
@@ -1747,7 +1747,7 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     getInternals(engine).pendingStarts.add('sos-cap');
     try {
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -1878,7 +1878,7 @@ describe('engine.startOrSignal', () => {
       await engine.signal('buffered-batch-failure', 'release', 'winner', { signalId: 'sig-batch' });
       storage.failNextPlainCreate('buffered-batch-failure');
 
-      await expect(
+      expect(
         engine.startOrSignal(
           'wait-for-release',
           null,

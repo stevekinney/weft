@@ -56,6 +56,7 @@ describe('normalizeWorkerManifest', () => {
 
     expect(Object.keys(normalized.workflows)).toEqual(['__proto__']);
     expect(normalized.workflows['__proto__']?.contractHash).toBe('h');
+    expect(Object.getPrototypeOf(normalized.workflows)).toBeNull();
   });
 
   it('does not mutate its input', () => {
@@ -67,14 +68,17 @@ describe('normalizeWorkerManifest', () => {
 
   it('deep-clones nested capability values so mutating the input cannot change the output', () => {
     const tags = ['a', 'b'];
-    const source = emptyManifest({ capabilities: { tags, meta: { note: 'x' } } });
+    const meta = { note: 'x' };
+    const source = emptyManifest({ capabilities: { tags, meta } });
     const normalized = normalizeWorkerManifest(source);
 
     tags.push('c');
-    (source.capabilities['meta'] as { note: string }).note = 'y';
+    meta.note = 'y';
 
     expect(normalized.capabilities['tags']).toEqual(['a', 'b']);
     expect(normalized.capabilities['meta']).toEqual({ note: 'x' });
+    expect(Object.getPrototypeOf(normalized.capabilities)).toBeNull();
+    expect(Object.getPrototypeOf(normalized.capabilities['meta']!)).toBeNull();
   });
 
   it('copies every declared field through unchanged', () => {

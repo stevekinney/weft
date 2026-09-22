@@ -171,7 +171,7 @@ describe('weft.catalog.sources.list — REST GET /v1/catalog/sources', () => {
       }),
     );
     engine.registerSource(source('invoice', 'second'));
-    await expect(engine.workflows.preload('invoice', 'first')).rejects.toThrow();
+    expect(engine.workflows.preload('invoice', 'first')).rejects.toThrow();
     const response = await handleRequest(
       new Request('http://localhost/v1/catalog/sources'),
       engine,

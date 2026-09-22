@@ -134,7 +134,7 @@ describe('streamMatchingWorkflowStates', () => {
       await otherHandle.result();
       await secondHandle.result();
 
-      await expect(collectMatchingWorkflowIds(engine, { tags: ['selected'] })).resolves.toEqual([
+      expect(collectMatchingWorkflowIds(engine, { tags: ['selected'] })).resolves.toEqual([
         'stream-selected-a',
         'stream-selected-b',
       ]);
@@ -223,7 +223,7 @@ describe('workflow reverse-index scan caps', () => {
     const prefix = KEYS.childWorkflowByParentPrefix('parent-id', 'parent-token');
     await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
 
-    await expect(
+    expect(
       queryChildWorkflowIndex(getInternals(engine), 'parent-id', 'parent-token'),
     ).rejects.toBeInstanceOf(WorkflowListScanCapExceededError);
   });
@@ -232,7 +232,7 @@ describe('workflow reverse-index scan caps', () => {
     const prefix = KEYS.scheduleRunBySchedulePrefix('schedule-id');
     await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
 
-    await expect(queryScheduleRunIndex(getInternals(engine), 'schedule-id')).rejects.toBeInstanceOf(
+    expect(queryScheduleRunIndex(getInternals(engine), 'schedule-id')).rejects.toBeInstanceOf(
       WorkflowListScanCapExceededError,
     );
   });

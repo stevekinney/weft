@@ -324,6 +324,39 @@ function buildPersistPendingAsyncActivityOperation(pending: PendingAsyncActivity
 }
 
 /**
+ * Build ONLY the resolution-record write half of an acknowledgement — no
+ * pending-token delete. Used by callers that co-commit a resolution
+ * alongside a DIFFERENT durable transition that isn't itself an
+ * acknowledgement of a caller-driven `completeAsyncActivity`/
+ * `failAsyncActivity` call (COR-152's remote-activity terminal-transition
+ * bridge, `server/runtime/remote-activity-result-bridge.ts`): that write
+ * must leave the pending-token record alone, because the token's owning
+ * engine — possibly a different process, possibly not yet recovered — is
+ * the only correct owner of deleting it. `recoverPendingAsyncActivities`
+ * already tolerates a resolution record whose pending-token record is still
+ * present (or already gone): it reloads both independently and queues the
+ * resolution for delivery when replay re-parks on the same token.
+ */
+export function buildAsyncActivityResolutionWrite(
+  workflowId: string,
+  token: string,
+  outcome: OperationOutcome,
+): BatchOperation {
+  const record: PersistedAsyncActivityResolution = {
+    version: 1,
+    kind: 'resolution',
+    token,
+    workflowId,
+    outcome,
+  };
+  return {
+    type: 'put',
+    key: KEYS.asyncActivityResolution(workflowId, token),
+    value: encode(record),
+  };
+}
+
+/**
  * Build the acknowledgement batch for a consumed token: delete the pending
  * token record and persist the resolution record carrying `outcome`, in one
  * batch, so the acknowledgement is durable before the caller learns it
@@ -333,20 +366,9 @@ export function buildAsyncActivityAcknowledgementOperations(
   pending: PendingAsyncActivity,
   outcome: OperationOutcome,
 ): BatchOperation[] {
-  const record: PersistedAsyncActivityResolution = {
-    version: 1,
-    kind: 'resolution',
-    token: pending.token,
-    workflowId: pending.workflowId,
-    outcome,
-  };
   return [
     { type: 'delete', key: KEYS.asyncActivity(pending.workflowId, pending.token) },
-    {
-      type: 'put',
-      key: KEYS.asyncActivityResolution(pending.workflowId, pending.token),
-      value: encode(record),
-    },
+    buildAsyncActivityResolutionWrite(pending.workflowId, pending.token, outcome),
   ];
 }
 

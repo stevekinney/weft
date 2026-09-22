@@ -54,8 +54,8 @@ class ContendedStorage extends MemoryStorage {
 describe('Mailbox sustained contention', () => {
   it('gives up loudly on admission rather than spinning', async () => {
     const { mailbox } = createMailboxFixture({ storage: new ContendedStorage(0) });
-    await expect(mailbox.admit(commandInput())).rejects.toThrow(MailboxContentionError);
-    await expect(mailbox.admit(commandInput())).rejects.toThrow(/after 25 attempts/);
+    expect(mailbox.admit(commandInput())).rejects.toThrow(MailboxContentionError);
+    expect(mailbox.admit(commandInput())).rejects.toThrow(/after 25 attempts/);
     mailbox.dispose();
   });
 
@@ -63,7 +63,7 @@ describe('Mailbox sustained contention', () => {
     const storage = new ContendedStorage(1);
     const { mailbox } = createMailboxFixture({ storage });
     await admitOne(mailbox);
-    await expect(mailbox.claim()).rejects.toThrow(MailboxContentionError);
+    expect(mailbox.claim()).rejects.toThrow(MailboxContentionError);
     mailbox.dispose();
   });
 
@@ -95,8 +95,8 @@ describe('Mailbox sustained contention', () => {
     const claim = await claimOne(mailbox);
 
     const failure = run(mailbox, commandId, claim.attemptToken);
-    await expect(failure).rejects.toThrow(MailboxContentionError);
-    await expect(run(mailbox, commandId, claim.attemptToken)).rejects.toThrow(
+    expect(failure).rejects.toThrow(MailboxContentionError);
+    expect(run(mailbox, commandId, claim.attemptToken)).rejects.toThrow(
       new RegExp(`${operation} for command "${commandId}"`),
     );
     mailbox.dispose();
@@ -109,8 +109,8 @@ describe('Mailbox sustained contention', () => {
     await claimOne(mailbox);
 
     clock.advance(101);
-    await expect(mailbox.runMaintenance()).rejects.toThrow(MailboxContentionError);
-    await expect(mailbox.runMaintenance()).rejects.toThrow(
+    expect(mailbox.runMaintenance()).rejects.toThrow(MailboxContentionError);
+    expect(mailbox.runMaintenance()).rejects.toThrow(
       new RegExp(`maintenance for command "${commandId}"`),
     );
     mailbox.dispose();
@@ -139,7 +139,7 @@ describe('Mailbox event-sink failure classification', () => {
     await admitOne(mailbox);
 
     events.failure = new Error('the feed is unreachable');
-    await expect(mailbox.admit(commandInput())).rejects.toThrow('the feed is unreachable');
+    expect(mailbox.admit(commandInput())).rejects.toThrow('the feed is unreachable');
 
     // Nothing new was written, so this really was the sink's failure, not a race.
     const persisted = await collectKeys(
@@ -174,9 +174,9 @@ describe('Mailbox event-sink failure classification', () => {
       return originalAppend(event, options);
     };
 
-    await expect(
-      mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken }),
-    ).rejects.toThrow(/corrupt/);
+    expect(mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
+      /corrupt/,
+    );
     mailbox.dispose();
   });
 
@@ -206,9 +206,9 @@ describe('Mailbox event-sink failure classification', () => {
     // The record is now unreadable garbage, so the retry surfaces corruption —
     // proving the mailbox re-read durable state instead of reporting the sink
     // error it was handed.
-    await expect(
-      mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken }),
-    ).rejects.toThrow(/corrupt/);
+    expect(mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
+      /corrupt/,
+    );
     mailbox.dispose();
   });
 });
@@ -225,10 +225,8 @@ describe('Mailbox digest failures', () => {
     try {
       // The payload is perfectly valid; blaming the caller here would send an
       // operator hunting for a bug in their command.
-      await expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
-      await expect(mailbox.admit(commandInput())).rejects.not.toThrow(
-        ApplicationCommandValidationError,
-      );
+      expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
+      expect(mailbox.admit(commandInput())).rejects.not.toThrow(ApplicationCommandValidationError);
     } finally {
       Object.defineProperty(crypto.subtle, 'digest', {
         configurable: true,
@@ -264,10 +262,10 @@ describe('Mailbox persisted causation', () => {
     const record = decode((await storage.get(key))!) as Record<string, unknown>;
 
     await storage.put(key, encode({ ...record, causation: 'conv-7' }));
-    await expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
+    expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
 
     await storage.put(key, encode({ ...record, causation: { correlationId: 42 } }));
-    await expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
+    expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
     mailbox.dispose();
   });
 });
@@ -290,7 +288,7 @@ describe('Mailbox reference payload without a declared size', () => {
 
   it('rejects a negative declared size', async () => {
     const { mailbox } = createMailboxFixture();
-    await expect(
+    expect(
       mailbox.admit(
         commandInput({
           payload: {

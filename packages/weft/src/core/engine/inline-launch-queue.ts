@@ -31,7 +31,13 @@ async function settleQueuedShutdownWork(
   return results.filter((workflowId): workflowId is string => workflowId !== null);
 }
 
-/** Queue a new inline workflow start and schedule a flush if one is not already scheduled. */
+/**
+ * Queue a new inline workflow start and schedule a flush if one is not
+ * already scheduled — unless `inlineLaunchSchedulingMode` is `'manual'`
+ * (COR-74), in which case nothing is scheduled at all: the start sits queued
+ * until a caller explicitly drives it via
+ * {@link flushQueuedInlineWorkflowStartsUntilDrained} (`engine.flushInlineLaunches()`).
+ */
 export function queueInlineWorkflowExecutionStart(
   internals: EngineInternals,
   start: QueuedInlineWorkflowExecutionStart,
@@ -40,6 +46,9 @@ export function queueInlineWorkflowExecutionStart(
   internals.queuedInlineWorkflowStartIds.add(start.workflowId);
   internals.queuedOrLaunchingInlineWorkflowStartIds.add(start.workflowId);
   internals.queuedInlineWorkflowStarts.push(start);
+  if (internals.options.inlineLaunchSchedulingMode === 'manual') {
+    return;
+  }
   if (internals.queuedInlineWorkflowStartFlushScheduled) {
     return;
   }
@@ -116,6 +125,40 @@ export async function flushQueuedInlineWorkflowStartsDirectly(
 ): Promise<void> {
   internals.queuedInlineWorkflowStartFlushScheduled = false;
   await flushQueuedInlineWorkflowStarts(internals, callbacks);
+}
+
+/**
+ * Deterministically drain every currently-queued inline launch, and any
+ * further start a completing turn enqueues synchronously (e.g.
+ * `ctx.startChild`), without scheduling anything — the basis for
+ * `engine.flushInlineLaunches()` (COR-74).
+ *
+ * Runs the exact same {@link startQueuedInlineWorkflowExecution} path a
+ * scheduled flush uses (no step execution is skipped or stubbed), just called
+ * directly instead of waiting for a `MessageChannel`/`setTimeout(0)`
+ * macrotask. Safe to call regardless of `inlineLaunchSchedulingMode`: under
+ * `'event-loop'` mode it simply runs the queue now, and the already-scheduled
+ * flush becomes a no-op once it eventually fires against an empty queue (see
+ * {@link flushQueuedInlineWorkflowStarts}'s empty-queue early return).
+ *
+ * Bounded by the same pass cap as {@link drainQueuedInlineWorkflowStarts},
+ * guarding against a pathological self-enqueueing run — but unlike that
+ * function, this is NOT a teardown path: it does not touch the abort signal,
+ * run the shutdown-settle wait, or accept `abortStartedWorkflows`. A start
+ * queued after the engine already aborted is discarded by
+ * {@link flushQueuedInlineWorkflowStarts}'s own abort check, exactly as it
+ * would be under the scheduled flush.
+ */
+export async function flushQueuedInlineWorkflowStartsUntilDrained(
+  internals: EngineInternals,
+  callbacks: InlineLaunchQueueCallbacks,
+): Promise<void> {
+  let passes = 0;
+  const maxPasses = 1000;
+  while (internals.queuedInlineWorkflowStarts.length > 0 && passes < maxPasses) {
+    passes += 1;
+    await flushQueuedInlineWorkflowStartsDirectly(internals, callbacks);
+  }
 }
 
 /**

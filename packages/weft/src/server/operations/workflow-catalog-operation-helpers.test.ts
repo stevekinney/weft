@@ -132,7 +132,7 @@ describe('validateManifestField', () => {
   });
 
   it('rejects a non-object value with InvalidParams', async () => {
-    await expect(validateManifestField('not an object')).rejects.toMatchObject({
+    expect(validateManifestField('not an object')).rejects.toMatchObject({
       code: 'InvalidParams',
     });
   });
@@ -142,7 +142,7 @@ describe('validateManifestField', () => {
     const manifest = await buildWorkflowRevisionManifest(contract);
     const tampered = { ...manifest, contractHash: `${manifest.contractHash.slice(0, -1)}0` };
 
-    await expect(validateManifestField(tampered)).rejects.toMatchObject({ code: 'InvalidParams' });
+    expect(validateManifestField(tampered)).rejects.toMatchObject({ code: 'InvalidParams' });
   });
 });
 
@@ -346,7 +346,7 @@ describe('readWorkflowCatalogRestBody', () => {
       body: 'not json {',
     });
 
-    await expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
+    expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
       code: 'InvalidParams',
     });
   });
@@ -358,7 +358,7 @@ describe('readWorkflowCatalogRestBody', () => {
       body: JSON.stringify([1, 2, 3]),
     });
 
-    await expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
+    expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
       code: 'InvalidParams',
     });
   });

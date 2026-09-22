@@ -46,7 +46,7 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    await expect(withTimeout(handle.result(), 500, 'early async completion')).resolves.toEqual({
+    expect(withTimeout(handle.result(), 500, 'early async completion')).resolves.toEqual({
       approval: { decision: 'arrived-before-adoption' },
     });
 
@@ -86,7 +86,7 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    await expect(withTimeout(handle.result(), 500, 'early async failure')).resolves.toBe(
+    expect(withTimeout(handle.result(), 500, 'early async failure')).resolves.toBe(
       'caught:arrived-before-adoption',
     );
 

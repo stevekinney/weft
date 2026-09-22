@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 
-import { isCoverageInstrumentationEnabled } from '../../benchmarks/coverage-mode.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowReduceInput } from '../types.ts';
@@ -20,7 +19,6 @@ async function* exclaimStageFn(_ctx: WorkflowContext, input: unknown) {
 const trimStage = workflow({ name: 'trim-stage' }).execute(trimStageFn);
 const upperStage = workflow({ name: 'upper-stage' }).execute(upperStageFn);
 const exclaimStage = workflow({ name: 'exclaim-stage' }).execute(exclaimStageFn);
-const runVirtualTimeConcurrencyTest = isCoverageInstrumentationEnabled() ? it.skip : it;
 
 describe('workflow composition operators', () => {
   it('Track 7c: ctx.pipe runs a 3-stage pipeline using registered workflow functions', async () => {
@@ -41,7 +39,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('pipeline-parent', '  hello world  ');
 
-    await expect(handle.result()).resolves.toBe('HELLO WORLD!');
+    expect(handle.result()).resolves.toBe('HELLO WORLD!');
   });
 
   it('Track 7c: ctx.pipe preserves completed stages across recovery and allows compensation after a middle-stage failure', async () => {
@@ -113,7 +111,7 @@ describe('workflow composition operators', () => {
     const resumedHandle = recovered.getHandle(originalHandle.id);
     await recovered.advanceTime('1s');
 
-    await expect(resumedHandle.result()).resolves.toEqual({ compensated: 'rollback:order-123' });
+    expect(resumedHandle.result()).resolves.toEqual({ compensated: 'rollback:order-123' });
     expect(firstStageRuns).toBe(1);
     expect(secondStageRuns).toBe(2);
     expect(compensations).toEqual(['rollback:order-123']);
@@ -138,7 +136,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('map-parent', null);
 
-    await expect(handle.result()).resolves.toEqual([6, 2, 4]);
+    expect(handle.result()).resolves.toEqual([6, 2, 4]);
   });
 
   it('Track 7c: user-provided child workflow ids fail fast when the existing child does not match the requested input', async () => {
@@ -164,10 +162,10 @@ describe('workflow composition operators', () => {
     );
 
     const firstHandle = await engine.start('first-parent', null);
-    await expect(firstHandle.result()).resolves.toEqual({ echoed: 'alpha' });
+    expect(firstHandle.result()).resolves.toEqual({ echoed: 'alpha' });
 
     const secondHandle = await engine.start('second-parent', null);
-    await expect(secondHandle.result()).rejects.toThrow(
+    expect(secondHandle.result()).rejects.toThrow(
       'Child workflow id collision for "shared-child" does not match the requested child workflow',
     );
   });
@@ -197,12 +195,12 @@ describe('workflow composition operators', () => {
     const firstHandle = await engine.start('first-execution-parent', null, {
       id: 'first-parent',
     });
-    await expect(firstHandle.result()).resolves.toEqual({ echoed: 'same' });
+    expect(firstHandle.result()).resolves.toEqual({ echoed: 'same' });
 
     const secondHandle = await engine.start('second-execution-parent', null, {
       id: 'second-parent',
     });
-    await expect(secondHandle.result()).rejects.toThrow(
+    expect(secondHandle.result()).rejects.toThrow(
       'Child workflow id collision for "shared-child" does not match the requested child workflow',
     );
   });
@@ -240,59 +238,53 @@ describe('workflow composition operators', () => {
     const firstHandle = await engine.start('first-parent', null, {
       id: 'first-parent',
     });
-    await expect(firstHandle.result()).resolves.toEqual({ echoed: 'same' });
+    expect(firstHandle.result()).resolves.toEqual({ echoed: 'same' });
 
     const collisionHandle = await engine.start('collision-parent', null, {
       id: 'collision-parent',
     });
-    await expect(collisionHandle.result()).rejects.toThrow(
+    expect(collisionHandle.result()).rejects.toThrow(
       'Child workflow id collision for "shared-child" does not match the requested child workflow',
     );
 
     const unrelatedHandle = await engine.start('unrelated-parent', null, {
       id: 'unrelated-parent',
     });
-    await expect(unrelatedHandle.result()).resolves.toEqual({ echoed: 'unrelated' });
+    expect(unrelatedHandle.result()).resolves.toEqual({ echoed: 'unrelated' });
   });
 
-  runVirtualTimeConcurrencyTest(
-    'Track 7c: ctx.map honors the concurrency limit for admitted child workflows',
-    async () => {
-      const engine = new TestEngine({ startTime: 0 });
+  it('Track 7c: ctx.map honors the concurrency limit for admitted child workflows', async () => {
+    const engine = new TestEngine({ startTime: 0 });
 
-      const delayedStage = workflow({ name: 'delayed-stage' }).execute(async function* (
-        ctx: WorkflowContext,
-        input: unknown,
-      ) {
-        yield* ctx.sleep('1s');
-        return Number(input) * 10;
-      });
+    const delayedStage = workflow({ name: 'delayed-stage' }).execute(async function* (
+      ctx: WorkflowContext,
+      input: unknown,
+    ) {
+      yield* ctx.sleep('1s');
+      return Number(input) * 10;
+    });
 
-      engine.register(delayedStage);
-      engine.register(
-        workflow({ name: 'concurrency-parent' }).execute(async function* (ctx: WorkflowContext) {
-          return yield* ctx.map([1, 2, 3, 4, 5], 'delayed-stage', { concurrency: 2 });
-        }),
-      );
+    engine.register(delayedStage);
+    engine.register(
+      workflow({ name: 'concurrency-parent' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.map([1, 2, 3, 4, 5], 'delayed-stage', { concurrency: 2 });
+      }),
+    );
 
-      await engine.start('concurrency-parent', null, { id: 'concurrency-parent' });
+    await engine.start('concurrency-parent', null, { id: 'concurrency-parent' });
 
-      await engine.advanceTime(0);
+    await engine.advanceTime(0);
 
-      const listed = await engine.list({});
-      const admittedChildIds = listed.items
-        .filter((item) => item.type === 'delayed-stage')
-        .map((item) => item.id)
-        .toSorted();
+    const listed = await engine.list({});
+    const admittedChildIds = listed.items
+      .filter((item) => item.type === 'delayed-stage')
+      .map((item) => item.id)
+      .toSorted();
 
-      expect(admittedChildIds).toEqual([
-        'concurrency-parent:map:0:0',
-        'concurrency-parent:map:0:1',
-      ]);
+    expect(admittedChildIds).toEqual(['concurrency-parent:map:0:0', 'concurrency-parent:map:0:1']);
 
-      engine[Symbol.dispose]();
-    },
-  );
+    engine[Symbol.dispose]();
+  });
 
   it('Track 7c: ctx.map recovery preserves later step indices when batching by concurrency', async () => {
     const engine = new TestEngine({ startTime: 0 });
@@ -335,7 +327,7 @@ describe('workflow composition operators', () => {
     const resumedHandle = recovered.getHandle(originalHandle.id);
     await recovered.advanceTime('1s');
 
-    await expect(resumedHandle.result()).resolves.toEqual([10, 20, 30]);
+    expect(resumedHandle.result()).resolves.toEqual([10, 20, 30]);
     expect(childRuns).toEqual([1, 2, 3]);
   });
 
@@ -358,7 +350,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('recursive-map', { level: 0 });
 
-    await expect(handle.result()).rejects.toThrow('nesting depth exceeded');
+    expect(handle.result()).rejects.toThrow('nesting depth exceeded');
   });
 
   it('Track 7c: ctx.reduce folds sequentially and handles an empty array', async () => {
@@ -383,7 +375,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('reduce-parent', null);
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       folded: 19,
       empty: 99,
     });
@@ -424,7 +416,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('nested-parent', null);
 
-    await expect(handle.result()).resolves.toEqual(['value:2', 'value:3', 'value:4']);
+    expect(handle.result()).resolves.toEqual(['value:2', 'value:3', 'value:4']);
   });
 
   it('Track 7c: ctx.pipe rejects unregistered workflow functions even when the function name matches a registered type', async () => {
@@ -459,7 +451,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('pipe-parent', 'hello');
 
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'Workflow functions used in composition operators must be registered before use.',
     );
   });
@@ -493,7 +485,7 @@ describe('workflow composition operators', () => {
 
     const handle = await engine.start('composition-parent', null);
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       mapped: [],
       reduced: 'seed',
     });
@@ -525,7 +517,7 @@ describe('workflow composition operators', () => {
     );
 
     const handle = await engine.start('same-execution-parent', null);
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       first: { alpha: 1, beta: 2 },
       second: { alpha: 1, beta: 2 },
     });

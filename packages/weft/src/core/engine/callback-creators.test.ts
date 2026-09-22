@@ -83,7 +83,7 @@ describe('engine callback creators', () => {
 
     await storage.put(KEYS.checkpoint('workflow-checkpoint'), new Uint8Array([1, 2, 3]));
 
-    await expect(
+    expect(
       createInlineParkingCallbacks(engine).readCheckpointBytes('workflow-checkpoint'),
     ).resolves.toEqual(new Uint8Array([1, 2, 3]));
 
@@ -271,6 +271,7 @@ describe('engine callback creators', () => {
           id: 'schedule-cleanup-error',
           input: null,
           missedFireCount: 0,
+          skippedCount: 0,
           nextFireAt: 60_000,
           overlap: 'skip',
           queuedRuns: [],
@@ -303,7 +304,7 @@ describe('engine callback creators', () => {
 
     const timeCallbacks = createTimeOperationCallbacks(engine);
     expect(timeCallbacks.parseStartOptionDuration('5ms', 'options.startAfter')).toBe(5);
-    await expect(
+    expect(
       timeCallbacks.failWorkflow('workflow-missing', new Error('failed')),
     ).resolves.toBeUndefined();
     timeCallbacks.handleCleanupError(

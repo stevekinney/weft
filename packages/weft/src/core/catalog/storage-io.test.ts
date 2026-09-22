@@ -51,7 +51,7 @@ describe('restoreWorkflowCatalog', () => {
       new TextEncoder().encode('not valid msgpack json'),
     );
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow();
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow();
   });
 
   it('fails closed on a catalog entry that fails manifest validation', async () => {
@@ -61,7 +61,7 @@ describe('restoreWorkflowCatalog', () => {
       new TextEncoder().encode(JSON.stringify({ manifest: { not: 'a manifest' }, installedAt: 1 })),
     );
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow();
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow();
   });
 
   it('fails closed on a catalog-entry key that does not match the expected shape', async () => {
@@ -69,14 +69,14 @@ describe('restoreWorkflowCatalog', () => {
     // Missing the trailing `:<revision>` segment.
     await storage.put('catalog-entry:checkout', new TextEncoder().encode('irrelevant'));
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/does not match the expected/);
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/does not match the expected/);
   });
 
   it('fails closed on a catalog-entry record that is not valid JSON', async () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.catalogEntry('checkout', 'r1'), new TextEncoder().encode('not json {'));
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/could not be parsed as JSON/);
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/could not be parsed as JSON/);
   });
 
   it('fails closed when a manifest (name, revision) disagrees with its storage key', async () => {
@@ -89,7 +89,7 @@ describe('restoreWorkflowCatalog', () => {
       new TextEncoder().encode(JSON.stringify({ manifest, installedAt: 1 })),
     );
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/disagrees with its storage key/);
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/disagrees with its storage key/);
   });
 
   it('fails closed on a catalog-active key that does not match the expected shape', async () => {
@@ -98,7 +98,7 @@ describe('restoreWorkflowCatalog', () => {
     // so it does not split into exactly the expected `[prefix, name]` shape.
     await storage.put('catalog-active:a:b', new TextEncoder().encode('irrelevant'));
 
-    await expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/does not match the expected/);
+    expect(restoreWorkflowCatalog(storage)).rejects.toThrow(/does not match the expected/);
   });
 });
 
@@ -126,7 +126,7 @@ describe('readActivePointer', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.catalogActive('checkout'), new TextEncoder().encode('garbage'));
 
-    await expect(readActivePointer(storage, 'checkout')).rejects.toThrow();
+    expect(readActivePointer(storage, 'checkout')).rejects.toThrow();
   });
 });
 
@@ -152,7 +152,7 @@ describe('readCatalogEntry', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.catalogEntry('checkout', 'r1'), new TextEncoder().encode('not json {'));
 
-    await expect(readCatalogEntry(storage, 'checkout', 'r1')).rejects.toThrow(
+    expect(readCatalogEntry(storage, 'checkout', 'r1')).rejects.toThrow(
       /could not be parsed as JSON/,
     );
   });
@@ -164,7 +164,7 @@ describe('readCatalogEntry', () => {
       new TextEncoder().encode(JSON.stringify({ manifest: { not: 'a manifest' }, installedAt: 1 })),
     );
 
-    await expect(readCatalogEntry(storage, 'checkout', 'r1')).rejects.toThrow(
+    expect(readCatalogEntry(storage, 'checkout', 'r1')).rejects.toThrow(
       /does not decode as a valid installed-revision record/,
     );
   });
@@ -179,7 +179,7 @@ describe('readCatalogEntry', () => {
       new TextEncoder().encode(JSON.stringify({ manifest, installedAt: 1 })),
     );
 
-    await expect(readCatalogEntry(storage, 'checkout', 'mismatched-revision')).rejects.toThrow(
+    expect(readCatalogEntry(storage, 'checkout', 'mismatched-revision')).rejects.toThrow(
       /disagrees with its storage key/,
     );
   });
@@ -218,7 +218,7 @@ describe('scanCatalogEntriesForName', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.catalogEntry('checkout', 'r1'), new TextEncoder().encode('not json {'));
 
-    await expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
+    expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
       /could not be parsed as JSON/,
     );
   });
@@ -242,7 +242,7 @@ describe('scanCatalogEntriesForName', () => {
       return originalScan(prefix, options);
     };
 
-    await expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
+    expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
       /does not match the expected catalog-entry:<name>:<revision> shape/,
     );
   });
@@ -257,7 +257,7 @@ describe('scanCatalogEntriesForName', () => {
       new TextEncoder().encode(JSON.stringify({ manifest, installedAt: 1 })),
     );
 
-    await expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
+    expect(scanCatalogEntriesForName(storage, 'checkout')).rejects.toThrow(
       /disagrees with its storage key/,
     );
   });

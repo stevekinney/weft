@@ -124,7 +124,7 @@ describe('workflow result resolution', () => {
 
     await bootstrapWorkflowResultResolver(internals, 'wf-state-read-failure', waiter);
 
-    await expect(waiter.promise).rejects.toThrow('failed to read wf-state-read-failure');
+    expect(waiter.promise).rejects.toThrow('failed to read wf-state-read-failure');
     expect(internals.resultResolvers.has('wf-state-read-failure')).toBe(false);
   });
 
@@ -154,7 +154,7 @@ describe('workflow result resolution', () => {
     // settles normally (this workflow id was never actually started, so it
     // resolves to the ordinary "not found" terminal outcome).
     await bootstrapWorkflowResultResolver(internals, 'poll-transient-1', waiter);
-    await expect(waiter.promise).rejects.toThrow('not found in storage');
+    expect(waiter.promise).rejects.toThrow('not found in storage');
     expect(internals.resultResolvers.has('poll-transient-1')).toBe(false);
   });
 
@@ -168,7 +168,7 @@ describe('workflow result resolution', () => {
     await bootstrapWorkflowResultResolver(internals, 'wf-replacement', replacementWaiter);
     currentWaiter.resolve('resolved through replacement');
 
-    await expect(replacementWaiter.promise).resolves.toBe('resolved through replacement');
+    expect(replacementWaiter.promise).resolves.toBe('resolved through replacement');
   });
 
   it('unregisters the previous cached handle token before replacing it', async () => {
@@ -212,7 +212,7 @@ describe('WFT-79: cross-engine result-poll fallback (ownership: "workflow-lease"
     // Resolves through the ordinary same-engine `termination/complete.ts`
     // path alone — the registry-null branch never schedules a competing
     // `setTimeout`, so this settles without any fake/advanced timers.
-    await expect(resultPromise).resolves.toBe('poll-fallback-done');
+    expect(resultPromise).resolves.toBe('poll-fallback-done');
   });
 
   it('does not schedule a further poll once the workflow is already terminal', async () => {
@@ -226,7 +226,7 @@ describe('WFT-79: cross-engine result-poll fallback (ownership: "workflow-lease"
     });
     const handle = await engine.start('wft-79-poll-fallback', null, { id: 'poll-terminal-1' });
     await handle.signal('go');
-    await expect(handle.result()).resolves.toBe('poll-fallback-done');
+    expect(handle.result()).resolves.toBe('poll-fallback-done');
 
     // A FRESH waiter (the cached handle's promise already settled, so this
     // exercises `getWorkflowResultPromise`'s `!existingWaiter` branch again)
@@ -236,7 +236,7 @@ describe('WFT-79: cross-engine result-poll fallback (ownership: "workflow-lease"
     const internals = getInternals(engine);
     const waiter = createWorkflowResultWaiter(internals, 'poll-terminal-1');
     await bootstrapWorkflowResultResolver(internals, 'poll-terminal-1', waiter);
-    await expect(waiter.promise).resolves.toBe('poll-fallback-done');
+    expect(waiter.promise).resolves.toBe('poll-fallback-done');
     expect(internals.resultResolvers.has('poll-terminal-1')).toBe(false);
   });
 
@@ -278,9 +278,7 @@ describe('WFT-79: cross-engine result-poll fallback (ownership: "workflow-lease"
     // the outsider's `resultResolvers` map is never touched by that
     // termination. Only this file's new poll can observe it.
     await engineOwner.getHandle('poll-cross-1').signal('go');
-    await expect(engineOwner.getHandle('poll-cross-1').result()).resolves.toBe(
-      'poll-fallback-done',
-    );
+    expect(engineOwner.getHandle('poll-cross-1').result()).resolves.toBe('poll-fallback-done');
 
     await waitForCondition(() => settled, {
       label: 'outsider engine observing cross-engine completion via poll',
@@ -311,7 +309,7 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     expect(internals.workflowClaimRegistry).toBeNull();
 
     // Must not throw and must not touch any waiter.
-    await expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
+    expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
   });
 
   it('defers to local terminal delivery for a claim this engine holds, without settling early', async () => {
@@ -387,7 +385,7 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
 
     // Terminates on the OTHER engine, so nothing local will ever deliver it.
     await seedEngine.getHandle('drain-orphan-1').signal('go');
-    await expect(seeded.result()).resolves.toBe('poll-fallback-done');
+    expect(seeded.result()).resolves.toBe('poll-fallback-done');
 
     await pollPendingCrossEngineResultWaiters(internals);
     await waitForCondition(() => settled === 'poll-fallback-done', {
@@ -400,7 +398,7 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     await using seedEngine = await Engine.create({ storage, workflows, recover: false });
     const seeded = await seedEngine.start('wft-79-poll-fallback', null, { id: 'drain-remote-1' });
     await seedEngine.getHandle('drain-remote-1').signal('go');
-    await expect(seeded.result()).resolves.toBe('poll-fallback-done');
+    expect(seeded.result()).resolves.toBe('poll-fallback-done');
 
     await using outsider = await Engine.create({ storage, workflows, ...manualOptions });
     const internals = getInternals(outsider);
@@ -430,7 +428,7 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
 
     // One unreadable workflow must not stop the pass; both entries are visited
     // and the call resolves rather than rejecting.
-    await expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
+    expect(pollPendingCrossEngineResultWaiters(internals)).resolves.toBeUndefined();
   });
 });
 
@@ -466,9 +464,9 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     const childHandle = await engine.start('wft-79-f1-failing-child', null, {
       id: 'child-failing',
     });
-    await expect(childHandle.result()).rejects.toThrow('child-failed');
+    expect(childHandle.result()).rejects.toThrow('child-failed');
 
-    await expect(
+    expect(
       getGeneratorOwnedWorkflowResultPromise(internals, 'child-failing', 'parent-failing'),
     ).rejects.toThrow('child-failed');
   });
@@ -486,7 +484,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
 
     // The child completes normally and durably.
     const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-1' });
-    await expect(childHandle.result()).resolves.toBe('child-done');
+    expect(childHandle.result()).resolves.toBe('child-done');
 
     // Gate parent-1's durable holder read from here on — the exact read
     // `confirmWakeOwnership` issues once the child settles below.
@@ -560,7 +558,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     expect(parentClaim.status).toBe('acquired');
 
     const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-2' });
-    await expect(childHandle.result()).resolves.toBe('child-done');
+    expect(childHandle.result()).resolves.toBe('child-done');
 
     // Parent attaches first, observer second — both land on one waiter.
     let parentSettled = false;
@@ -590,7 +588,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     ]);
 
     // The observer gets the durable result even though the parent is deposed.
-    await expect(observed).resolves.toBe('child-done');
+    expect(observed).resolves.toBe('child-done');
     expect(parentSettled).toBe(false);
   });
 
@@ -604,11 +602,11 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     expect(acquired.status).toBe('acquired');
 
     const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-2' });
-    await expect(childHandle.result()).resolves.toBe('child-done');
+    expect(childHandle.result()).resolves.toBe('child-done');
 
-    await expect(
-      getGeneratorOwnedWorkflowResultPromise(internals, 'child-2', 'parent-2'),
-    ).resolves.toBe('child-done');
+    expect(getGeneratorOwnedWorkflowResultPromise(internals, 'child-2', 'parent-2')).resolves.toBe(
+      'child-done',
+    );
   });
 
   it("proceeds (matching confirmWakeOwnership's own thrown-read policy) when the ownership pre-check itself throws", async () => {
@@ -621,7 +619,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
     expect(acquired.status).toBe('acquired');
 
     const childHandle = await engine.start('wft-79-f1-child', null, { id: 'child-3' });
-    await expect(childHandle.result()).resolves.toBe('child-done');
+    expect(childHandle.result()).resolves.toBe('child-done');
 
     // Simulate a thrown pre-check read (e.g. a transient failure reading the
     // registry's own cached epoch) rather than a confirmed loss of ownership.
@@ -636,7 +634,7 @@ describe('WFT-79 F1: generator-owned child-result fencing', () => {
       },
     );
     try {
-      await expect(
+      expect(
         getGeneratorOwnedWorkflowResultPromise(internals, 'child-3', 'parent-3'),
       ).resolves.toBe('child-done');
     } finally {
@@ -697,7 +695,7 @@ describe('WFT-79 F2: local-claim settling never races notifyCompletionWaiters or
     // only requires that engineOwner's own waiter still settles correctly.
     await seedEngine.getHandle('race-1').signal('go');
 
-    await expect(resultPromise).resolves.toBe('race-done');
+    expect(resultPromise).resolves.toBe('race-done');
   });
 });
 
@@ -727,7 +725,7 @@ describe('WFT-79 F3/[25]: terminal result derivation never re-reads storage', ()
       recover: false,
     });
     const handle = await engine.start('wft-79-f3-instant', null, { id: 'f3-transient-1' });
-    await expect(handle.result()).resolves.toBe('first-run-result');
+    expect(handle.result()).resolves.toBe('first-run-result');
 
     const internals = getInternals(engine);
     const recordKey = KEYS.workflow('f3-transient-1');
@@ -761,7 +759,7 @@ describe('WFT-79 F3/[25]: terminal result derivation never re-reads storage', ()
 
     await bootstrapWorkflowResultResolver(internals, 'f3-transient-1', waiter);
 
-    await expect(waiter.promise).resolves.toBe('first-run-result');
+    expect(waiter.promise).resolves.toBe('first-run-result');
     expect(reads).toBe(1);
   });
 });

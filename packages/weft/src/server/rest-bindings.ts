@@ -7,7 +7,7 @@
  * these operation-backed bindings.
  *
  * Statically-configured operations and bindings live in
- * `operations/static-registrations.ts`; this module owns the heterogeneous
+ * `operations/static-operations.ts` and `operations/static-rest-bindings.ts`; this module owns the heterogeneous
  * binding type, the per-server factory wiring (metrics, workers, task
  * queues, diagnostics), and the composed live registry/binding builders.
  *
@@ -16,7 +16,11 @@
 
 import type { MetricsCollector } from '../observability/metrics.ts';
 import type { WorkerRegistry } from '../worker/registry.ts';
-import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
+import {
+  createOperationRegistry,
+  type OperationRegistry,
+  type RegistrableOperation,
+} from './operation-catalog.ts';
 import {
   createGetSystemMetricsOperation,
   createGetSystemMetricsRestBinding,
@@ -45,7 +49,8 @@ import {
   createListWorkersRestBinding,
   listWorkersOperation,
 } from './operations/list-workers.ts';
-import { STATIC_OPERATIONS, STATIC_REST_BINDINGS } from './operations/static-registrations.ts';
+import { STATIC_OPERATIONS } from './operations/static-operations.ts';
+import { STATIC_REST_BINDINGS } from './operations/static-rest-bindings.ts';
 import {
   clearDeploymentDrainOperation,
   clearWorkerDrainOperation,
@@ -121,11 +126,25 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
  * surface, but their `invoke` paths throw if reached — no discovery-only
  * registry is ever used to serve real requests.
  */
-type LiveOperationRegistryOptions = {
+export type LiveOperationRegistryOptions = {
   metricsCollector?: MetricsCollector;
   workerRegistry?: WorkerRegistry;
   taskQueue?: TaskQueue;
   clock?: () => number;
+  /**
+   * Operations declared outside this package, registered alongside Weft's own.
+   *
+   * The catalog is shared: `@lostgradient/operative` and `@lostgradient/bureau`
+   * declare subscriptions with `defineOperation` and both already depend on
+   * Weft, so a host serving all three wants one registry, one dispatch
+   * pipeline, and one discovery document rather than a second RPC surface
+   * standing beside this one.
+   *
+   * Appended last, and `createOperationRegistry` rejects a duplicate name, so
+   * a foreign operation cannot shadow one of Weft's — it fails construction
+   * instead, before a port is bound.
+   */
+  additionalOperations?: ReadonlyArray<RegistrableOperation>;
 };
 
 function buildSystemMetricsOperation(options: LiveOperationRegistryOptions) {
@@ -205,6 +224,26 @@ function buildWorkerRegistrationRejectionsOperationForRegistry(
   });
 }
 
+/**
+ * Build the registry of every operation this build serves, wiring the ones
+ * that need live collaborators — task diagnostics, system metrics, the worker
+ * registry — to the instances you pass, and falling back to standalone
+ * versions for anything you omit.
+ *
+ * `serve()` calls this for you. Call it directly when you need the operation
+ * surface without a running server: {@link createCatalogSnapshot} uses it as
+ * its default source, which is how `weft codegen` describes a build it never
+ * starts.
+ *
+ * @example
+ * ```ts
+ * import { createLiveOperationRegistry } from '@lostgradient/weft';
+ *
+ * const operations = createLiveOperationRegistry().list();
+ *
+ * console.log(operations.length, 'operations registered');
+ * ```
+ */
 export function createLiveOperationRegistry(
   options?: LiveOperationRegistryOptions,
 ): OperationRegistry {
@@ -221,5 +260,6 @@ export function createLiveOperationRegistry(
     buildListTaskQueuesOperationForRegistry(resolved),
     buildWorkerDiagnosticsOperationForRegistry(resolved),
     buildWorkerRegistrationRejectionsOperationForRegistry(resolved),
+    ...(resolved.additionalOperations ?? []),
   ]);
 }

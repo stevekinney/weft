@@ -1,10 +1,18 @@
 import { ActivityFailedEvent } from '../../core/events.ts';
-import type { ServeOptions, TaskDispatch } from '../index.ts';
-import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
+import {
+  buildAttemptDispositionWriteForToken,
+  buildCurrentAttemptDispositionWrites,
+} from '../../core/task-ledger/task-attempt-runtime.ts';
+import { taskAttemptPrefix } from '../../core/task-ledger/task-attempt.ts';
+import {
+  commitTaskLedgerDelete,
+  commitTaskLedgerTransition,
+} from '../../core/task-ledger/task-ledger-runtime.ts';
 import {
   canDeleteRetainedTerminalTask,
+  commitUncertainCancellation,
   requeueExpiredAttempt,
-} from '../task-ledger-transitions.ts';
+} from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   taskLedgerKey,
@@ -12,10 +20,13 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskQueued,
   type RemoteTaskTerminal,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import { storageKeys } from '../../storage/interface.ts';
+import type { ServeOptions, TaskDispatch } from '../index.ts';
+import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
 import type { ServerContext } from './context.ts';
+import { buildTerminalResolutionWrites } from './remote-activity-result-bridge.ts';
 import { scheduleDelayedDispatch } from './task-dispatch.ts';
-import { commitTaskLedgerDelete, commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   isTaskHeartbeatStaleForMetrics,
   recordTaskRequeueMetric,
@@ -101,6 +112,39 @@ export async function reassignOrExpireTask(
         now,
       ),
     1,
+    [],
+    // Acceptance criterion 5: the retiring attempt's identity and
+    // disposition are retained on requeue, not overwritten — a fresh
+    // `TaskAttemptRecord` for the NEXT attempt is written separately, at its
+    // own claim. This covers requeue from every origin `reassignOrExpireTask`
+    // is called from: visibility-timeout expiry (`scanExpiredTasks`), worker
+    // disconnect (`worker-disconnect-requeue.ts`), and startup recovery of an
+    // already-expired lease (`task-ledger-recovery.ts`) — acceptance
+    // criteria 5, 6 (disconnect/restart attributability), and the "restart"
+    // and "disconnect" fixtures all resolve through this one call site.
+    async (_current, nextRecord, now) => [
+      ...(await buildAttemptDispositionWriteForToken(
+        options.engine.storage,
+        operationId,
+        record.attemptToken,
+        {
+          disposition: nextRecord.state === 'terminal' ? 'retryExhausted' : 'requeued',
+          dispositionAt: now,
+          dispositionReason: reason,
+        },
+      )),
+      // Acceptance criterion 6: retry exhaustion co-commits the durable
+      // async-activity resolution record too, so a parked `ctx.run()` can
+      // resume with the real exhaustion error even across a crash — same
+      // reasoning as the ordinary completion path
+      // (`task-ledger-completion.ts`'s `commitTerminalFromCompleting`).
+      ...(nextRecord.state === 'terminal'
+        ? buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
+            status: 'failed',
+            error: nextRecord.error,
+          })
+        : []),
+    ],
   );
   if (!result.ok) {
     console.error(`[weft] Failed to requeue/expire task "${operationId}": ${result.reason}`);
@@ -213,6 +257,18 @@ async function reapRetainedTerminalRecord(
   const retainedSince = decoded.adoptedAt ?? decoded.terminalAt;
   if (now - retainedSince < options.taskRetentionWindowMs) return;
 
+  // Acceptance criterion 12: purge removes attempt records through bounded
+  // operations. The number of attempts under one operationId is bounded by
+  // its retry policy, so this prefix scan — and the single conditionalBatch
+  // it feeds — never approaches a full-ledger scan.
+  const attemptKeys: string[] = [];
+  for await (const attemptKey of storageKeys(
+    options.engine.storage,
+    taskAttemptPrefix(decoded.operationId),
+  )) {
+    attemptKeys.push(attemptKey);
+  }
+
   const deleted = await commitTaskLedgerDelete(
     options.engine.storage,
     decoded.operationId,
@@ -221,6 +277,7 @@ async function reapRetainedTerminalRecord(
         expectedRetentionGeneration: decoded.retentionGeneration,
       }),
     1,
+    attemptKeys,
   );
   if (!deleted.ok) {
     console.error(
@@ -259,6 +316,58 @@ export async function scanExpiredTasks(
         const decoded = decodeRemoteTaskRecord(
           await options.engine.storage.get(taskLedgerKey(operationId)),
         );
+
+        // COR-230, acceptance criterion 15: a `cancelling` record whose
+        // `cancellationDeadline` has passed with no cooperative
+        // `taskResult(status: 'cancelled')` from the worker is force-settled
+        // as cancelled, with `uncertain: true` recorded — the server does
+        // not know whether the activity actually stopped. Tracked in the
+        // same deadline heap `cancelTask` populates in place of the
+        // visibility deadline this operationId no longer has once it left
+        // `leased`.
+        if (decoded !== null && decoded.state === 'cancelling') {
+          if (decoded.cancellationDeadline > now) {
+            // Not yet due — a fresh read raced ahead of the heap entry's own
+            // deadline; re-track it rather than dropping it.
+            context.deadlineTracker.add({ operationId, deadline: decoded.cancellationDeadline });
+            continue;
+          }
+          const settled = await commitTaskLedgerTransition(
+            options.engine.storage,
+            operationId,
+            (current, settleNow) =>
+              commitUncertainCancellation(
+                current,
+                { attemptToken: decoded.attemptToken },
+                settleNow,
+              ),
+            1,
+            [],
+            async (current, nextRecord, settleNow) => [
+              ...(await buildCurrentAttemptDispositionWrites(options.engine.storage, current, {
+                disposition: 'cancelled',
+                dispositionAt: settleNow,
+                dispositionReason: 'cancellation deadline elapsed with no cooperative result',
+              })),
+              // Acceptance criterion 6: same reasoning as the cooperative
+              // cancellation path in `task-ledger-completion.ts`.
+              ...buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
+                status: 'failed',
+                error: nextRecord.cancellationReason,
+                failureCategory: 'cancellation',
+              }),
+            ],
+          );
+          if (!settled.ok) {
+            // Lost the race to the worker's own cooperative result (or a
+            // concurrent settlement) — the record already resolved some
+            // other way; nothing left to do.
+            continue;
+          }
+          context.registry.completeTask(operationId);
+          cleanupWorkflowIndex(operationId);
+          continue;
+        }
 
         if (decoded === null || decoded.state !== 'leased') continue; // Already resolved or requeued by another path.
 
@@ -305,10 +414,13 @@ export async function scanExpiredTasks(
  * restart), `queued` records whose durable `availableAt` has elapsed but
  * whose `scheduleDelayedDispatch` timer never fired (same causes), and
  * (WFT-24) adopted `terminal` records old enough to reap under
- * {@link ServeOptions.taskRetentionWindowMs}. `completing`, `cancelling`,
- * and `deadLettered` are left untouched — resolving those is either the
- * worker's redelivered result (`completing`) or explicitly out of this
- * slice's scope.
+ * {@link ServeOptions.taskRetentionWindowMs}, and (COR-230, acceptance
+ * criterion 15) `cancelling` records whose cancellation-deadline heap entry
+ * was never tracked or was lost — same causes as the `leased` case, same
+ * "ensure it's tracked, or force-settle it if already due" treatment.
+ * `completing` and `deadLettered` are left untouched — resolving those is
+ * either the worker's redelivered result (`completing`) or explicitly out
+ * of this slice's scope.
  */
 export async function reconcileOrphanedRecords(
   context: ServerContext,
@@ -337,6 +449,56 @@ export async function reconcileOrphanedRecords(
         }
         if (decoded.state === 'terminal') {
           await reapRetainedTerminalRecord(options, decoded, now);
+          continue;
+        }
+        // COR-230, acceptance criterion 15: catch a `cancelling` record
+        // whose cancellation-deadline heap entry was never tracked (written
+        // by a peer) or lost (a restart) — the same safety-net role this
+        // full-ledger sweep already plays for `leased` records below.
+        if (decoded.state === 'cancelling') {
+          if (context.processingOperations.has(decoded.operationId)) continue;
+          if (decoded.cancellationDeadline > now) {
+            context.deadlineTracker.remove(decoded.operationId);
+            context.deadlineTracker.add({
+              operationId: decoded.operationId,
+              deadline: decoded.cancellationDeadline,
+            });
+            continue;
+          }
+          context.processingOperations.add(decoded.operationId);
+          try {
+            context.deadlineTracker.remove(decoded.operationId);
+            const settled = await commitTaskLedgerTransition(
+              options.engine.storage,
+              decoded.operationId,
+              (current, settleNow) =>
+                commitUncertainCancellation(
+                  current,
+                  { attemptToken: decoded.attemptToken },
+                  settleNow,
+                ),
+              1,
+              [],
+              async (current, nextRecord, settleNow) => [
+                ...(await buildCurrentAttemptDispositionWrites(options.engine.storage, current, {
+                  disposition: 'cancelled',
+                  dispositionAt: settleNow,
+                  dispositionReason: 'cancellation deadline elapsed with no cooperative result',
+                })),
+                ...buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
+                  status: 'failed',
+                  error: nextRecord.cancellationReason,
+                  failureCategory: 'cancellation',
+                }),
+              ],
+            );
+            if (settled.ok) {
+              context.registry.completeTask(decoded.operationId);
+              cleanupWorkflowIndex(decoded.operationId);
+            }
+          } finally {
+            context.processingOperations.delete(decoded.operationId);
+          }
           continue;
         }
         if (decoded.state !== 'leased') continue;

@@ -12,7 +12,7 @@ describe('async activity registration', () => {
     await storage.put(KEYS.leaseEpoch(), epochBytes);
     storage.conditionalBatch = mock(async () => false);
 
-    await expect(
+    expect(
       registerPendingAsyncActivity(
         {
           deposed: false,

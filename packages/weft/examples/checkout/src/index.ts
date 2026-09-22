@@ -1,4 +1,5 @@
-import { Engine, activity, workflow } from '@lostgradient/weft';
+import { BunSQLiteStorage, Engine, activity, workflow } from '@lostgradient/weft';
+import { resolveExampleEnvironment } from '../../environment-configuration.ts';
 
 export interface CheckoutItem {
   name: string;
@@ -129,10 +130,9 @@ export const checkoutWorkflow = workflow({ name: 'checkout' })
 
 export async function runCheckoutExample(
   input: CheckoutInput = sampleCheckoutInput,
-  databasePath = Bun.env['WEFT_CHECKOUT_DATABASE_PATH'] ?? './checkout.sqlite',
+  databasePath = resolveExampleEnvironment().weftCheckoutDatabasePath ?? './checkout.sqlite',
 ): Promise<CheckoutResult> {
-  const { SQLiteStorage } = await import('@lostgradient/weft/storage/sqlite');
-  using storage = new SQLiteStorage(databasePath);
+  using storage = new BunSQLiteStorage(databasePath);
   await using engine = new Engine({ storage }).register(checkoutWorkflow);
   await engine.recoverAll({ acknowledgeUnknownWorkflowTypes: true });
 
@@ -142,5 +142,5 @@ export async function runCheckoutExample(
 
 if (import.meta.main) {
   const result = await runCheckoutExample(createCheckoutInput(`checkout-${Date.now()}`));
-  console.log(JSON.stringify(result, null, 2));
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

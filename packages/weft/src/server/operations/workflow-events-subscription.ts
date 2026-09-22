@@ -58,11 +58,7 @@ export type WorkflowEventsSubscriptionEnvelope = z.infer<typeof workflowEventsSu
  * running `serve({ engine })` without auth must add an authentication layer
  * before exposing this endpoint to untrusted networks.
  */
-export const workflowEventsSubscriptionOperation = defineOperation<
-  WorkflowEventsSubscriptionInput,
-  WorkflowEventsSubscriptionEnvelope,
-  EventEnvelope
->({
+export const workflowEventsSubscriptionOperation = defineOperation({
   name: 'weft.workflows.events',
   mcpExposable: false,
   kind: 'subscription',

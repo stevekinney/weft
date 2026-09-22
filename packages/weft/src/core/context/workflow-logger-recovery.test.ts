@@ -81,7 +81,7 @@ describe('ctx.log engine-level replay safety', () => {
     // Resume past the replayed prefix: the post-resume log is now at the live
     // frontier and emits.
     await recovered.signal('log-recover-id', 'go', 'done');
-    await expect(handle!.result()).resolves.toBe('done');
+    expect(handle!.result()).resolves.toBe('done');
     expect(loggedMessages(captured.records, 'log-recover')).toEqual(['marker:after-resume']);
   });
 
@@ -137,7 +137,7 @@ describe('ctx.log engine-level replay safety', () => {
     expect(loggedMessages(captured.records, 'log-after-all')).toEqual(['marker:tail']);
 
     await recovered.signal('log-after-all-id', 'go', 'go');
-    await expect(handle!.result()).resolves.toBe('done');
+    expect(handle!.result()).resolves.toBe('done');
   });
 
   it('re-fires a log placed after the last committed step on recovery (documented caveat)', async () => {
@@ -176,7 +176,7 @@ describe('ctx.log engine-level replay safety', () => {
     expect(loggedMessages(captured.records, 'log-after-last')).toEqual(['marker:after-last']);
 
     await recovered.signal('log-after-last-id', 'go', 'go');
-    await expect(handle!.result()).resolves.toBe('done');
+    expect(handle!.result()).resolves.toBe('done');
   });
 
   it('delivers a recovered-run live-frontier log to the host sink at parity with the console (#549)', async () => {
@@ -216,7 +216,7 @@ describe('ctx.log engine-level replay safety', () => {
     const [consoleHandle] = await consoleRecovered.recoverAll();
     await flush();
     await consoleRecovered.signal('log-sink-frontier-id', 'go', 'go');
-    await expect(consoleHandle!.result()).resolves.toBe('done');
+    expect(consoleHandle!.result()).resolves.toBe('done');
     const consoleMarkers = loggedMessages(captured.records, 'log-sink-frontier');
 
     // With-sink run: count sink markers across the recovered phase of an identical cycle.
@@ -238,7 +238,7 @@ describe('ctx.log engine-level replay safety', () => {
     const [sinkHandle] = await sinkRecovered.recoverAll();
     await flush();
     await sinkRecovered.signal('log-sink-frontier-id', 'go', 'go');
-    await expect(sinkHandle!.result()).resolves.toBe('done');
+    expect(sinkHandle!.result()).resolves.toBe('done');
     const sinkMarkers = loggedMessages(sink, 'log-sink-frontier');
 
     // Parity: the sink saw the recovered-run live-frontier log exactly as often as the

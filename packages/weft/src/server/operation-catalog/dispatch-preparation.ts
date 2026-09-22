@@ -1,14 +1,7 @@
 import { z } from 'zod';
 
 import type { OperationFault } from '../operation-fault.ts';
-import { transportToPolicyKey } from './pipeline-helpers.ts';
-import {
-  checkAccess,
-  checkAuthorization,
-  checkTransport,
-  parseAndApplyUnknownKeyPolicy,
-  tracePipeline,
-} from './pipeline-stages.ts';
+import { tracePipeline } from './pipeline-stages.ts';
 import { type DispatchContext, type DispatchResult, type ErasedOperation } from './types.ts';
 
 /**
@@ -34,62 +27,20 @@ export function lookupOperation(
 }
 
 /**
- * Take an already-looked-up operation and run transport, access, input
- * parsing with unknown-key policy, and authorization. Emits markers
- * `transport-checked`, `access-checked`, the parse markers emitted from
- * inside `parseAndApplyUnknownKeyPolicy`, then `authorized`.
- *
- * Authorization is part of this helper's contract; callers must not
- * re-authorize the same input.
- */
-export async function prepareAuthorizedInput(
-  operation: ErasedOperation,
-  rawInput: unknown,
-  context: DispatchContext,
-): Promise<DispatchResult<{ input: unknown }>> {
-  const pipelineTrace = context.pipelineTrace;
-
-  const transportFailure = checkTransport(operation, context);
-  if (transportFailure !== null) return transportFailure;
-  tracePipeline(pipelineTrace, 'transport-checked');
-
-  const accessFailure = checkAccess(operation, context);
-  if (accessFailure !== null) return accessFailure;
-  tracePipeline(pipelineTrace, 'access-checked');
-
-  const parseOutcome = parseAndApplyUnknownKeyPolicy(
-    operation,
-    rawInput,
-    transportToPolicyKey(context.transport),
-    pipelineTrace,
-  );
-  if (parseOutcome.kind === 'failure') return dispatchFailure(parseOutcome.fault);
-
-  const authorizationFailure = await checkAuthorization(operation, parseOutcome.input, context);
-  if (authorizationFailure !== null) return authorizationFailure;
-  tracePipeline(pipelineTrace, 'authorized');
-
-  return { ok: true, value: { input: parseOutcome.input } };
-}
-
-/**
  * Safely run `schema.safeParse(value)`. Maps any thrown exception or
  * failed parse to `{ code: 'EngineFailure', message: 'internal error', data: {} }`.
  * On success returns the parsed data so Zod transforms, defaults, and
  * refinements are honored.
  *
- * The `Output` generic is the caller's declared output type for the
- * operation. The schema is erased to `z.ZodType` on `ErasedOperation`,
- * so we cast `parseResult.data` to `Output` at the validated boundary —
- * the same single-level cast the previous private helpers performed
- * (`validateAndReturnOutput` and `validateOutput`). The cast is safe
- * because the success branch is only reachable after `schema.safeParse`
- * succeeded.
+ * The registry intentionally erases operation-specific output types. A
+ * name-only dispatch cannot prove a domain result to its caller, so the
+ * parsed value remains unknown at this boundary. Zod's parser is still the
+ * source of truth for transforms, defaults, and refinements.
  */
-export function validateOutputAgainstSchema<Output>(
+export function validateOutputAgainstSchema(
   schema: z.ZodType,
   value: unknown,
-): DispatchResult<Output> {
+): DispatchResult<unknown> {
   let parseResult: ReturnType<typeof schema.safeParse>;
   try {
     parseResult = schema.safeParse(value);
@@ -99,7 +50,7 @@ export function validateOutputAgainstSchema<Output>(
   if (!parseResult.success) {
     return dispatchFailure({ code: 'EngineFailure', message: 'internal error', data: {} });
   }
-  return { ok: true, value: parseResult.data as Output };
+  return { ok: true, value: parseResult.data };
 }
 
 /** Wrap an `OperationFault` in the standard `DispatchResult` failure shape. */

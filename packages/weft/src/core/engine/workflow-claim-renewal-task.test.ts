@@ -256,7 +256,7 @@ describe('createWorkflowClaimRenewalTask · runOnce', () => {
     const target = createFakeTarget(['workflow-a']);
     const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
 
-    await expect(task.runOnce()).resolves.toMatchObject({ renewedCount: 1 });
+    expect(task.runOnce()).resolves.toMatchObject({ renewedCount: 1 });
   });
 
   it('survives a throwing onPassComplete sink: the pass still resolves and the failure is reported', async () => {
@@ -281,7 +281,7 @@ describe('createWorkflowClaimRenewalTask · runOnce', () => {
 
       // The renewal itself already committed before the sink ran, so a broken
       // observability sink must not surface as a failed pass.
-      await expect(task.runOnce()).resolves.toMatchObject({ renewedCount: 1, failedCount: 0 });
+      expect(task.runOnce()).resolves.toMatchObject({ renewedCount: 1, failedCount: 0 });
     } finally {
       console.error = originalConsoleError;
     }
@@ -333,7 +333,7 @@ describe('createWorkflowClaimRenewalTask · runOnce', () => {
     target.failNextList(boom);
     const task = createWorkflowClaimRenewalTask({ target, getNow: clock.now, intervalMs: 1_000 });
 
-    await expect(task.runOnce()).rejects.toBe(boom);
+    expect(task.runOnce()).rejects.toBe(boom);
   });
 });
 

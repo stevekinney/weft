@@ -10,12 +10,15 @@
  * @module cli/output
  */
 
+import { resolveCliEnvironment } from '../runtime/environment-configuration.ts';
+
 /** Returns true when ANSI color should be emitted for the given stream. */
 export function supportsColor(stream: { isTTY?: boolean } | undefined = process.stdout): boolean {
-  if (process.env['NO_COLOR'] !== undefined && process.env['NO_COLOR'] !== '') return false;
+  const environment = resolveCliEnvironment();
+  if (environment.noColor !== undefined && environment.noColor !== '') return false;
   // Per the FORCE_COLOR spec: '0' explicitly means "no color"; any other non-empty value
   // means "force color". See https://force-color.org/
-  const forceColor = process.env['FORCE_COLOR'];
+  const forceColor = environment.forceColor;
   if (forceColor !== undefined && forceColor !== '' && forceColor !== '0') return true;
   return stream?.isTTY === true;
 }

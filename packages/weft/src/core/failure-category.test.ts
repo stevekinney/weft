@@ -62,7 +62,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(timeoutCrashWorkflow);
 
     const handle = await engine.start('timeout-crash', null, { id: 'wf-timeout-fail' });
-    await expect(handle.result()).rejects.toThrow('review timed out');
+    expect(handle.result()).rejects.toThrow('review timed out');
 
     const state = await engine.get('wf-timeout-fail');
     expect(state?.failureCategory).toBe('timeout');
@@ -76,7 +76,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(abortCrashWorkflow);
 
     const handle = await engine.start('abort-crash', null, { id: 'wf-cancellation-fail' });
-    await expect(handle.result()).rejects.toThrow('operation aborted');
+    expect(handle.result()).rejects.toThrow('operation aborted');
 
     const state = await engine.get('wf-cancellation-fail');
     expect(state?.failureCategory).toBe('cancellation');
@@ -97,7 +97,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(resourceCrashWorkflow);
 
     const handle = await engine.start('resource-crash', null, { id: 'wf-resource-fail' });
-    await expect(handle.result()).rejects.toThrow('resource exhausted');
+    expect(handle.result()).rejects.toThrow('resource exhausted');
 
     const state = await engine.get('wf-resource-fail');
     expect(state?.failureCategory).toBe('resource');

@@ -12,6 +12,7 @@ export const addWorkflowTagsOperation = createSingleWorkflowTagMutationOperation
   name: 'weft.workflows.tags.add',
   summary: 'Add workflow tags',
   destructive: false,
+  requiredEngineMethods: ['addTags'],
   mutateTags: (engine, workflowId, tags) => engine.addTags(workflowId, ...tags),
 });
 

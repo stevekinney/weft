@@ -21,7 +21,7 @@ import type { EngineInternals } from './internals.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { createScheduleTimerId, decodeWorkflowStartHeaders } from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
-import { decodeScheduleState } from './validation/schedule.ts';
+import { decodeScheduleState } from './validation/schedule-decode.ts';
 import {
   buildWorkflowClaimExternalTerminalRotationTransition,
   type WorkflowClaimTransitionFragment,

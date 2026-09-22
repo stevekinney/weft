@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { ListFilter } from './types/list-options.ts';
-
 import {
-  ListFilterValidationError,
-  listFilterObjectSchema,
-  normalizeListFilter,
-} from './list-filter-validation.ts';
+  searchAttribute,
+  type SearchAttributeHandle,
+  type SearchAttributeValue,
+} from './types/search-attributes.ts';
+
+import { ListFilterValidationError } from './list-filter-validation-error.ts';
+import { listFilterObjectSchema, normalizeListFilter } from './list-filter-validation.ts';
 
 describe('normalizeListFilter', () => {
   describe('existing fields', () => {
@@ -28,6 +30,64 @@ describe('normalizeListFilter', () => {
         offset: 40,
       };
       expect(normalizeListFilter(filter)).toEqual(filter);
+    });
+
+    it('preserves typed search attribute handles and explicit undefined keys', () => {
+      const customerId = searchAttribute('customerId', 'string');
+      const normalized = normalizeListFilter({
+        type: undefined,
+        attributes: [{ key: customerId, value: 'acme' }],
+      });
+
+      expect(Object.keys(normalized)).toEqual(['type', 'attributes']);
+      expect(normalized.type).toBeUndefined();
+      expect(normalized.attributes?.[0]?.key).toBe(customerId);
+    });
+
+    it('preserves every typed handle scalar and any-of value', () => {
+      const first = new Date(0);
+      const second = new Date(1_000);
+      type ExpectedHandleValue = SearchAttributeValue | number[] | boolean[] | Date[];
+      const cases: Array<{
+        key: SearchAttributeHandle;
+        scalar: ExpectedHandleValue;
+        anyOf: ExpectedHandleValue;
+      }> = [
+        { key: searchAttribute('text', 'string'), scalar: 'one', anyOf: ['one', 'two'] },
+        { key: searchAttribute('amount', 'number'), scalar: 1, anyOf: [1, 2] },
+        { key: searchAttribute('count', 'integer'), scalar: 1, anyOf: [1, 2] },
+        { key: searchAttribute('enabled', 'boolean'), scalar: true, anyOf: [true, false] },
+        {
+          key: searchAttribute('labels', { type: 'array', items: { type: 'string' } }),
+          scalar: 'one',
+          anyOf: ['one', 'two'],
+        },
+        {
+          key: searchAttribute('createdAt', { type: 'string', format: 'date-time' }),
+          scalar: first,
+          anyOf: [first, second],
+        },
+      ];
+
+      for (const { key, scalar, anyOf } of cases) {
+        expect(normalizeListFilter({ attributes: [{ key, value: scalar }] }).attributes).toEqual([
+          { key, value: scalar },
+        ]);
+        expect(normalizeListFilter({ attributes: [{ key, value: anyOf }] }).attributes).toEqual([
+          { key, value: anyOf },
+        ]);
+      }
+    });
+
+    it('preserves explicit undefined attribute fields', () => {
+      const normalized = normalizeListFilter({
+        attributes: [{ key: 'customerId', value: undefined, gte: undefined }],
+      });
+
+      expect(Object.keys(normalized.attributes![0]!)).toEqual(['key', 'value', 'gte']);
+      expect(normalized.attributes).toEqual([
+        { key: 'customerId', value: undefined, gte: undefined },
+      ]);
     });
 
     it('rejects unknown top-level keys', () => {
@@ -134,7 +194,8 @@ describe('normalizeListFilter', () => {
         expect.unreachable('expected throw');
       } catch (error) {
         expect(error).toBeInstanceOf(ListFilterValidationError);
-        const issues = (error as ListFilterValidationError).issues;
+        if (!(error instanceof ListFilterValidationError)) throw error;
+        const issues = error.issues;
         expect(issues.length).toBeGreaterThanOrEqual(2);
         const paths = issues.map((issue) => issue.path.join('.'));
         expect(paths).toContain('idPrefix');
@@ -148,15 +209,15 @@ describe('normalizeListFilter', () => {
         expect.unreachable('expected throw');
       } catch (error) {
         expect(error).toBeInstanceOf(ListFilterValidationError);
-        const validationError = error as ListFilterValidationError;
-        expect(validationError.issues).toEqual([
+        if (!(error instanceof ListFilterValidationError)) throw error;
+        expect(error.issues).toEqual([
           {
             path: ['status'],
             message: 'Invalid input',
             code: 'invalid_union',
           },
         ]);
-        expect(validationError.message).toBe('status: Invalid input');
+        expect(error.message).toBe('status: Invalid input');
       }
     });
   });

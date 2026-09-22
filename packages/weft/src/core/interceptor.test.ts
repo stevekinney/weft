@@ -11,8 +11,8 @@ import type {
   SleepInterception,
   WorkflowInterceptor,
   WorkflowStartInterception,
-} from './interceptor';
-import { composeActivityInterceptors, composeWorkflowInterceptors } from './interceptor';
+} from './interceptor.ts';
+import { composeActivityInterceptors, composeWorkflowInterceptors } from './interceptor.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1122,7 +1122,7 @@ describe('composeWorkflowInterceptors — signalReceived hook', () => {
 
       const composed = composeWorkflowInterceptors([interceptor]);
 
-      await expect(
+      expect(
         composed.childWorkflow(makeChildWorkflowInterception(), async () => {
           throw new Error('child workflow failed');
         }),

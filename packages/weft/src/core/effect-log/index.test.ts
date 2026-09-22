@@ -14,7 +14,7 @@
 
 import { beforeEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory';
+import { MemoryStorage } from '../../storage/memory.ts';
 import { computeSemanticHash, EffectLog, EffectReplayConflictError } from './index.ts';
 
 // ---------------------------------------------------------------------------

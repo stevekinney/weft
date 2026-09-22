@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { DEFAULT_SCOPE, KEYS } from '../storage/interface.ts';
+import { DEFAULT_SCOPE, KEYS } from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createCoreStorageAdapter } from '../storage/storage-adapter.test-support.ts';
 import {
@@ -27,7 +27,7 @@ describe('AtomicState capability gate', () => {
       initial: 0,
     });
 
-    await expect(state.set(1)).rejects.toThrow(
+    expect(state.set(1)).rejects.toThrow(
       'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
     );
   });
@@ -38,7 +38,7 @@ describe('AtomicState capability gate', () => {
       initial: 0,
     });
 
-    await expect(state.delete()).rejects.toThrow(
+    expect(state.delete()).rejects.toThrow(
       'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
     );
   });
@@ -90,7 +90,7 @@ describe('AtomicState', () => {
     await state.delete();
 
     expect(await storage.get(key)).toBeNull();
-    const version = decode((await storage.get(atomicStateVersionKey(key)))!) as number;
+    const version = decode((await storage.get(atomicStateVersionKey(key)))!);
     expect(version).toBe(2);
   });
 
@@ -108,7 +108,7 @@ describe('AtomicState', () => {
       },
     });
 
-    await expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
+    expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
     expect(sleepCalls).toHaveLength(2);
   });
 
@@ -199,7 +199,7 @@ describe('AtomicState', () => {
     state.addEventListener('conflict', (event) => events.push(event));
     state.addEventListener('exhausted', (event) => events.push(event));
 
-    await expect(state.delete()).rejects.toMatchObject({
+    expect(state.delete()).rejects.toMatchObject({
       stateKey: key,
       attempts: 3,
       message: `AtomicState conflict: failed to update "${key}" after 3 attempts`,
@@ -211,10 +211,12 @@ describe('AtomicState', () => {
       'conflict',
       'exhausted',
     ]);
-    expect(events.slice(0, 3).map((event) => (event as AtomicStateConflictEvent).attempt)).toEqual([
-      1, 2, 3,
-    ]);
-    expect((events[3] as AtomicStateExhaustedEvent).attempts).toBe(3);
+    expect(
+      events
+        .slice(0, 3)
+        .map((event) => (event instanceof AtomicStateConflictEvent ? event.attempt : undefined)),
+    ).toEqual([1, 2, 3]);
+    expect(events[3] instanceof AtomicStateExhaustedEvent ? events[3].attempts : undefined).toBe(3);
   });
 
   it('supports typed convenience methods', async () => {
@@ -259,7 +261,7 @@ describe('AtomicState', () => {
     subscription.unsubscribe();
 
     expect(events[0]).toBeInstanceOf(AtomicStateChangeEvent);
-    expect((events[0] as AtomicStateChangeEvent<number>).value).toBe(1);
+    expect(events[0] instanceof AtomicStateChangeEvent ? events[0].value : undefined).toBe(1);
     expect(observableEvents).toHaveLength(1);
     expect(iterated.value).toBeInstanceOf(AtomicStateChangeEvent);
   });
@@ -273,7 +275,7 @@ describe('AtomicState', () => {
     state.addEventListener('exhausted', (event) => events.push(event));
     storage.conditionalBatch = async () => false;
 
-    await expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
+    expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
 
     expect(events[0]).toBeInstanceOf(AtomicStateConflictEvent);
     expect(events[1]).toBeInstanceOf(AtomicStateExhaustedEvent);

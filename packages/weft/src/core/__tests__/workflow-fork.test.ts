@@ -53,8 +53,8 @@ describe('workflow forking', () => {
     await engine.signal(original.id, 'branch', 'left');
     await engine.signal(forked.id, 'branch', 'right');
 
-    await expect(original.result()).resolves.toBe('base:left');
-    await expect(forked.result()).resolves.toBe('base:right');
+    expect(original.result()).resolves.toBe('base:left');
+    expect(forked.result()).resolves.toBe('base:right');
 
     const forkedState = await engine.get(forked.id);
     expect(forkedState).not.toBeNull();
@@ -105,7 +105,7 @@ describe('workflow forking', () => {
     await engine.signal(forked.id, 'hold');
     await engine.signal(forked.id, 'continue');
 
-    await expect(forked.result()).resolves.toBe('first:second');
+    expect(forked.result()).resolves.toBe('first:second');
     expect(executedStages).toEqual(['first', 'second']);
 
     const forkedState = await engine.get(forked.id);
@@ -118,7 +118,7 @@ describe('workflow forking', () => {
     });
 
     await engine.signal(original.id, 'continue');
-    await expect(original.result()).resolves.toBe('first:second');
+    expect(original.result()).resolves.toBe('first:second');
 
     engine[Symbol.dispose]();
   });
@@ -162,10 +162,10 @@ describe('workflow forking', () => {
     expect(forkedStateBeforeTimerFires?.status).toBe('running');
 
     await engine.advanceTime('1 minute');
-    await expect(forked.result()).resolves.toBe('done');
+    expect(forked.result()).resolves.toBe('done');
 
     await engine.cancel(original.id);
-    await expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(originalResult).rejects.toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -199,12 +199,12 @@ describe('workflow forking', () => {
     );
 
     const original = await engine.start('completed-fork', 'original', { id: 'wf-completed' });
-    await expect(original.result()).resolves.toBe('original:prepare-done');
+    expect(original.result()).resolves.toBe('original:prepare-done');
     expect(executedStages).toEqual(['prepare']);
     expect(terminalSummaries).toEqual(['original']);
 
     const forked = await engine.fork(original.id);
-    await expect(forked.result()).resolves.toBe('original:prepare-done');
+    expect(forked.result()).resolves.toBe('original:prepare-done');
     expect(executedStages).toEqual(['prepare']);
     expect(terminalSummaries).toEqual(['original', 'original']);
 
@@ -235,10 +235,10 @@ describe('workflow forking', () => {
     );
 
     const original = await engine.start('completed-ordering', null, { id: 'wf-order-root' });
-    await expect(original.result()).resolves.toBe('done');
+    expect(original.result()).resolves.toBe('done');
 
     const forked = await engine.fork(original.id);
-    await expect(forked.result()).resolves.toBe('done');
+    expect(forked.result()).resolves.toBe('done');
 
     const forkedEvents = observedEvents
       .filter((event) => event.workflowId === forked.id)
@@ -319,8 +319,8 @@ describe('workflow forking', () => {
     expect(descendants.items.map((item) => item.id)).toContain(forked.id);
 
     await engine.cancel(original.id);
-    await expect(forkedResult).rejects.toThrow('Workflow cancelled');
-    await expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(forkedResult).rejects.toThrow('Workflow cancelled');
+    expect(originalResult).rejects.toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -372,7 +372,7 @@ describe('workflow forking', () => {
     expect(persistedHeaders.has('x-auth')).toBe(false);
 
     await engine.signal(forked.id, 'continue');
-    await expect(forked.result()).resolves.toBe('child-complete');
+    expect(forked.result()).resolves.toBe('child-complete');
     expect(capturedParentHeaders).toHaveLength(1);
     expect(capturedParentHeaders[0]?.get('traceparent')).toBe(
       '00-abcd1234abcd1234abcd1234abcd1234-ef56ef56ef56ef56-01',
@@ -381,7 +381,7 @@ describe('workflow forking', () => {
     expect(capturedParentHeaders[0]?.has('x-auth')).toBe(false);
 
     await engine.cancel(original.id);
-    await expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(originalResult).rejects.toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -411,10 +411,10 @@ describe('workflow forking', () => {
     const originalResult = original.result();
 
     await engine.signal(forked.id, 'continue');
-    await expect(forked.result()).resolves.toEqual([2, 4]);
+    expect(forked.result()).resolves.toEqual([2, 4]);
 
     await engine.cancel(original.id);
-    await expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(originalResult).rejects.toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 });
@@ -474,8 +474,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    await expect(original.result()).resolves.toBe('orig');
-    await expect(forked.result()).resolves.toBe('forked');
+    expect(original.result()).resolves.toBe('orig');
+    expect(forked.result()).resolves.toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -523,8 +523,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    await expect(original.result()).resolves.toBe('orig');
-    await expect(forked.result()).resolves.toBe('forked');
+    expect(original.result()).resolves.toBe('orig');
+    expect(forked.result()).resolves.toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -558,7 +558,7 @@ describe('fork revision handling (WFT-21)', () => {
     expect(after.items.length).toBe(before.items.length);
 
     await engine.signal(original.id, 'go', 'done');
-    await expect(original.result()).resolves.toBe('done');
+    expect(original.result()).resolves.toBe('done');
     engine[Symbol.dispose]();
   });
 
@@ -586,7 +586,7 @@ describe('fork revision handling (WFT-21)', () => {
     expect((thrown as WorkflowRevisionUnavailableError).reason).toBe('not-registered');
 
     await engine.signal(original.id, 'go', 'done');
-    await expect(original.result()).resolves.toBe('done');
+    expect(original.result()).resolves.toBe('done');
     engine[Symbol.dispose]();
   });
 
@@ -610,8 +610,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    await expect(original.result()).resolves.toBe('orig');
-    await expect(forked.result()).resolves.toBe('forked');
+    expect(original.result()).resolves.toBe('orig');
+    expect(forked.result()).resolves.toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -649,12 +649,12 @@ describe('fork revision handling (WFT-21)', () => {
       ),
     );
 
-    await expect(engine.fork(original.id, { revision: revisionV2 })).rejects.toThrow(
+    expect(engine.fork(original.id, { revision: revisionV2 })).rejects.toThrow(
       VersionMismatchError,
     );
 
     await engine.signal(original.id, 'go', 'done');
-    await expect(original.result()).resolves.toBe('done');
+    expect(original.result()).resolves.toBe('done');
     engine[Symbol.dispose]();
   });
 });

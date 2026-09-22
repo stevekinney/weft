@@ -9,6 +9,7 @@ import type { Engine } from './index.ts';
 import {
   drainQueuedInlineWorkflowStarts,
   flushQueuedInlineWorkflowStarts,
+  flushQueuedInlineWorkflowStartsUntilDrained,
   type InlineLaunchQueueCallbacks,
 } from './inline-launch-queue.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
@@ -51,9 +52,10 @@ export function shouldStartEngineScheduler(
  * the scheduled-flush handler and the dispose-time drain so both advance a
  * queued start through exactly the same callbacks.
  */
-function inlineLaunchQueueCallbacksForEngine<TWorkflows extends object, TActivities extends object>(
-  engine: Engine<TWorkflows, TActivities>,
-): InlineLaunchQueueCallbacks {
+export function inlineLaunchQueueCallbacksForEngine<
+  TWorkflows extends object,
+  TActivities extends object,
+>(engine: Engine<TWorkflows, TActivities>): InlineLaunchQueueCallbacks {
   // Build the lifecycle callbacks once and reuse them across every queued-start
   // advance, rather than reconstructing the bundle per invocation on the
   // inline-launch hot path.
@@ -105,6 +107,26 @@ export async function drainQueuedInlineWorkflowStartsForEngine<
     getInternals(engine),
     inlineLaunchQueueCallbacksForEngine(engine),
     options,
+  );
+}
+
+/**
+ * Deterministically drain `engine`'s inline launch queue on demand — the
+ * basis for `engine.flushInlineLaunches()` (COR-74). Built with the same
+ * inline-launch-queue callbacks as the scheduled flush handler and the
+ * dispose-time drain, so a manually-flushed start advances identically to a
+ * normally-flushed one. Unlike {@link drainQueuedInlineWorkflowStartsForEngine},
+ * this is not a teardown path — see
+ * {@link flushQueuedInlineWorkflowStartsUntilDrained}'s own doc for how the
+ * two differ.
+ */
+export async function flushQueuedInlineWorkflowStartsForEngine<
+  TWorkflows extends object,
+  TActivities extends object,
+>(engine: Engine<TWorkflows, TActivities>): Promise<void> {
+  await flushQueuedInlineWorkflowStartsUntilDrained(
+    getInternals(engine),
+    inlineLaunchQueueCallbacksForEngine(engine),
   );
 }
 

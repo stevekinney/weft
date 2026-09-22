@@ -117,6 +117,37 @@ export type WorkflowClaimAcquirePreparation = {
   claimedAt: number;
 };
 
+/**
+ * Result of {@link WorkflowClaimRegistry.holderStatus} — a cross-process
+ * read of a workflow's CURRENT claim liveness, evaluated with the exact
+ * `isWorkflowClaimExpired` judgment {@link WorkflowClaimRegistry.takeover}
+ * uses to decide whether a takeover attempt right now would be fenced.
+ * `heldByThisProcess` is `true` only when `heldByAnyProcess` is also `true`
+ * — it never claims local ownership of an expired record.
+ *
+ * Read it as a point-in-time answer, not a lock. A claim can expire between
+ * this read and whatever you do next, so use it for diagnostics and routing
+ * decisions — which process should log, which should report health — and let
+ * `takeover` itself arbitrate when correctness depends on the outcome.
+ *
+ * @example
+ * ```ts
+ * import type { WorkflowClaimHolderStatus } from '@lostgradient/weft';
+ *
+ * declare const status: WorkflowClaimHolderStatus;
+ *
+ * if (status.heldByThisProcess) console.log('this process is driving it');
+ * else if (status.heldByAnyProcess) console.log('another process holds it');
+ * else console.log('unclaimed — a takeover would succeed right now');
+ * ```
+ */
+export type WorkflowClaimHolderStatus = {
+  /** Whether THIS engine process is the live holder. */
+  heldByThisProcess: boolean;
+  /** Whether ANY engine process currently holds a live (non-expired) claim. */
+  heldByAnyProcess: boolean;
+};
+
 /** Result of {@link WorkflowClaimRegistry.takeover}. */
 export type WorkflowClaimTakeoverResult =
   | { status: 'acquired'; workflowId: string; epoch: number }
@@ -186,6 +217,37 @@ export class WorkflowClaimRegistry {
   currentEpochBytes(workflowId: string): Uint8Array | null {
     const entry = this.#claims.get(workflowId);
     return entry === undefined ? null : entry.epochBytes.slice();
+  }
+
+  /**
+   * Cross-process read of `wf-owner-holder:<workflowId>`'s CURRENT liveness —
+   * the same durable key and {@link isWorkflowClaimExpired} judgment
+   * {@link takeover} uses to decide whether it would be fenced by a still-live
+   * holder right now. `undefined` when no claim record exists (never claimed,
+   * already released, or terminal) or the stored bytes fail to decode —
+   * treated the same as absent, fail-closed, matching every other holder read
+   * in this file.
+   *
+   * A storage read, not a lock: another process holding the claim can renew,
+   * release, or lose it the instant after this resolves. `heldByAnyProcess:
+   * true` means a `takeover` attempt would have been fenced AT THE MOMENT this
+   * read completed — evidence for a caller to avoid pruning state a live claim
+   * still depends on, not a guarantee that holds any longer than that instant.
+   */
+  async holderStatus(workflowId: string): Promise<WorkflowClaimHolderStatus | undefined> {
+    const raw = await this.#claimStorage.get(KEYS.workflowOwnerHolder(workflowId));
+    if (raw === null) return undefined;
+    const holder = decodeWorkflowClaimHolder(raw);
+    if (holder === null) return undefined;
+    const heldByAnyProcess = !isWorkflowClaimExpired({
+      expiresAt: holder.expiresAt,
+      now: this.#getNow(),
+      renewIntervalMs: this.#claimRenewIntervalMs,
+    });
+    return {
+      heldByAnyProcess,
+      heldByThisProcess: heldByAnyProcess && holder.engineId === this.#engineId,
+    };
   }
 
   async #resolveHeldBy(workflowId: string): Promise<string | null> {

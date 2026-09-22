@@ -33,7 +33,7 @@
  *
  * @example
  * ```ts
- * import { serve, type CorsOptions } from '@lostgradient/weft/server';
+ * import { serve, type CorsOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * const cors: CorsOptions = {

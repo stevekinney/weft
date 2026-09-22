@@ -86,7 +86,7 @@ describe('activity reconciliation helpers', () => {
       }),
     );
 
-    await expect(readActivityReconciliationRecord(storage, reference.key)).rejects.toThrow(
+    expect(readActivityReconciliationRecord(storage, reference.key)).rejects.toThrow(
       'Activity reconciliation record has an unsupported status.',
     );
   });
@@ -109,7 +109,7 @@ describe('activity reconciliation helpers', () => {
       'activity-key',
     );
 
-    await expect(
+    expect(
       resolveStartedActivityReconciliationRecord(
         internals,
         'workflow-id',
@@ -144,7 +144,7 @@ describe('activity reconciliation helpers', () => {
     };
     await storage.put(reference.key, encode(expectedRecord));
 
-    await expect(
+    expect(
       commitActivityReconciliationTransitionWithFencedWrite(
         internals,
         'workflow-id',
@@ -188,7 +188,7 @@ describe('activity reconciliation helpers', () => {
       updatedAt: 2,
     });
 
-    await expect(readActivityReconciliationRecord(storage, reference.key)).resolves.toEqual({
+    expect(readActivityReconciliationRecord(storage, reference.key)).resolves.toEqual({
       ...expectedRecord,
       status: 'completed',
       result: 'done',
@@ -216,7 +216,7 @@ describe('activity reconciliation helpers', () => {
       updatedAt: 1,
     };
 
-    await expect(
+    expect(
       writeActivityReconciliationTransition(storage, reference, expectedRecord, {
         ...expectedRecord,
         status: 'completed',

@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import {
   UpdateTimeoutError,
   UpdateValidationError,
@@ -10,7 +9,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, isOperationFault } from './operation-helpers.ts';
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
 
@@ -35,7 +34,7 @@ const updateWorkflowOutput = z.object({
 export type UpdateWorkflowInput = z.infer<typeof updateWorkflowInput>;
 export type UpdateWorkflowOutput = z.infer<typeof updateWorkflowOutput>;
 
-export const updateWorkflowOperation = defineOperation<UpdateWorkflowInput, UpdateWorkflowOutput>({
+export const updateWorkflowOperation = defineOperation({
   name: 'weft.workflows.update',
   mcpExposable: false,
   summary: 'Send a synchronous update to a workflow',
@@ -53,7 +52,8 @@ export const updateWorkflowOperation = defineOperation<UpdateWorkflowInput, Upda
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<UpdateWorkflowOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['submitCoordinatedUpdate']);
+    const typedEngine = engine;
 
     // non-number `timeout` and non-string `idempotencyKey` are
     // silently ignored (defaults apply). Validation happens here, not at the

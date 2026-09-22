@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 
-import { decode, encode, validateCloneable } from './codec';
+import { decode, encode, validateCloneable } from './codec.ts';
 import { extensionCodec, replaceUndefined } from './codec/extension-codec.ts';
 
 function byteStabilityPreprocess(value: unknown, visited: Set<object>): unknown {

@@ -63,9 +63,7 @@ describe('#494 per-attempt timeout', () => {
     );
 
     const handle = await engine.start('per-attempt-wf', null, { id: 'pat-1' });
-    await expect(handle.result()).rejects.toThrow(
-      'attempt 1 exceeded its per-attempt timeout of 50ms',
-    );
+    expect(handle.result()).rejects.toThrow('attempt 1 exceeded its per-attempt timeout of 50ms');
     const failed = await engine.get('pat-1');
     expect(failed?.status).toBe('failed');
   });
@@ -88,7 +86,7 @@ describe('#494 per-attempt timeout', () => {
     );
 
     const handle = await engine.start('quick-wf', null, { id: 'quick-1' });
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
   });
 
   it('aborts the activity AbortSignal when the per-attempt cap fires', async () => {
@@ -118,7 +116,7 @@ describe('#494 per-attempt timeout', () => {
     // The error crosses the durable boundary as a message string (the class is not
     // reconstructed), so assert on the message — the failure-category test below
     // pins the class + classification directly.
-    await expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
+    expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
     // The deadline fired the per-attempt AbortController, so the activity's composite
     // signal saw the abort — a cooperating activity could have stopped on it.
     expect(signalAborted).toBe(true);
@@ -160,7 +158,7 @@ describe('#494 per-attempt timeout', () => {
     // The workflow still fails with the per-attempt timeout (the deadline already
     // rejected the awaited result), even though the activity itself stopped — the
     // cooperative stop frees resources but does not retroactively succeed the run.
-    await expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
+    expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
     // Proves the activity actually observed the abort and ran its cleanup path —
     // resolves only when `observedAbort()` fired inside the activity.
     await observed;
@@ -190,7 +188,7 @@ describe('#494 per-attempt timeout', () => {
     );
 
     const handle = await engine.start('race-tie-wf', null, { id: 'race-tie-1' });
-    await expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
+    expect(handle.result()).rejects.toThrow('exceeded its per-attempt timeout of 50ms');
     const failed = await engine.get('race-tie-1');
     expect(failed?.status).toBe('failed');
   });
@@ -219,7 +217,7 @@ describe('#494 per-attempt timeout', () => {
     );
 
     const handle = await engine.start('retry-cap-wf', null, { id: 'retry-cap-1' });
-    await expect(handle.result()).resolves.toBe('recovered');
+    expect(handle.result()).resolves.toBe('recovered');
     expect(attempts).toBe(2);
   });
 
@@ -320,7 +318,7 @@ describe('#494 per-attempt timeout', () => {
     );
 
     const handle = await engine.start('no-poison-wf', null, { id: 'no-poison-1' });
-    await expect(handle.result()).resolves.toBe('recovered');
+    expect(handle.result()).resolves.toBe('recovered');
     expect(attempts).toBe(2);
     // The retry's fresh signal was NOT aborted — the timeout abort stayed contained
     // to attempt 1's per-attempt controller.
@@ -375,7 +373,7 @@ describe('#494 per-attempt timeout', () => {
     const handle = await engine.start('compose-wf', null, { id: 'compose-1' });
     // The terminal failure is the cross-attempt budget (scheduleToCloseTimeout),
     // reached after the per-attempt timeouts consumed the budget.
-    await expect(handle.result()).rejects.toThrow('scheduleToCloseTimeout budget');
+    expect(handle.result()).rejects.toThrow('scheduleToCloseTimeout budget');
     // Exactly three attempts ran: the per-attempt cap did not collapse the run on
     // attempt 1, and the budget barred the fourth at the retry boundary. Pinning the
     // exact count (not just > 1) locks in the deterministic virtual-clock timeline.

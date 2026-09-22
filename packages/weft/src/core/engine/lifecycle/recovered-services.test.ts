@@ -54,6 +54,7 @@ function makeScheduleState(
     updatedAt: 1,
     nextFireAt: options.nextFireAt ?? 60_001,
     missedFireCount: 0,
+    skippedCount: 0,
     queuedRuns: options.queuedRuns ?? [],
     ...(options.currentWorkflowId !== undefined
       ? { currentWorkflowId: options.currentWorkflowId }

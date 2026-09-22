@@ -22,12 +22,35 @@ import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
 
 const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const REVISION_PATTERN = /^sha256:[0-9a-f]{64}$/;
+
+function faultOperation(fault: {
+  readonly code: 'EngineFailure' | 'Forbidden' | 'Unauthorized';
+  readonly message: string;
+  readonly data: Record<string, unknown>;
+}) {
+  return defineOperation({
+    name: getRegistryOperation.name,
+    mcpExposable: false,
+    summary: getRegistryOperation.summary,
+    destructive: false,
+    tags: ['System'],
+    inputSchema: z.object({}),
+    outputSchema: z.object({}),
+    access: { kind: 'public' },
+    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+    invoke: async () => {
+      throw fault;
+    },
+  });
+}
 
 interface RegistryBody {
   registryVersion: number;
@@ -387,6 +410,21 @@ describe('GET /v1/registry — authorization', () => {
     expect(value.registryVersion).toBe(2);
     expect(value.workflows.some((m) => m.name === 'demo')).toBe(true);
   });
+
+  it('throws when invoked directly with a context whose engine is not a concrete Engine instance', async () => {
+    // `invoke()` is exercised end-to-end above only through `handleRequest`/
+    // `executeOperation`, which always supply a real `Engine`. This guard
+    // exists for a caller that constructs the invoke context itself (a
+    // non-Engine test double, or a future alternate context builder).
+    await expect(
+      getRegistryOperation.invoke({
+        engine: {},
+        principal: { method: 'unauthenticated' },
+        transport: 'jsonRpcStdio',
+        input: {},
+      }),
+    ).rejects.toThrow('Registry snapshot requires a concrete Engine instance.');
+  });
 });
 
 describe('GET /v1/registry — error shaping', () => {
@@ -511,16 +549,11 @@ describe('GET /v1/registry — error shaping', () => {
 
   it('returns 500 with "Internal server error" for unrelated EngineFailure faults', async () => {
     engine = createEngine();
-    const failingOperation = {
-      ...getRegistryOperation,
-      invoke: async () => {
-        throw {
-          code: 'EngineFailure' as const,
-          message: 'secret internal detail',
-          data: {},
-        };
-      },
-    };
+    const failingOperation = faultOperation({
+      code: 'EngineFailure',
+      message: 'secret internal detail',
+      data: {},
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -538,16 +571,11 @@ describe('GET /v1/registry — error shaping', () => {
 
   it('shapes a Forbidden fault as 403 via the REST fault shaper', async () => {
     engine = createEngine();
-    const forbiddenOperation = {
-      ...getRegistryOperation,
-      invoke: async () => {
-        throw {
-          code: 'Forbidden' as const,
-          message: 'insufficient scope',
-          data: { reason: 'insufficient scope' },
-        };
-      },
-    };
+    const forbiddenOperation = faultOperation({
+      code: 'Forbidden',
+      message: 'insufficient scope',
+      data: { reason: 'insufficient scope' },
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -565,16 +593,11 @@ describe('GET /v1/registry — error shaping', () => {
 
   it('shapes an Unauthorized fault as 401 via the REST fault shaper', async () => {
     engine = createEngine();
-    const unauthorizedOperation = {
-      ...getRegistryOperation,
-      invoke: async () => {
-        throw {
-          code: 'Unauthorized' as const,
-          message: 'no credentials',
-          data: { reason: 'no credentials' },
-        };
-      },
-    };
+    const unauthorizedOperation = faultOperation({
+      code: 'Unauthorized',
+      message: 'no credentials',
+      data: { reason: 'no credentials' },
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -588,5 +611,64 @@ describe('GET /v1/registry — error shaping', () => {
 
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: 'no credentials' });
+  });
+
+  it('validates registry envelope members without rebuilding null-prototype maps', () => {
+    const workflows = [
+      {
+        manifestVersion: 1,
+        name: 'checkout',
+        workflowVersion: '1',
+        revision: 'sha256:' + 'a'.repeat(64),
+        contractHash: 'sha256:' + 'b'.repeat(64),
+        contract: {},
+      },
+    ];
+    const activeRevisions: Record<string, string> = {};
+    Object.setPrototypeOf(activeRevisions, null);
+    activeRevisions['__proto__'] = 'sha256:' + 'a'.repeat(64);
+    const activities: Record<string, { queue: string }> = {};
+    Object.setPrototypeOf(activities, null);
+    activities['__proto__'] = { queue: 'default' };
+    const parsed = getRegistryOperation.outputSchema.parse({
+      registryVersion: 2,
+      generatedAt: new Date(0).toISOString(),
+      workflows,
+      activeRevisions,
+      activities,
+    });
+
+    expect(parsed.activeRevisions).toBe(activeRevisions);
+    expect(parsed.activities).toBe(activities);
+    expect(Object.prototype.hasOwnProperty.call(parsed.activeRevisions, '__proto__')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(parsed.activities, '__proto__')).toBe(true);
+  });
+
+  it('rejects malformed workflow, revision, and activity envelope members', () => {
+    const valid = {
+      registryVersion: 2,
+      generatedAt: new Date(0).toISOString(),
+      workflows: [],
+      activeRevisions: {},
+      activities: {},
+    };
+    expect(() =>
+      getRegistryOperation.outputSchema.parse({
+        ...valid,
+        workflows: [null],
+      }),
+    ).toThrow();
+    expect(() =>
+      getRegistryOperation.outputSchema.parse({
+        ...valid,
+        activeRevisions: [],
+      }),
+    ).toThrow();
+    expect(() =>
+      getRegistryOperation.outputSchema.parse({
+        ...valid,
+        activities: null,
+      }),
+    ).toThrow();
   });
 });

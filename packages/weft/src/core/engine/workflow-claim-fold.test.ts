@@ -172,7 +172,7 @@ describe('throwWorkflowClaimUnavailable', () => {
     const holderAcquireResult = await competitorRegistry.acquire('wf-held');
     expect(holderAcquireResult.status).toBe('acquired');
 
-    await expect(throwWorkflowClaimUnavailable(internals, 'wf-held')).rejects.toMatchObject({
+    expect(throwWorkflowClaimUnavailable(internals, 'wf-held')).rejects.toMatchObject({
       name: 'WorkflowClaimUnavailableError',
       workflowId: 'wf-held',
       heldBy: 'holder-engine',
@@ -181,7 +181,7 @@ describe('throwWorkflowClaimUnavailable', () => {
 
   it('reports heldBy: null when the holder record is absent', async () => {
     const { internals } = await createTestEngine();
-    await expect(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')).rejects.toMatchObject({
+    expect(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')).rejects.toMatchObject({
       workflowId: 'wf-no-holder',
       heldBy: null,
     });

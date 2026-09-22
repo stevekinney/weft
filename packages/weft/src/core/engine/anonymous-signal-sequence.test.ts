@@ -75,7 +75,7 @@ describe('anonymous signal sequence', () => {
     const workflowId = 'anonymous-invalid-sequence';
     await storage.put(KEYS.signalSequence(workflowId), encode('bad-sequence'));
 
-    await expect(
+    expect(
       commitAnonymousSignalOperations(
         createInternals(storage),
         workflowId,
@@ -98,7 +98,7 @@ describe('anonymous signal sequence', () => {
       encode('old'),
     );
 
-    await expect(
+    expect(
       commitAnonymousSignalOperations(
         createInternals(storage),
         workflowId,
@@ -113,7 +113,7 @@ describe('anonymous signal sequence', () => {
     const storage = new NeverCommitConditionalStorage();
     const workflowId = 'anonymous-retry-exhaustion';
 
-    await expect(
+    expect(
       commitAnonymousSignalOperations(
         createInternals(storage),
         workflowId,

@@ -89,9 +89,9 @@ describe('Outbox construction', () => {
     const { outbox } = createOutboxFixture();
     outbox.dispose();
     outbox.dispose();
-    await expect(outbox.enqueue(deliveryInput())).rejects.toThrow(/disposed/);
-    await expect(outbox.deliverNext()).rejects.toThrow(/disposed/);
-    await expect(outbox.runMaintenance()).rejects.toThrow(/disposed/);
+    expect(outbox.enqueue(deliveryInput())).rejects.toThrow(/disposed/);
+    expect(outbox.deliverNext()).rejects.toThrow(/disposed/);
+    expect(outbox.runMaintenance()).rejects.toThrow(/disposed/);
   });
 });
 
@@ -160,7 +160,7 @@ describe('Outbox enqueue', () => {
 
   it('requires external idempotency evidence for retry-with-idempotency', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(
+    expect(
       outbox.enqueue(deliveryInput({ unknownOutcomePolicy: 'retry-with-idempotency' })),
     ).rejects.toThrow(/externalIdempotencyKey/);
     const admitted = await outbox.enqueue(
@@ -186,7 +186,7 @@ describe('Outbox enqueue', () => {
     ['payload.value', { payload: { form: 'inline', value: () => 1 } as never }],
   ])('rejects an invalid %s', async (_name, override) => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.enqueue(deliveryInput(override))).rejects.toThrow(
+    expect(outbox.enqueue(deliveryInput(override))).rejects.toThrow(
       ApplicationDeliveryValidationError,
     );
     expect(await outbox.list()).toHaveLength(0);
@@ -195,7 +195,7 @@ describe('Outbox enqueue', () => {
 
   it('rejects an oversized inline payload and accepts a reference with a byte length', async () => {
     const { outbox } = createOutboxFixture({ maxInlinePayloadBytes: 16 });
-    await expect(
+    expect(
       outbox.enqueue(deliveryInput({ payload: { form: 'inline', value: 'x'.repeat(64) } })),
     ).rejects.toThrow(/inline ceiling/);
     const reference = await outbox.enqueue(
@@ -209,10 +209,10 @@ describe('Outbox enqueue', () => {
 
   it('rejects a non-object delivery and a malformed generated id', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.enqueue(null as never)).rejects.toThrow(/must be an object/);
+    expect(outbox.enqueue(null as never)).rejects.toThrow(/must be an object/);
     outbox.dispose();
     const empty = createOutboxFixture({ generateId: () => '' }).outbox;
-    await expect(empty.enqueue(deliveryInput())).rejects.toThrow(/generateId/);
+    expect(empty.enqueue(deliveryInput())).rejects.toThrow(/generateId/);
     empty.dispose();
   });
 });
@@ -229,9 +229,9 @@ describe('Outbox receipts and listing', () => {
     const queuedOnly = await outbox.list({ states: ['queued'] });
     expect(queuedOnly.map((receipt) => receipt.deliveryId)).toEqual([second]);
     expect(await outbox.list({ limit: 1 })).toHaveLength(1);
-    await expect(outbox.list({ limit: 0 })).rejects.toThrow(/limit/);
+    expect(outbox.list({ limit: 0 })).rejects.toThrow(/limit/);
     expect(await outbox.receipt('missing')).toBeNull();
-    await expect(outbox.receipt('')).rejects.toThrow(ApplicationDeliveryValidationError);
+    expect(outbox.receipt('')).rejects.toThrow(ApplicationDeliveryValidationError);
     outbox.dispose();
   });
 
@@ -239,7 +239,7 @@ describe('Outbox receipts and listing', () => {
     const { outbox, storage } = createOutboxFixture();
     await enqueueOne(outbox);
     await storage.put(KEYS.applicationDeliveryBySequence('bureau', 'agent-7', 7), encode('id-1'));
-    await expect(outbox.list()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.list()).rejects.toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 
@@ -260,9 +260,9 @@ describe('Outbox receipts and listing', () => {
       unknown
     >;
     await storage.put(key, encode({ ...record, state: 'attempting' }));
-    await expect(outbox.receipt(deliveryId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.receipt(deliveryId)).rejects.toThrow(PersistedDataCorruptError);
     await storage.put(key, new Uint8Array([1, 2, 3]));
-    await expect(outbox.receipt(deliveryId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.receipt(deliveryId)).rejects.toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 });
@@ -388,8 +388,8 @@ describe('Outbox adapter runner', () => {
   it('requires an adapter for deliverNext and drain', async () => {
     const { outbox } = createOutboxFixture({ adapter: undefined });
     await enqueueOne(outbox);
-    await expect(outbox.deliverNext()).rejects.toThrow(/require an adapter/);
-    await expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
+    expect(outbox.deliverNext()).rejects.toThrow(/require an adapter/);
+    expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
     outbox.dispose();
   });
 
@@ -500,9 +500,9 @@ describe('Outbox fenced claim API', () => {
     const { outbox } = createOutboxFixture();
     await enqueueOne(outbox);
     const claim = await beginOne(outbox);
-    await expect(
-      outbox.heartbeat({ ...claim, transportActivity: new Map() as never }),
-    ).rejects.toThrow(ApplicationDeliveryValidationError);
+    expect(outbox.heartbeat({ ...claim, transportActivity: new Map() as never })).rejects.toThrow(
+      ApplicationDeliveryValidationError,
+    );
     // A malformed evidence value is an unknown outcome, not a caller error.
     const settled = await outbox.settle({
       ...claim,
@@ -541,7 +541,7 @@ describe('Outbox fenced claim API', () => {
       key,
       encode({ ...record, payload: { form: 'inline', value: { orderId: 'changed' } } }),
     );
-    await expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 });
@@ -621,10 +621,10 @@ describe('Outbox cancellation', () => {
 
   it('validates the cancellation reason and the delivery id', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(
+    expect(
       outbox.requestCancellation({ deliveryId: 'x', reason: 'r'.repeat(2000) }),
     ).rejects.toThrow(ApplicationDeliveryValidationError);
-    await expect(outbox.cleanupState('')).rejects.toThrow(ApplicationDeliveryValidationError);
+    expect(outbox.cleanupState('')).rejects.toThrow(ApplicationDeliveryValidationError);
     expect(await statusOf(outbox.cleanupState('missing'))).toBe('unknown');
     outbox.dispose();
   });
@@ -717,7 +717,7 @@ describe('Outbox events and secrets', () => {
     const events = new RecordingEventSink(storage);
     events.failure = new Error('feed down');
     const { outbox } = createOutboxFixture({ storage, events });
-    await expect(outbox.enqueue(deliveryInput())).rejects.toThrow('feed down');
+    expect(outbox.enqueue(deliveryInput())).rejects.toThrow('feed down');
     outbox.dispose();
   });
 

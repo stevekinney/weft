@@ -296,7 +296,7 @@ describe('REST fault shaper regressions', () => {
   });
 
   it('keeps invalid-params fault construction in operation helpers', async () => {
-    const source = await Bun.file(new URL('bulk-filter-helpers.ts', operationsDirectory)).text();
+    const source = await Bun.file(new URL('bulk-filter-body.ts', operationsDirectory)).text();
 
     expect(source).toMatch(
       /import\s+\{[^}]*\binvalidParamsFault\b[^}]*\}\s+from\s+['"]\.\/operation-helpers\.ts['"]/u,

@@ -8,12 +8,12 @@
  * suite's actual assertions local.
  */
 
+import { decodeRemoteTaskRecord } from '../../core/task-ledger/task-ledger.ts';
 import { MetricsCollector } from '../../observability/metrics.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { DeadlineTracker } from '../deadline-tracker.ts';
-import { decodeRemoteTaskRecord } from '../task-ledger.ts';
 import { TaskQueue } from '../task-queue.ts';
 
 import type { ServeOptions } from '../index.ts';
@@ -58,6 +58,7 @@ export function minimalServerContext(
     rateLimiter: null,
     visibilityPollMs: 5000,
     workerReconnectGracePeriodMs: 0,
+    cancellationGracePeriodMs: 30_000,
     payloadSizeMaxBytes: null,
     pendingWorkerRequeues: new Map(),
     scanRunning: false,

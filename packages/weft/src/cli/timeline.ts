@@ -54,9 +54,9 @@ export async function executeTimeline(options: {
     };
   }
 
-  const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+  const { BunSQLiteStorage } = await import('../index.ts');
   const storage = new BunSQLiteStorage(options.database);
-  const { Engine } = await import('../core/engine.ts');
+  const { Engine } = await import('../index.ts');
   const engine = new Engine({ storage });
 
   try {

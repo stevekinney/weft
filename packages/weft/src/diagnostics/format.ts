@@ -7,6 +7,7 @@
  * @module diagnostics/format
  */
 
+import { resolveCliEnvironment } from '../runtime/environment-configuration.ts';
 import type { DiagnosticReport, VersionCheckReport } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -14,7 +15,7 @@ import type { DiagnosticReport, VersionCheckReport } from './types.ts';
 // ---------------------------------------------------------------------------
 
 const supportsColor =
-  typeof process !== 'undefined' && process.stdout?.isTTY && !process.env['NO_COLOR'];
+  typeof process !== 'undefined' && process.stdout?.isTTY && !resolveCliEnvironment().noColor;
 
 const color = {
   green: (text: string) => (supportsColor ? `\x1b[32m${text}\x1b[0m` : text),

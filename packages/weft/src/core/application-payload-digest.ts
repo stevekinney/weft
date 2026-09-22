@@ -151,7 +151,8 @@ function toHex(bytes: ArrayBuffer): string {
  */
 export async function computePayloadDigest(value: unknown): Promise<string> {
   const canonical = canonicalize(value, new Set(), 0);
-  return toHex(await crypto.subtle.digest('SHA-256', encode(canonical)));
+  const bytes = encode(canonical).slice();
+  return toHex(await crypto.subtle.digest('SHA-256', bytes.buffer));
 }
 
 /**
@@ -159,5 +160,6 @@ export async function computePayloadDigest(value: unknown): Promise<string> {
  * boundary can be forged by embedding a separator.
  */
 export async function computeIdentityDigest(components: readonly string[]): Promise<string> {
-  return toHex(await crypto.subtle.digest('SHA-256', encode([...components])));
+  const bytes = encode([...components]).slice();
+  return toHex(await crypto.subtle.digest('SHA-256', bytes.buffer));
 }

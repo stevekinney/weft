@@ -15,10 +15,7 @@ const suspendWorkflowOutput = z.undefined();
 export type SuspendWorkflowInput = z.infer<typeof suspendWorkflowInput>;
 export type SuspendWorkflowOutput = z.infer<typeof suspendWorkflowOutput>;
 
-export const suspendWorkflowOperation = createSingleWorkflowControlOperation<
-  SuspendWorkflowInput,
-  SuspendWorkflowOutput
->({
+export const suspendWorkflowOperation = createSingleWorkflowControlOperation({
   name: 'weft.workflows.suspend',
   summary: 'Suspend a running workflow',
   description:
@@ -33,6 +30,7 @@ export const suspendWorkflowOperation = createSingleWorkflowControlOperation<
   inputSchema: suspendWorkflowInput,
   outputSchema: suspendWorkflowOutput,
   producibleFaults: ['Unprocessable'],
+  requiredEngineMethods: ['suspend'],
   invoke: async ({ input, engine }): Promise<SuspendWorkflowOutput> => {
     await engine.suspend(input.workflowId);
     return undefined;

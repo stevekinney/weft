@@ -51,6 +51,6 @@ describe('waitForMessage', () => {
   it('rejects after the timeout when no matching frame arrives', async () => {
     const { ws } = fakeWebSocket();
 
-    await expect(waitForMessage(ws, () => false, 10)).rejects.toThrow(/timed out/i);
+    expect(waitForMessage(ws, () => false, 10)).rejects.toThrow(/timed out/i);
   });
 });

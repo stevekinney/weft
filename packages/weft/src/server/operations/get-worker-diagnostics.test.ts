@@ -16,6 +16,7 @@ import {
   createGetWorkerDiagnosticsOperation,
   createGetWorkerDiagnosticsRestBinding,
   getWorkerDiagnosticsOperation,
+  type GetWorkerDiagnosticsOutput,
 } from './get-worker-diagnostics.ts';
 import {
   assertOperationRejectsInsufficientScope,
@@ -88,6 +89,8 @@ describe('weft.workers.diagnostics — REST GET /v1/workers/:workerId/diagnostic
       startedAt: expect.any(Number),
       lastHeartbeatAt: 1000,
       heartbeatAgeMs: 4000,
+      inFlight: 0,
+      sessionGeneration: 1,
     });
     expect(body.worker.deploymentVersion).toEqual({
       deploymentName: 'payments',
@@ -97,7 +100,7 @@ describe('weft.workers.diagnostics — REST GET /v1/workers/:workerId/diagnostic
       runtimeVersion: '1.3.14',
       sdkVersion: '0.18.0',
       manifestVersion: 1,
-      protocolVersion: 3,
+      protocolVersion: 6,
       manifestDigest: 'sha256:accepted',
       workflows: {
         checkout: {
@@ -204,6 +207,69 @@ describe('weft.workers.diagnostics — operation behavior', () => {
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error('expected rejection');
       expect(result.fault.code).toBe('EngineFailure');
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('surfaces sessionGeneration and inFlight from the registry, both changing across a reconnect (COR-220)', async () => {
+    const engine = createOperationTestEngine();
+    try {
+      const workerRegistry = new WorkerRegistry();
+      workerRegistry.register({
+        manifest: manifestWithWorkflow(),
+        acceptedManifestDigest: 'sha256:accepted',
+        id: 'worker-1',
+        queue: 'payments',
+        activities: ['checkout.charge'],
+        concurrency: 3,
+      });
+      workerRegistry.assignTask('worker-1', 'op-1', 30_000, undefined, 'attempt-1');
+
+      const registry = createOperationRegistry([
+        createGetWorkerDiagnosticsOperation({ workerRegistry }),
+      ]);
+      const firstResult = await executeOperation(
+        'weft.workers.diagnostics',
+        { workerId: 'worker-1' },
+        {
+          principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry,
+        },
+      );
+      if (!firstResult.ok) throw new Error('expected success');
+      const firstOutput = firstResult.value as GetWorkerDiagnosticsOutput;
+      expect(firstOutput.worker?.instance.sessionGeneration).toBe(1);
+      expect(firstOutput.worker?.instance.inFlight).toBe(1);
+
+      // A reconnect that proves nothing about the disconnected session — an
+      // ordinary fresh registration, exactly like `register()`'s default
+      // (no `resumingSessionGeneration`) behaves for any caller that hasn't
+      // proven a resume.
+      workerRegistry.register({
+        manifest: manifestWithWorkflow(),
+        acceptedManifestDigest: 'sha256:accepted',
+        id: 'worker-1',
+        queue: 'payments',
+        activities: ['checkout.charge'],
+        concurrency: 3,
+      });
+
+      const secondResult = await executeOperation(
+        'weft.workers.diagnostics',
+        { workerId: 'worker-1' },
+        {
+          principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
+          engine,
+          transport: 'jsonRpcStdio',
+          registry,
+        },
+      );
+      if (!secondResult.ok) throw new Error('expected success');
+      const secondOutput = secondResult.value as GetWorkerDiagnosticsOutput;
+      expect(secondOutput.worker?.instance.sessionGeneration).toBe(2);
     } finally {
       engine[Symbol.dispose]();
     }

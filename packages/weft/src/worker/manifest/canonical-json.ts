@@ -8,7 +8,7 @@
  * @module worker/manifest/canonical-json
  */
 
-function sortedEntryKeys(record: Readonly<Record<string, unknown>>): readonly string[] {
+function sortedEntryKeys(record: object): readonly string[] {
   return Object.keys(record).toSorted();
 }
 
@@ -30,9 +30,8 @@ export function canonicalJsonStringify(value: unknown): string {
     return `[${value.map((entry) => canonicalJsonStringify(entry)).join(',')}]`;
   }
 
-  const record = value as Readonly<Record<string, unknown>>;
-  const entries = sortedEntryKeys(record)
-    .filter((key) => record[key] !== undefined)
-    .map((key) => `${JSON.stringify(key)}:${canonicalJsonStringify(record[key])}`);
+  const entries = sortedEntryKeys(value)
+    .filter((key) => Reflect.get(value, key) !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJsonStringify(Reflect.get(value, key))}`);
   return `{${entries.join(',')}}`;
 }

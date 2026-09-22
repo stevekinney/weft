@@ -107,7 +107,7 @@ describe('event-stream contracts', () => {
     expect(isReplayAwareClosableIterable(iterable)).toBe(true);
     completeReplay?.();
     await iterable.replayComplete;
-    await expect(Array.fromAsync(iterable)).resolves.toEqual(['first', 'second']);
+    expect(Array.fromAsync(iterable)).resolves.toEqual(['first', 'second']);
     await Promise.all([iterable.close(), iterable.close()]);
     expect(cleanupCount).toBe(1);
   });
@@ -135,7 +135,7 @@ describe('event-stream contracts', () => {
         })(),
       { close: () => void (failureCleanupCount += 1) },
     );
-    await expect(Array.fromAsync(failingIterable)).rejects.toThrow('source failed');
+    expect(Array.fromAsync(failingIterable)).rejects.toThrow('source failed');
     expect(failureCleanupCount).toBe(1);
   });
 });

@@ -197,7 +197,10 @@ describe('WFT-78: two engines sharing one store under ownership: "workflow-lease
     // No double-recovery: the two engines' recovered sets are disjoint and, together,
     // cover both seeded workflows exactly once — each engine progresses a DIFFERENT one.
     expect(idsA.filter((id) => idsB.includes(id))).toEqual([]);
-    expect([...idsA, ...idsB].toSorted()).toEqual(['recover-race-1', 'recover-race-2']);
+    expect([...idsA, ...idsB].toSorted((left, right) => left.localeCompare(right))).toEqual([
+      'recover-race-1',
+      'recover-race-2',
+    ]);
     expect(idsA).toHaveLength(1);
     expect(idsB).toHaveLength(1);
 
@@ -571,7 +574,7 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
 
     release.resolve();
 
-    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
 
     // The regression: `acquireStandaloneClaimBeforeResume` freshly installed
     // a claim for engineA (no cached epoch, and nothing else held it after
@@ -669,7 +672,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
 
     release.resolve();
 
-    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
 
     // The regression this finding describes: `acquireStandaloneClaimBeforeResume`
     // saw `cachedEpoch !== null` (the stale entry `staleAcquire` installed),
@@ -751,7 +754,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
 
     // The stale resume rejects — its own state, read before the cancel,
     // no longer matches what the serialized section observes.
-    await expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
 
     // The regression: cleaning up the STALE resume's claim must not release
     // whatever is CURRENTLY tracked (the replacement's live claim) — it must
@@ -809,7 +812,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
     const registryA = getInternals(engineA).workflowClaimRegistry;
     expect(registryA).not.toBeNull();
 
-    await expect(engineA.resume(workflowId)).rejects.toThrow(/Checkpoint not found/);
+    expect(engineA.resume(workflowId)).rejects.toThrow(/Checkpoint not found/);
 
     // The regression: `release()`'s durable CAS threw (simulated transient
     // failure, not a lost CAS), so the durable holder record is still

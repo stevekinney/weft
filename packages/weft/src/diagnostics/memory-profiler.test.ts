@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { isConstrainedCodexRunner } from '../benchmarks/benchmark-environment.ts';
-import { isCoverageInstrumentationEnabled } from '../benchmarks/coverage-mode.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
@@ -19,8 +17,7 @@ import {
   linearRegression,
 } from './memory-profiler.ts';
 
-const runRssStabilityTest =
-  isConstrainedCodexRunner() || isCoverageInstrumentationEnabled() ? it.skip : it;
+const runRssStabilityTest = it;
 
 // ---------------------------------------------------------------------------
 // Unit tests: linearRegression
@@ -248,6 +245,7 @@ describe('engine memory stability under load', () => {
         _context: WorkflowContext,
         input: unknown,
       ) {
+        yield* [];
         return `done:${String(input)}`;
       });
       engine.register(trivial);
@@ -302,6 +300,7 @@ describe('engine memory stability under load', () => {
       _context: WorkflowContext,
       input: unknown,
     ) {
+      yield* [];
       return `done:${String(input)}`;
     });
     engine.register(trivial);

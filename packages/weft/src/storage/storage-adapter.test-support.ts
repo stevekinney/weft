@@ -7,7 +7,7 @@
  * fixtures so the two suites stay in lockstep.
  *
  * The storage conformance runners are public through
- * `@lostgradient/weft/storage/testing`; this module keeps the additional
+ * `@lostgradient/weft`; this module keeps the additional
  * adapter fixtures internal. The `.test-support.ts` suffix is excluded by
  * `tsconfig.build.json` so those fixtures never ship in `dist/`.
  */

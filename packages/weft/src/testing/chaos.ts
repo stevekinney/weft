@@ -24,7 +24,7 @@ export type { FailureCategory } from '../core/types.ts';
  *
  * @example
  * ```ts
- * import { withChaos, type FaultClass } from '@lostgradient/weft/testing';
+ * import { withChaos, type FaultClass } from '@lostgradient/weft';
  *
  * const faults: FaultClass[] = ['transient', 'error'];
  * const noisy = withChaos(
@@ -43,7 +43,7 @@ export type FaultClass = 'transient' | 'timeout' | 'error' | 'delay';
  *
  * @example
  * ```ts
- * import { withChaos, type ChaosScenario } from '@lostgradient/weft/testing';
+ * import { withChaos, type ChaosScenario } from '@lostgradient/weft';
  *
  * const scenario: ChaosScenario = {
  *   faultRate: 0.2,
@@ -101,7 +101,7 @@ function makePrng(seed: number): () => number {
  *
  * @example
  * ```ts
- * import { ChaosTransientError } from '@lostgradient/weft/testing';
+ * import { ChaosTransientError } from '@lostgradient/weft';
  *
  * const err = new ChaosTransientError();
  * console.log(err.retryable); // true
@@ -126,7 +126,7 @@ export class ChaosTransientError extends Error {
  *
  * @example
  * ```ts
- * import { ChaosNonRetryableError } from '@lostgradient/weft/testing';
+ * import { ChaosNonRetryableError } from '@lostgradient/weft';
  *
  * const err = new ChaosNonRetryableError();
  * console.log(err.retryable); // false
@@ -151,7 +151,7 @@ export class ChaosNonRetryableError extends Error {
  *
  * @example
  * ```ts
- * import { ChaosTimeoutError } from '@lostgradient/weft/testing';
+ * import { ChaosTimeoutError } from '@lostgradient/weft';
  *
  * const err = new ChaosTimeoutError(25);
  * console.log(err.timeoutMilliseconds); // 25
@@ -221,7 +221,7 @@ async function raiseTimeoutFault(timeoutMilliseconds: number): Promise<never> {
  *
  * @example
  * ```ts
- * import { TestEngine, withChaos } from '@lostgradient/weft/testing';
+ * import { TestEngine, withChaos } from '@lostgradient/weft';
  *
  * const noisySendEmail = withChaos(
  *   async (input: unknown) => ({ sent: true }),

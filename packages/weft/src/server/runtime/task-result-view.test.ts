@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 
-import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
@@ -12,7 +11,8 @@ import {
   type RemoteTaskTerminalCancelled,
   type RemoteTaskTerminalResolved,
   type RemoteTaskTerminalRetryExhausted,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import { minimalServeOptions } from './server-context.test-support.ts';
 import { adoptTaskResultImpl, getTaskResultViewImpl } from './task-result-view.ts';
 
@@ -84,6 +84,7 @@ function cancellingFixture(overrides: Partial<RemoteTaskCancelling> = {}): Remot
     state: 'cancelling',
     cancellationReason: 'user requested',
     cancellationRequestedAt: 3_000,
+    cancellationDeadline: 33_000,
     ...overrides,
   };
 }

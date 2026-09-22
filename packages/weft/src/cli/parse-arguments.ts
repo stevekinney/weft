@@ -112,7 +112,6 @@ function parseServeArguments(args: string[]): CliCommand {
       database: { type: 'string', short: 'd', default: './weft.db' },
       storage: { type: 'string', short: 's', default: 'sqlite' },
       help: { type: 'boolean', short: 'h', default: false },
-      console: { type: 'boolean', default: false },
       workflows: { type: 'string', short: 'w' },
     },
     strict: true,
@@ -130,7 +129,6 @@ function parseServeArguments(args: string[]): CliCommand {
     database: values.database ?? './weft.db',
     storage: parseStorageBackend(values.storage),
     help: values.help ?? false,
-    console: values.console ?? false,
     ...(values.workflows ? { workflows: values.workflows } : {}),
   };
 }

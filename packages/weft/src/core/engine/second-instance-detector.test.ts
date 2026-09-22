@@ -311,7 +311,7 @@ describe('createSecondInstanceDetector', () => {
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
 
     // Best-effort: a failed heartbeat write must not surface to the engine.
-    await expect(detector.tick()).resolves.toBeUndefined();
+    expect(detector.tick()).resolves.toBeUndefined();
   });
 
   it('swallows a delete failure during stop and during sweep', async () => {
@@ -324,9 +324,9 @@ describe('createSecondInstanceDetector', () => {
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
 
     // Sweep delete throws internally; tick still resolves.
-    await expect(detector.tick()).resolves.toBeUndefined();
+    expect(detector.tick()).resolves.toBeUndefined();
     // stop() delete throws internally; stop still resolves.
-    await expect(detector.stop()).resolves.toBeUndefined();
+    expect(detector.stop()).resolves.toBeUndefined();
   });
 
   it('swallows a SYNCHRONOUS throw from storage (put, sweep delete, and stop delete)', async () => {
@@ -349,10 +349,10 @@ describe('createSecondInstanceDetector', () => {
 
     // tick(): the first-tick sweep delete AND the heartbeat put both throw
     // synchronously; the tick must still resolve.
-    await expect(detector.tick()).resolves.toBeUndefined();
+    expect(detector.tick()).resolves.toBeUndefined();
     // stop(): the delete throws synchronously; stop() is fire-and-forget and must
     // never reject.
-    await expect(detector.stop()).resolves.toBeUndefined();
+    expect(detector.stop()).resolves.toBeUndefined();
   });
 
   it('two real detectors over one shared store each warn about the other (autoscaling=2)', async () => {
@@ -627,7 +627,7 @@ describe('createSecondInstanceDetector', () => {
     releasePut();
 
     // The tick resolves despite the finally-delete throwing.
-    await expect(inFlight).resolves.toBeUndefined();
+    expect(inFlight).resolves.toBeUndefined();
   });
 
   it('sweeps by the scanned key, never a key rebuilt from a spoofed instanceId', async () => {

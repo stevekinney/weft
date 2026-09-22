@@ -375,7 +375,7 @@ describe('Mailbox maintenance', () => {
       KEYS.applicationCommand('bureau', 'agent-7', commandId),
       new Uint8Array([0xc1, 0xc1]),
     );
-    await expect(mailbox.runMaintenance()).rejects.toThrow(/corrupt/);
+    expect(mailbox.runMaintenance()).rejects.toThrow(/corrupt/);
     mailbox.dispose();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { CounterWindow, HistogramWindow } from './sliding-window';
+import { CounterWindow, HistogramWindow } from './sliding-window.ts';
 
 describe('CounterWindow', () => {
   it('records events and computes correct rate', () => {

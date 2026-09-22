@@ -78,7 +78,7 @@ describe('recoverAll() version mismatch policies', () => {
 
     const matchedHandle = handles[0]!;
     await matchedHandle.signal('continue', 'continue');
-    await expect(matchedHandle.result()).resolves.toBe('resumed:continue');
+    expect(matchedHandle.result()).resolves.toBe('resumed:continue');
   });
 
   it('does not resolve services or invoke onRecoveredWorkflow for the mismatched run', async () => {
@@ -130,7 +130,7 @@ describe('recoverAll() version mismatch policies', () => {
     await using recovered = new Engine({ storage });
     recovered.register(createWaiterWorkflow('1.0.0'));
 
-    await expect(recovered.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
+    expect(recovered.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
       'Version mismatch',
     );
 

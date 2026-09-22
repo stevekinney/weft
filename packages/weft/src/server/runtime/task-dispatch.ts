@@ -1,30 +1,36 @@
-import type { ConditionalBatchCondition } from '../../storage/interface.ts';
-import { buildWorkerExecutionIdentity } from '../../worker/manifest/execution-identity.ts';
-import type { RoutingOptions } from '../../worker/registry.ts';
-import type { ServeOptions, TaskDispatch } from '../index.ts';
-import { evictOldestAffinityEntries } from '../runtime-helpers.ts';
+import {
+  buildClaimAttemptRecordWrite,
+  digestAttemptToken,
+} from '../../core/task-ledger/task-attempt-runtime.ts';
+import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-runtime.ts';
 import {
   claimQueued,
   createQueued,
+  recordCancellationIntent,
   type ClaimQueuedInput,
   type CreateQueuedInput,
   type TaskLedgerTransitionResult,
-} from '../task-ledger-transitions.ts';
+} from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskLeased,
   type RemoteTaskQueued,
   type RemoteTaskRecord,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import type { ConditionalBatchCondition } from '../../storage/interface.ts';
+import { buildWorkerExecutionIdentity } from '../../worker/manifest/execution-identity.ts';
+import type { RoutingOptions } from '../../worker/registry.ts';
+import type { ServeOptions, TaskDispatch } from '../index.ts';
+import { evictOldestAffinityEntries } from '../runtime-helpers.ts';
 import type { ServerContext } from './context.ts';
+import { buildTerminalResolutionWrites } from './remote-activity-result-bridge.ts';
 import {
   assertFreshDispatchOperationIdAdmissible,
   awaitTaskLedgerRecoveryReady,
   buildCreateQueuedInput,
 } from './task-dispatch-envelope.ts';
 import { assertDispatchTargetsFreshRevision } from './task-dispatch-revision.ts';
-import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
 import {
   recordTaskBacklogMetric,
   recordTaskQueueLatencyMetric,
@@ -249,6 +255,12 @@ async function selectAndReserveWorker(
     task.workflowRevision,
   );
 
+  // Computed once, before the commit, so a single attempt's digest is reused
+  // for both the CAS's own retry loop (there is none here — a single
+  // attempt) and the attempt-record write below, rather than re-hashing.
+  const attemptTokenDigest = digestAttemptToken(attemptToken);
+  const sessionGeneration = worker.sessionGeneration;
+
   let result;
   try {
     result = await commitTaskLedgerTransition(
@@ -262,6 +274,29 @@ async function selectAndReserveWorker(
       }),
       1,
       revisionFenceConditions,
+      // Acceptance criterion 1: every successful reservation produces a
+      // complete durable execution identity — the `TaskAttemptRecord` —
+      // BEFORE the `task` frame is ever sent below, atomically with the
+      // claim transition itself (criterion 11). Criterion 2 falls out
+      // structurally: a rejected claim (`result.ok === false` below) never
+      // reaches this callback at all.
+      async (_current, nextRecord, now) =>
+        [
+          buildClaimAttemptRecordWrite({
+            operationId: nextRecord.operationId,
+            attempt: nextRecord.attempt,
+            attemptTokenDigest,
+            workerSessionId: nextRecord.workerSessionId,
+            sessionGeneration,
+            ...(nextRecord.executionIdentity !== undefined
+              ? { executionIdentity: nextRecord.executionIdentity }
+              : {}),
+            ...(nextRecord.executionRequirement !== undefined
+              ? { executionRequirement: nextRecord.executionRequirement }
+              : {}),
+            claimedAt: now,
+          }),
+        ] as const,
     );
   } catch (error) {
     // Durable claim failed after the local reservation — release it and let
@@ -453,15 +488,124 @@ export async function dispatchTaskImpl(
   );
 }
 
-/** Send a cancel message to the worker handling a specific operation. */
-export function cancelTask(context: ServerContext, operationId: string): boolean {
-  // O(1) lookup via the registry's in-flight task map.
+const DEFAULT_CANCELLATION_REASON = 'Task cancelled by operator';
+
+/**
+ * Request cancellation of `operationId` (COR-230, acceptance criteria 9-11
+ * and 15).
+ *
+ * Reads the durable ledger record and branches on its current state — the
+ * durable record, not the in-memory registry, is what decides whether this
+ * is a queued-origin cancellation (commits straight to `Terminal`, no worker
+ * to notify — criterion 9) or a leased-origin one (commits `Leased -->
+ * Cancelling` FIRST, then best-effort sends the `cancel` control only if
+ * that durable write succeeds — criterion 10). A single CAS attempt, no
+ * retry, matching every other single-shot transition in this module
+ * (`selectAndReserveWorker`): a lost race means another actor (a
+ * just-arrived result, a visibility-timeout requeue, a concurrent
+ * cancellation) already resolved this operationId, and retrying the
+ * identical transition cannot change that outcome.
+ *
+ * The `cancel` control carries `attemptToken` (criterion 11) so the
+ * worker's `AbortController` lookup can reject a control that targets an
+ * attempt it no longer holds. Delivery is best-effort and NEVER gates the
+ * return value once durable intent is recorded: a leased-origin
+ * cancellation whose worker has no live socket (a long-poll worker, or a
+ * disconnected WebSocket worker still mid-reconnect-grace) still returns
+ * `true` — the durable `Cancelling` record is the source of truth, and the
+ * cancellation-deadline scan (`scanExpiredTasks`, criterion 15) force-settles
+ * it as cancelled if no cooperative result ever arrives.
+ */
+export async function cancelTask(
+  context: ServerContext,
+  options: ServeOptions,
+  operationId: string,
+  cancellationReason: string = DEFAULT_CANCELLATION_REASON,
+): Promise<boolean> {
+  const current = decodeRemoteTaskRecord(
+    await options.engine.storage.get(taskLedgerKey(operationId)),
+  );
+  if (current === null) return false;
+
+  if (current.state === 'terminal') {
+    // Idempotent: a queued-origin or already-settled cancellation is a
+    // successful no-op: this operationId is already cancelled. Any other
+    // terminal disposition (resolved, retryExhausted) cannot be turned into
+    // a cancellation after the fact.
+    return current.disposition === 'cancelled';
+  }
+  if (current.state === 'cancelling') {
+    // Cancellation already in flight for this attempt — idempotent success,
+    // no second intent to record and nothing new to send.
+    return true;
+  }
+  if (current.state !== 'queued' && current.state !== 'leased') {
+    // 'completing' (a result is already pending commit) or 'deadLettered' —
+    // there is no live attempt left to cancel.
+    return false;
+  }
+
+  const cancellationToken = crypto.randomUUID();
+  const result = await commitTaskLedgerTransition(
+    options.engine.storage,
+    operationId,
+    (record, now) =>
+      recordCancellationIntent(
+        record,
+        {
+          expectedGeneration: current.generation,
+          expectedAttempt: current.attempt,
+          cancellationReason,
+          cancellationToken,
+          cancellationGracePeriodMilliseconds: context.cancellationGracePeriodMs,
+        },
+        now,
+      ),
+    1,
+    [],
+    // Acceptance criterion 6: a queued-origin cancellation resolves straight
+    // to terminal (no attempt ever existed) — co-commit the durable
+    // async-activity resolution record here too, same reasoning as every
+    // other terminal-producing transition. A leased-origin cancellation
+    // lands in `cancelling` here (not terminal), so `nextRecord.state ===
+    // 'terminal'` gates this to the queued-origin case only; the
+    // leased-origin case resolves later through `commitCancellation`/
+    // `commitUncertainCancellation`, which already carry this write.
+    async (_record, nextRecord) =>
+      nextRecord.state === 'terminal'
+        ? buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
+            status: 'failed',
+            error: nextRecord.cancellationReason,
+            failureCategory: 'cancellation',
+          })
+        : [],
+  );
+  if (!result.ok) return false;
+
+  if (result.record.state === 'terminal') {
+    // Queued-origin (criterion 9): resolved directly, no worker ever held
+    // this attempt, so there is nothing to notify.
+    return true;
+  }
+
+  // Leased-origin (criterion 10): durable intent is already committed above.
+  // Track the cancellation deadline in place of the visibility deadline this
+  // operationId no longer has (it left `leased`), so `scanExpiredTasks` can
+  // force-settle it if no cooperative result arrives in time.
+  context.deadlineTracker.remove(operationId);
+  context.deadlineTracker.add({ operationId, deadline: result.record.cancellationDeadline });
+
+  // Best-effort delivery — see this function's doc comment. A missing
+  // in-flight entry or socket (long-poll worker, or a WebSocket worker
+  // mid-disconnect) never turns a successful durable write into a `false`
+  // return.
   const task = context.registry.getTask(operationId);
-  if (!task) return false;
+  const ws = task !== undefined ? context.workerSockets.get(task.workerId) : undefined;
+  if (ws !== undefined) {
+    ws.send(
+      JSON.stringify({ type: 'cancel', operationId, attemptToken: result.record.attemptToken }),
+    );
+  }
 
-  const ws = context.workerSockets.get(task.workerId);
-  if (!ws) return false;
-
-  ws.send(JSON.stringify({ type: 'cancel', operationId }));
   return true;
 }

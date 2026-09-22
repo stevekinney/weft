@@ -1,12 +1,11 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { SearchAttributeValue } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, isOperationFault } from './operation-helpers.ts';
 
 const setWorkflowAttributesInput = z.object({
   workflowId: z.string().min(1),
@@ -19,10 +18,7 @@ const setWorkflowAttributesOutput = z.object({
 export type SetWorkflowAttributesInput = z.infer<typeof setWorkflowAttributesInput>;
 export type SetWorkflowAttributesOutput = z.infer<typeof setWorkflowAttributesOutput>;
 
-export const setWorkflowAttributesOperation = defineOperation<
-  SetWorkflowAttributesInput,
-  SetWorkflowAttributesOutput
->({
+export const setWorkflowAttributesOperation = defineOperation({
   name: 'weft.workflows.attributes.set',
   mcpExposable: false,
   summary: 'Update search attributes for a workflow',
@@ -37,7 +33,8 @@ export const setWorkflowAttributesOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<SetWorkflowAttributesOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['setAttributes']);
+    const e = engine;
 
     try {
       // REST forwards whatever lived under `attributes`

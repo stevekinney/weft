@@ -1,7 +1,7 @@
 import { PayloadSizeExceededError, assertPayloadWithinLimit } from '../../core/payload-size.ts';
 
 export type TaskResultPayloadSizeInput = {
-  readonly status: 'completed' | 'failed';
+  readonly status: 'completed' | 'failed' | 'cancelled';
   readonly value?: unknown;
   readonly error?: string | undefined;
 };

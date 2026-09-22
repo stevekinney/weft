@@ -41,7 +41,7 @@ export type BatchOperation =
  *
  * @example
  * ```ts
- * import { MAX_BATCH_OPERATIONS } from '@lostgradient/weft/storage';
+ * import { MAX_BATCH_OPERATIONS } from '@lostgradient/weft';
  *
  * console.log(MAX_BATCH_OPERATIONS); // 10000
  * ```
@@ -53,7 +53,7 @@ export const MAX_BATCH_OPERATIONS = 10_000;
  *
  * @example
  * ```ts
- * import { MAX_SCAN_LIMIT } from '@lostgradient/weft/storage';
+ * import { MAX_SCAN_LIMIT } from '@lostgradient/weft';
  *
  * console.log(MAX_SCAN_LIMIT); // 10000
  * ```
@@ -65,7 +65,7 @@ export const MAX_SCAN_LIMIT = 10_000;
  *
  * @example
  * ```ts
- * import type { StorageBatchOperationLimitTarget } from '@lostgradient/weft/storage';
+ * import type { StorageBatchOperationLimitTarget } from '@lostgradient/weft';
  *
  * const target: StorageBatchOperationLimitTarget = 'batch operations';
  * void target;
@@ -79,7 +79,7 @@ export type StorageBatchOperationLimitTarget =
  *
  * @example
  * ```ts
- * import { StorageBatchOperationLimitExceededError } from '@lostgradient/weft/storage';
+ * import { StorageBatchOperationLimitExceededError } from '@lostgradient/weft';
  *
  * const error = new StorageBatchOperationLimitExceededError('batch operations', 10001);
  * console.log(error.cap); // 10000
@@ -104,7 +104,7 @@ export class StorageBatchOperationLimitExceededError extends Error {
  *
  * @example
  * ```ts
- * import { assertStorageBatchOperationCount } from '@lostgradient/weft/storage';
+ * import { assertStorageBatchOperationCount } from '@lostgradient/weft';
  *
  * assertStorageBatchOperationCount('batch operations', 1);
  * ```
@@ -160,14 +160,14 @@ export interface ScanOptions {
  * `keys`, `count`, `scoped`, and `query`. Adapters that omit optional methods
  * get generic fallbacks via `storageHas`, `storageKeys`, `storageCount`,
  * `storageDeletePrefix`, and `storageConditionalBatch` (all from this module),
- * plus `storageDeleteRange` (exported from `@lostgradient/weft` / `@lostgradient/weft/storage`, defined in
+ * plus `storageDeleteRange` (exported from `@lostgradient/weft` / `@lostgradient/weft`, defined in
  * `storage/delete-range.ts`). Callers should use those wrappers rather than
  * calling optional methods directly.
  *
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import type { Storage } from '@lostgradient/weft/storage/interface';
+ * import type { Storage } from '@lostgradient/weft';
  *
  * await using storage: Storage = new MemoryStorage();
  * const encoded = new TextEncoder().encode('hello');
@@ -210,7 +210,7 @@ export interface Storage extends Disposable {
  *
  * @example
  * ```ts
- * import { resolvePrefixRangeEnd } from '@lostgradient/weft/storage/interface';
+ * import { resolvePrefixRangeEnd } from '@lostgradient/weft';
  *
  * const end = resolvePrefixRangeEnd('wf:');
  * console.log(end); // 'wf;'
@@ -228,7 +228,7 @@ export function resolvePrefixRangeEnd(prefix: string): string {
  *
  * @example
  * ```ts
- * import { matchesScanOptions } from '@lostgradient/weft/storage/interface';
+ * import { matchesScanOptions } from '@lostgradient/weft';
  *
  * console.log(matchesScanOptions('wf:b', { gt: 'wf:a', lt: 'wf:c' })); // true
  * console.log(matchesScanOptions('wf:a', { gt: 'wf:a' }));              // false
@@ -291,7 +291,7 @@ export function storageValuesEqual(left: Uint8Array | null, right: Uint8Array | 
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { storageHas } from '@lostgradient/weft/storage/interface';
+ * import { storageHas } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await storage.put('my-key', new Uint8Array([1]));
@@ -313,7 +313,7 @@ export async function storageHas(storage: Storage, key: string): Promise<boolean
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { storageKeys } from '@lostgradient/weft/storage/interface';
+ * import { storageKeys } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * for await (const key of storageKeys(storage, 'wf:')) {
@@ -339,7 +339,7 @@ export function storageKeys(
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { storageCount } from '@lostgradient/weft/storage/interface';
+ * import { storageCount } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await storage.put('wf:1', new Uint8Array([1]));
@@ -361,7 +361,7 @@ export async function storageCount(storage: Storage, prefix: string): Promise<nu
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { storageDeletePrefix } from '@lostgradient/weft/storage/interface';
+ * import { storageDeletePrefix } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await storage.put('wf:a', new Uint8Array([1]));
@@ -383,7 +383,7 @@ export async function storageDeletePrefix(storage: Storage, prefix: string): Pro
  *
  * @example
  * ```ts
- * import { MemoryStorage, storageBatch } from '@lostgradient/weft/storage';
+ * import { MemoryStorage, storageBatch } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await storageBatch(storage, []);
@@ -405,7 +405,7 @@ export async function storageBatch(storage: Storage, operations: BatchOperation[
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { storageConditionalBatch } from '@lostgradient/weft/storage/interface';
+ * import { storageConditionalBatch } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const key = 'my-key';
@@ -419,7 +419,7 @@ export async function storageBatch(storage: Storage, operations: BatchOperation[
  * ```
  */
 export async function storageConditionalBatch(
-  storage: Storage,
+  storage: Pick<Storage, 'capabilities'> & { conditionalBatch?: Storage['conditionalBatch'] },
   conditions: ConditionalBatchCondition[],
   operations: BatchOperation[],
 ): Promise<boolean> {
@@ -430,7 +430,7 @@ export async function storageConditionalBatch(
   // method but honestly reports conditionalBatch: false (e.g. a remote HTTP
   // backend known to lack CAS) must not silently execute the swap.
   requireStorageCapability(storage, 'conditionalBatch', 'storageConditionalBatch');
-  if (!storage.conditionalBatch) {
+  if (typeof storage.conditionalBatch !== 'function') {
     throw new Error(
       'This storage backend reports conditionalBatch capability but does not implement the conditionalBatch() method.',
     );
@@ -467,7 +467,7 @@ export {
  *
  * @example
  * ```ts
- * import { KEYS } from '@lostgradient/weft/storage/interface';
+ * import { KEYS } from '@lostgradient/weft';
  * KEYS.workflow('workflow-id');
  * ```
  */

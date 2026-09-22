@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  classifyBetterSqlite3Failure,
   createMissingBetterSqlite3Error,
   isBetterSqlite3LoadFailure,
   loadBetterSqlite3ForTest,
@@ -84,12 +85,67 @@ describe('isBetterSqlite3LoadFailure', () => {
   });
 });
 
+describe('classifyBetterSqlite3Failure', () => {
+  it('separates an absent package from an uncompiled binding', () => {
+    // These two were indistinguishable before COR-1278, and the conflation is
+    // what made an unbuilt binding read as a missing dependency for three
+    // investigations. Their remedies are different, so their diagnoses must be.
+    expect(
+      classifyBetterSqlite3Failure(
+        errorWithCode("Cannot find module 'better-sqlite3'", 'MODULE_NOT_FOUND'),
+      ),
+    ).toBe('missing-package');
+    expect(
+      classifyBetterSqlite3Failure(
+        new Error(
+          'Could not locate the bindings file. Tried:\n → /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+        ),
+      ),
+    ).toBe('unbuilt-binding');
+  });
+
+  it('classifies a refused binding as a dlopen failure', () => {
+    expect(
+      classifyBetterSqlite3Failure(
+        errorWithCode("'better-sqlite3' is not yet supported in Bun.", 'ERR_DLOPEN_FAILED'),
+      ),
+    ).toBe('dlopen-failed');
+  });
+
+  it('returns undefined for anything it does not recognize', () => {
+    expect(classifyBetterSqlite3Failure(errorWithCode('boom', 'EACCES'))).toBeUndefined();
+    expect(classifyBetterSqlite3Failure('not an error')).toBeUndefined();
+  });
+});
+
 describe('createMissingBetterSqlite3Error', () => {
   it('produces an actionable error that preserves the original cause', () => {
-    const cause = new Error('original');
+    const cause = errorWithCode("Cannot find module 'better-sqlite3'", 'MODULE_NOT_FOUND');
     const error = createMissingBetterSqlite3Error(cause);
     expect(error.message).toContain(MISSING_BETTER_SQLITE_ERROR);
     expect(error.cause).toBe(cause);
+  });
+
+  it('tells an uncompiled binding to rebuild rather than to install', () => {
+    const cause = new Error(
+      'Could not locate the bindings file. Tried:\n → /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node',
+    );
+    const error = createMissingBetterSqlite3Error(cause);
+    expect(error.message).toContain('its native binding was never compiled');
+    expect(error.message).toContain('bun install --force');
+    // The wrong advice must be gone, not merely supplemented.
+    expect(error.message).not.toContain('bun add better-sqlite3');
+  });
+
+  it('appends the underlying message so it survives into a thrown assertion', () => {
+    const error = createMissingBetterSqlite3Error(new Error('the real reason'));
+    expect(error.message).toContain('Underlying error: the real reason');
+  });
+
+  it('describes a non-Error cause rather than dropping it', () => {
+    expect(createMissingBetterSqlite3Error('a string cause').message).toContain(
+      'Underlying error: a string cause',
+    );
   });
 });
 

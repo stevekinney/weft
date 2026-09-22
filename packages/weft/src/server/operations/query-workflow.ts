@@ -1,11 +1,10 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestTextBody } from '../rest-body.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 
 const queryWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -17,7 +16,7 @@ const queryWorkflowOutput = z.unknown();
 export type QueryWorkflowInput = z.infer<typeof queryWorkflowInput>;
 export type QueryWorkflowOutput = { result: unknown };
 
-export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryWorkflowOutput>({
+export const queryWorkflowOperation = defineOperation({
   name: 'weft.workflows.query',
   mcpExposable: false,
   summary: 'Query workflow state by id',
@@ -28,13 +27,14 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
   destructive: false,
   tags: ['Workflows'],
   inputSchema: queryWorkflowInput,
-  outputSchema: queryWorkflowOutput as z.ZodType<QueryWorkflowOutput>,
+  outputSchema: queryWorkflowOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotImplemented'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<QueryWorkflowOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['query']);
+    const e = engine;
 
     try {
       const result = await e.query(input.workflowId, input.queryName, input.input);
@@ -108,15 +108,19 @@ export const queryWorkflowWithInputRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Invalid JSON body');
     }
 
-    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    if (!isJsonObject(body)) {
       throw invalidParamsFault('Request body must be a JSON object');
     }
 
     return {
       workflowId: pathParams['id'] ?? '',
       queryName: pathParams['name'] ?? '',
-      input: (body as Record<string, unknown>)['input'],
+      input: body['input'],
     };
   },
   success: { kind: 'json', status: 200 },
 };
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

@@ -166,7 +166,7 @@ describe('Server-Sent Event helpers', () => {
       signal: controller.signal,
     });
 
-    await expect(new Response(stream).text()).resolves.toBe('');
+    expect(new Response(stream).text()).resolves.toBe('');
     await closed.promise;
   });
 

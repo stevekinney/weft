@@ -13,7 +13,7 @@
  *
  * @example
  * ```ts
- * import { serve, type DiscoveryInfo } from '@lostgradient/weft/server';
+ * import { serve, type DiscoveryInfo } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * const discoveryInfo: DiscoveryInfo = {

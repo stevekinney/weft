@@ -12,10 +12,14 @@
 import { z } from 'zod';
 
 import { FAILURE_CATEGORIES, isFailureCategory } from './failure-categories.ts';
+import {
+  attributeFilterSchema,
+  normalizeAttributeFilter,
+} from './list-filter-attribute-validation.ts';
+import { ListFilterValidationError } from './list-filter-validation-error.ts';
 import type { FailureCategory, WorkflowStatus } from './types/identity.ts';
-import type { ListFilter } from './types/list-options.ts';
+import type { ListFilter, TimeRange } from './types/list-options.ts';
 import { flattenZodIssue, type ValidationIssue } from './validation-issues.ts';
-import { WeftError } from './weft-error.ts';
 
 const WORKFLOW_STATUSES = [
   'pending',
@@ -28,8 +32,7 @@ const WORKFLOW_STATUSES = [
 ] as const satisfies readonly WorkflowStatus[];
 
 const ID_PREFIX_PATTERN = /^[A-Za-z0-9_-]+$/;
-
-const workflowStatusSchema: z.ZodType<WorkflowStatus> = z.enum(WORKFLOW_STATUSES);
+export const workflowStatusSchema: z.ZodType<WorkflowStatus> = z.enum(WORKFLOW_STATUSES);
 const failureCategorySchema: z.ZodType<FailureCategory> = z.enum(FAILURE_CATEGORIES);
 
 const timeRangeSchema = z
@@ -55,25 +58,19 @@ const timeRangeSchema = z
     message: 'TimeRange may not set both lte and lt',
   });
 
-// Search-attribute filters retain the existing permissive shape — they are not
-// the focus of this validation module. Visibility-filter callers validate
-// attribute names elsewhere (in the engine and aggregate path).
-const searchAttributeValueSchema: z.ZodType = z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.date(),
-  z.array(z.string()),
-]);
+function normalizeTimeRange(range: z.infer<typeof timeRangeSchema>): TimeRange {
+  return { ...range };
+}
 
-const attributeFilterSchema = z.object({
-  key: z.union([z.string().min(1), z.any()]),
-  value: searchAttributeValueSchema.optional(),
-  gt: searchAttributeValueSchema.optional(),
-  lt: searchAttributeValueSchema.optional(),
-  gte: searchAttributeValueSchema.optional(),
-  lte: searchAttributeValueSchema.optional(),
-});
+function normalizeAttributes(
+  attributes: z.infer<typeof attributeFilterSchema>[] | undefined,
+  hasAttributesField: boolean,
+): Pick<ListFilter, 'attributes'> {
+  if (attributes === undefined) {
+    return hasAttributesField ? { attributes: undefined } : {};
+  }
+  return { attributes: attributes.map(normalizeAttributeFilter) };
+}
 
 /**
  * Concrete object schema for {@link ListFilter}. Supports `.omit()` and
@@ -108,26 +105,6 @@ export const listFilterObjectSchema = z
 export type FilterValidationIssue = ValidationIssue;
 
 /**
- * Thrown by {@link normalizeListFilter} when the input fails validation.
- * Carries flattened Zod issues so transport adapters can map directly to the
- * existing `InvalidParams` fault shape.
- */
-export class ListFilterValidationError extends WeftError<'ListFilterValidationError'> {
-  readonly issues: ReadonlyArray<FilterValidationIssue>;
-
-  constructor(issues: ReadonlyArray<FilterValidationIssue>) {
-    const summary = issues
-      .map((issue) => {
-        const path = issue.path.join('.');
-        return path.length > 0 ? `${path}: ${issue.message}` : issue.message;
-      })
-      .join('; ');
-    super('ListFilterValidationError', summary.length > 0 ? summary : 'Invalid list filter');
-    this.issues = issues;
-  }
-}
-
-/**
  * Parse and validate a {@link ListFilter}. Returns a typed copy on success;
  * throws {@link ListFilterValidationError} on failure with structured issues.
  *
@@ -151,7 +128,21 @@ export function normalizeListFilter(input: unknown): ListFilter {
       },
     ]);
   }
-  return result.data as ListFilter;
+  const { attributes, ...filterFields } = result.data;
+  const normalized: ListFilter = {
+    ...filterFields,
+    ...normalizeAttributes(attributes, 'attributes' in result.data),
+    ...(filterFields.createdAt === undefined
+      ? {}
+      : { createdAt: normalizeTimeRange(filterFields.createdAt) }),
+    ...(filterFields.updatedAt === undefined
+      ? {}
+      : { updatedAt: normalizeTimeRange(filterFields.updatedAt) }),
+    ...(filterFields.executionDeadline === undefined
+      ? {}
+      : { executionDeadline: normalizeTimeRange(filterFields.executionDeadline) }),
+  };
+  return normalized;
 }
 
 export { isFailureCategory };

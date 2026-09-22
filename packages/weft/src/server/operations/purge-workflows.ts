@@ -1,38 +1,39 @@
-import { z } from 'zod';
+import { purgeOutputSchema } from './bulk-output-schemas.ts';
+import {
+  assertOperationEngineMethods,
+  faultMessage,
+  invalidParamsFault,
+  readOptionalJsonBody,
+} from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
+import type { z } from 'zod';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
-import type { PurgeResult } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
 import {
   bulkListFilterInputSchema,
-  faultMessage,
   listFilterFromBulkInput,
-  parseBulkListFilterFromBody,
-  readOptionalJsonBody,
   type BulkListFilterInput,
-} from './bulk-filter-helpers.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
-
-const purgeWorkflowsOutput = z.unknown();
+} from './bulk-filter-input.ts';
 
 export type PurgeWorkflowsInput = BulkListFilterInput;
-export type PurgeWorkflowsOutput = PurgeResult;
+export type PurgeWorkflowsOutput = z.output<typeof purgeOutputSchema>;
 
-export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, PurgeWorkflowsOutput>({
+export const purgeWorkflowsOperation = defineOperation({
   name: 'weft.workflows.purge',
   mcpExposable: false,
   summary: 'Purge terminal workflows',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkListFilterInputSchema,
-  outputSchema: purgeWorkflowsOutput as z.ZodType<PurgeWorkflowsOutput>,
+  outputSchema: purgeOutputSchema,
   access: { kind: 'public' },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<PurgeWorkflowsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['purge']);
+    const e = engine;
 
     // purge intentionally keeps inline tag coercion + filter assembly
     // local; it must allow empty filters (no scoped assert) and use the
@@ -54,7 +55,8 @@ export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, Purg
       ...input,
       ...(validatedTags === undefined ? {} : { tags: validatedTags }),
     });
-    return await e.purge(Object.keys(filter).length === 0 ? undefined : filter);
+    const result = await e.purge(Object.keys(filter).length === 0 ? undefined : filter);
+    return { deleted: result.deleted };
   },
 });
 

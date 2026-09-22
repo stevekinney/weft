@@ -1,20 +1,19 @@
-import type { ActivityDefinition } from '../core/activity.ts';
-import type { Engine } from '../core/engine.ts';
-import { registerOnRuntimeEngine, runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
-import type { WorkflowDefinition } from '../core/types.ts';
+import type { ActivityDefinition, Engine, WorkflowDefinition } from '../index.ts';
 
 /**
  * Convert a plain-object `ActivityDefinition` into a callable function that
  * satisfies the engine's `isActivityDefinition` check (which requires a
  * function with `name` and `execute` own properties).
  */
-export function toActivityCallable(
-  definition: ActivityDefinition,
-): (...args: unknown[]) => unknown {
+export function toActivityCallable(definition: ActivityDefinition) {
   const { name, execute, ...metadata } = definition;
-  const callable = Object.assign(async function activityCallable(...args: unknown[]) {
-    return execute(...(args as Parameters<typeof execute>));
-  }, metadata);
+  const callable = Object.assign(
+    async function activityCallable(...args: Parameters<typeof execute>) {
+      return execute(...args);
+    },
+    metadata,
+    { execute },
+  );
   Object.defineProperty(callable, 'name', { value: name, configurable: true });
   Object.defineProperty(callable, 'execute', {
     value: execute,
@@ -34,15 +33,14 @@ export function registerModuleExports(
   registrations: Record<string, WorkflowDefinition>,
   activities: ActivityDefinition[],
 ): void {
-  const runtime = runtimeWorkflowEngine(engine);
   for (const definition of Object.values(registrations)) {
-    registerOnRuntimeEngine(runtime, definition);
+    engine.register(definition);
   }
   for (const activity of activities) {
     if (typeof activity === 'function') {
       engine.register(activity);
     } else {
-      engine.register(toActivityCallable(activity) as never);
+      engine.register(toActivityCallable(activity));
     }
   }
 }

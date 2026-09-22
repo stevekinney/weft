@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { WorkflowFinalizerStatus, WorkflowScheduleProvenance } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const workflowObservabilityInput = z.object({
   workflowId: z.string().min(1),
@@ -42,10 +42,7 @@ export type GetWorkflowObservabilityInput = z.infer<typeof workflowObservability
 export type GetWorkflowScheduleProvenanceOutput = WorkflowScheduleProvenance | null;
 export type GetWorkflowFinalizerOutput = WorkflowFinalizerStatus | null;
 
-export const getWorkflowScheduleProvenanceOperation = defineOperation<
-  GetWorkflowObservabilityInput,
-  GetWorkflowScheduleProvenanceOutput
->({
+export const getWorkflowScheduleProvenanceOperation = defineOperation({
   name: 'weft.workflows.scheduleprovenance.get',
   mcpExposable: false,
   summary: 'Get the schedule occurrence that launched a workflow',
@@ -57,18 +54,18 @@ export const getWorkflowScheduleProvenanceOperation = defineOperation<
   inputSchema: workflowObservabilityInput,
   // Zod models an optional property as `number | undefined`; Engine omits the
   // property entirely under exactOptionalPropertyTypes.
-  outputSchema: scheduleProvenanceOutput as z.ZodType<GetWorkflowScheduleProvenanceOutput>,
+  outputSchema: scheduleProvenanceOutput,
   access: { kind: 'public' },
   producibleFaults: [],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => (engine as Engine).getScheduleProvenance(input.workflowId),
+  invoke: async ({ input, engine }) => {
+    assertOperationEngineMethods(engine, ['getScheduleProvenance']);
+    return engine.getScheduleProvenance(input.workflowId);
+  },
 });
 
-export const getWorkflowFinalizerOperation = defineOperation<
-  GetWorkflowObservabilityInput,
-  GetWorkflowFinalizerOutput
->({
+export const getWorkflowFinalizerOperation = defineOperation({
   name: 'weft.workflows.finalizer.get',
   mcpExposable: false,
   summary: 'Get workflow finalizer progress and outcome',
@@ -83,7 +80,10 @@ export const getWorkflowFinalizerOperation = defineOperation<
   producibleFaults: [],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => (engine as Engine).getFinalizerStatus(input.workflowId),
+  invoke: async ({ input, engine }) => {
+    assertOperationEngineMethods(engine, ['getFinalizerStatus']);
+    return engine.getFinalizerStatus(input.workflowId);
+  },
 });
 
 export const getWorkflowScheduleProvenanceRestBinding: UnknownRestBinding = {

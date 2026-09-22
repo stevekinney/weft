@@ -5,10 +5,8 @@ import type { OperationFault } from '../operation-fault.ts';
 import {
   dispatchFailure,
   lookupOperation,
-  prepareAuthorizedInput,
   validateOutputAgainstSchema,
 } from './dispatch-preparation.ts';
-import { classifyEngineError } from './pipeline-helpers.ts';
 import { tracePipeline } from './pipeline-stages.ts';
 import {
   type DispatchContext,
@@ -31,27 +29,17 @@ export class SubscriptionElementValidationError extends WeftError<'SubscriptionE
  * Execute a `kind: 'stream'` operation and return a schema-validating
  * async iterable for its emitted elements.
  */
-export async function executeStream<Element>(
+export async function executeStream(
   operationName: string,
   rawInput: unknown,
   context: DispatchContext,
-): Promise<DispatchResult<AsyncIterable<Element>>> {
+): Promise<DispatchResult<AsyncIterable<unknown>>> {
   const prepared = await prepareLongLivedOperation(operationName, rawInput, context, 'stream');
   if (!prepared.ok) return prepared;
-  const { operation, input, eventSchema } = prepared.value;
-
-  let invocation: unknown;
-  try {
-    invocation = await operation.invoke({
-      input,
-      principal: context.principal,
-      engine: context.engine,
-      transport: context.transport,
-    });
-  } catch (error) {
-    return dispatchFailure(classifyEngineError(error, operation));
-  }
-  tracePipeline(context.pipelineTrace, 'invoked');
+  const { operation, eventSchema } = prepared.value;
+  const dispatched = await operation.dispatch(rawInput, context);
+  if (!dispatched.ok) return dispatched;
+  const invocation = dispatched.value;
 
   if (!isAsyncIterable(invocation)) {
     return dispatchFailure({ code: 'EngineFailure', message: 'internal error', data: {} });
@@ -60,7 +48,7 @@ export async function executeStream<Element>(
   tracePipeline(context.pipelineTrace, 'output-validated');
   return {
     ok: true,
-    value: validateElements<Element>(invocation, eventSchema),
+    value: validateElements(invocation, eventSchema),
   };
 }
 
@@ -68,14 +56,14 @@ export async function executeStream<Element>(
  * Execute a `kind: 'subscription'` operation and return its validated
  * subscribe envelope, schema-validating element iterable, and close hook.
  */
-export async function executeSubscription<Element, Envelope>(
+export async function executeSubscription(
   operationName: string,
   rawInput: unknown,
   context: DispatchContext,
 ): Promise<
   DispatchResult<{
-    envelope: Envelope;
-    iterable: AsyncIterable<Element>;
+    envelope: unknown;
+    iterable: AsyncIterable<unknown>;
     close: () => Promise<void>;
   }>
 > {
@@ -86,29 +74,16 @@ export async function executeSubscription<Element, Envelope>(
     'subscription',
   );
   if (!prepared.ok) return prepared;
-  const { operation, input, eventSchema } = prepared.value;
-
-  let invocation: unknown;
-  try {
-    invocation = await operation.invoke({
-      input,
-      principal: context.principal,
-      engine: context.engine,
-      transport: context.transport,
-    });
-  } catch (error) {
-    return dispatchFailure(classifyEngineError(error, operation));
-  }
-  tracePipeline(context.pipelineTrace, 'invoked');
+  const { operation, eventSchema } = prepared.value;
+  const dispatched = await operation.dispatch(rawInput, context);
+  if (!dispatched.ok) return dispatched;
+  const invocation = dispatched.value;
 
   if (!isSubscriptionInvocation(invocation)) {
     return dispatchFailure({ code: 'EngineFailure', message: 'internal error', data: {} });
   }
 
-  const envelope = validateOutputAgainstSchema<Envelope>(
-    operation.outputSchema,
-    invocation.envelope,
-  );
+  const envelope = validateOutputAgainstSchema(operation.outputSchema, invocation.envelope);
   if (!envelope.ok) return envelope;
   tracePipeline(context.pipelineTrace, 'output-validated');
 
@@ -116,7 +91,7 @@ export async function executeSubscription<Element, Envelope>(
     ok: true,
     value: {
       envelope: envelope.value,
-      iterable: validateElements<Element>(invocation.iterable, eventSchema),
+      iterable: validateElements(invocation.iterable, eventSchema),
       close: invocation.close,
     },
   };
@@ -132,7 +107,6 @@ export async function executeSubscription<Element, Envelope>(
  */
 type PreparedLongLivedOperation = {
   readonly operation: ErasedOperation;
-  readonly input: unknown;
   readonly eventSchema: z.ZodType;
 };
 
@@ -145,6 +119,7 @@ async function prepareLongLivedOperation(
   const lookup = lookupOperation(operationName, context);
   if (!lookup.ok) return lookup;
   const operation = lookup.value;
+  void rawInput;
 
   if ((operation.kind ?? 'unary') !== expectedKind) {
     return dispatchFailure({
@@ -169,16 +144,13 @@ async function prepareLongLivedOperation(
   }
   const eventSchema = operation.eventSchema;
 
-  const prepared = await prepareAuthorizedInput(operation, rawInput, context);
-  if (!prepared.ok) return prepared;
-
-  return { ok: true, value: { operation, input: prepared.value.input, eventSchema } };
+  return { ok: true, value: { operation, eventSchema } };
 }
 
-async function* validateElements<Element>(
+async function* validateElements(
   iterable: AsyncIterable<unknown>,
   eventSchema: z.ZodType,
-): AsyncIterable<Element> {
+): AsyncIterable<unknown> {
   for await (const element of iterable) {
     let parsed: ReturnType<typeof eventSchema.safeParse>;
     try {
@@ -189,7 +161,7 @@ async function* validateElements<Element>(
     if (!parsed.success) {
       throw new SubscriptionElementValidationError(elementValidationFault());
     }
-    yield parsed.data as Element;
+    yield parsed.data;
   }
 }
 
@@ -206,11 +178,12 @@ function isSubscriptionInvocation(
   value: unknown,
 ): value is SubscriptionOperationInvocation<unknown, unknown> {
   if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
   return (
-    Object.hasOwn(record, 'envelope') &&
-    isAsyncIterable(record['iterable']) &&
-    typeof record['close'] === 'function'
+    'envelope' in value &&
+    'iterable' in value &&
+    'close' in value &&
+    isAsyncIterable(value.iterable) &&
+    typeof value.close === 'function'
   );
 }
 

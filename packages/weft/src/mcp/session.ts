@@ -27,7 +27,7 @@ type ToolListSignatureEntry = readonly [
  *
  * @example
  * ```ts
- * import { type McpSessionPhase } from '@lostgradient/weft/mcp';
+ * import { type McpSessionPhase } from '@lostgradient/weft';
  *
  * const phase: McpSessionPhase = 'ready';
  * void phase;
@@ -40,7 +40,7 @@ export type McpSessionPhase = 'new' | 'initializing' | 'ready';
  *
  * @example
  * ```ts
- * import { createMcpSessionManager, type McpSessionManagerOptions } from '@lostgradient/weft/mcp';
+ * import { createMcpSessionManager, type McpSessionManagerOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -87,7 +87,7 @@ const RESOURCE_EVENT_NAMES = [
  *
  * @example
  * ```ts
- * import { McpSessionManager, type McpSession } from '@lostgradient/weft/mcp';
+ * import { McpSessionManager, type McpSession } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -227,7 +227,7 @@ function asJsonRpcId(value: unknown): JsonRpcId | undefined {
  *
  * @example
  * ```ts
- * import { McpSessionManager } from '@lostgradient/weft/mcp';
+ * import { McpSessionManager } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -412,7 +412,7 @@ function toolListSignaturesEqual(
  *
  * @example
  * ```ts
- * import { createMcpSessionManager } from '@lostgradient/weft/mcp';
+ * import { createMcpSessionManager } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();

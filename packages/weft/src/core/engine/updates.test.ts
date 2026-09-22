@@ -50,7 +50,7 @@ describe('engine update helpers', () => {
       findPendingUpdateByName: mock(async () => undefined),
     } as any;
 
-    await expect(
+    expect(
       update(internals, 'workflow-1', 'rename', { value: 'patched' }, undefined, callbacks),
     ).rejects.toThrow('coordinated boom');
   });

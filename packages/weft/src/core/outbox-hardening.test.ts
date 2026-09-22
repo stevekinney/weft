@@ -61,7 +61,7 @@ describe('claim commit failures', () => {
     storage.beforeBatch = (ordinal) => {
       if (ordinal === 2) throw new Error('storage down');
     };
-    await expect(outbox.claim()).rejects.toThrow('storage down');
+    expect(outbox.claim()).rejects.toThrow('storage down');
     storage.beforeBatch = null;
     // The delivery is still claimable and the registry holds no leaked attempt.
     const claim = await claimOne(outbox);
@@ -102,7 +102,7 @@ describe('enqueue edge cases', () => {
   it('admits idempotency keys only up to the ceiling the record decoder accepts', async () => {
     const { outbox } = createOutboxFixture();
     for (const field of ['idempotencyKey', 'externalIdempotencyKey'] as const) {
-      await expect(outbox.enqueue(deliveryInput({ [field]: 'k'.repeat(257) }))).rejects.toThrow(
+      expect(outbox.enqueue(deliveryInput({ [field]: 'k'.repeat(257) }))).rejects.toThrow(
         ApplicationDeliveryValidationError,
       );
       const admitted = await outbox.enqueue(
@@ -130,7 +130,7 @@ describe('enqueue edge cases', () => {
         enqueuedCount: 0,
       }),
     );
-    await expect(outbox.enqueue(deliveryInput())).rejects.toThrow(/sequence allocator/);
+    expect(outbox.enqueue(deliveryInput())).rejects.toThrow(/sequence allocator/);
     outbox.dispose();
   });
 
@@ -142,7 +142,7 @@ describe('enqueue edge cases', () => {
       bindingKey,
       encode({ recordVersion: 1, deliveryId: other, identityDigest: 'x'.repeat(64) }),
     );
-    await expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'forged' }))).rejects.toThrow(
+    expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'forged' }))).rejects.toThrow(
       PersistedDataCorruptError,
     );
     outbox.dispose();
@@ -152,14 +152,14 @@ describe('enqueue edge cases', () => {
     const { outbox, storage } = createOutboxFixture();
     const garbage = encode({ nested: { deep: true } }).slice(0, 3);
     await storage.put(KEYS.applicationOutbox(NAMESPACE, OWNER), garbage);
-    await expect(outbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
     await storage.delete(KEYS.applicationOutbox(NAMESPACE, OWNER));
     await storage.put(KEYS.applicationDeliveryIdempotency(NAMESPACE, OWNER, 'k'), garbage);
-    await expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'k' }))).rejects.toThrow(
+    expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'k' }))).rejects.toThrow(
       PersistedDataCorruptError,
     );
     await storage.put(KEYS.applicationDeliveryDue(NAMESPACE, OWNER, 0, 'x'), garbage);
-    await expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 });
@@ -218,7 +218,7 @@ describe('maintenance races and bounds', () => {
     await claimOne(outbox);
     clock.advance(10);
     storage.losing = true;
-    await expect(outbox.runMaintenance()).rejects.toThrow(OutboxContentionError);
+    expect(outbox.runMaintenance()).rejects.toThrow(OutboxContentionError);
     storage.losing = false;
     expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 1 });
     outbox.dispose();
@@ -231,8 +231,8 @@ describe('maintenance races and bounds', () => {
     const deliveryId = await enqueueOne(outbox);
     await deliverOne(outbox);
     storage.losing = true;
-    await expect(outbox.retry({ deliveryId })).rejects.toThrow(OutboxContentionError);
-    await expect(outbox.deadLetter({ deliveryId })).rejects.toThrow(OutboxContentionError);
+    expect(outbox.retry({ deliveryId })).rejects.toThrow(OutboxContentionError);
+    expect(outbox.deadLetter({ deliveryId })).rejects.toThrow(OutboxContentionError);
     outbox.dispose();
   });
 
@@ -411,14 +411,14 @@ describe('outcome validation', () => {
     });
     await Promise.resolve();
     controller.abort(new Error('gave up'));
-    await expect(waiting).rejects.toThrow('gave up');
+    expect(waiting).rejects.toThrow('gave up');
     stalled.dispose();
     outbox.dispose();
   });
 
   it('rejects a heartbeat whose delivery id cannot form a key', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.heartbeat({ deliveryId: '\uD800', attemptToken: 't' })).rejects.toThrow(
+    expect(outbox.heartbeat({ deliveryId: '\uD800', attemptToken: 't' })).rejects.toThrow(
       ApplicationDeliveryValidationError,
     );
     expect(
@@ -437,7 +437,7 @@ describe('due index identity', () => {
     const real = await enqueueOne(outbox, { availableAfterMs: 1000 });
     const stray = KEYS.applicationDeliveryDue('bureau', 'agent-7', 0, 'stranded');
     await storage.put(stray, encodeApplicationDeliveryEntry(real));
-    await expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
     // The canonical entry is left in place, not discarded as an orphan.
     expect(await storage.get(stray)).not.toBeNull();
     outbox.dispose();

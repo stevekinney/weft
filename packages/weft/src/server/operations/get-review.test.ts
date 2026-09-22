@@ -8,6 +8,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { getReviewOperation, getReviewRestBinding } from './get-review.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -77,7 +78,7 @@ describe('weft.reviews.get', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getReviewOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -87,7 +88,7 @@ describe('weft.reviews.get', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/workflows/wf-1/review/rev-1', { method: 'GET' }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { assertReadOnlyQuery } from './read-only-query';
+import { assertReadOnlyQuery } from './read-only-query.ts';
 
 describe('assertReadOnlyQuery', () => {
   it('rejects empty queries after normalization', () => {

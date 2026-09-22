@@ -15,7 +15,11 @@ import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
+import {
+  assertOperationEngineMethods,
+  invalidParamsFault,
+  isOperationFault,
+} from './operation-helpers.ts';
 
 /**
  * Async ("out-of-band") activity completion, exposed across every transport.
@@ -127,10 +131,7 @@ export type AsyncActivityOutput = z.infer<typeof okOutput>;
 export type ListPendingAsyncActivitiesInput = z.infer<typeof listPendingAsyncActivitiesInput>;
 export type ListPendingAsyncActivitiesOutput = PendingAsyncActivityPage;
 
-export const listPendingAsyncActivitiesOperation = defineOperation<
-  ListPendingAsyncActivitiesInput,
-  ListPendingAsyncActivitiesOutput
->({
+export const listPendingAsyncActivitiesOperation = defineOperation({
   name: 'weft.workflows.activities.pending.list',
   mcpExposable: false,
   summary: 'List pending async activities for a workflow',
@@ -141,13 +142,14 @@ export const listPendingAsyncActivitiesOperation = defineOperation<
   destructive: false,
   tags: ['Activities'],
   inputSchema: listPendingAsyncActivitiesInput,
-  outputSchema: listPendingAsyncActivitiesOutput as z.ZodType<ListPendingAsyncActivitiesOutput>,
+  outputSchema: listPendingAsyncActivitiesOutput,
   access: asyncActivityReadAccess,
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListPendingAsyncActivitiesOutput> => {
-    const liveEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['listPendingAsyncActivities', 'get']);
+    const liveEngine = engine;
     if (
       input.cursor !== undefined &&
       !isPendingAsyncActivityCursorForWorkflow(input.cursor, input.workflowId)
@@ -208,10 +210,7 @@ function raiseAsyncActivityFault(
   throw error;
 }
 
-export const completeAsyncActivityOperation = defineOperation<
-  CompleteAsyncActivityInput,
-  AsyncActivityOutput
->({
+export const completeAsyncActivityOperation = defineOperation({
   name: 'weft.activities.complete',
   mcpExposable: false,
   summary: 'Complete a deferred activity by task token',
@@ -236,7 +235,8 @@ export const completeAsyncActivityOperation = defineOperation<
     // `engine` is erased to the catalog engine type so adapters can share the
     // registry; in a live server it is always the concrete Engine. Cast matches
     // every other operation in this directory.
-    const liveEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['completeAsyncActivity']);
+    const liveEngine = engine;
     try {
       await liveEngine.completeAsyncActivity(input.token, input.result);
     } catch (error) {
@@ -246,10 +246,7 @@ export const completeAsyncActivityOperation = defineOperation<
   },
 });
 
-export const failAsyncActivityOperation = defineOperation<
-  FailAsyncActivityInput,
-  AsyncActivityOutput
->({
+export const failAsyncActivityOperation = defineOperation({
   name: 'weft.activities.fail',
   mcpExposable: false,
   summary: 'Fail a deferred activity by task token',
@@ -273,7 +270,8 @@ export const failAsyncActivityOperation = defineOperation<
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<AsyncActivityOutput> => {
     // See completeAsyncActivityOperation: erased catalog engine, concrete at runtime.
-    const liveEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['failAsyncActivity']);
+    const liveEngine = engine;
     try {
       await liveEngine.failAsyncActivity(input.token, errorFromFailInput(input));
     } catch (error) {
@@ -314,10 +312,14 @@ async function readJsonObjectBody(
     if (isOperationFault(error)) throw error;
     return null;
   });
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+  if (!isJsonObject(body)) {
     throw invalidParamsFault('Request body must be a JSON object.');
   }
-  return body as Record<string, unknown>;
+  return body;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export const completeAsyncActivityRestBinding: UnknownRestBinding = {

@@ -58,6 +58,8 @@ export interface ResolvedOptions {
   storage: WeftStorage;
   development: boolean;
   backgroundTaskMode: 'automatic' | 'manual';
+  /** Resolved form of `EngineOptions.inlineLaunchScheduling` (COR-74). */
+  inlineLaunchSchedulingMode: 'event-loop' | 'manual';
   checkpointHistory: number;
   checkpointSizeWarningThreshold: number;
   maxNestingDepth: number;

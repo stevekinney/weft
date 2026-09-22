@@ -11,10 +11,15 @@ import {
   type SchedulerContractContext,
 } from '../testing/scheduler-contract.test-support.ts';
 
-import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface';
-import { decode, encode } from './codec';
-import { buildTimerBatchOperations, calculateBackoff, parseDuration, Scheduler } from './scheduler';
-import type { TimerEntry } from './types';
+import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface.ts';
+import { decode, encode } from './codec.ts';
+import {
+  buildTimerBatchOperations,
+  calculateBackoff,
+  parseDuration,
+  Scheduler,
+} from './scheduler.ts';
+import type { TimerEntry } from './types.ts';
 
 const EXPECTED_EXPIRED_TIMER_SCAN_LIMIT = 1_000;
 

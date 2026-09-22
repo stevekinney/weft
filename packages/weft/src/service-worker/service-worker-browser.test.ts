@@ -1,3 +1,19 @@
+/**
+ * Real-browser Service Worker smoke test.
+ *
+ * Drives the Service Worker runtime — lifecycle, fetch routing, periodic sync,
+ * and restart recovery — inside a real Chromium launched by Playwright.
+ *
+ * ## Running
+ *
+ * Gate: `WEFT_BROWSER_SMOKE=1` must be set (the shared flag for all real-browser
+ * smokes, via `browserSmokeEnabled`). Otherwise the suite skips and does not run
+ * in the default `bun test` pass. Run it with
+ * `bun run --filter=@lostgradient/weft test:browser`.
+ *
+ * Browser provisioning: `bunx playwright install chromium` (run once).
+ */
+
 import { afterAll, afterEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,9 +22,8 @@ import { fileURLToPath } from 'node:url';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
-const shouldRunBrowserSmoke = Bun.env['WEFT_BROWSER_SMOKE'] === '1';
+import { browserSmokeEnabled } from '../testing/browser-smoke-gate.test-support.ts';
 
-const browserSmokeTest = shouldRunBrowserSmoke ? it : it.skip;
 const repositoryRoot = new URL('../..', import.meta.url);
 const engineModulePath = fileURLToPath(new URL('src/core/engine.ts', repositoryRoot));
 const typesModulePath = fileURLToPath(new URL('src/core/types.ts', repositoryRoot));
@@ -763,8 +778,8 @@ async function stopServiceWorkers(
   await withinPhase('CDP detach', session.detach());
 }
 
-describe('Service Worker browser smoke', () => {
-  browserSmokeTest(
+describe.skipIf(!browserSmokeEnabled)('Service Worker browser smoke', () => {
+  it(
     'runs lifecycle, fetch, periodic-sync, and restart recovery in Chromium',
     async () => {
       // Declared before the budget so a phase timeout can report whatever the
@@ -835,7 +850,7 @@ describe('Service Worker browser smoke', () => {
       expect(timerWorkflow.id).toBe('timer-workflow');
       await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running', withinPhase);
       await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' }, withinPhase);
-      await expect(
+      expect(
         withinPhase(
           'read timer workflow result',
           page.evaluate(async () => {
@@ -901,7 +916,7 @@ describe('Service Worker browser smoke', () => {
         }),
       );
 
-      await expect(
+      expect(
         withinPhase(
           'read parked workflow result',
           page.evaluate(async () => {
@@ -925,7 +940,7 @@ describe('Service Worker browser smoke', () => {
     { timeout: SMOKE_TEST_TIMEOUT_MS },
   );
 
-  browserSmokeTest(
+  it(
     'setupServiceWorker({ recover: true }) auto-recovers a parked workflow after SW restart',
     async () => {
       // Declared before the budget so a phase timeout can report whatever the
@@ -1010,7 +1025,7 @@ describe('Service Worker browser smoke', () => {
       );
 
       // Confirm the workflow completed with the expected result.
-      await expect(
+      expect(
         withinPhase(
           'read parked workflow result',
           page.evaluate(async () => {
@@ -1034,7 +1049,7 @@ describe('Service Worker browser smoke', () => {
     { timeout: SMOKE_TEST_TIMEOUT_MS },
   );
 
-  browserSmokeTest(
+  it(
     'setupServiceWorker({ recover: true }) resumes a sleeping timer workflow via periodic sync after SW restart',
     async () => {
       // Declared before the budget so a phase timeout can report whatever the
@@ -1137,7 +1152,7 @@ describe('Service Worker browser smoke', () => {
         workflowStatus: 'completed',
       });
 
-      await expect(
+      expect(
         withinPhase(
           'read sleeping workflow result',
           page.evaluate(async () => {

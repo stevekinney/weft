@@ -6,22 +6,18 @@ import {
   aggregateOptionsObjectSchema,
   type AggregateGroupBy,
 } from '../../core/aggregate-validation.ts';
-import type { Engine } from '../../core/engine.ts';
 import {
   UnknownAggregateAttributeError,
   type AggregateResult,
 } from '../../core/engine/aggregate.ts';
 import { WorkflowListScanCapExceededError } from '../../core/engine/workflow-indexes.ts';
-import {
-  ListFilterValidationError,
-  listFilterObjectSchema,
-} from '../../core/list-filter-validation.ts';
-import type { ListFilter } from '../../core/types.ts';
+import { ListFilterValidationError } from '../../core/list-filter-validation-error.ts';
+import { listFilterObjectSchema, normalizeListFilter } from '../../core/list-filter-validation.ts';
 import { type OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 const aggregateWorkflowsInput = listFilterObjectSchema
   .omit({ limit: true, offset: true })
@@ -45,10 +41,7 @@ function toUnprocessable(message: string): OperationFault {
   return { code: 'Unprocessable', message, data: { reason: message } };
 }
 
-export const aggregateWorkflowsOperation = defineOperation<
-  AggregateWorkflowsInput,
-  AggregateWorkflowsOutput
->({
+export const aggregateWorkflowsOperation = defineOperation({
   name: 'weft.workflows.aggregate',
   mcpExposable: false,
   summary: 'Aggregate workflows by a single dimension',
@@ -61,9 +54,10 @@ export const aggregateWorkflowsOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<AggregateWorkflowsOutput> => {
-    const engineHandle = engine as Engine;
+    assertOperationEngineMethods(engine, ['aggregate']);
+    const engineHandle = engine;
     const { groupBy, limit, ...filterFields } = input;
-    const filter = filterFields as ListFilter;
+    const filter = normalizeListFilter(filterFields);
     try {
       return await engineHandle.aggregate(filter, {
         groupBy,
@@ -108,7 +102,7 @@ function parseGroupByQuery(raw: string | null): AggregateGroupBy | null {
   return null;
 }
 
-function extractAggregateWorkflowsInput(request: Request): AggregateWorkflowsInput {
+function extractAggregateWorkflowsInput(request: Request) {
   const url = new URL(request.url);
 
   const groupByRaw = url.searchParams.get('group_by');
@@ -130,7 +124,7 @@ function extractAggregateWorkflowsInput(request: Request): AggregateWorkflowsInp
     ...(limitValue !== undefined && Number.isFinite(limitValue) && limitValue >= 1
       ? { limit: limitValue }
       : {}),
-  } as AggregateWorkflowsInput;
+  };
 }
 
 function shapeAggregateWorkflowsFault(fault: OperationFault): Response {

@@ -1,73 +1,42 @@
 #!/usr/bin/env bun
 
 import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { join } from 'node:path';
+import { parseArgs } from 'node:util';
+
+import packageJson from '../package.json' with { type: 'json' };
 
 import { format, resolveConfig } from 'prettier';
 
+import { compareStrings } from '../src/server/json-schema-utilities.ts';
 import type {
   CatalogOperationSnapshot,
   CatalogSnapshot,
-} from '../src/cli/operation-catalog-snapshot.ts';
-import { createCatalogSnapshot } from '../src/cli/operation-catalog-snapshot.ts';
-import { compareStrings } from '../src/server/json-schema-utilities.ts';
+} from '../src/server/operation-catalog-snapshot.ts';
+import { createCatalogSnapshot } from '../src/server/operation-catalog-snapshot.ts';
 
-export const OPERATION_CLIENT_PATH = 'src/cli/generated/operation-client.generated.ts';
-
-/**
- * Hoist a repeated object shape into a named alias only when it appears at least
- * twice. Below this it is unique and aliasing would only add indirection.
- */
-const MINIMUM_OCCURRENCES = 2;
-
-/**
- * Object shapes with at least this many fields are always worth a named alias
- * once they repeat. Smaller shapes (e.g. a single-field `{ key: string }`) are
- * left inline unless they repeat unusually often (see {@link FREQUENT_OCCURRENCES}).
- */
-const LARGE_FIELD_COUNT = 3;
+import { renderAliasDeclarations, selectAliases } from './operation-client-aliases.ts';
+import {
+  GENERATED_HEADER,
+  operationDomains,
+  operationDomainSource,
+} from './operation-client-domains.ts';
+import { schemaToNode } from './operation-client-schema.ts';
 
 /**
- * The minimum field count and occurrence count under which a small (2-field)
- * shape still earns an alias. Keeps trivial 1-field objects inline while
- * de-duplicating genuinely repeated small records.
+ * The name the generated examples import from — read from the manifest rather than written
+ * here, because this generator is published alongside the package it describes and a mirror of
+ * it carries a different name. A hardcoded name would make the generated file drift the moment
+ * the package was renamed, and the drift test would report the generator as wrong.
  */
-const SMALL_FIELD_COUNT = 2;
-const FREQUENT_OCCURRENCES = 3;
+const packageName: string = packageJson.name;
 
-/** Number of PascalCased field-name fragments folded into a readable alias hint. */
-const HINT_FIELD_LIMIT = 3;
-/** Maximum length of the readable hint portion of an alias name. */
-const HINT_MAX_LENGTH = 24;
+export const OPERATION_CLIENT_DIRECTORY = 'src/client/generated';
+export const OPERATION_CLIENT_FILE = 'operation-client.generated.ts';
 
-/**
- * Sentinel returned by {@link unionBranches} for a combinator arrangement the
- * emitter deliberately refuses to interpret, distinguishing "degrade to
- * `unknown`" from "no combinator here, keep parsing". Declared alongside the
- * other module constants so the `import.meta.main` entrypoint below — which
- * runs during module evaluation — never reaches it in the temporal dead zone.
- */
-const UNSUPPORTED_COMBINATOR = Symbol('unsupported-combinator');
-
-/**
- * A normalized type node — the single source of truth for both the structural
- * dedup key and the emitted TypeScript text. Two nodes share a `canonicalKey`
- * if and only if they would render to identical TypeScript.
- */
-type TypeNode =
-  | { readonly kind: 'primitive'; readonly text: string }
-  | { readonly kind: 'array'; readonly element: TypeNode }
-  | { readonly kind: 'union'; readonly members: ReadonlyArray<TypeNode> }
-  | { readonly kind: 'record' }
-  | { readonly kind: 'object'; readonly fields: ReadonlyArray<ObjectField> };
-
-type ObjectField = {
-  readonly name: string;
-  readonly optional: boolean;
-  readonly value: TypeNode;
-};
-
-export async function createOperationClientSource(snapshot: CatalogSnapshot): Promise<string> {
+export async function createOperationClientSources(
+  snapshot: CatalogSnapshot,
+): Promise<ReadonlyMap<string, string>> {
   const catalogOperations = snapshot.operations
     .filter((operation) => operation.kind === 'unary' && operation.transports.jsonRpcHttp)
     .toSorted((left, right) => compareStrings(left.name, right.name));
@@ -92,15 +61,24 @@ export async function createOperationClientSource(snapshot: CatalogSnapshot): Pr
   ]);
 
   const { aliasNameByKey, nodeByKey } = selectAliases(roots);
-  const entries = clientOperations.map((operation) =>
-    operationToTypeEntry(operation, aliasNameByKey),
-  );
+  const domains = operationDomains(clientOperations);
+  const imports = domains
+    .map((domain) => `import type { ${domain.typeName} } from './${domain.fileName}';`)
+    .join('\n');
+  const types = domains.map((domain) => domain.typeName).join(' & ') || '{}';
   const aliasDeclarations = renderAliasDeclarations(aliasNameByKey, nodeByKey);
 
-  const aliasBlock = aliasDeclarations.length ? `\n${aliasDeclarations.join('\n')}\n` : '';
+  const sources = new Map<string, string>();
+  for (const domain of domains)
+    sources.set(domain.fileName, operationDomainSource(domain, aliasNameByKey));
+  if (aliasDeclarations.length)
+    sources.set(
+      'shared-operation-types.generated.ts',
+      `${GENERATED_HEADER}\n${aliasDeclarations.map((declaration) => `export ${declaration}`).join('\n')}\n`,
+    );
 
-  const source = `/* generated by scripts/generate-operation-client.ts; do not edit by hand */
-/* oxlint-disable max-lines -- generated catalog clients are intentionally dense; rejected: splitting generated output across hidden fragments */
+  const source = `${GENERATED_HEADER}
+${imports}
 
 import {
   createCatalogWeftClient,
@@ -110,31 +88,193 @@ import {
   type WeftClientConnection,
 } from '../operation-client-runtime.ts';
 
+/**
+ * Every unary operation this server exposes over JSON-RPC, sorted by name.
+ *
+ * This is exactly the set {@link createWeftClient} turns into client methods,
+ * so it also answers "can I call this over JSON-RPC?" at runtime — worth
+ * checking when the name arrived as a string from a CLI argument or a queued
+ * job, before you hand it to the client.
+ *
+ * @example
+ * \`\`\`ts
+ * import { CATALOG_OPERATION_NAMES } from '${packageName}';
+ *
+ * const requested = 'weft.activities.complete';
+ * const callable = CATALOG_OPERATION_NAMES.some((name) => name === requested);
+ * console.log(callable); // true
+ * \`\`\`
+ */
 export const CATALOG_OPERATION_NAMES = [
 ${catalogNames.join('\n')}
 ] as const;
 
+/**
+ * The name of any operation callable over JSON-RPC — the union behind
+ * {@link CATALOG_OPERATION_NAMES}.
+ *
+ * Annotate with this when an operation name reaches you from somewhere
+ * untyped and you would rather the compiler reject a name this server does
+ * not serve than discover it on the first round trip.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { CatalogOperationName } from '${packageName}';
+ *
+ * const operation: CatalogOperationName = 'weft.alerts.list';
+ * console.log(operation);
+ * \`\`\`
+ */
 export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
 
+/**
+ * Every operation the generated client can reach, sorted by name: the JSON-RPC
+ * catalog in {@link CATALOG_OPERATION_NAMES} plus those served only over REST.
+ *
+ * Reach for this when you want the client's whole surface — building a
+ * permission table, generating documentation, checking coverage — and for
+ * {@link CATALOG_OPERATION_NAMES} when you specifically need the JSON-RPC
+ * subset.
+ *
+ * @example
+ * \`\`\`ts
+ * import { CATALOG_OPERATION_NAMES, CLIENT_OPERATION_NAMES } from '${packageName}';
+ *
+ * const restOnly = CLIENT_OPERATION_NAMES.filter(
+ *   (name) => !CATALOG_OPERATION_NAMES.some((catalogName) => catalogName === name),
+ * );
+ * console.log(restOnly.length);
+ * \`\`\`
+ */
 export const CLIENT_OPERATION_NAMES = [
 ${clientNames.join('\n')}
 ] as const;
 
+/**
+ * The name of any operation the generated client can reach — the union behind
+ * {@link CLIENT_OPERATION_NAMES}.
+ *
+ * Wider than {@link CatalogOperationName}, which covers only the JSON-RPC
+ * subset. Use this one for code that handles REST-only operations too.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { ClientOperationName } from '${packageName}';
+ *
+ * const operation: ClientOperationName = 'weft.alerts.list';
+ * console.log(operation);
+ * \`\`\`
+ */
 export type ClientOperationName = (typeof CLIENT_OPERATION_NAMES)[number];
 
+/**
+ * HTTP method, path template and input placement for each operation the client
+ * reaches over REST rather than JSON-RPC.
+ *
+ * The generated client already uses this table to build its requests, so read
+ * it directly only when you are working outside the client — proxying Weft
+ * behind your own router, or writing a gateway that has to reproduce the same
+ * routes. Paths are client-relative: the server's \`/v1\` prefix is stripped.
+ *
+ * @example
+ * \`\`\`ts
+ * import { CLIENT_REST_OPERATION_BINDINGS } from '${packageName}';
+ *
+ * for (const [operation, binding] of Object.entries(CLIENT_REST_OPERATION_BINDINGS)) {
+ *   console.log(binding.method + ' ' + binding.path + '  ' + operation);
+ * }
+ * \`\`\`
+ */
 export const CLIENT_REST_OPERATION_BINDINGS = {
 ${restBindings.join('\n')}
 } as const satisfies Readonly<Record<string, ClientRestOperationBinding>>;
-${aliasBlock}
-export type ClientOperationTypes = {
-${entries.join('\n')}
-};
 
+/**
+ * Input and output types for every operation the client can reach, keyed by
+ * operation name and assembled from the per-domain generated modules.
+ *
+ * You seldom name this directly — {@link createWeftClient} applies it for you.
+ * It earns its keep when you write code generic over operations, such as a
+ * logging or retry wrapper that has to preserve each operation's own input and
+ * output types instead of widening them to \`unknown\`.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { ClientOperationTypes } from '${packageName}';
+ *
+ * type CancelInput = ClientOperationTypes['weft.workflows.cancel']['input'];
+ *
+ * declare const input: CancelInput;
+ * console.log(input);
+ * \`\`\`
+ */
+export type ClientOperationTypes = ${types};
+
+/**
+ * The {@link ClientOperationTypes} entries for operations reachable over
+ * JSON-RPC, which is the surface {@link createWeftClient} builds against.
+ *
+ * Use this rather than {@link ClientOperationTypes} when your code runs
+ * against a JSON-RPC transport and should not reference an operation that only
+ * exists over REST.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { CatalogOperationTypes } from '${packageName}';
+ *
+ * type AlertsOutput = CatalogOperationTypes['weft.alerts.list']['output'];
+ *
+ * declare const alerts: AlertsOutput;
+ * console.log(alerts);
+ * \`\`\`
+ */
 export type CatalogOperationTypes = Pick<ClientOperationTypes, CatalogOperationName>;
 
 export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
+
+/**
+ * A client shaped over every operation, REST included: each operation name is
+ * a method taking that operation's input and resolving to its output.
+ *
+ * {@link createWeftClient} returns the narrower JSON-RPC-only shape. Name this
+ * one when you build a client over a transport that also covers the REST-only
+ * operations.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { ClientOperations } from '${packageName}';
+ *
+ * declare const client: ClientOperations;
+ * const diagnostics = client['weft.catalog.diagnostics'];
+ * console.log(typeof diagnostics);
+ * \`\`\`
+ */
 export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
 
+/**
+ * Build a typed client for a remote Weft server, with one method per operation
+ * in {@link CATALOG_OPERATION_NAMES}.
+ *
+ * Calls travel as JSON-RPC over HTTP. Connection settings resolve in the usual
+ * order — explicit options, environment, named profile, then the default
+ * address — so passing nothing is right when the environment already describes
+ * the server. In library code pass \`includeRunLockfile: false\`, so a stray
+ * local \`weft serve\` lockfile cannot quietly redirect your calls.
+ *
+ * @example
+ * \`\`\`ts
+ * import { createWeftClient, type ClientOperationTypes } from '${packageName}';
+ *
+ * const client = createWeftClient({
+ *   server: 'http://localhost:7233',
+ *   includeRunLockfile: false,
+ * });
+ *
+ * declare const input: ClientOperationTypes['weft.alerts.list']['input'];
+ * const alerts = await client['weft.alerts.list'](input);
+ * console.log(alerts);
+ * \`\`\`
+ */
 export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
   return createCatalogWeftClient<CatalogOperationTypes>(
     CATALOG_OPERATION_NAMES,
@@ -142,11 +282,14 @@ export function createWeftClient(connection: WeftClientConnection = {}): WeftCli
   );
 }
 `;
-  const prettierConfiguration = await resolveConfig(OPERATION_CLIENT_PATH);
-  return format(source, {
-    ...prettierConfiguration,
-    filepath: OPERATION_CLIENT_PATH,
-  });
+  sources.set(OPERATION_CLIENT_FILE, source);
+  const formatted = new Map<string, string>();
+  for (const [fileName, contents] of sources) {
+    const filePath = join(OPERATION_CLIENT_DIRECTORY, fileName);
+    const configuration = await resolveConfig(filePath);
+    formatted.set(fileName, await format(contents, { ...configuration, filepath: filePath }));
+  }
+  return formatted;
 }
 
 /**
@@ -166,449 +309,17 @@ function isGenericRestClientOperation(operation: CatalogOperationSnapshot): bool
 }
 
 if (import.meta.main) {
-  await mkdir(dirname(OPERATION_CLIENT_PATH), { recursive: true });
-  await Bun.write(
-    OPERATION_CLIENT_PATH,
-    await createOperationClientSource(createCatalogSnapshot()),
-  );
-  console.log(`wrote ${OPERATION_CLIENT_PATH}`);
-}
-
-function operationToTypeEntry(
-  operation: CatalogOperationSnapshot,
-  aliasNameByKey: ReadonlyMap<string, string>,
-): string {
-  const faults = operation.producibleFaults.length
-    ? operation.producibleFaults.map((fault) => `'${fault}'`).join(' | ')
-    : 'never';
-  const input = renderRoot(schemaToNode(operation.inputSchema), aliasNameByKey);
-  const output = renderRoot(schemaToNode(operation.outputSchema), aliasNameByKey);
-  return `  '${operation.name}': {
-    readonly input: ${input};
-    readonly output: ${output};
-    readonly faults: ${faults};
-  };`;
-}
-
-/**
- * Return the members of an all-string `enum`, or `undefined` when the schema has
- * no `enum` or any member is not a string. A single-quoted string-literal union
- * is emitted for these; mixed or non-string enums fall through to the `unknown`
- * fallback rather than guessing a representation.
- */
-function stringEnumMembers(schema: Record<string, unknown>): readonly string[] | undefined {
-  const values = schema['enum'];
-  if (!Array.isArray(values) || values.length === 0) return undefined;
-  if (!values.every((value): value is string => typeof value === 'string')) return undefined;
-  return values;
-}
-
-/**
- * Return the branch schemas of a `anyOf`/`oneOf` union, `undefined` when the
- * schema is not a union, or {@link UNSUPPORTED_COMBINATOR} when it is one the
- * emitter refuses to interpret.
- *
- * TypeScript has no exclusive-or type, so `oneOf` and `anyOf` both render to
- * the same `A | B` union text; Zod's `discriminatedUnion()` compiles to `oneOf`
- * with a `const` discriminant per branch, which the `const` handling above
- * already preserves as a literal (WFT-93). `allOf` stays unsupported.
- *
- * JSON Schema applies sibling combinators conjunctively, so a node carrying
- * more than one is a constraint this emitter does not compose. Degrade to
- * `unknown` rather than silently honoring one and dropping the rest — the same
- * posture `src/cli/codegen-emit.ts` takes for the same case.
- */
-function unionBranches(
-  schema: Record<string, unknown>,
-): readonly unknown[] | undefined | typeof UNSUPPORTED_COMBINATOR {
-  let found:
-    { readonly keyword: 'anyOf' | 'oneOf'; readonly branches: readonly unknown[] } | undefined;
-  for (const keyword of ['anyOf', 'oneOf', 'allOf'] as const) {
-    const value = schema[keyword];
-    if (!Array.isArray(value)) continue;
-    if (found !== undefined || keyword === 'allOf') return UNSUPPORTED_COMBINATOR;
-    found = { keyword, branches: value };
-  }
-  if (found === undefined) return undefined;
-  // An empty combinator array is a degenerate schema with no branches to union.
-  return found.branches.length > 0 ? found.branches : UNSUPPORTED_COMBINATOR;
-}
-
-/**
- * Parse a JSON Schema fragment into a normalized {@link TypeNode}. Reproduces
- * exactly the schema subset the emitter supports: primitives, arrays,
- * string `enum` literal unions, primitive `const` literals, `type: []` unions,
- * `anyOf`/`oneOf` unions, objects (honoring `required`), no-`properties` objects
- * as `Record<string, unknown>`, and an `unknown` fallback for every other schema
- * feature (non-string `enum`, `allOf`, co-occurring combinators,
- * additionalProperties, nullable patterns).
- */
-function schemaToNode(schema: Record<string, unknown>): TypeNode {
-  const constant = schema['const'];
-  if (
-    typeof constant === 'string' ||
-    typeof constant === 'number' ||
-    typeof constant === 'boolean' ||
-    constant === null
-  ) {
-    return { kind: 'primitive', text: JSON.stringify(constant) };
-  }
-
-  const branches = unionBranches(schema);
-  if (branches === UNSUPPORTED_COMBINATOR) return { kind: 'primitive', text: 'unknown' };
-  if (branches !== undefined) {
-    const members = branches.map((member) =>
-      isRecord(member)
-        ? schemaToNode(member)
-        : ({ kind: 'primitive', text: 'unknown' } satisfies TypeNode),
-    );
-    if (members.some((member) => member.kind === 'primitive' && member.text === 'unknown')) {
-      return { kind: 'primitive', text: 'unknown' };
-    }
-    return {
-      kind: 'union',
-      members,
-    };
-  }
-
-  // A string `enum` is tighter than its `type: 'string'`, so emit the literal
-  // union and preserve the operation's discriminant (e.g. startorsignal's
-  // `outcome: 'started' | 'signalled'`) instead of widening to `string`. Members
-  // stay in schema order for deterministic output. Non-string enums fall through.
-  const stringEnum = stringEnumMembers(schema);
-  if (stringEnum !== undefined) {
-    return {
-      kind: 'union',
-      // `JSON.stringify` produces a TypeScript-valid double-quoted string literal
-      // with proper escaping, so enum values containing quotes, backslashes, or
-      // newlines emit a correct literal rather than via raw interpolation.
-      members: stringEnum.map((value) => ({ kind: 'primitive', text: JSON.stringify(value) })),
-    };
-  }
-  const type = schema['type'];
-  if (type === 'string') return { kind: 'primitive', text: 'string' };
-  if (type === 'number' || type === 'integer') return { kind: 'primitive', text: 'number' };
-  if (type === 'boolean') return { kind: 'primitive', text: 'boolean' };
-  if (type === 'null') return { kind: 'primitive', text: 'null' };
-  if (type === 'array') {
-    const items = schema['items'];
-    return {
-      kind: 'array',
-      element: isRecord(items) ? schemaToNode(items) : { kind: 'primitive', text: 'unknown' },
-    };
-  }
-  if (Array.isArray(type)) {
-    return {
-      kind: 'union',
-      members: type.map((entry) =>
-        typeof entry === 'string'
-          ? schemaToNode({ type: entry })
-          : { kind: 'primitive', text: 'unknown' },
-      ),
-    };
-  }
-  if (type === 'object' || isRecord(schema['properties'])) {
-    const properties = schema['properties'];
-    if (!isRecord(properties)) return { kind: 'record' };
-    const required = new Set(
-      Array.isArray(schema['required'])
-        ? schema['required'].filter((entry): entry is string => typeof entry === 'string')
-        : [],
-    );
-    // Snapshot schemas arrive with keys already canonicalized (alphabetical), so
-    // this sort is a no-op on the real catalog and preserves the prior generator's
-    // field order byte-for-byte. It stays as a defensive invariant: the dedup key
-    // and emitted text must be field-order-stable even if an upstream source is
-    // ever not pre-canonicalized.
-    const fields = Object.entries(properties)
-      .map(([name, propertySchema]) => ({
-        name,
-        optional: !required.has(name),
-        value: isRecord(propertySchema)
-          ? schemaToNode(propertySchema)
-          : ({ kind: 'primitive', text: 'unknown' } satisfies TypeNode),
-      }))
-      .toSorted((left, right) => compareStrings(left.name, right.name));
-    return { kind: 'object', fields };
-  }
-  return { kind: 'primitive', text: 'unknown' };
-}
-
-/**
- * Render a {@link TypeNode} to TypeScript. When a child node's
- * {@link canonicalKey} is present in `aliasNameByKey`, the alias name is
- * substituted in place of inlining the shape. `suppressKey` prevents an alias
- * body from referencing itself (which would emit `type X = X`).
- */
-function renderNode(
-  node: TypeNode,
-  aliasNameByKey: ReadonlyMap<string, string>,
-  suppressKey?: string,
-): string {
-  // Render a child, substituting its alias name unless it is the suppressed self.
-  const renderChild = (child: TypeNode): string => {
-    const key = canonicalKey(child);
-    if (key !== suppressKey) {
-      const alias = aliasNameByKey.get(key);
-      if (alias !== undefined) return alias;
-    }
-    return renderNode(child, aliasNameByKey, suppressKey);
-  };
-
-  switch (node.kind) {
-    case 'primitive':
-      return node.text;
-    case 'record':
-      return 'Record<string, unknown>';
-    case 'array':
-      return `ReadonlyArray<${renderChild(node.element)}>`;
-    case 'union':
-      return node.members.map((member) => renderChild(member)).join(' | ');
-    case 'object': {
-      const fields = node.fields.map((field) => {
-        const optional = field.optional ? '?' : '';
-        return `readonly ${JSON.stringify(field.name)}${optional}: ${renderChild(field.value)};`;
-      });
-      return `{ ${fields.join(' ')} }`;
-    }
-  }
-
-  return node satisfies never;
-}
-
-/**
- * Render a top-level node (an operation input/output position). Unlike
- * {@link renderNode}, this substitutes the alias name when the node *itself* is
- * hoisted — so two operations with an identical whole-object input both collapse
- * to the same alias reference.
- */
-function renderRoot(node: TypeNode, aliasNameByKey: ReadonlyMap<string, string>): string {
-  const alias = aliasNameByKey.get(canonicalKey(node));
-  if (alias !== undefined) return alias;
-  return renderNode(node, aliasNameByKey);
-}
-
-/** Deterministic structural key for a node; equal iff the emitted text is equal. */
-function canonicalKey(node: TypeNode): string {
-  return JSON.stringify(node);
-}
-
-type AliasSelection = {
-  readonly aliasNameByKey: ReadonlyMap<string, string>;
-  readonly nodeByKey: ReadonlyMap<string, TypeNode>;
-};
-
-/**
- * Select which structural shapes to hoist into aliases. Prunes to a fixed point
- * so that every surviving alias is referenced at least twice across the emitted
- * alias bodies and operation entries. Returns both the name map and the original
- * nodes so declarations render without round-tripping through the string key.
- */
-function selectAliases(roots: ReadonlyArray<TypeNode>): AliasSelection {
-  const counts = new Map<string, { count: number; node: TypeNode }>();
-  for (const root of roots) collectCounts(root, counts);
-
-  let candidates = new Map<string, TypeNode>();
-  for (const [key, { count, node }] of counts) {
-    if (isHoistWorthy(node, count)) candidates.set(key, node);
-  }
-
-  // Prune aliases referenced fewer than twice once substitution is applied.
-  // Dropping a parent can lower a child's reference count, so iterate to a fixed
-  // point. References are counted structurally over the node graph (not by text
-  // matching), so the count is exact. The loop strictly shrinks `candidates`
-  // each iteration until it stabilizes, so it terminates in at most
-  // `candidates.size` rounds.
-  for (;;) {
-    const aliasKeys = new Set(candidates.keys());
-    const references = countAliasReferences(aliasKeys, roots);
-    const survivors = new Map<string, TypeNode>();
-    for (const [key, node] of candidates) {
-      if ((references.get(key) ?? 0) >= MINIMUM_OCCURRENCES) survivors.set(key, node);
-    }
-    if (survivors.size === candidates.size) break;
-    candidates = survivors;
-  }
-
-  return { aliasNameByKey: assignAliasNames(candidates), nodeByKey: candidates };
-}
-
-/** Increment the occurrence count for `node` and recurse into its children. */
-function collectCounts(
-  node: TypeNode,
-  counts: Map<string, { count: number; node: TypeNode }>,
-): void {
-  const key = canonicalKey(node);
-  const existing = counts.get(key);
-  if (existing) existing.count += 1;
-  else counts.set(key, { count: 1, node });
-
-  if (node.kind === 'array') collectCounts(node.element, counts);
-  else if (node.kind === 'union') for (const member of node.members) collectCounts(member, counts);
-  else if (node.kind === 'object')
-    for (const field of node.fields) collectCounts(field.value, counts);
-}
-
-function isHoistWorthy(node: TypeNode, count: number): boolean {
-  if (node.kind !== 'object') return false;
-  if (count < MINIMUM_OCCURRENCES) return false;
-  const fieldCount = node.fields.length;
-  if (fieldCount >= LARGE_FIELD_COUNT) return true;
-  return fieldCount >= SMALL_FIELD_COUNT && count >= FREQUENT_OCCURRENCES;
-}
-
-/**
- * Assign a stable, readable, content-derived name to each candidate shape.
- * `hashFn` is injectable so the collision guard can be exercised in tests;
- * it defaults to the real FNV-1a hash.
- */
-export function assignAliasNames(
-  candidates: ReadonlyMap<string, TypeNode>,
-  hashFn: (value: string) => string = fnv1a,
-): Map<string, string> {
-  const aliasNameByKey = new Map<string, string>();
-  const keyByName = new Map<string, string>();
-  // Deterministic assignment order so names never depend on Map insertion order.
-  const sortedEntries = [...candidates.entries()].toSorted(([left], [right]) =>
-    compareStrings(left, right),
-  );
-  for (const [key, node] of sortedEntries) {
-    const name = aliasNameFor(node, hashFn);
-    const existing = keyByName.get(name);
-    if (existing !== undefined && existing !== key) {
-      throw new Error(`alias name collision: ${name} for ${existing} and ${key}`);
-    }
-    keyByName.set(name, key);
-    aliasNameByKey.set(key, name);
-  }
-  return aliasNameByKey;
-}
-
-/**
- * Build the alias name `Shared<hint>_<hash>` for an object node: a readable
- * hint drawn from the first sorted field names plus a stable content hash.
- */
-export function aliasNameFor(node: TypeNode, hashFn: (value: string) => string = fnv1a): string {
-  const fields = node.kind === 'object' ? node.fields : [];
-  const hint = fields
-    .slice(0, HINT_FIELD_LIMIT)
-    .map((field) => toPascalCase(field.name))
-    .join('')
-    .slice(0, HINT_MAX_LENGTH);
-  return `Shared${hint}_${hashFn(canonicalKey(node))}`;
-}
-
-/**
- * Count, per alias key, how many substitution sites would reference it once
- * `aliasKeys` are hoisted. Counts are structural — derived by walking the node
- * graph, never by matching rendered text. A reference is a position where a
- * hoisted key appears: a root that is itself an alias, or a child (array
- * element, object field, union member) whose key is hoisted. An alias node's
- * own body does not count as a self-reference (the body inlines its top level).
- */
-function countAliasReferences(
-  aliasKeys: ReadonlySet<string>,
-  roots: ReadonlyArray<TypeNode>,
-): Map<string, number> {
-  const references = new Map<string, number>();
-  for (const key of aliasKeys) references.set(key, 0);
-
-  const bump = (key: string) => references.set(key, (references.get(key) ?? 0) + 1);
-
-  /** Count alias references among the children of `node` (not `node` itself). */
-  const countChildren = (node: TypeNode) => {
-    if (node.kind === 'array') visitChild(node.element);
-    else if (node.kind === 'union') for (const member of node.members) visitChild(member);
-    else if (node.kind === 'object') for (const field of node.fields) visitChild(field.value);
-  };
-
-  const visitChild = (child: TypeNode) => {
-    const key = canonicalKey(child);
-    if (aliasKeys.has(key)) {
-      // The child collapses to an alias reference; do not descend past it.
-      bump(key);
-      return;
-    }
-    countChildren(child);
-  };
-
-  // Operation entries: a root that is itself an alias is one reference.
-  for (const root of roots) {
-    const key = canonicalKey(root);
-    if (aliasKeys.has(key)) bump(key);
-    else countChildren(root);
-  }
-
-  // Alias bodies: each hoisted shape's body contributes references to the
-  // nested aliases it substitutes (its own top level is inlined, not a self-ref).
-  // The two steps below do DIFFERENT work and must both run for an alias node:
-  // `countChildren` records this body's direct alias references (stopping at
-  // alias boundaries), while the tail recursion keeps descending to discover and
-  // count the bodies of aliases nested deeper. Returning early after
-  // `countChildren` would miss grandchild aliases and is a bug, not an
-  // optimization. `seen` makes the per-body counting idempotent across roots that
-  // share a subtree.
-  const seen = new Set<string>();
-  const collectBodies = (node: TypeNode) => {
-    const key = canonicalKey(node);
-    if (aliasKeys.has(key) && !seen.has(key)) {
-      seen.add(key);
-      countChildren(node);
-    }
-    if (node.kind === 'array') collectBodies(node.element);
-    else if (node.kind === 'union') for (const member of node.members) collectBodies(member);
-    else if (node.kind === 'object') for (const field of node.fields) collectBodies(field.value);
-  };
-  for (const root of roots) collectBodies(root);
-
-  return references;
-}
-
-/**
- * Render the `type Shared… = …;` declarations, sorted by alias name. Each body
- * is rendered from its original {@link TypeNode} with its own key suppressed, so
- * nested aliases substitute but the alias never references itself.
- */
-function renderAliasDeclarations(
-  aliasNameByKey: ReadonlyMap<string, string>,
-  nodeByKey: ReadonlyMap<string, TypeNode>,
-): string[] {
-  const entries = [...aliasNameByKey.entries()].toSorted(([, left], [, right]) =>
-    compareStrings(left, right),
-  );
-  return entries.map(([key, name]) => {
-    const node = nodeByKey.get(key);
-    if (node === undefined) throw new Error(`missing node for alias ${name} (${key})`);
-    return `type ${name} = ${renderNode(node, aliasNameByKey, key)};`;
+  const { values } = parseArgs({
+    args: Bun.argv.slice(2),
+    options: { 'output-directory': { type: 'string' } },
+    strict: true,
   });
-}
-
-function toPascalCase(value: string): string {
-  return value
-    .split(/[^A-Za-z0-9]+/)
-    .filter((segment) => segment.length > 0)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join('');
-}
-
-/**
- * 32-bit FNV-1a hash, formatted as 8 lowercase hex characters. Uses `Math.imul`
- * and `>>> 0` normalization to stay within unsigned 32-bit semantics regardless
- * of JavaScript's signed-int behavior.
- */
-function fnv1a(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-    hash >>>= 0;
+  const directory = values['output-directory'] ?? OPERATION_CLIENT_DIRECTORY;
+  const sources = await createOperationClientSources(createCatalogSnapshot());
+  await mkdir(directory, { recursive: true });
+  for (const [fileName, source] of sources) {
+    const path = join(directory, fileName);
+    await Bun.write(path, source);
+    console.log(`wrote ${path}`);
   }
-  return (hash >>> 0).toString(16).padStart(8, '0');
 }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export { canonicalKey, isHoistWorthy, renderNode, schemaToNode, selectAliases };
-export type { AliasSelection, ObjectField, TypeNode };

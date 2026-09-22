@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-import { getWorkflowRevisionDiagnostics, type Engine } from '../../core/engine.ts';
+import { Engine, getWorkflowRevisionDiagnostics } from '../../core/engine.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -84,7 +84,7 @@ export type GetCatalogDiagnosticsOutput = z.infer<typeof getCatalogDiagnosticsOu
  *
  * @example
  * ```ts
- * import { HttpClient } from '@lostgradient/weft/client';
+ * import { HttpClient } from '@lostgradient/weft';
  *
  * const client = new HttpClient({ baseUrl: 'https://weft.example.com' });
  * const diagnostics = await client.operations['weft.catalog.diagnostics']({
@@ -94,10 +94,7 @@ export type GetCatalogDiagnosticsOutput = z.infer<typeof getCatalogDiagnosticsOu
  * console.log(diagnostics.installed, diagnostics.removable);
  * ```
  */
-export const getCatalogDiagnosticsOperation = defineOperation<
-  GetCatalogDiagnosticsInput,
-  GetCatalogDiagnosticsOutput
->({
+export const getCatalogDiagnosticsOperation = defineOperation({
   name: 'weft.catalog.diagnostics',
   mcpExposable: false,
   summary: 'Get bounded reference-count and removability diagnostics for one workflow revision',
@@ -118,8 +115,10 @@ export const getCatalogDiagnosticsOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine, input }): Promise<GetCatalogDiagnosticsOutput> => {
-    const e = engine as Engine;
-    return getWorkflowRevisionDiagnostics(e, input.name, input.revision);
+    if (!(engine instanceof Engine)) {
+      throw new TypeError('Catalog diagnostics requires a concrete Engine instance.');
+    }
+    return getWorkflowRevisionDiagnostics(engine, input.name, input.revision);
   },
 });
 

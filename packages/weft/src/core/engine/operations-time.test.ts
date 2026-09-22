@@ -890,7 +890,7 @@ describe('processSleepOperation', () => {
     };
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
-    await expect(
+    expect(
       processSleepOperation(
         createSleepInternals(storage, scheduler, firedWithoutResolver),
         workflowId,
@@ -946,7 +946,7 @@ describe('processSleepOperation', () => {
       expect(realTimerFired).toBe(true);
     });
     const { loadWorkflowState } = createSleepCallbacks(workflowId);
-    await expect(
+    expect(
       processSleepOperation(
         internals,
         workflowId,
@@ -986,7 +986,7 @@ describe('processSleepOperation', () => {
     };
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
-    await expect(
+    expect(
       processSleepOperation(
         createSleepInternals(storage, scheduler, firedWithoutResolver),
         workflowId,
@@ -1034,7 +1034,7 @@ describe('processSleepOperation', () => {
     } as never;
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
-    await expect(
+    expect(
       processSleepOperation(
         internals,
         workflowId,
@@ -1111,7 +1111,7 @@ describe('handleTimerFired "wait-condition" + Scheduler: WFT-79 findings 1 & 2 r
     // the predicate never became true, so the deadline resolves `false` — and
     // this time actually deletes the durable timer key.
     await owner.scheduler.tick(now);
-    await expect(handle.result()).resolves.toBe(false);
+    expect(handle.result()).resolves.toBe(false);
     expect(await countConditionTimerIndexKeys(storage)).toBe(0);
   });
 

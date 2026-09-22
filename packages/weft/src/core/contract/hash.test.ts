@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { jsonSchemaToTypeScript } from '../../cli/codegen-emit.ts';
+import { jsonSchemaToTypeScript } from '../../json-schema/codegen-emit.ts';
 import equivalentContracts from './__fixtures__/equivalent-contracts-different-key-order.json';
 import semanticallyDifferentContracts from './__fixtures__/semantically-different-contracts.json';
 import { activityContractHash, contractHash, digestCanonicalWorkflowContract } from './hash.ts';

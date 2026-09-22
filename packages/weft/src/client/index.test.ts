@@ -862,9 +862,9 @@ describe('HttpClient', () => {
       const handle = await client.start('echo', 'done', { id: 'wf-http-missing-replay' });
       await handle.result();
 
-      await expect(client.getTimeline('missing-workflow')).resolves.toEqual([]);
-      await expect(client.replayTo('missing-workflow', 1)).resolves.toBeNull();
-      await expect(client.replayTo('wf-http-missing-replay', 1)).resolves.toBeNull();
+      expect(client.getTimeline('missing-workflow')).resolves.toEqual([]);
+      expect(client.replayTo('missing-workflow', 1)).resolves.toBeNull();
+      expect(client.replayTo('wf-http-missing-replay', 1)).resolves.toBeNull();
     });
   });
 
@@ -1320,7 +1320,7 @@ describe('HttpClient request surface', () => {
 
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
 
-    await expect(httpClient.signalAll({ tags: ['nightly'] }, '')).rejects.toThrow(
+    expect(httpClient.signalAll({ tags: ['nightly'] }, '')).rejects.toThrow(
       'Field "name" must be a non-empty string',
     );
     expect(fetchCalls).toEqual([]);
@@ -1391,11 +1391,11 @@ describe('HttpClient request surface', () => {
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
     const handle = await httpClient.start('echo', null);
 
-    await expect(handle.query(statusQuery)).resolves.toBe('ready');
-    await expect(httpClient.query('wf/1', echoInputQuery, { detail: true })).resolves.toEqual({
+    expect(handle.query(statusQuery)).resolves.toBe('ready');
+    expect(httpClient.query('wf/1', echoInputQuery, { detail: true })).resolves.toEqual({
       detail: true,
     });
-    await expect(handle.query(echoInputQuery, { source: 'handle' })).resolves.toEqual({
+    expect(handle.query(echoInputQuery, { source: 'handle' })).resolves.toEqual({
       source: 'handle',
     });
 
@@ -1469,7 +1469,7 @@ describe('HttpClient request surface', () => {
       updateId: '',
       error: 'business rejection',
     });
-    await expect(httpClient.submitCoordinatedUpdate('wf-1', 'rename')).rejects.toMatchObject({
+    expect(httpClient.submitCoordinatedUpdate('wf-1', 'rename')).rejects.toMatchObject({
       status: 401,
       message: 'Unauthorized',
     });
@@ -1487,7 +1487,7 @@ describe('HttpClient request surface', () => {
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
     const handle = await httpClient.start('echo', 'hello');
 
-    await expect(handle.result()).rejects.toBeInstanceOf(HttpClientError);
+    expect(handle.result()).rejects.toBeInstanceOf(HttpClientError);
   });
 
   it('pushes handle events over the watch channel and closes on terminal events', async () => {

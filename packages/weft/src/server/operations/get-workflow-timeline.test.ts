@@ -8,6 +8,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import {
   getWorkflowTimelineOperation,
   getWorkflowTimelineRestBinding,
@@ -106,10 +107,14 @@ describe('weft.workflows.timeline.get', () => {
     );
 
     expect(response.status).toBe(200);
-    const timeline = (await response.json()) as Array<{ branches?: unknown[] }>;
-    expect(timeline[0]?.branches).toEqual([
-      expect.objectContaining({ index: 0, operationLabel: 'first', outcome: 'fulfilled' }),
-      expect.objectContaining({ index: 1, operationLabel: 'second', outcome: 'fulfilled' }),
+    const timeline = await response.json();
+    expect(timeline).toMatchObject([
+      {
+        branches: [
+          expect.objectContaining({ index: 0, operationLabel: 'first', outcome: 'fulfilled' }),
+          expect.objectContaining({ index: 1, operationLabel: 'second', outcome: 'fulfilled' }),
+        ],
+      },
     ]);
   });
 
@@ -135,7 +140,7 @@ describe('weft.workflows.timeline.get', () => {
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     engine = createEngine();
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getWorkflowTimelineOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -145,7 +150,7 @@ describe('weft.workflows.timeline.get', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/workflows/wf-timeline-success/timeline', {

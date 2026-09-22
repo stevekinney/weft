@@ -241,8 +241,8 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
 
     // `signal` + `handle.result()` drive further durable commits. If
     // the engine's notifier rethrew, one of these would reject.
-    await expect(engine.signal(handle.id, 'release', 'go')).resolves.toBeUndefined();
-    await expect(handle.result()).resolves.toBe('go');
+    expect(engine.signal(handle.id, 'release', 'go')).resolves.toBeUndefined();
+    expect(handle.result()).resolves.toBe('go');
 
     expect(sink.length).toBeGreaterThan(0);
     unsubscribeThrower();

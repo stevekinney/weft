@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import {
+  createPostgresTestServer,
+  postgresTestDatabase,
+  type PostgresTestDatabase,
+} from './postgres-server.test-support.ts';
 
 import { createPGliteTestFixture } from './pglite.test-support.ts';
 import { PostgresStorage, type PostgresPool } from './postgres.ts';
@@ -51,7 +56,7 @@ describe('PostgresStorage', () => {
     });
 
     expect(() => fixture.database).toThrow('PGlite test fixture is not running');
-    await expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
+    expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
 
     await initialize?.();
     expect(fixture.database).toBeDefined();
@@ -66,7 +71,7 @@ describe('PostgresStorage', () => {
 
     await dispose?.();
     expect(() => fixture.database).toThrow('PGlite test fixture is not running');
-    await expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
+    expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
   });
 
   it('accepts an injected pool without a url', async () => {
@@ -158,23 +163,25 @@ describe('PostgresStorage', () => {
   });
 });
 
-/**
- * Opt-in integration suite against a real Postgres via the `pg` driver. Skipped
- * by default so CI and `bun test` never require a database; set
- * `WEFT_TEST_POSTGRES_URL` (point it at a primary endpoint) to run it. This is the
- * only place the real `pg` wire protocol — TCP connection, BYTEA marshalling, and
- * SERIALIZABLE conflict handling — is exercised end to end.
- */
-const POSTGRES_URL = process.env['WEFT_TEST_POSTGRES_URL'];
-
-describe.skipIf(!POSTGRES_URL)('PostgresStorage (live pg)', () => {
+// Skip only when no database is obtainable at all — neither a supplied
+// `WEFT_TEST_POSTGRES_URL` nor the client binaries to spawn a disposable cluster.
+// Where a database exists this suite must run: it is the only place the real `pg`
+// wire protocol is exercised end to end.
+describe.skipIf(postgresTestDatabase === null)('PostgresStorage (live pg)', () => {
+  let database: PostgresTestDatabase;
+  beforeAll(async () => {
+    database = await createPostgresTestServer();
+  });
+  afterAll(async () => {
+    if (database) await database[Symbol.asyncDispose]();
+  });
   // A dedicated table so a mistakenly-supplied production URL can't be wiped by the
   // reset below — and so the live suite exercises the `table` option over the real
   // driver for free.
   const LIVE_TABLE = 'weft_test_kv';
 
   async function createLivePostgresStorage(): Promise<PostgresStorage> {
-    const storage = new PostgresStorage({ url: POSTGRES_URL!, table: LIVE_TABLE });
+    const storage = new PostgresStorage({ url: database.url, table: LIVE_TABLE });
     // Reset only this suite's table so each case starts from an empty store.
     await storage.put('__reset__', new Uint8Array([0]));
     await storage.deletePrefix('');

@@ -68,7 +68,7 @@ describe('textValueStore (MemoryStorage)', () => {
     // Lone continuation byte (0x80) — invalid UTF-8.
     await base.put('corrupt', new Uint8Array([0x80]));
 
-    await expect(store.get('corrupt')).rejects.toThrow();
+    expect(store.get('corrupt')).rejects.toThrow();
   });
 
   it('lists keys under a prefix as an array', async () => {

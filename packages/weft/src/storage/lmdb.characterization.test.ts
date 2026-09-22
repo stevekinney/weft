@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
-import { LMDBStorage } from './lmdb';
+import { LMDBStorage } from './lmdb.ts';
 
 /** Encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {

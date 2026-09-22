@@ -7,8 +7,8 @@
  */
 
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { ScheduleSummary } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -23,7 +23,7 @@ const getScheduleOutput = z.unknown();
 export type GetScheduleInput = z.infer<typeof getScheduleInput>;
 export type GetScheduleOutput = ScheduleSummary;
 
-export const getScheduleOperation = defineOperation<GetScheduleInput, GetScheduleOutput>({
+export const getScheduleOperation = defineOperation({
   name: 'weft.schedules.get',
   mcpExposable: false,
   summary: 'Get a recurring schedule by id',
@@ -34,14 +34,15 @@ export const getScheduleOperation = defineOperation<GetScheduleInput, GetSchedul
   destructive: false,
   tags: ['Schedules'],
   inputSchema: getScheduleInput,
-  outputSchema: getScheduleOutput as z.ZodType<GetScheduleOutput>,
+  outputSchema: getScheduleOutput,
   access: { kind: 'authenticated' },
   producibleFaults: ['NotFound', 'Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetScheduleOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getSchedule']);
+    const e = engine;
     const schedule = await e.getSchedule(input.scheduleId);
     if (schedule === null) {
       const notFoundFault: OperationFault = {

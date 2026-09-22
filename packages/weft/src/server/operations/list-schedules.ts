@@ -10,7 +10,6 @@
 
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type {
   PaginatedResult,
   ScheduleFilter,
@@ -19,7 +18,7 @@ import type {
 } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 
 const VALID_SCHEDULE_STATUSES = new Set<string>(['active', 'paused', 'cancelled']);
 
@@ -100,7 +99,7 @@ function validateListSchedulesQuery(input: ListSchedulesInput): ScheduleFilter {
   return filter;
 }
 
-export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSchedulesOutput>({
+export const listSchedulesOperation = defineOperation({
   name: 'weft.schedules.list',
   mcpExposable: false,
   summary: 'List recurring schedules',
@@ -110,14 +109,15 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   destructive: false,
   tags: ['Schedules'],
   inputSchema: listSchedulesInput,
-  outputSchema: listSchedulesOutput as z.ZodType<ListSchedulesOutput>,
+  outputSchema: listSchedulesOutput,
   access: { kind: 'authenticated' },
   producibleFaults: ['Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListSchedulesOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['listSchedules']);
+    const e = engine;
 
     // Build the ScheduleFilter from the validated input. Field-level
     // validation order is pinned by the tests below.

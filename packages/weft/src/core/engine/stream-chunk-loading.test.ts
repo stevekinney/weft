@@ -46,7 +46,7 @@ describe('loadStoredStreamChunks', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamChunk('workflow-1', 'tokens', 0), new Uint8Array([0xc1]));
 
-    await expect(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')).rejects.toThrow(
+    expect(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')).rejects.toThrow(
       'Unrecognized type byte: 0xc1',
     );
   });
@@ -55,18 +55,18 @@ describe('loadStoredStreamChunks', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 7 }));
 
-    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBe(7);
+    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBe(7);
   });
 
   it('treats missing or malformed stream tail records as absent', async () => {
     const storage = new MemoryStorage();
 
-    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
 
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 'bad' }));
-    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
 
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), new Uint8Array([0xc1]));
-    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
   });
 });

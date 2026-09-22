@@ -55,7 +55,7 @@ import type { Storage } from './interface.ts';
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import type { StorageCapabilities } from '@lostgradient/weft/storage/interface';
+ * import type { StorageCapabilities } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const caps: StorageCapabilities = storage.capabilities();
@@ -133,8 +133,8 @@ export type StorageCapabilities = {
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { requireStorageCapability } from '@lostgradient/weft/storage/interface';
- * import type { GatedStorageCapabilityKey } from '@lostgradient/weft/storage/interface';
+ * import { requireStorageCapability } from '@lostgradient/weft';
+ * import type { GatedStorageCapabilityKey } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * // The third argument's type is GatedStorageCapabilityKey — only the
@@ -163,7 +163,7 @@ export type GatedStorageCapabilityKey = 'conditionalBatch';
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { requireStorageCapability } from '@lostgradient/weft/storage/interface';
+ * import { requireStorageCapability } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
@@ -171,7 +171,7 @@ export type GatedStorageCapabilityKey = 'conditionalBatch';
  * ```
  */
 export function requireStorageCapability(
-  storage: Storage,
+  storage: Pick<Storage, 'capabilities'>,
   capability: GatedStorageCapabilityKey,
   featureName: string,
 ): void {

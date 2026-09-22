@@ -13,7 +13,7 @@ const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: 
 // options, the MCP surfaces). Pin the same "both `new Engine({ storage })`
 // and `Engine.create({ workflows })` are accepted without a call-site cast"
 // invariant here for symmetry, since `handleRequest` is public from both the
-// package root (`@lostgradient/weft`) and the `@lostgradient/weft/server/handler`
+// package root (`@lostgradient/weft`) and the `@lostgradient/weft`
 // subpath.
 async function verifyHandleRequestAcceptsBothEngineConstructionPatterns(): Promise<void> {
   const defaultEngine = new Engine({ storage: new MemoryStorage() });

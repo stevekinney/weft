@@ -83,7 +83,7 @@ describe('ensureWorkflowCatalogReady', () => {
     // `workflowVersion` over MAX_CONTRACT_IDENTIFIER_BYTES (512 bytes).
     engine.register(noopWorkflow('oversized', 'v'.repeat(600)));
 
-    await expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
+    expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
   });
 
   it('the fast path returns synchronously-resolved when nothing is pending and the catalog is restored', async () => {
@@ -94,7 +94,7 @@ describe('ensureWorkflowCatalogReady', () => {
 
     expect(getInternals(engine).catalogRestored).toBe(true);
     expect(getInternals(engine).pendingCatalogInstalls).toHaveLength(0);
-    await expect(ensureWorkflowCatalogReady(engine)).resolves.toBeUndefined();
+    expect(ensureWorkflowCatalogReady(engine)).resolves.toBeUndefined();
   });
 
   it('re-queues the failing name AND every name behind it in the drain order, rather than dropping them, when one manifest build fails mid-drain', async () => {
@@ -106,7 +106,7 @@ describe('ensureWorkflowCatalogReady', () => {
     engine.register(noopWorkflow('oversized', 'v'.repeat(600)));
     engine.register(noopWorkflow('good'));
 
-    await expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
+    expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
 
     // Neither name was dropped: both are still queued for the next attempt,
     // and `isWorkflowCatalogReady` must not report a false "ready" with
@@ -132,7 +132,7 @@ describe('ensureWorkflowCatalogReady', () => {
     engine.register(noopWorkflow('alpha'));
     engine[Symbol.dispose]();
 
-    await expect(ensureWorkflowCatalogReady(engine)).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(ensureWorkflowCatalogReady(engine)).rejects.toBeInstanceOf(EngineDisposedError);
     storage[Symbol.dispose]();
   });
 
@@ -326,7 +326,7 @@ describe('ensureWorkflowCatalogReady — boot-time orphaned-tombstone sweep (WFT
       warnings.push(event);
     });
 
-    await expect(ensureWorkflowCatalogReady(recovered)).resolves.toBeUndefined();
+    expect(ensureWorkflowCatalogReady(recovered)).resolves.toBeUndefined();
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.source).toBe(`catalog-tombstone-boot-sweep:checkout:${v1.revision}`);

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { Engine } from '../core/engine.ts';
-import { serve } from '../server/index.ts';
+import { Engine, serve } from '../index.ts';
 import { callCatalogOperation, failureExitCode } from './server-client.ts';
 
 type StubServer = { url: string; stop: () => void };
@@ -24,11 +23,15 @@ function serveMethodNotFound(): StubServer {
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === '/jsonrpc') {
-        const body = (await request.json()) as { id?: unknown };
+        const body = await request.json();
+        const id =
+          typeof body === 'object' && body !== null && !Array.isArray(body) && 'id' in body
+            ? body.id
+            : null;
         return Response.json({
           jsonrpc: '2.0',
           error: { code: -32601, message: 'Method not found' },
-          id: body.id ?? null,
+          id: id ?? null,
         });
       }
       return new Response('not found', { status: 404 });

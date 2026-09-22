@@ -1,9 +1,9 @@
-import type { ActivityExecutionInterception, ActivityInterceptor } from '../core/interceptor';
-import type { OpenTelemetrySpan } from './no-op-telemetry';
-import { NO_OP_SPAN_METHODS } from './no-op-telemetry';
-import { extractTraceParent } from './propagation';
-import { runAsyncWithSpan, serializePayload } from './span-helpers';
-import type { ObservabilityState } from './types';
+import type { ActivityExecutionInterception, ActivityInterceptor } from '../core/interceptor.ts';
+import type { OpenTelemetrySpan } from './no-op-telemetry.ts';
+import { NO_OP_SPAN_METHODS } from './no-op-telemetry.ts';
+import { extractTraceParent } from './propagation.ts';
+import { runAsyncWithSpan, serializePayload } from './span-helpers.ts';
+import type { ObservabilityState } from './types.ts';
 
 export function buildActivityInterceptor(state: ObservabilityState): ActivityInterceptor {
   return {

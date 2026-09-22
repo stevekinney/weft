@@ -1,22 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
 /**
- * Bun's test runner refuses `require('@valibot/to-json-schema')` mid-suite
- * with "Unexpected require target" — the require resolves cleanly only when
- * the file is invoked on its own. The in-suite Valibot test (in
- * `definition-schema-to-json.test.ts`) probes that behavior and uses
- * `it.skipIf(!canLoadValibot)`, which means the in-suite case can silently
- * skip if the loader is broken in CI.
- *
- * This test closes that gap by spawning a child Bun process that runs a
- * small standalone fixture (`definition-schema-to-json.valibot-fixture.ts`)
- * which exercises the Valibot adapter unconditionally — no `skipIf`, no
- * probe — and exits non-zero on any failure. The child's exit code is the
- * gate: any breakage in the Valibot conversion path or the
- * `@valibot/to-json-schema` package fails this test. It is intentionally
- * small (no DI, no fixtures beyond the script itself) and proves the
- * shipped adapter path actually works under CI without restructuring the
- * loader.
+ * Verify the Valibot adapter in a fresh Bun process as well as the in-process
+ * suite. The child must exit successfully; loader and dependency failures
+ * remain test failures.
  */
 describe('definition-schema-to-json (subprocess gate)', () => {
   it('exits zero when the Valibot adapter fixture runs in a fresh Bun process', async () => {

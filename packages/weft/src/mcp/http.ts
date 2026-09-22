@@ -19,7 +19,7 @@ import { McpSessionLimitExceededError, McpSessionManager, type McpSession } from
  *
  * @example
  * ```ts
- * import { createMcpSessionManager, type McpHttpRequestOptions } from '@lostgradient/weft/mcp';
+ * import { createMcpSessionManager, type McpHttpRequestOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -67,7 +67,7 @@ class McpBodyTooLargeError extends WeftError<'McpBodyTooLargeError'> {
  *
  * @example
  * ```ts
- * import { createMcpSessionManager, handleMcpHttpRequest } from '@lostgradient/weft/mcp';
+ * import { createMcpSessionManager, handleMcpHttpRequest } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();

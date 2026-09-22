@@ -50,7 +50,7 @@ describe('update validators (pre-acceptance)', () => {
     await flush();
 
     // Invalid payload — validator throws (use string name to bypass payload type check)
-    await expect(handle.update('approve', { wrong: true })).rejects.toThrow(UpdateValidationError);
+    expect(handle.update('approve', { wrong: true })).rejects.toThrow(UpdateValidationError);
 
     // Workflow never observed the bad payload
     expect(observed).toHaveLength(0);
@@ -145,8 +145,8 @@ describe('update validators (pre-acceptance)', () => {
     await flush();
 
     // First two calls are rejected by the validator
-    await expect(handle.update(tick, 'a')).rejects.toThrow(UpdateValidationError);
-    await expect(handle.update(tick, 'b')).rejects.toThrow(UpdateValidationError);
+    expect(handle.update(tick, 'a')).rejects.toThrow(UpdateValidationError);
+    expect(handle.update(tick, 'b')).rejects.toThrow(UpdateValidationError);
 
     // Third call passes — validator no longer throws
     const result = await handle.update(tick, 'c');

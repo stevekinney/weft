@@ -66,11 +66,7 @@ const workflowEventsSseOutputSchema: z.ZodType<WorkflowEventsSseOutput> =
     'Expected async iterable workflow event stream',
   );
 
-export const workflowEventsSseOperation = defineOperation<
-  WorkflowEventsSseInput,
-  WorkflowEventsSseOutput,
-  EventEnvelope
->({
+export const workflowEventsSseOperation = defineOperation({
   name: 'weft.workflows.events.sse',
   mcpExposable: false,
   kind: 'stream',

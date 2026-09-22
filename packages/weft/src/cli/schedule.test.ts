@@ -58,7 +58,8 @@ describe('schedule command validation and formatting', () => {
   it('formats interval schedules when listing persisted schedules', async () => {
     const database = join(tmpdir(), `weft-schedule-${crypto.randomUUID()}.db`);
     databases.push(database);
-    const workflows = new URL('../hello-world.test-support.ts', import.meta.url).pathname;
+    const workflows = new URL('./__fixtures__/validation/hello-world/src/index.ts', import.meta.url)
+      .pathname;
 
     const created = await executeSchedule({
       command: 'schedule',

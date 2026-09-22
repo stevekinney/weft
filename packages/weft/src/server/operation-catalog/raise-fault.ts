@@ -5,6 +5,7 @@
  */
 
 import type { FaultCode } from '../../core/fault-code.ts';
+import { resolveServerEnvironment } from '../../runtime/environment-configuration.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import type { ErasedOperation } from './types.ts';
 
@@ -45,7 +46,8 @@ export function raiseFault(
     ...(operation.producibleFaults ?? []),
   ]);
 
-  const isStrict = Bun.env['WEFT_STRICT_FAULTS'] === '1' || Bun.env['NODE_ENV'] !== 'production';
+  const environment = resolveServerEnvironment();
+  const isStrict = environment.weftStrictFaults || environment.nodeEnv !== 'production';
 
   if (!declared.has(fault.code)) {
     if (isStrict) {

@@ -4,6 +4,8 @@ import type {
   ActivityCompletedEvent,
   ActivityFailedEvent,
   ActivityStartedEvent,
+  RemoteActivityCancellationRequestedEvent,
+  RemoteActivityQueuedEvent,
   TaskResultDeadLetteredEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
@@ -14,7 +16,12 @@ import type {
   WorkflowRevisionInstalledEvent,
   WorkflowRevisionRemovedEvent,
 } from './catalog-events.ts';
-import type { ScheduleFiredEvent, ScheduleMissedFireEvent } from './schedule-events.ts';
+import type {
+  ScheduleAttemptedEvent,
+  ScheduleFiredEvent,
+  ScheduleMissedFireEvent,
+  ScheduleSkippedEvent,
+} from './schedule-events.ts';
 import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
 import type {
   AlertFiredEvent,
@@ -79,6 +86,8 @@ export type WeftEventMap = {
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;
   'activity:async-pending': ActivityAsyncPendingEvent;
+  'activity:remote-queued': RemoteActivityQueuedEvent;
+  'activity:remote-cancellation-requested': RemoteActivityCancellationRequestedEvent;
   'task:dead-lettered': TaskResultDeadLetteredEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
@@ -87,6 +96,8 @@ export type WeftEventMap = {
   'human-review:completed': ReviewCompletedEvent;
   'attributes:changed': AttributesChangedEvent;
   'schedule:missed-fire': ScheduleMissedFireEvent;
+  'schedule:attempted': ScheduleAttemptedEvent;
+  'schedule:skipped': ScheduleSkippedEvent;
   'update:received': UpdateReceivedEvent;
   'update:completed': UpdateCompletedEvent;
   'checkpoint:size-warning': CheckpointSizeWarningEvent;

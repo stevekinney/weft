@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
@@ -13,7 +13,7 @@ const resumeScheduleOutput = z.undefined();
 export type ResumeScheduleInput = z.infer<typeof resumeScheduleInput>;
 export type ResumeScheduleOutput = z.infer<typeof resumeScheduleOutput>;
 
-export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, ResumeScheduleOutput>({
+export const resumeScheduleOperation = defineOperation({
   name: 'weft.schedules.resume',
   mcpExposable: false,
   summary: 'Resume a recurring schedule',
@@ -29,7 +29,8 @@ export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, Resu
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ResumeScheduleOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['resumeSchedule']);
+    const typedEngine = engine;
 
     try {
       await typedEngine.resumeSchedule(input.scheduleId);

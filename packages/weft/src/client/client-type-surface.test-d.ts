@@ -3,7 +3,7 @@
  *
  * #583: `StartOrSignalOutcome` must be publicly exported from both the package
  * root (`@lostgradient/weft`) and the `/client` barrel
- * (`@lostgradient/weft/client`).
+ * (`@lostgradient/weft`).
  *
  * #585: `LocalClient` must accept a branded engine returned by
  * `Engine.create({ workflows })` without requiring a cast.
@@ -23,6 +23,7 @@ import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import type {
+  ClientStartOrSignalOptions,
   FaultCode as FaultCodeFromRoot,
   StartOrSignalOptions as OptionsFromRoot,
   StartOrSignalOutcome as OutcomeFromRoot,
@@ -44,7 +45,6 @@ import {
 import { MemoryStorage } from '../storage/memory.ts';
 import type { HttpClient } from './http-client.ts';
 import type {
-  ClientStartOrSignalOptions,
   FaultCode as FaultCodeFromClientBarrel,
   StartOrSignalOutcome as OutcomeFromClientBarrel,
   WeftErrorCode as WeftErrorCodeFromClientBarrel,
@@ -67,8 +67,7 @@ import {
 } from './index.ts';
 import { LocalClient } from './local.ts';
 
-type Equals<X, Y> =
-  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+type SameUnion<X, Y> = [X] extends [Y] ? ([Y] extends [X] ? true : false) : false;
 
 // --- Issue #583: StartOrSignalOutcome export surface -------------------------
 
@@ -77,36 +76,36 @@ declare const outcomeRoot: OutcomeFromRoot;
 declare const outcomeClient: OutcomeFromClientBarrel;
 
 // Cross-assignability proves they are the same type.
-const _rootToClient: OutcomeFromClientBarrel = outcomeRoot;
-void _rootToClient;
-const _clientToRoot: OutcomeFromRoot = outcomeClient;
-void _clientToRoot;
+const rootToClient: OutcomeFromClientBarrel = outcomeRoot;
+void rootToClient;
+const clientToRoot: OutcomeFromRoot = outcomeClient;
+void clientToRoot;
 
 // The union must only admit the documented members — exact-type check.
-const _provedExact: Equals<OutcomeFromRoot, 'started' | 'signalled'> = true;
-void _provedExact;
+const provedExact: SameUnion<OutcomeFromRoot, 'started' | 'signalled'> = true;
+void provedExact;
 
 // @ts-expect-error: 'pending' is not a valid StartOrSignalOutcome.
-const _invalid: OutcomeFromRoot = 'pending';
-void _invalid;
+const invalid: OutcomeFromRoot = 'pending';
+void invalid;
 
 // --- Issue #604: restart-capable startOrSignal option surface ---------------
 
-const _rootStartOrSignalOptions: OptionsFromRoot = {
+const rootStartOrSignalOptions: OptionsFromRoot = {
   id: 'stable-id',
   onTerminalConflict: 'start-new',
 };
-void _rootStartOrSignalOptions;
+void rootStartOrSignalOptions;
 
-const _clientStartOrSignalOptions: ClientStartOrSignalOptions = {
+const clientStartOrSignalOptions: ClientStartOrSignalOptions = {
   id: 'stable-id',
   onTerminalConflict: 'start-new',
 };
-void _clientStartOrSignalOptions;
+void clientStartOrSignalOptions;
 
 // @ts-expect-error: client start-or-signal options cannot carry inline services.
-const _clientStartOrSignalRejectsServices: ClientStartOrSignalOptions = { services: {} };
-void _clientStartOrSignalRejectsServices;
+const clientStartOrSignalRejectsServices: ClientStartOrSignalOptions = { services: {} };
+void clientStartOrSignalRejectsServices;
 
 // --- Issue #585: LocalClient accepts a branded Engine from Engine.create ----
 
@@ -114,9 +113,10 @@ void _clientStartOrSignalRejectsServices;
 // `Engine<{ greet: ... } & DefaultWorkflowRegistry, ...>` — NOT the bare
 // `Engine<DefaultWorkflowRegistry>` the old constructor accepted.
 const greetWorkflow = workflow({ name: 'greet' }).execute(async function* (
-  _ctx: WorkflowContext,
+  ctx: WorkflowContext,
   input: { name: string },
 ) {
+  yield* ctx.sleep(0);
   return `Hello, ${input.name}!`;
 });
 
@@ -138,8 +138,8 @@ void proveBrandedEngineAccepted;
 
 // A bare Engine (the pre-existing case) must also still be accepted.
 declare const bareEngine: Engine;
-const _bareClient = new LocalClient(bareEngine);
-void _bareClient;
+const bareClient = new LocalClient(bareEngine);
+void bareClient;
 
 // Generic constructor must infer without any cast.
 async function proveGenericConstructor(): Promise<void> {
@@ -149,8 +149,8 @@ async function proveGenericConstructor(): Promise<void> {
     recover: false,
   });
   // No `as` cast — constructor is generic and infers TWorkflows from brandedEngine2.
-  const _typedClient = new LocalClient(brandedEngine2);
-  void _typedClient;
+  const typedClient = new LocalClient(brandedEngine2);
+  void typedClient;
 }
 void proveGenericConstructor;
 
@@ -174,19 +174,19 @@ void proveGenericConstructor;
 // --- Issues #725/#728: REST-only operation and storage client surfaces -----
 
 declare const httpClient: HttpClient;
-const _clearDeadLetterResult: Promise<{ readonly ok: boolean }> = httpClient.call(
+const clearDeadLetterResult: Promise<{ readonly ok: boolean }> = httpClient.call(
   'weft.tasks.diagnostics.deadletters.clear',
   { operationId: 'op-1' },
 );
-void _clearDeadLetterResult;
+void clearDeadLetterResult;
 
-const _storageGetResult: Promise<Uint8Array | null> = httpClient.storage.get('raw-key');
-void _storageGetResult;
-const _storageScanResult: AsyncIterable<[string, Uint8Array]> = httpClient.storage.scan('raw:');
-void _storageScanResult;
+const storageGetResult: Promise<Uint8Array | null> = httpClient.storage.get('raw-key');
+void storageGetResult;
+const storageScanResult: AsyncIterable<[string, Uint8Array]> = httpClient.storage.scan('raw:');
+void storageScanResult;
 
 // @ts-expect-error: the six specialized storage operations stay off the generic map.
-httpClient.operations['weft.storage.get'];
+void httpClient.operations['weft.storage.get'];
 
 // --- Issue #722: isWeftFault/isWeftError family importable from /client -----
 
@@ -194,47 +194,47 @@ httpClient.operations['weft.storage.get'];
 // narrow the same way as the root barrel's.
 declare const unknownError: unknown;
 if (isWeftError(unknownError)) {
-  const _code: string = unknownError.code;
-  void _code;
+  const code: string = unknownError.code;
+  void code;
 }
 if (isWeftErrorLike(unknownError)) {
-  const _code: WeftErrorCodeFromClientBarrel = unknownError.code;
-  void _code;
+  const code: WeftErrorCodeFromClientBarrel = unknownError.code;
+  void code;
 }
-const _isCode: boolean = isWeftErrorCode('WorkflowNotFoundError');
-void _isCode;
-const _isFault: boolean = isWeftFaultFromClientBarrel(unknownError, 'WorkflowNotFoundError');
-void _isFault;
+const isCode: boolean = isWeftErrorCode('WorkflowNotFoundError');
+void isCode;
+const isFault: boolean = isWeftFaultFromClientBarrel(unknownError, 'WorkflowNotFoundError');
+void isFault;
 
 // `WeftError` re-exported from `/client` must be the same class as the root
 // barrel's — an instance of one must be assignable through the other's type.
 declare const errorFromClientBarrel: WeftErrorFromClientBarrel;
-const _clientErrorAsRoot: WeftErrorFromRoot = errorFromClientBarrel;
-void _clientErrorAsRoot;
+const clientErrorAsRoot: WeftErrorFromRoot = errorFromClientBarrel;
+void clientErrorAsRoot;
 
 // `WeftErrorCode` re-exported from `/client` must resolve to the same union
 // as the root barrel's.
 declare const codeFromRoot: WeftErrorCodeFromRoot;
-const _codeAsClientBarrel: WeftErrorCodeFromClientBarrel = codeFromRoot;
-void _codeAsClientBarrel;
+const codeAsClientBarrel: WeftErrorCodeFromClientBarrel = codeFromRoot;
+void codeAsClientBarrel;
 
 // The root barrel's guard must still work identically for comparison.
-const _isFaultFromRoot: boolean = isWeftFaultFromRoot(unknownError, 'WorkflowNotFoundError');
-void _isFaultFromRoot;
+const isFaultFromRoot: boolean = isWeftFaultFromRoot(unknownError, 'WorkflowNotFoundError');
+void isFaultFromRoot;
 
 // --- Issue #751: browser lifecycle classifiers importable from /client -----
 
 declare const unknownFaultCode: unknown;
 if (isFaultCodeFromClientBarrel(unknownFaultCode)) {
-  const _sameNarrowing: FaultCodeFromClientBarrel = unknownFaultCode;
-  const _sameAsRoot: FaultCodeFromRoot = _sameNarrowing;
-  void _sameNarrowing;
-  void _sameAsRoot;
+  const sameNarrowing: FaultCodeFromClientBarrel = unknownFaultCode;
+  const sameAsRoot: FaultCodeFromRoot = sameNarrowing;
+  void sameNarrowing;
+  void sameAsRoot;
 }
-const _rootGuardStillCallable: boolean = isFaultCodeFromRoot(unknownFaultCode);
-void _rootGuardStillCallable;
+const rootGuardStillCallable: boolean = isFaultCodeFromRoot(unknownFaultCode);
+void rootGuardStillCallable;
 
-const _workflowLifecycleTypes = [
+const workflowLifecycleTypes = [
   WorkflowStartedEventFromClientBarrel.type,
   WorkflowResumedEventFromClientBarrel.type,
   WorkflowCompletedEventFromClientBarrel.type,
@@ -244,7 +244,7 @@ const _workflowLifecycleTypes = [
   WorkflowSuspendedEventFromClientBarrel.type,
   WorkflowTeardownEventFromClientBarrel.type,
 ] as const;
-const _expectedWorkflowLifecycleTypes: readonly [
+const expectedWorkflowLifecycleTypes: readonly [
   typeof WorkflowStartedEventFromRoot.type,
   typeof WorkflowResumedEventFromRoot.type,
   typeof WorkflowCompletedEventFromRoot.type,
@@ -253,11 +253,11 @@ const _expectedWorkflowLifecycleTypes: readonly [
   typeof WorkflowTimedOutEventFromRoot.type,
   typeof WorkflowSuspendedEventFromRoot.type,
   typeof WorkflowTeardownEventFromRoot.type,
-] = _workflowLifecycleTypes;
-void _expectedWorkflowLifecycleTypes;
+] = workflowLifecycleTypes;
+void expectedWorkflowLifecycleTypes;
 
 // Runtime classes re-exported through `/client` must retain the root classes'
 // constructor and instance types rather than becoming client-only copies.
 declare const startedFromClient: InstanceType<typeof WorkflowStartedEventFromClientBarrel>;
-const _startedAsRoot: InstanceType<typeof WorkflowStartedEventFromRoot> = startedFromClient;
-void _startedAsRoot;
+const startedAsRoot: InstanceType<typeof WorkflowStartedEventFromRoot> = startedFromClient;
+void startedAsRoot;

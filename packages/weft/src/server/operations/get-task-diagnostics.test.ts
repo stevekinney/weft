@@ -1,197 +1,22 @@
 import { describe, expect, it } from 'bun:test';
 
-import { encode } from '../../core/codec.ts';
-import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
 } from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
-import {
-  encodeRemoteTaskRecord,
-  taskLedgerKey,
-  type RemoteTaskDeadLettered,
-  type RemoteTaskLeased,
-  type RemoteTaskQueued,
-  type RemoteTaskTerminalResolved,
-} from '../task-ledger.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
-  clearTaskDeadLetterOperation,
-  createGetTaskDiagnosticsOperation,
-  type GetTaskDiagnosticsOutput,
-} from './get-task-diagnostics.ts';
-
-const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
-  _ctx: WorkflowContext,
-  input: unknown,
-) {
-  return input;
-});
-
-function createEngine(storage: MemoryStorage): Engine {
-  const engine = new Engine({ storage });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-class ThrowingScanStorage extends MemoryStorage {
-  override scan(): AsyncIterable<[string, Uint8Array]> {
-    return {
-      [Symbol.asyncIterator]: (): AsyncIterator<[string, Uint8Array]> => ({
-        next: async (): Promise<IteratorResult<[string, Uint8Array]>> => {
-          throw new Error('diagnostics scan failed');
-        },
-      }),
-    };
-  }
-}
-
-function queuedFixture(overrides: Partial<RemoteTaskQueued> = {}): RemoteTaskQueued {
-  return {
-    recordVersion: 1,
-    operationId: 'op-queued',
-    workflowType: 'test',
-    activityName: 'charge',
-    queue: 'default',
-    input: null,
-    headers: {},
-    visibilityTimeoutMilliseconds: 30_000,
-    createdAt: 0,
-    generation: 0,
-    state: 'queued',
-    attempt: 1,
-    availableAt: 0,
-    firstQueuedAt: 0,
-    lastQueuedAt: 0,
-    retryCount: 0,
-    requeueCount: 0,
-    ...overrides,
-  };
-}
-
-function leasedFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
-  return {
-    recordVersion: 1,
-    operationId: 'op-leased',
-    workflowType: 'test',
-    activityName: 'charge',
-    queue: 'default',
-    input: null,
-    headers: {},
-    visibilityTimeoutMilliseconds: 30_000,
-    createdAt: 0,
-    generation: 1,
-    state: 'leased',
-    attemptToken: 'attempt-token',
-    workerSessionId: 'worker-1',
-    attempt: 1,
-    leaseDeadline: 60_000,
-    firstQueuedAt: 0,
-    lastQueuedAt: 0,
-    startedAt: 0,
-    lastHeartbeatAt: 0,
-    retryCount: 0,
-    requeueCount: 0,
-    ...overrides,
-  };
-}
-
-function terminalFixture(
-  overrides: Partial<RemoteTaskTerminalResolved> = {},
-): RemoteTaskTerminalResolved {
-  return {
-    recordVersion: 1,
-    operationId: 'op-terminal',
-    workflowType: 'test',
-    activityName: 'charge',
-    queue: 'default',
-    input: null,
-    headers: {},
-    visibilityTimeoutMilliseconds: 30_000,
-    createdAt: 0,
-    generation: 2,
-    state: 'terminal',
-    disposition: 'resolved',
-    attempt: 1,
-    attemptToken: 'attempt-token',
-    status: 'completed',
-    resultDigest: 'digest',
-    terminalAt: 9_000,
-    adopted: false,
-    retentionGeneration: 0,
-    ...overrides,
-  };
-}
-
-function deadLetteredFixture(
-  overrides: Partial<RemoteTaskDeadLettered> = {},
-): RemoteTaskDeadLettered {
-  return {
-    recordVersion: 1,
-    operationId: 'op-dead-lettered',
-    workflowType: 'test',
-    activityName: 'charge',
-    queue: 'default',
-    input: null,
-    headers: {},
-    visibilityTimeoutMilliseconds: 30_000,
-    createdAt: 0,
-    generation: 3,
-    state: 'deadLettered',
-    attemptToken: 'attempt-token',
-    attempt: 2,
-    pendingStatus: 'completed',
-    pendingResultDigest: 'digest',
-    retryCount: 0,
-    requeueCount: 0,
-    deadLetteredAt: 9_000,
-    persistenceFailureReason:
-      'lost the compare-and-swap race on operation "op-dead-lettered" after 3 attempt(s)',
-    ...overrides,
-  };
-}
-
-async function putLedgerRecord(
-  storage: MemoryStorage,
-  record: RemoteTaskQueued | RemoteTaskLeased | RemoteTaskTerminalResolved | RemoteTaskDeadLettered,
-): Promise<void> {
-  await storage.put(taskLedgerKey(record.operationId), encodeRemoteTaskRecord(record));
-}
-
-async function runDiagnostics({
-  engine,
-  registry,
-  taskQueue,
-  input = {},
-  scopes = ['system:read'],
-}: {
-  engine: Engine;
-  registry: WorkerRegistry;
-  taskQueue: TaskQueue;
-  input?: Record<string, unknown>;
-  scopes?: ReadonlyArray<AuthorizationScope>;
-}) {
-  const operation = createGetTaskDiagnosticsOperation({
-    registry,
-    taskQueue,
-    now: () => 10_000,
-  });
-  const operationRegistry = createOperationRegistry([operation]);
-
-  return executeOperation('weft.tasks.diagnostics', input, {
-    principal: principalFromApiKey({ subject: 'operator', scopes }),
-    engine,
-    transport: 'jsonRpcStdio',
-    registry: operationRegistry,
-  });
-}
+  createEngine,
+  deadLetteredFixture,
+  diagnosticsValue,
+  leasedFixture,
+  putLedgerRecord,
+  queuedFixture,
+  runDiagnostics,
+  terminalFixture,
+} from './get-task-diagnostics.test-support.ts';
 
 describe('weft.tasks.diagnostics', () => {
   it('identifies stuck queued tasks, stale inflight tasks, retry storms, and capacity saturation', async () => {
@@ -273,7 +98,7 @@ describe('weft.tasks.diagnostics', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    const diagnostics = diagnosticsValue(result.value);
 
     expect(diagnostics.summary).toEqual({
       stuckQueued: 1,
@@ -342,7 +167,7 @@ describe('weft.tasks.diagnostics', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    const diagnostics = diagnosticsValue(result.value);
 
     expect(diagnostics.summary.deadLettered).toBe(1);
     expect(diagnostics.summary.staleInflight).toBe(0);
@@ -376,7 +201,7 @@ describe('weft.tasks.diagnostics', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    const diagnostics = diagnosticsValue(result.value);
     expect(diagnostics.items).toHaveLength(0);
     expect(diagnostics.summary).toEqual({
       stuckQueued: 0,
@@ -414,7 +239,7 @@ describe('weft.tasks.diagnostics', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+    const diagnostics = diagnosticsValue(result.value);
     expect(diagnostics.items).toHaveLength(0);
   });
 
@@ -448,7 +273,7 @@ describe('weft.tasks.diagnostics', () => {
     });
     expect(omitted.ok).toBe(true);
     if (!omitted.ok) throw new Error('expected diagnostics result');
-    expect((omitted.value as GetTaskDiagnosticsOutput).items).toEqual([]);
+    expect(diagnosticsValue(omitted.value).items).toEqual([]);
 
     const included = await runDiagnostics({
       engine,
@@ -458,7 +283,7 @@ describe('weft.tasks.diagnostics', () => {
     });
     expect(included.ok).toBe(true);
     if (!included.ok) throw new Error('expected diagnostics result');
-    const diagnostics = included.value as GetTaskDiagnosticsOutput;
+    const diagnostics = diagnosticsValue(included.value);
     expect(diagnostics.summary.delayed).toBe(1);
     expect(diagnostics.items).toContainEqual({
       kind: 'delayed',
@@ -472,283 +297,5 @@ describe('weft.tasks.diagnostics', () => {
       evidence: ['Task is delayed until 40000 on queue "payments"'],
     });
     expect(diagnostics.items.some((item) => item.operationId === 'available-now')).toBe(false);
-  });
-
-  it('reports only unadopted terminal tasks at or beyond the configured age', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    await putLedgerRecord(
-      storage,
-      terminalFixture({
-        operationId: 'unadopted-old',
-        workflowId: 'workflow-a',
-        queue: 'payments',
-        terminalAt: 9_000,
-      }),
-    );
-    await putLedgerRecord(
-      storage,
-      terminalFixture({ operationId: 'unadopted-young', terminalAt: 9_001 }),
-    );
-    await putLedgerRecord(
-      storage,
-      terminalFixture({ operationId: 'already-adopted', terminalAt: 0, adopted: true }),
-    );
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: { unadoptedAfterMs: 1_000 },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.summary.unadoptedTerminal).toBe(1);
-    expect(diagnostics.items).toContainEqual({
-      kind: 'unadopted-terminal',
-      state: 'resolved',
-      operationId: 'unadopted-old',
-      workflowId: 'workflow-a',
-      queue: 'payments',
-      terminalAt: 9_000,
-      adopted: false,
-      evidence: ['Terminal task has remained unadopted for 1000ms'],
-    });
-  });
-
-  it('combines record filters with AND and counts new kinds before truncation', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    await putLedgerRecord(
-      storage,
-      queuedFixture({
-        operationId: 'matching-delayed',
-        workflowId: 'workflow-a',
-        queue: 'payments',
-        availableAt: 20_000,
-      }),
-    );
-    await putLedgerRecord(
-      storage,
-      terminalFixture({
-        operationId: 'matching-terminal',
-        workflowId: 'workflow-a',
-        queue: 'payments',
-        terminalAt: 0,
-      }),
-    );
-    await putLedgerRecord(
-      storage,
-      queuedFixture({
-        operationId: 'wrong-queue',
-        workflowId: 'workflow-a',
-        queue: 'shipping',
-        availableAt: 20_000,
-      }),
-    );
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: {
-        workflowId: 'workflow-a',
-        queue: 'payments',
-        includeExpectedDelayed: true,
-        unadoptedAfterMs: 1_000,
-        limit: 1,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.items).toHaveLength(1);
-    expect(diagnostics.summary.delayed).toBe(1);
-    expect(diagnostics.summary.unadoptedTerminal).toBe(1);
-
-    const operationFiltered = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: {
-        operationId: 'matching-delayed',
-        workflowId: 'workflow-a',
-        queue: 'payments',
-        includeExpectedDelayed: true,
-      },
-    });
-    expect(operationFiltered.ok).toBe(true);
-    if (!operationFiltered.ok) throw new Error('expected diagnostics result');
-    expect((operationFiltered.value as GetTaskDiagnosticsOutput).items).toHaveLength(1);
-  });
-
-  it('excludes malformed ledger rows from items and summary', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    await storage.put(taskLedgerKey('malformed'), encode({ state: 'queued' }));
-
-    const result = await runDiagnostics({
-      engine,
-      registry: new WorkerRegistry(),
-      taskQueue: new TaskQueue(),
-      input: { includeExpectedDelayed: true, unadoptedAfterMs: 0 },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.items).toEqual([]);
-    expect(diagnostics.summary.delayed).toBe(0);
-    expect(diagnostics.summary.unadoptedTerminal).toBe(0);
-  });
-
-  it('propagates storage scan failures through the existing server fault path', async () => {
-    const engine = createEngine(new ThrowingScanStorage());
-
-    const result = await runDiagnostics({
-      engine,
-      registry: new WorkerRegistry(),
-      taskQueue: new TaskQueue(),
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected server fault');
-    expect(result.fault.code).toBe('EngineFailure');
-  });
-
-  it('bounds diagnostic result items while retaining summary counts', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
-
-    for (let index = 0; index < 3; index += 1) {
-      await putLedgerRecord(
-        storage,
-        queuedFixture({
-          operationId: `queued-${String(index)}`,
-          availableAt: 1_000 + index,
-          firstQueuedAt: 1_000 + index,
-          lastQueuedAt: 1_000 + index,
-        }),
-      );
-    }
-
-    const result = await runDiagnostics({
-      engine,
-      registry,
-      taskQueue,
-      input: { staleQueuedAfterMs: 1_000, limit: 2 },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected diagnostics result');
-    const diagnostics = result.value as GetTaskDiagnosticsOutput;
-    expect(diagnostics.summary.stuckQueued).toBe(3);
-    expect(diagnostics.items).toHaveLength(2);
-    expect(diagnostics.limit).toBe(2);
-  });
-
-  it('requires system read scope', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    const operation = createGetTaskDiagnosticsOperation({
-      registry: new WorkerRegistry(),
-      taskQueue: new TaskQueue(),
-    });
-    const operationRegistry = createOperationRegistry([operation]);
-
-    const result = await executeOperation(
-      'weft.tasks.diagnostics',
-      {},
-      {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: operationRegistry,
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected authorization failure');
-    expect(result.fault.code).toBe('Forbidden');
-  });
-});
-
-describe('weft.tasks.diagnostics.deadletters.clear', () => {
-  function runClear(
-    engine: Engine,
-    operationId: string,
-    scopes: ReadonlyArray<AuthorizationScope>,
-  ) {
-    const operationRegistry = createOperationRegistry([clearTaskDeadLetterOperation]);
-    return executeOperation(
-      'weft.tasks.diagnostics.deadletters.clear',
-      { operationId },
-      {
-        principal: principalFromApiKey({ subject: 'operator', scopes }),
-        engine,
-        transport: 'http-rest',
-        registry: operationRegistry,
-      },
-    );
-  }
-
-  it('deletes a dead-lettered ledger record, freeing the operationId', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-to-clear' }));
-
-    const result = await runClear(engine, 'op-to-clear', ['system:admin']);
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected clear to succeed');
-    expect(result.value).toEqual({ ok: true });
-    expect(await storage.get(taskLedgerKey('op-to-clear'))).toBeNull();
-  });
-
-  it('faults NotFound when no dead-lettered record exists for the operationId', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-
-    const result = await runClear(engine, 'never-dispatched', ['system:admin']);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected NotFound fault');
-    expect(result.fault.code).toBe('NotFound');
-  });
-
-  it('faults NotFound rather than clearing a record that is not currently dead-lettered', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    await putLedgerRecord(storage, queuedFixture({ operationId: 'still-queued' }));
-
-    const result = await runClear(engine, 'still-queued', ['system:admin']);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected NotFound fault');
-    expect(result.fault.code).toBe('NotFound');
-    expect(await storage.get(taskLedgerKey('still-queued'))).not.toBeNull();
-  });
-
-  it('requires system admin scope', async () => {
-    const storage = new MemoryStorage();
-    const engine = createEngine(storage);
-    await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-scoped' }));
-
-    const result = await runClear(engine, 'op-scoped', ['system:read']);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected authorization failure');
-    expect(result.fault.code).toBe('Forbidden');
   });
 });

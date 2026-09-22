@@ -9,14 +9,14 @@
  * @module observability
  */
 
-import type { Interceptor } from '../core/interceptor';
-import { buildActivityInterceptor } from './activity-interceptor';
-import { MetricsCollector as MetricsCollectorClass } from './metrics';
-import { getOpenTelemetryApi } from './no-op-telemetry';
-import { DEFAULT_MAX_PAYLOAD_SIZE } from './span-helpers';
-import type { ObservabilityOptions, ObservabilityState } from './types';
-import { buildWorkflowInterceptor } from './workflow-interceptor';
-import { createWorkflowLifecycle } from './workflow-lifecycle';
+import type { Interceptor } from '../core/interceptor.ts';
+import { buildActivityInterceptor } from './activity-interceptor.ts';
+import { MetricsCollector as MetricsCollectorClass } from './metrics.ts';
+import { getOpenTelemetryApi } from './no-op-telemetry.ts';
+import { DEFAULT_MAX_PAYLOAD_SIZE } from './span-helpers.ts';
+import type { ObservabilityOptions, ObservabilityState } from './types.ts';
+import { buildWorkflowInterceptor } from './workflow-interceptor.ts';
+import { createWorkflowLifecycle } from './workflow-lifecycle.ts';
 
 export {
   createMetricsCollectorExporter,
@@ -24,7 +24,7 @@ export {
   METRICS,
   MetricsCollector,
   serializeMetricsSnapshotForPrometheus,
-} from './metrics';
+} from './metrics.ts';
 export type {
   CounterMetric,
   GaugeMetric,
@@ -34,14 +34,14 @@ export type {
   MetricType,
   OpenTelemetryMetrics,
   PrometheusExporter,
-} from './metrics';
-export { getOpenTelemetryApi } from './no-op-telemetry';
+} from './metrics.ts';
+export { getOpenTelemetryApi } from './no-op-telemetry.ts';
 export type {
   OpenTelemetryApi,
   OpenTelemetryMeter,
   OpenTelemetrySpan,
   OpenTelemetryTracer,
-} from './no-op-telemetry';
+} from './no-op-telemetry.ts';
 export {
   extractTraceParent,
   formatTraceParent,
@@ -49,9 +49,9 @@ export {
   generateTraceId,
   injectTraceParent,
   parseTraceParent,
-} from './propagation';
-export type { TraceContext } from './propagation';
-export type { InterceptionContext, ObservabilityOptions } from './types';
+} from './propagation.ts';
+export type { TraceContext } from './propagation.ts';
+export type { InterceptionContext, ObservabilityOptions } from './types.ts';
 
 function createObservabilityState(options?: ObservabilityOptions): ObservabilityState {
   const {

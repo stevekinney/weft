@@ -49,7 +49,7 @@ describe('delayed-start coverage regression', () => {
 
     const loadWorkflowState = async () => createWorkflowState(workflowId);
 
-    await expect(
+    expect(
       startDelayedWorkflow(
         {
           deposed: false,

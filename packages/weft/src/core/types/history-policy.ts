@@ -65,10 +65,21 @@ export interface NormalizedHistoryPolicy {
 }
 
 /**
- * Terminal reason recorded on a workflow forced to `timed-out` by the history
- * circuit breaker. Distinguishes circuit-breaker termination from an ordinary
- * deadline timeout (which carries no reason). A single-member union today;
- * widen as additional distinct termination reasons are introduced.
+ * Distinct reason a workflow reached a terminal state, beyond the status
+ * itself. Two members today:
+ *
+ * - {@link HISTORY_CIRCUIT_BREAKER_REASON}: forced to `timed-out` by the
+ *   history circuit breaker, as opposed to an ordinary deadline timeout
+ *   (which carries no reason).
+ * - {@link PREPARED_WORKFLOW_ABANDONED_REASON} (COR-75): a workflow
+ *   `engine.prepare()`d but never launched, then explicitly abandoned via
+ *   `handle.abandon()`. Recorded as `'cancelled'`, like any other
+ *   cancellation, but distinguishable from an ordinary mid-run
+ *   `engine.cancel()` — this run never began executing.
+ *
+ * If your code narrows or switches on this type exhaustively, widening it
+ * with a new member is a source (not just source-compatible) change: add the
+ * new case.
  *
  * @example
  * ```ts
@@ -78,7 +89,8 @@ export interface NormalizedHistoryPolicy {
  * void reason;
  * ```
  */
-export type TerminationReason = typeof HISTORY_CIRCUIT_BREAKER_REASON;
+export type TerminationReason =
+  typeof HISTORY_CIRCUIT_BREAKER_REASON | typeof PREPARED_WORKFLOW_ABANDONED_REASON;
 
 /**
  * Value written to `WorkflowState.terminationReason` and
@@ -97,3 +109,23 @@ export type TerminationReason = typeof HISTORY_CIRCUIT_BREAKER_REASON;
  * ```
  */
 export const HISTORY_CIRCUIT_BREAKER_REASON = 'history-circuit-breaker';
+
+/**
+ * Value written to `WorkflowState.terminationReason` when a workflow
+ * `engine.prepare()`d but never launched is explicitly abandoned via
+ * `handle.abandon()` (COR-75). The workflow's status is `'cancelled'`, like
+ * any other cancellation; compare against this value to tell "declined to
+ * launch" apart from an ordinary mid-run `engine.cancel()`.
+ *
+ * @example
+ * ```ts
+ * import { Engine, PREPARED_WORKFLOW_ABANDONED_REASON } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * const state = await engine.get('some-workflow-id');
+ * if (state?.terminationReason === PREPARED_WORKFLOW_ABANDONED_REASON) {
+ *   console.log('this run was prepared but abandoned before it ever launched');
+ * }
+ * ```
+ */
+export const PREPARED_WORKFLOW_ABANDONED_REASON = 'prepared-workflow-abandoned';

@@ -7,7 +7,7 @@
  * @module server/operations/list-filter-query-extractor
  */
 
-import type { FailureCategory, ListFilter, TimeRange, WorkflowStatus } from '../../core/types.ts';
+import type { ListFilter, TimeRange } from '../../core/types.ts';
 import { parseAttributeFilters } from '../attribute-filters.ts';
 
 /**
@@ -29,13 +29,18 @@ type ListFilterDimension =
   | 'updatedAt'
   | 'executionDeadline';
 
+type ListFilterQueryInput = Omit<ListFilter, 'status' | 'failureCategory'> & {
+  status?: string | string[];
+  failureCategory?: string | string[];
+};
+
 /** Parser for one `ListFilter` dimension. `undefined` means "not present in the query". */
 type ListFilterQueryParser<TDimension extends ListFilterDimension> = (
   params: URLSearchParams,
-) => ListFilter[TDimension] | undefined;
+) => ListFilterQueryInput[TDimension] | undefined;
 
-function parseStatus(params: URLSearchParams): ListFilter['status'] | undefined {
-  const statuses = params.getAll('status') as WorkflowStatus[];
+function parseStatus(params: URLSearchParams): ListFilterQueryInput['status'] | undefined {
+  const statuses = params.getAll('status');
   if (statuses.length === 0) return undefined;
   if (statuses.length === 1) return statuses[0]!;
   return statuses;
@@ -88,8 +93,10 @@ function parseIdPrefix(params: URLSearchParams): ListFilter['idPrefix'] | undefi
   return idPrefix === null ? undefined : idPrefix;
 }
 
-function parseFailureCategory(params: URLSearchParams): ListFilter['failureCategory'] | undefined {
-  const categories = params.getAll('failure_category') as FailureCategory[];
+function parseFailureCategory(
+  params: URLSearchParams,
+): ListFilterQueryInput['failureCategory'] | undefined {
+  const categories = params.getAll('failure_category');
   if (categories.length === 0) return undefined;
   if (categories.length === 1) return categories[0]!;
   return categories;
@@ -133,18 +140,13 @@ const LIST_FILTER_QUERY_PARSERS = {
  * query string. `limit` and `offset` are NOT extracted — callers that
  * support pagination layer them on top.
  */
-export function extractListFilterFromQuery(url: URL): ListFilter {
+export function extractListFilterFromQuery(url: URL): ListFilterQueryInput {
   const params = url.searchParams;
-  const filter: ListFilter = {};
-  for (const [dimension, parse] of Object.entries(LIST_FILTER_QUERY_PARSERS) as Array<
-    [ListFilterDimension, (params: URLSearchParams) => unknown]
-  >) {
+  const filter: ListFilterQueryInput = {};
+  for (const [dimension, parse] of Object.entries(LIST_FILTER_QUERY_PARSERS)) {
     const value = parse(params);
     if (value === undefined) continue;
-    // Each parser is keyed by its own dimension, so the assignment is
-    // type-safe by construction. The `as never` keeps the assignment
-    // index-signature-safe without weakening the per-parser return type.
-    (filter[dimension] as unknown) = value;
+    Object.assign(filter, { [dimension]: value });
   }
   return filter;
 }

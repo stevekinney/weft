@@ -88,7 +88,7 @@ describe('payload-size cap — signal payload', () => {
       resumeParkedInlineWorkflow: async () => {},
     };
 
-    await expect(
+    expect(
       bufferSignalPayloads(
         internals as never,
         'wf-batch',

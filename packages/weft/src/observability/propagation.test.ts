@@ -7,7 +7,7 @@ import {
   generateTraceId,
   injectTraceParent,
   parseTraceParent,
-} from './propagation';
+} from './propagation.ts';
 
 describe('propagation', () => {
   describe('parseTraceParent', () => {

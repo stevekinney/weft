@@ -10,13 +10,15 @@ import { flushQueuedInlineWorkflowStartsDirectly } from './inline-launch-queue.t
 import { getInternals } from './internals.ts';
 import { startWorkflow } from './lifecycle.ts';
 import type { ReviewOperationCallbacks, SubmitReviewCallbacks } from './reviews.ts';
-import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import {
   applyScheduleOccurrence,
-  handleScheduleTimer,
   handleScheduledWorkflowTerminal,
   refreshScheduledWorkflowState,
   settleBackfillScheduleState,
+} from './schedule-current-run.ts';
+import type { ScheduledRunStartOptions } from './schedule-run.ts';
+import {
+  handleScheduleTimer,
   startScheduledRun,
   type RefreshedScheduleState,
   type ScheduleCallbacks,

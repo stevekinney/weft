@@ -6,7 +6,7 @@
  * JSON Schema documents in `./protocol-schemas.ts`, the `taskResult` variant
  * parser in `./protocol-task-result.ts`, and internal helpers in
  * `./protocol-internals.ts`. All are re-exported so the public surface
- * `@lostgradient/weft/worker-protocol` stays a single import path.
+ * `@lostgradient/weft` stays a single import path.
  *
  * @module worker/protocol
  */
@@ -27,6 +27,7 @@ import {
   protocolFailure,
 } from './protocol-internals.ts';
 import type {
+  ActivityHeartbeatMessage,
   CancelMessage,
   CancelledTaskResultMessage,
   CompletedTaskResultMessage,
@@ -40,6 +41,7 @@ import type {
   RemoteWorkerJsonValue,
   ShutdownMessage,
   TaskMessage,
+  TaskResultAckMessage,
 } from './protocol-messages.ts';
 import {
   REMOTE_WORKER_MESSAGE_SCHEMAS,
@@ -65,6 +67,7 @@ export {
   isRemoteWorkerJsonValue,
 };
 export type {
+  ActivityHeartbeatMessage,
   CancelMessage,
   CancelledTaskResultMessage,
   CompletedTaskResultMessage,
@@ -81,6 +84,7 @@ export type {
   RemoteWorkerProtocolVersion,
   ShutdownMessage,
   TaskMessage,
+  TaskResultAckMessage,
   TaskResultMessage,
 };
 
@@ -89,19 +93,20 @@ export type {
  *
  * @example
  * ```ts
- * import type { WorkerToServerMessage } from '@lostgradient/weft/worker-protocol';
+ * import type { WorkerToServerMessage } from '@lostgradient/weft';
  *
  * const message: WorkerToServerMessage = { type: 'heartbeat', workerId: 'worker-1' };
  * ```
  */
-export type WorkerToServerMessage = RegisterMessage | HeartbeatMessage | TaskResultMessage;
+export type WorkerToServerMessage =
+  RegisterMessage | HeartbeatMessage | ActivityHeartbeatMessage | TaskResultMessage;
 
 /**
  * Messages the server may send to a worker stream client.
  *
  * @example
  * ```ts
- * import type { ServerToWorkerMessage } from '@lostgradient/weft/worker-protocol';
+ * import type { ServerToWorkerMessage } from '@lostgradient/weft';
  *
  * const message: ServerToWorkerMessage = { type: 'shutdown' };
  * ```
@@ -112,9 +117,15 @@ export type ServerToWorkerMessage =
   | ProtocolErrorMessage
   | TaskMessage
   | CancelMessage
-  | ShutdownMessage;
+  | ShutdownMessage
+  | TaskResultAckMessage;
 
-const WORKER_TO_SERVER_TYPES = new Set(['register', 'heartbeat', 'taskResult']);
+const WORKER_TO_SERVER_TYPES = new Set([
+  'register',
+  'heartbeat',
+  'activityHeartbeat',
+  'taskResult',
+]);
 const SERVER_TO_WORKER_TYPES = new Set([
   'registerAck',
   'registerError',
@@ -122,6 +133,7 @@ const SERVER_TO_WORKER_TYPES = new Set([
   'task',
   'cancel',
   'shutdown',
+  'taskResultAck',
 ]);
 
 // --- parseRegisterMessage ---------------------------------------------------
@@ -153,6 +165,7 @@ const REGISTER_FIELD_SPECS: readonly FieldSpec[] = [
   ['manifest',    true,  isRecord,         'register.manifest must be a JSON object'],
   ['concurrency', false, isFiniteNumber,   'register.concurrency must be a finite number'],
   ['startedAt',   false, isFiniteNumber,   'register.startedAt must be a finite number when present'],
+  ['resumeSessionGeneration', false, isFiniteNumber, 'register.resumeSessionGeneration must be a finite number when present'],
 ];
 
 function parseRegisterMessage(
@@ -187,6 +200,25 @@ function parseHeartbeatMessage(
   return { ok: true, message: { type: 'heartbeat', workerId } };
 }
 
+// prettier-ignore
+const ACTIVITY_HEARTBEAT_FIELD_SPECS: readonly FieldSpec[] = [
+  ['workerId',     true, isNonEmptyString, 'activityHeartbeat.workerId must be a non-empty string'],
+  ['operationId',  true, isNonEmptyString, 'activityHeartbeat.operationId must be a non-empty string'],
+  ['attemptToken', true, isNonEmptyString, 'activityHeartbeat.attemptToken must be a non-empty string'],
+];
+
+function parseActivityHeartbeatMessage(
+  record: Record<string, unknown>,
+): RemoteWorkerProtocolParseResult<ActivityHeartbeatMessage> {
+  const fields = collectFields('invalid_message', record, ACTIVITY_HEARTBEAT_FIELD_SPECS);
+  if (!fields.ok) return fields.error;
+
+  return {
+    ok: true,
+    message: { type: 'activityHeartbeat', ...fields.values } as ActivityHeartbeatMessage,
+  };
+}
+
 // --- parseTaskMessage -------------------------------------------------------
 
 const TASK_FIELD_SPECS: readonly FieldSpec[] = [
@@ -216,15 +248,19 @@ function parseTaskMessage(
   return { ok: true, message: { type: 'task', ...fields.values } as TaskMessage };
 }
 
+// prettier-ignore
+const CANCEL_FIELD_SPECS: readonly FieldSpec[] = [
+  ['operationId',  true, isNonEmptyString, 'cancel.operationId must be a non-empty string'],
+  ['attemptToken', true, isNonEmptyString, 'cancel.attemptToken must be a non-empty string'],
+];
+
 function parseCancelMessage(
   record: Record<string, unknown>,
 ): RemoteWorkerProtocolParseResult<CancelMessage> {
-  const operationId = record['operationId'];
-  if (!isNonEmptyString(operationId)) {
-    return protocolFailure('invalid_message', 'cancel.operationId must be a non-empty string');
-  }
+  const fields = collectFields('invalid_message', record, CANCEL_FIELD_SPECS);
+  if (!fields.ok) return fields.error;
 
-  return { ok: true, message: { type: 'cancel', operationId } };
+  return { ok: true, message: { type: 'cancel', ...fields.values } as CancelMessage };
 }
 
 function parseShutdownMessage(): RemoteWorkerProtocolParseResult<ShutdownMessage> {
@@ -247,6 +283,7 @@ function parseRegisterAckMessage(
   const concurrency = record['concurrency'];
   const acceptedManifestDigest = record['acceptedManifestDigest'];
   const serverCapabilities = record['serverCapabilities'];
+  const sessionGeneration = record['sessionGeneration'];
   if (!isNonEmptyString(workerId)) {
     return protocolFailure('invalid_message', 'registerAck.workerId must be a non-empty string');
   }
@@ -268,6 +305,12 @@ function parseRegisterAckMessage(
       'registerAck.serverCapabilities must be an array of non-empty strings',
     );
   }
+  if (!isFiniteNumber(sessionGeneration)) {
+    return protocolFailure(
+      'invalid_message',
+      'registerAck.sessionGeneration must be a finite number',
+    );
+  }
 
   return {
     ok: true,
@@ -279,6 +322,7 @@ function parseRegisterAckMessage(
       concurrency,
       acceptedManifestDigest,
       serverCapabilities,
+      sessionGeneration,
     },
   };
 }
@@ -351,11 +395,43 @@ function parseProtocolErrorMessage(
   return { ok: true, message: { type: 'protocolError', code, message } };
 }
 
+function isTaskResultAckDisposition(value: unknown): value is TaskResultAckMessage['disposition'] {
+  return value === 'applied' || value === 'duplicate' || value === 'dead-lettered';
+}
+
+function parseTaskResultAckMessage(
+  record: Record<string, unknown>,
+): RemoteWorkerProtocolParseResult<TaskResultAckMessage> {
+  const operationId = record['operationId'];
+  if (!isNonEmptyString(operationId)) {
+    return protocolFailure(
+      'invalid_message',
+      'taskResultAck.operationId must be a non-empty string',
+    );
+  }
+  const attemptToken = record['attemptToken'];
+  if (!isNonEmptyString(attemptToken)) {
+    return protocolFailure(
+      'invalid_message',
+      'taskResultAck.attemptToken must be a non-empty string',
+    );
+  }
+  const disposition = record['disposition'];
+  if (!isTaskResultAckDisposition(disposition)) {
+    return protocolFailure(
+      'invalid_message',
+      'taskResultAck.disposition must be "applied", "duplicate", or "dead-lettered"',
+    );
+  }
+
+  return { ok: true, message: { type: 'taskResultAck', operationId, attemptToken, disposition } };
+}
+
 /**
  * Parse and validate a worker-to-server protocol message.
  * @example
  * ```ts
- * import { parseWorkerToServerMessage } from '@lostgradient/weft/worker-protocol';
+ * import { parseWorkerToServerMessage } from '@lostgradient/weft';
  * const result = parseWorkerToServerMessage({ type: 'heartbeat', workerId: 'worker-1' });
  * ```
  */
@@ -379,6 +455,8 @@ export function parseWorkerToServerMessage(
       return parseRegisterMessage(value);
     case 'heartbeat':
       return parseHeartbeatMessage(value);
+    case 'activityHeartbeat':
+      return parseActivityHeartbeatMessage(value);
     case 'taskResult':
       return parseTaskResultMessage(value);
     default:
@@ -390,7 +468,7 @@ export function parseWorkerToServerMessage(
  * Parse and validate a server-to-worker protocol message.
  * @example
  * ```ts
- * import { parseServerToWorkerMessage } from '@lostgradient/weft/worker-protocol';
+ * import { parseServerToWorkerMessage } from '@lostgradient/weft';
  * const result = parseServerToWorkerMessage({ type: 'shutdown' });
  * ```
  */
@@ -422,6 +500,8 @@ export function parseServerToWorkerMessage(
       return parseCancelMessage(value);
     case 'shutdown':
       return parseShutdownMessage();
+    case 'taskResultAck':
+      return parseTaskResultAckMessage(value);
     default:
       return protocolFailure('unknown_message_type', `Unknown server message type: ${type}`);
   }

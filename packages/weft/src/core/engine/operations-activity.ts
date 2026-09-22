@@ -1,4 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { parsePerAttemptTimeoutMs } from '../context/activity-schedule-to-close.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityContext, ActivityVerificationResult, OperationOutcome } from '../types.ts';
@@ -43,9 +44,26 @@ export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknow
 
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
 
-export interface ActivityExecutionOptions {
+/**
+ * Per-call execution options for one activity operation. Distinct from the
+ * public, engine-construction-level `ActivityExecutionOptions`
+ * (`core/types/options.ts`) — this interface configures how ONE operation's
+ * reconciliation commits and whether it may reach remote dispatch, not how
+ * the engine as a whole executes activities.
+ */
+export interface ActivityOperationExecutionOptions {
   reconciliationCompletion?: 'stage-with-workflow-commit' | 'immediate-fenced';
   beforeImmediateReconciliationCommit?: () => void | (() => void);
+  /**
+   * Whether this operation may dispatch through `activityExecution: { mode:
+   * 'remote' }` when the engine is so configured. Defaults to `true` for an
+   * ordinary `ctx.run()` call. `durableActivity()`'s internal helper
+   * activities set this to `false` (acceptance criterion 12): they run
+   * post-checkpoint retry logic that assumes a synchronous local result and
+   * explicitly reject `ctx.completeAsync()`-style deferral — reaching remote
+   * dispatch would silently break that assumption instead of running inline.
+   */
+  allowRemoteDispatch?: boolean;
 }
 
 export type ActivityOperationCallbacks = {
@@ -135,6 +153,78 @@ export async function invokeWorkerActivity(
   return result.value;
 }
 
+/**
+ * Resolve the calling workflow's canonical registered type (acceptance
+ * criterion 3) — never a caller-controlled string — so remote dispatch's
+ * qualified activity name (`${workflowType}.${activityName}`) always matches
+ * the same convention `buildWorkerExecutionIdentity` and the wire's `task`
+ * message already use for a WebSocket-dispatched task.
+ */
+function requireWorkflowTypeForRemoteDispatch(
+  internals: EngineInternals,
+  workflowId: string,
+): string {
+  const identity = internals.workflowTypeByWorkflowId.get(workflowId);
+  if (identity === undefined) {
+    throw new Error(
+      `Cannot dispatch a remote activity for workflow "${workflowId}": no canonical workflow ` +
+        'type is registered for it in this process.',
+    );
+  }
+  return identity.type;
+}
+
+/**
+ * Dispatch one `ctx.run()` attempt through `activityExecution: { mode:
+ * 'remote' }` (COR-152). Durably enqueues the task, then parks the workflow
+ * operation exactly like `ActivityContext.completeAsync()` does — reusing
+ * `AsyncActivityDeferral`/`parkDeferredAsyncActivity` rather than a parallel
+ * parking mechanism (acceptance criteria 5, 6, 7). The enqueue itself runs
+ * as `AsyncActivityDeferral.afterRegister`, so it never becomes visible to a
+ * server/worker before the pending token is durably registered — see that
+ * field's doc comment for why the ordering matters.
+ *
+ * Never falls back to local execution (acceptance criterion 9): this
+ * function's only two outcomes are "durably parked, resolved later" or "the
+ * attempt fails" (broker.enqueue threw). It never calls
+ * `invokeInlineActivity`/`invokeWorkerActivity`.
+ */
+function invokeRemoteActivity(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: ActivityOperation,
+  activityName: string,
+  input: unknown,
+  headers: Map<string, string>,
+  attempt: number,
+  workflowExecutionToken: string | undefined,
+): Promise<never> {
+  const broker = internals.remoteActivityBroker;
+  if (!broker) {
+    throw new Error(`Engine is not configured for remote activity execution ("${activityName}")`);
+  }
+  const activityStateKey = getActivityStateKey(operation);
+  const token = deriveAsyncActivityToken(workflowId, activityStateKey, attempt);
+  const workflowType = requireWorkflowTypeForRemoteDispatch(internals, workflowId);
+  // A per-call `timeout` overrides the broker's own configured default
+  // (`EngineOwnedRemoteActivityBroker`'s `defaults.visibilityTimeoutMilliseconds`) —
+  // `undefined` here just means "use the broker's default," not "no timeout".
+  const visibilityTimeoutMilliseconds = parsePerAttemptTimeoutMs(operation.options?.['timeout']);
+  const deferral = new AsyncActivityDeferral(token, () =>
+    broker.enqueue({
+      operationId: token,
+      workflowId,
+      workflowType,
+      activityName,
+      input,
+      headers: Object.fromEntries(headers),
+      ...(visibilityTimeoutMilliseconds !== undefined ? { visibilityTimeoutMilliseconds } : {}),
+      ...(workflowExecutionToken !== undefined ? { workflowExecutionToken } : {}),
+    }),
+  );
+  throw deferral;
+}
+
 export function invokeInlineActivity(
   internals: EngineInternals,
   workflowId: string,
@@ -176,6 +266,7 @@ export async function executeActivity(
   callbacks: ActivityOperationCallbacks,
   attempt = getActivityAttempt(operation),
   coordinatorSignal?: AbortSignal,
+  allowRemoteDispatch = true,
 ): Promise<unknown> {
   const activityInput = operation.input;
 
@@ -210,9 +301,30 @@ export async function executeActivity(
   );
   const activityAttemptToken = activityContext.activityAttemptToken;
 
-  // Build the leaf executor: either dispatch to a worker or call inline.
-  const invokeActivity: (activityName: string, input: unknown) => unknown =
-    internals.activityWorkerDispatcher
+  // Build the leaf executor: remote dispatch, a local worker pool, or inline.
+  // `remoteActivityBroker` is non-`null` if and only if `activityExecution.mode
+  // === 'remote'` (set once, at construction, by `createRemoteActivityBroker`)
+  // — this is a mode discriminant, not a generic "is some dispatcher
+  // configured" check, so remote unavailability can never silently fall
+  // through to a different mode (acceptance criterion 9).
+  const isRemoteMode = Boolean(internals.remoteActivityBroker) && allowRemoteDispatch;
+  const invokeActivity: (
+    activityName: string,
+    input: unknown,
+    headers: Map<string, string>,
+  ) => unknown = isRemoteMode
+    ? (activityName, input, headers) =>
+        invokeRemoteActivity(
+          internals,
+          workflowId,
+          operation,
+          activityName,
+          input,
+          headers,
+          attempt,
+          workflowExecutionToken,
+        )
+    : internals.activityWorkerDispatcher
       ? (activityName, input) =>
           invokeWorkerActivity(
             internals,
@@ -246,7 +358,7 @@ export async function executeActivity(
     headers: Map<string, string>,
   ): Promise<unknown> => {
     if (!composedActivity) {
-      return invokeActivity(activityName, input);
+      return invokeActivity(activityName, input, headers);
     }
 
     const activityInterception = {
@@ -258,7 +370,7 @@ export async function executeActivity(
     };
 
     const result = await composedActivity.execute(activityInterception, async (interception) => {
-      return invokeActivity(activityName, interception.input);
+      return invokeActivity(activityName, interception.input, headers);
     });
 
     return result;
@@ -306,7 +418,7 @@ export async function executeActivityOperationResult(
   callbacks: ActivityOperationCallbacks,
   coordinatorSignal?: AbortSignal,
   speculativeState?: SpeculativeExecutionState,
-  executionOptions: ActivityExecutionOptions = {},
+  executionOptions: ActivityOperationExecutionOptions = {},
 ): Promise<unknown> {
   const activity = getActivityFunctionWithMetadata(internals, workflowId, operation);
   const idempotencyKey = resolveActivityIdempotencyKey(activity, operation);
@@ -340,6 +452,7 @@ export async function executeActivityOperationResult(
       callbacks,
       started.attempt,
       coordinatorSignal,
+      executionOptions.allowRemoteDispatch ?? true,
     );
     validateActivityResultForReconciliation(result, internals.options.payloadSizePolicy.maxBytes);
     await finalizeActivityResult(
@@ -397,6 +510,7 @@ export async function executeActivityOperationResult(
     callbacks,
     operationAttempt,
     coordinatorSignal,
+    executionOptions.allowRemoteDispatch ?? true,
   );
 
   assertPayloadWithinLimit(result, internals.options.payloadSizePolicy.maxBytes, 'activity result');

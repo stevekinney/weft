@@ -39,11 +39,21 @@ function buildInitialIdentitySlice(
   delayedStartTimer: TimerEntry | undefined,
   now: number,
   tags: string[] | undefined,
+  /**
+   * COR-75: `engine.prepare()` wants the exact same `'pending'`, no-`startedAt`
+   * shape a delayed start's create batch produces — WITHOUT a
+   * `delayedStartTimer`, so the create batch still folds claim acquisition
+   * (unlike an actual `startAt`/`startAfter` start, whose create batch
+   * intentionally skips it — see `start-commit.ts`) and writes no durable
+   * timer. Independent of `delayedStartTimer` for exactly that reason.
+   */
+  forcePendingWithoutTimer: boolean | undefined,
 ): WorkflowState {
+  const isPending = delayedStartTimer !== undefined || forcePendingWithoutTimer === true;
   return {
     id: workflowId,
     type,
-    status: delayedStartTimer ? 'pending' : 'running',
+    status: isPending ? 'pending' : 'running',
     input,
     versionTuple,
     revision,
@@ -52,7 +62,7 @@ function buildInitialIdentitySlice(
     ...(parentWorkflowId !== undefined && { parentWorkflowId }),
     ...(parentWorkflowExecutionToken !== undefined && { parentWorkflowExecutionToken }),
     createdAt: now,
-    ...(!delayedStartTimer && { startedAt: now }),
+    ...(!isPending && { startedAt: now }),
     updatedAt: now,
     ...(tags !== undefined && { tags }),
   };
@@ -100,6 +110,8 @@ export function createInitialWorkflowState(
   parentWorkflowExecutionToken: string | undefined,
   delayedStartTimer: TimerEntry | undefined,
   callbacks: LifecycleCallbacks,
+  /** See {@link buildInitialIdentitySlice}'s parameter of the same name (COR-75). */
+  forcePendingWithoutTimer?: boolean,
 ): WorkflowState {
   const now = internals.options.getNow();
   const state = buildInitialIdentitySlice(
@@ -114,15 +126,17 @@ export function createInitialWorkflowState(
     delayedStartTimer,
     now,
     tags,
+    forcePendingWithoutTimer,
   );
 
-  const executionDeadline = resolveInitialExecutionDeadline(
-    internals,
-    options,
-    delayedStartTimer,
-    now,
-    callbacks,
-  );
+  // A prepared-but-unlaunched workflow defers execution-deadline computation
+  // to `launch()`, exactly like a delayed start defers it to its timer fire
+  // (`resolveDelayedExecutionDeadline` in `operations-time.ts`) — the
+  // deadline should count from when execution actually begins, not from
+  // `prepare()` time.
+  const executionDeadline = forcePendingWithoutTimer
+    ? undefined
+    : resolveInitialExecutionDeadline(internals, options, delayedStartTimer, now, callbacks);
   if (executionDeadline !== undefined) {
     state.executionDeadline = executionDeadline;
   }

@@ -99,7 +99,7 @@ describe('operation test helpers', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
 
     try {
-      await expect(
+      expect(
         waitForWorkflowStatus(engine, 'missing-workflow', 'running', {
           intervalMilliseconds: 1,
           timeoutMilliseconds: 1,
@@ -116,7 +116,7 @@ describe('operation test helpers', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
 
     try {
-      await expect(
+      expect(
         waitForWorkflowStatus(engine, 'invalid-interval-workflow', 'running', {
           intervalMilliseconds: 0,
           timeoutMilliseconds: 1,

@@ -142,38 +142,36 @@ describe('resolveStorage', () => {
   });
 
   it('rejects unknown storage configuration variants', async () => {
-    await expect(resolveStorage({ type: 'nope' } as never)).rejects.toThrow(
+    expect(resolveStorage({ type: 'nope' } as never)).rejects.toThrow(
       'Unsupported storage configuration type: nope',
     );
   });
 
   it('rejects non-object storage configuration values predictably', async () => {
-    await expect(resolveStorage(null as never)).rejects.toThrow(
+    expect(resolveStorage(null as never)).rejects.toThrow(
       'Unsupported storage configuration type: unknown',
     );
   });
 
   it('validates backend-specific runtime configuration before constructing storage', async () => {
-    await expect(resolveStorage({ type: 'http' } as never)).rejects.toThrow(
+    expect(resolveStorage({ type: 'http' } as never)).rejects.toThrow(
       'HTTP storage configuration requires "baseUrl" as a string or URL.',
     );
-    await expect(resolveStorage({ type: 'lmdb' } as never)).rejects.toThrow(
+    expect(resolveStorage({ type: 'lmdb' } as never)).rejects.toThrow(
       'LMDB storage configuration requires "path" as a string.',
     );
-    await expect(
+    expect(
       resolveStorage({ type: 'lmdb', path: './weft-data', durability: 'eventual' } as never),
     ).rejects.toThrow(
       'LMDB storage configuration field "durability" must be one of full or relaxed.',
     );
-    await expect(resolveStorage({ type: 'neon' } as never)).rejects.toThrow(
+    expect(resolveStorage({ type: 'neon' } as never)).rejects.toThrow(
       'Neon storage configuration requires "url" as a string.',
     );
-    await expect(
-      resolveStorage({ type: 'web-extension', area: 'chrome' } as never),
-    ).rejects.toThrow(
+    expect(resolveStorage({ type: 'web-extension', area: 'chrome' } as never)).rejects.toThrow(
       'WebExtension storage configuration field "area" must be one of local, sync, session, or managed.',
     );
-    await expect(
+    expect(
       resolveStorage({
         type: 'http',
         baseUrl: 'https://example.test',

@@ -86,7 +86,7 @@ describe('computePayloadDigest ordering', () => {
       value: () => Promise.reject(failure),
     });
     try {
-      await expect(computePayloadDigest({ ok: true })).rejects.toThrow(failure);
+      expect(computePayloadDigest({ ok: true })).rejects.toThrow(failure);
     } finally {
       Object.defineProperty(crypto.subtle, 'digest', {
         configurable: true,
@@ -149,18 +149,18 @@ describe('computePayloadDigest fail-closed behavior', () => {
   it('rejects a cycle rather than looping', async () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
-    await expect(computePayloadDigest(cyclic)).rejects.toThrow(PayloadDigestError);
-    await expect(computePayloadDigest(cyclic)).rejects.toThrow(/cycle/);
+    expect(computePayloadDigest(cyclic)).rejects.toThrow(PayloadDigestError);
+    expect(computePayloadDigest(cyclic)).rejects.toThrow(/cycle/);
   });
 
   it('rejects a cycle reached through an array or a Set', async () => {
     const array: unknown[] = [];
     array.push(array);
-    await expect(computePayloadDigest(array)).rejects.toThrow(/cycle/);
+    expect(computePayloadDigest(array)).rejects.toThrow(/cycle/);
 
     const set = new Set<unknown>();
     set.add(set);
-    await expect(computePayloadDigest(set)).rejects.toThrow(/cycle/);
+    expect(computePayloadDigest(set)).rejects.toThrow(/cycle/);
   });
 
   it('allows the same object to appear twice, which is sharing rather than a cycle', async () => {
@@ -169,25 +169,21 @@ describe('computePayloadDigest fail-closed behavior', () => {
   });
 
   it('rejects a function or symbol value', async () => {
-    await expect(computePayloadDigest({ run: () => 1 })).rejects.toThrow(/non-cloneable function/);
-    await expect(computePayloadDigest({ tag: Symbol('x') })).rejects.toThrow(
-      /non-cloneable symbol/,
-    );
+    expect(computePayloadDigest({ run: () => 1 })).rejects.toThrow(/non-cloneable function/);
+    expect(computePayloadDigest({ tag: Symbol('x') })).rejects.toThrow(/non-cloneable symbol/);
   });
 
   it('rejects a class instance it cannot order', async () => {
     class Ticket {
       constructor(readonly id: string) {}
     }
-    await expect(computePayloadDigest({ ticket: new Ticket('t-1') })).rejects.toThrow(
-      /class instance/,
-    );
+    expect(computePayloadDigest({ ticket: new Ticket('t-1') })).rejects.toThrow(/class instance/);
   });
 
   it('rejects nesting past the depth ceiling', async () => {
     let deep: unknown = 'leaf';
     for (let level = 0; level < 70; level += 1) deep = { deep };
-    await expect(computePayloadDigest(deep)).rejects.toThrow(/nesting exceeds/);
+    expect(computePayloadDigest(deep)).rejects.toThrow(/nesting exceeds/);
 
     // Just inside the ceiling still digests.
     let shallow: unknown = 'leaf';

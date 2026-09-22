@@ -18,7 +18,18 @@ function workerShutdownFinished(
   );
 }
 
-/** Send a shutdown message to a specific worker and wait for it to disconnect. */
+/**
+ * Send a shutdown message to a specific worker and wait for it to
+ * disconnect.
+ *
+ * Marks the worker draining BEFORE sending the `shutdown` control (COR-230,
+ * acceptance criterion 14): `WorkerRegistry.markWorkerDraining` makes
+ * `findWorker()` exclude it from new routing immediately, synchronously, in
+ * the same tick — not eventually, once the worker gets around to
+ * disconnecting after receiving the control frame. Without this ordering, a
+ * dispatch racing the shutdown frame's network delivery could still route a
+ * fresh task onto a worker that is a moment away from disconnecting.
+ */
 export async function shutdownWorker(
   context: ServerContext,
   workerId: string,
@@ -27,6 +38,7 @@ export async function shutdownWorker(
   const ws = context.workerSockets.get(workerId);
   if (!ws) return false;
 
+  context.registry.markWorkerDraining(workerId);
   ws.send(JSON.stringify({ type: 'shutdown' }));
 
   const timeout = shutdownOptions?.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;

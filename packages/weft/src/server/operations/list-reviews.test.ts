@@ -8,6 +8,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { principalFromApiKey } from '../principal.ts';
 import { storeHistoricalReviewDecisionWithoutRequestMetadata } from '../review-test-support.test-support.ts';
 import { listReviewsOperation, listReviewsRestBinding } from './list-reviews.ts';
@@ -201,7 +202,7 @@ describe('weft.reviews.list', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...listReviewsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -211,7 +212,7 @@ describe('weft.reviews.list', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/reviews', { method: 'GET' }),

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 
 import { Engine } from '../core/engine.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
@@ -10,7 +11,6 @@ import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import type { WeftServer } from './index.ts';
 import { serve } from './index.ts';
-import { decodeRemoteTaskRecord, taskLedgerKey } from './task-ledger.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,

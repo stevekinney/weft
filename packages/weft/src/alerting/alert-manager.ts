@@ -11,10 +11,10 @@ import {
   AlertFiredEvent,
   AlertResolvedEvent,
   StorageSizeReportedEvent,
-} from '../core/events';
-import { parseDuration } from '../core/scheduler';
-import { CounterWindow, HistogramWindow } from './sliding-window';
-import type { AlertRule, AlertStateSnapshot, AlertingOptions } from './types';
+} from '../core/events.ts';
+import { parseDuration } from '../core/scheduler.ts';
+import { CounterWindow, HistogramWindow } from './sliding-window.ts';
+import type { AlertRule, AlertStateSnapshot, AlertingOptions } from './types.ts';
 
 /** Periodic re-evaluation interval in milliseconds. */
 const TICK_INTERVAL_MS = 10_000;

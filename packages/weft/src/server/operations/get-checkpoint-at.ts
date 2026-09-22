@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { CheckpointState } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -16,17 +16,14 @@ const getCheckpointAtOutput = z.unknown();
 export type GetCheckpointAtInput = z.infer<typeof getCheckpointAtInput>;
 export type GetCheckpointAtOutput = CheckpointState;
 
-export const getCheckpointAtOperation = defineOperation<
-  GetCheckpointAtInput,
-  GetCheckpointAtOutput
->({
+export const getCheckpointAtOperation = defineOperation({
   name: 'weft.workflows.checkpoints.get',
   mcpExposable: false,
   summary: 'Get a specific checkpoint by step number',
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getCheckpointAtInput,
-  outputSchema: getCheckpointAtOutput as z.ZodType<GetCheckpointAtOutput>,
+  outputSchema: getCheckpointAtOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
@@ -37,7 +34,8 @@ export const getCheckpointAtOperation = defineOperation<
   // not in the operation output, so JSON-RPC clients receive a
   // clean canonical envelope.
   invoke: async ({ input, engine }): Promise<GetCheckpointAtOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getCheckpointAt']);
+    const e = engine;
     const state = await e.getCheckpointAt(input.workflowId, input.step);
     if (state === null) {
       const fault: OperationFault = {

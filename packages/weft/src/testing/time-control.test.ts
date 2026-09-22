@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { TimeControl } from './time-control';
+import { TimeControl } from './time-control.ts';
 
 describe('TimeControl', () => {
   let clock: TimeControl;

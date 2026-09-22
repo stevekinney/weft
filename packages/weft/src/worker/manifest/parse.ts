@@ -14,7 +14,7 @@
 import { validateWorkflowOrActivityName, type NameKind } from '../../core/types/name-grammar.ts';
 import { parseManifestCapabilities } from './capabilities.ts';
 import { manifestFailure, type ManifestValidationFailure } from './failure.ts';
-import { isRecord } from './is-record.ts';
+import { isPlainRecord } from './is-plain-record.ts';
 import {
   MAX_MANIFEST_ACTIVITY_COUNT,
   MAX_MANIFEST_IDENTIFIER_BYTES,
@@ -160,7 +160,7 @@ function parseRuntime(
   value: unknown,
   path: string,
 ): { ok: true; runtime: WorkerRuntimeIdentity } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -189,7 +189,7 @@ function parseDeployment(
   value: unknown,
   path: string,
 ): { ok: true; deployment: WorkerDeploymentIdentity } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -214,7 +214,7 @@ function parseActivity(
   value: unknown,
   path: string,
 ): { ok: true; activity: WorkerActivityContract } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -239,7 +239,7 @@ function parseActivities(
   value: unknown,
   path: string,
 ): { ok: true; activities: Record<string, WorkerActivityContract> } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -272,7 +272,7 @@ function parseWorkflow(
   value: unknown,
   path: string,
 ): { ok: true; workflow: WorkerWorkflowContract } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -301,7 +301,7 @@ function parseWorkflows(
   value: unknown,
   path: string,
 ): { ok: true; workflows: Record<string, WorkerWorkflowContract> } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 
@@ -355,7 +355,7 @@ function parseWorkflows(
  * ```
  */
 export function parseWorkerManifest(value: unknown): WorkerManifestParseResult {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('not_an_object', 'manifest must be a JSON object');
   }
 

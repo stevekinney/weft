@@ -8,9 +8,9 @@ import {
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
   WorkflowTimedOutEvent,
-} from '../core/events';
-import { AlertManager } from './alert-manager';
-import type { AlertingOptions } from './types';
+} from '../core/events.ts';
+import { AlertManager } from './alert-manager.ts';
+import type { AlertingOptions } from './types.ts';
 
 describe('AlertManager', () => {
   let target: EventTarget;

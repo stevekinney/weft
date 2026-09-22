@@ -278,7 +278,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     process.on('warning', listener);
 
     try {
-      await expect(
+      expect(
         commitFencedEngineWrite(
           internals,
           'wf-unclaimed',
@@ -306,7 +306,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     await internals.storage.put('exists', new Uint8Array([1]));
 
     const lostRace = new Error('lost the base-condition race');
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         'wf-a',
@@ -333,7 +333,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     process.on('warning', listener);
 
     try {
-      await expect(
+      expect(
         commitFencedEngineWrite(
           internals,
           'wf-a',
@@ -377,7 +377,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
       },
     });
 
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         'wf-a',
@@ -410,7 +410,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     // (2) The claim is stolen: the epoch condition itself fails => hard halt,
     // never a silent `false` a caller could misread as "already exists".
     await stealWorkflowClaim(internals.storage, 'wf-a', 42);
-    await expect(
+    expect(
       commitFencedEngineWriteAllowingPreconditionFailure(
         internals,
         'wf-a',
@@ -436,7 +436,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     // wf-a is stolen by a successor; wf-b is untouched.
     await stealWorkflowClaim(internals.storage, 'wf-a', 7);
 
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         'wf-a',
@@ -480,7 +480,7 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     // Even though this write names a workflowId, `ownership: 'lease'` ignores
     // it entirely and fences on the GLOBAL epoch — losing it sets the
     // engine-wide `deposed` flag, unlike the per-workflow case above.
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         'wf-a',

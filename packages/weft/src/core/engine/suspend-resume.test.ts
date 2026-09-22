@@ -155,7 +155,7 @@ describe('suspend/resume', () => {
     const resultPromise = handle.result();
     await handle.cancel();
     expect(await statusOf(engine, 'sus-cancel')).toBe('cancelled');
-    await expect(resultPromise).rejects.toThrow(/cancelled/i);
+    expect(resultPromise).rejects.toThrow(/cancelled/i);
   });
 
   it('rejects a pre-suspend result waiter when a suspended workflow is cancelled', async () => {
@@ -171,7 +171,7 @@ describe('suspend/resume', () => {
     expect(await statusOf(engine, 'sus-cancel-pre')).toBe('suspended');
     await handle.cancel();
     expect(await statusOf(engine, 'sus-cancel-pre')).toBe('cancelled');
-    await expect(resultPromise).rejects.toThrow(/cancelled/i);
+    expect(resultPromise).rejects.toThrow(/cancelled/i);
   });
 
   it('recoverAll skips suspended workflows (no auto-recovery, no throw)', async () => {
@@ -224,7 +224,7 @@ describe('suspend/resume', () => {
     );
     const handle = await engine.start('instant2', null, { id: 'res-terminal' });
     await handle.result();
-    await expect(engine.resume('res-terminal')).rejects.toThrow(/status is "completed"/);
+    expect(engine.resume('res-terminal')).rejects.toThrow(/status is "completed"/);
   });
 
   it('list filter accepts suspended as a valid status', () => {
@@ -532,10 +532,10 @@ describe('suspend/resume', () => {
     const handle = await engine.start('waits', null, { id: 'sus-worker' });
     await flush();
     // A running worker workflow cannot be parked without cancelling it.
-    await expect(handle.suspend()).rejects.toBeInstanceOf(WorkflowSuspendNotSupportedError);
+    expect(handle.suspend()).rejects.toBeInstanceOf(WorkflowSuspendNotSupportedError);
 
     // State-dependent, not mode-dependent: suspend on an UNKNOWN workflow is a
     // no-op even in worker mode (it never reaches the unsupported-mode throw).
-    await expect(engine.suspend('does-not-exist')).resolves.toBeUndefined();
+    expect(engine.suspend('does-not-exist')).resolves.toBeUndefined();
   });
 });

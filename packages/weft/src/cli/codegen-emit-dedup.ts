@@ -36,10 +36,9 @@
  * @module cli/codegen-emit-dedup
  */
 
-import { hashString } from '../runtime/portable.ts';
-import { CodegenEmitError } from './codegen-emit-keywords.ts';
+import { CodegenEmitError, hashString } from '../index.ts';
 
-export { CodegenEmitError } from './codegen-emit-keywords.ts';
+export { CodegenEmitError } from '../index.ts';
 
 /** One schema fragment's independently-emitted TypeScript text. */
 export type SchemaFragmentOccurrence = {

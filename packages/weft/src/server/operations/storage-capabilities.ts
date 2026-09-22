@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { requireOperationStorage } from './operation-helpers.ts';
 
 const storageCapabilitiesInput = z.object({});
 const storageCapabilitiesOutput = z
@@ -19,10 +19,7 @@ const storageCapabilitiesOutput = z
 export type StorageCapabilitiesInput = z.infer<typeof storageCapabilitiesInput>;
 export type StorageCapabilitiesOutput = z.infer<typeof storageCapabilitiesOutput>;
 
-export const storageCapabilitiesOperation = defineOperation<
-  StorageCapabilitiesInput,
-  StorageCapabilitiesOutput
->({
+export const storageCapabilitiesOperation = defineOperation({
   name: 'weft.storage.capabilities',
   mcpExposable: false,
   summary: "Report the connected storage backend's capability profile",
@@ -37,7 +34,7 @@ export const storageCapabilitiesOperation = defineOperation<
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine }) => (engine as Engine).storage.capabilities(),
+  invoke: async ({ engine }) => requireOperationStorage(engine, ['capabilities']).capabilities(),
 });
 
 export const storageCapabilitiesRestBinding: UnknownRestBinding = {

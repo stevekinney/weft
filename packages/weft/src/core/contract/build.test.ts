@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { jsonSchemaToTypeScript } from '../../cli/codegen-emit.ts';
+import { jsonSchemaToTypeScript } from '../../json-schema/codegen-emit.ts';
 import type { DefinitionSchema, StandardJSONSchemaV1 } from '../types/definition-schema.ts';
 import { query, signal, update } from '../types/message-handles.ts';
 import hostileSchemas from './__fixtures__/hostile-schemas.json';

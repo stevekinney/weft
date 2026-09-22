@@ -166,7 +166,7 @@ describe('buildWorkerManifestFromRegistry', () => {
   it('throws WorkerManifestBuildError when a declared workflow type is not registered', async () => {
     engine = createEngine();
 
-    await expect(
+    expect(
       buildWorkerManifestFromRegistry(engine, {
         workflows: { 'not-registered': [] },
         deployment: DEPLOYMENT,
@@ -179,7 +179,7 @@ describe('buildWorkerManifestFromRegistry', () => {
     engine = createEngine();
     engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
 
-    await expect(
+    expect(
       buildWorkerManifestFromRegistry(engine, {
         workflows: { checkout: ['not-registered'] },
         deployment: DEPLOYMENT,

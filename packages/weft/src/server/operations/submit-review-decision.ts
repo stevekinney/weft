@@ -1,12 +1,11 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { ReviewDecision, SubmitReviewOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, isOperationFault } from './operation-helpers.ts';
 
 const VALID_DECISIONS = [
   'approved',
@@ -143,10 +142,7 @@ function mapReviewDecisionError(error: unknown, reviewId: string): never {
   throw fault;
 }
 
-export const submitReviewDecisionOperation = defineOperation<
-  SubmitReviewDecisionInput,
-  SubmitReviewDecisionOutput
->({
+export const submitReviewDecisionOperation = defineOperation({
   name: 'weft.reviews.decision.submit',
   mcpExposable: false,
   summary: 'Submit a decision for a human review',
@@ -167,7 +163,8 @@ export const submitReviewDecisionOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<SubmitReviewDecisionOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['submitReview']);
+    const e = engine;
 
     const { reviewOptions } = validateReviewDecisionInput(input);
 

@@ -77,7 +77,7 @@ type StartWorkflowPreparation = {
   normalizedTags: string[] | undefined;
 };
 
-function prepareStartWorkflow(
+export function prepareStartWorkflow(
   internals: EngineInternals,
   options: StartOptions | undefined,
   callbacks: LifecycleCallbacks,
@@ -141,7 +141,7 @@ function prepareStartWorkflow(
   };
 }
 
-function rollbackTransientStartState(internals: EngineInternals, workflowId: string): void {
+export function rollbackTransientStartState(internals: EngineInternals, workflowId: string): void {
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
@@ -155,7 +155,7 @@ function rollbackTransientStartState(internals: EngineInternals, workflowId: str
  * It cannot cross to a Worker, so reject it early under worker execution mode
  * rather than stranding a persisted run that can never read its services.
  */
-function assertServicesSupportedForMode(
+export function assertServicesSupportedForMode(
   internals: EngineInternals,
   options: StartOptions | undefined,
 ): void {
@@ -190,7 +190,7 @@ function assertServicesSupportedForMode(
  * working uniformly for both cases without `startWorkflow` needing any new
  * branch of its own.
  */
-function resolveAndReserveStartRegistration(
+export function resolveAndReserveStartRegistration(
   internals: EngineInternals,
   type: string,
   revisionOverride: string | undefined,

@@ -1,3 +1,4 @@
+import { resolveEngineEnvironment } from '../../runtime/environment-configuration.ts';
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -6,6 +7,7 @@ import { WorkerPool } from '../../workers/pool.ts';
 import { optionalInlineDependencies } from '../inline-execution-strategy.context-options.ts';
 import { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { ComposedWorkflowInterceptor, Interceptor } from '../interceptor.ts';
+import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
@@ -29,6 +31,7 @@ import type {
 } from './engine-internal-types.ts';
 import { copyFinalizerMetadata } from './finalizer-metadata.ts';
 import { resolveBackgroundTaskMode, resolveOwnershipFields } from './ownership-options.ts';
+import { EngineOwnedRemoteActivityBroker } from './remote-activity-broker.ts';
 import {
   normalizeHistoryPolicy,
   normalizePayloadSizePolicy,
@@ -89,19 +92,6 @@ export function typedEngineView(engine: object): never {
 
 let didWarnOnMemoryStorageFallback = false;
 
-/**
- * Read an environment variable without assuming a runtime. The engine
- * constructor runs in Bun, Node, and the browser/Service Worker, so a bare
- * `Bun.env[...]` (or `process.env[...]`) would throw a ReferenceError where
- * that global is absent. Returns `undefined` when no environment object exists.
- */
-function readEnvironmentVariable(name: string): string | undefined {
-  return readEnvironmentVariableFromSources(name, {
-    bunEnv: typeof Bun !== 'undefined' ? Bun.env : undefined,
-    processEnv: typeof process !== 'undefined' ? process.env : undefined,
-  });
-}
-
 export function readEnvironmentVariableFromSources(
   name: string,
   sources: {
@@ -128,8 +118,8 @@ export function readEnvironmentVariableFromSources(
 function shouldWarnOnMemoryStorageFallback(options?: EngineConstructorOptions): boolean {
   return (
     options?.development === true ||
-    readEnvironmentVariable('WEFT_DEV_WARNINGS') === '1' ||
-    readEnvironmentVariable('NODE_ENV') === 'development'
+    resolveEngineEnvironment().weftDevWarnings ||
+    resolveEngineEnvironment().nodeEnv === 'development'
   );
 }
 
@@ -286,6 +276,24 @@ function resolveSecondInstanceFields(
   };
 }
 
+/**
+ * Resolve `EngineOptions.inlineLaunchScheduling` (COR-74). `'event-loop'`
+ * (the default) is today's unchanged behavior; `'manual'` opts a test into
+ * deterministically driving the inline launch queue via
+ * {@link Engine.flushInlineLaunches} instead of a real macrotask.
+ */
+export function resolveInlineLaunchSchedulingMode(
+  options: EngineConstructorOptions | undefined,
+): ResolvedOptions['inlineLaunchSchedulingMode'] {
+  const mode = options?.inlineLaunchScheduling ?? 'event-loop';
+  if (mode !== 'event-loop' && mode !== 'manual') {
+    throw new Error(
+      'options.inlineLaunchScheduling must be "event-loop" or "manual" when provided',
+    );
+  }
+  return mode;
+}
+
 export function resolveEngineOptions(
   storage: WeftStorage,
   options: EngineConstructorOptions | undefined,
@@ -297,6 +305,7 @@ export function resolveEngineOptions(
     resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
     onLog: options?.onLog ?? null,
     backgroundTaskMode: resolveBackgroundTaskMode(options),
+    inlineLaunchSchedulingMode: resolveInlineLaunchSchedulingMode(options),
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
@@ -486,12 +495,52 @@ export function createExecutionStrategyBundle(parameters: {
 export function createActivityWorkerDispatcher(
   activityExecution: EngineConstructorOptions['activityExecution'],
 ): ActivityWorkerDispatcher | null {
-  if (!activityExecution) return null;
+  if (!activityExecution || activityExecution.mode !== 'worker') return null;
   return new ActivityWorkerDispatcher(
     new WorkerPool({
       workerUrl: activityExecution.workerUrl,
       concurrency: activityExecution.poolSize ?? 4,
       smol: activityExecution.smol ?? false,
     }),
+  );
+}
+
+/**
+ * Build the engine's `RemoteActivityBroker` for `activityExecution: { mode:
+ * 'remote' }` (COR-152), or `null` for every other mode. Defaults to the
+ * storage-backed {@link EngineOwnedRemoteActivityBroker}; a caller-supplied
+ * `broker` (a recording or poison test double) is used verbatim instead —
+ * see `ActivityExecutionOptions`'s `mode: 'remote'` doc comment.
+ *
+ * `dispatchRemoteActivityQueuedEvent` is threaded in rather than closed over
+ * an `Engine` instance so this stays a plain, engine-instance-agnostic
+ * builder, matching `createActivityWorkerDispatcher` and
+ * `createInlineExecutionStrategy` above.
+ */
+export function createRemoteActivityBroker(
+  activityExecution: EngineConstructorOptions['activityExecution'],
+  storage: WeftStorage,
+  dispatchRemoteActivityQueuedEvent: (
+    operationId: string,
+    workflowId: string,
+    queue: string,
+  ) => void,
+): RemoteActivityBroker | null {
+  if (!activityExecution || activityExecution.mode !== 'remote') return null;
+  return (
+    activityExecution.broker ??
+    new EngineOwnedRemoteActivityBroker(
+      storage,
+      {
+        ...(activityExecution.queue !== undefined ? { queue: activityExecution.queue } : {}),
+        ...(activityExecution.visibilityTimeoutMilliseconds !== undefined
+          ? { visibilityTimeoutMilliseconds: activityExecution.visibilityTimeoutMilliseconds }
+          : {}),
+        ...(activityExecution.retryPolicy !== undefined
+          ? { retryPolicy: activityExecution.retryPolicy }
+          : {}),
+      },
+      dispatchRemoteActivityQueuedEvent,
+    )
   );
 }

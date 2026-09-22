@@ -11,12 +11,12 @@
  * @module service-worker/setup
  */
 
-import { Engine, type RegistryAgnosticEngine } from '../core/engine';
-import type { HandlerOptions } from '../server/handler';
-import { handleRequest } from '../server/handler';
-import { IndexedDBStorage } from '../storage/indexeddb';
-import type { Storage as WeftStorage } from '../storage/interface';
-import { ServiceWorkerScheduler } from './scheduler';
+import { Engine, type RegistryAgnosticEngine } from '../core/engine.ts';
+import type { HandlerOptions } from '../server/handler.ts';
+import { handleRequest } from '../server/handler.ts';
+import { IndexedDBStorage } from '../storage/indexeddb.ts';
+import type { Storage as WeftStorage } from '../storage/interface.ts';
+import { ServiceWorkerScheduler } from './scheduler.ts';
 import {
   buildDelegatedRequest,
   DEFAULT_PERIODIC_SYNC_TAG,
@@ -36,7 +36,7 @@ const DEFAULT_DATABASE_NAME = 'weft';
  *
  * @example
  * ```ts
- * import type { ServiceWorkerHandlerOptions } from '@lostgradient/weft/service-worker';
+ * import type { ServiceWorkerHandlerOptions } from '@lostgradient/weft';
  *
  * const handlerOptions: ServiceWorkerHandlerOptions = {
  *   authContext: { method: 'public' },
@@ -57,7 +57,7 @@ export type ServiceWorkerHandlerOptions = Pick<
  * @example
  * ```ts
  * import { workflow } from '@lostgradient/weft';
- * import { setupServiceWorker, type SetupServiceWorkerOptions } from '@lostgradient/weft/service-worker';
+ * import { setupServiceWorker, type SetupServiceWorkerOptions } from '@lostgradient/weft';
  *
  * const checkout = workflow({ name: 'checkout' }).execute(async function* () {
  *   yield;
@@ -127,7 +127,7 @@ export interface SetupServiceWorkerOptions {
  * @example
  * ```ts
  * import { workflow } from '@lostgradient/weft';
- * import { setupServiceWorker, type SetupServiceWorkerResult } from '@lostgradient/weft/service-worker';
+ * import { setupServiceWorker, type SetupServiceWorkerResult } from '@lostgradient/weft';
  *
  * const hello = workflow({ name: 'hello' }).execute(async function* () {
  *   yield;
@@ -287,7 +287,7 @@ function attachListeners(
  * ```ts
  * /// <reference lib="webworker" />
  * import { workflow } from '@lostgradient/weft';
- * import { setupServiceWorker } from '@lostgradient/weft/service-worker';
+ * import { setupServiceWorker } from '@lostgradient/weft';
  *
  * const checkout = workflow({ name: 'checkout' }).execute(async function* () {
  *   yield;
@@ -390,7 +390,7 @@ export function setupServiceWorker(
  *
  * @example
  * ```ts
- * import { resetSetupServiceWorkerRegistry } from '@lostgradient/weft/service-worker';
+ * import { resetSetupServiceWorkerRegistry } from '@lostgradient/weft';
  * declare const fakeScope: object;
  * resetSetupServiceWorkerRegistry(fakeScope);
  * ```

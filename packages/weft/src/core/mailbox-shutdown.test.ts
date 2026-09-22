@@ -289,7 +289,7 @@ describe('Mailbox disposal', () => {
   it('aborts a pending claim through its own signal', async () => {
     const { mailbox } = createMailboxFixture();
     await admitOne(mailbox);
-    await expect(mailbox.claim({ signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(mailbox.claim({ signal: AbortSignal.abort() })).rejects.toThrow();
     // The durable work is untouched by an aborted claim attempt.
     const listed = await mailbox.list();
     expect(listed[0]?.state).toBe('available');

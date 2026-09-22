@@ -20,6 +20,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
@@ -30,6 +31,10 @@ import {
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** An `AuthContext` that grants `system:read` for use in direct `handleRequest` calls. */
@@ -73,7 +78,7 @@ describe('weft.system.metrics — default export (no collector)', () => {
   it('maps EngineFailure faults to 500 with "Internal server error"', async () => {
     engine = createEngine();
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getSystemMetricsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -83,7 +88,7 @@ describe('weft.system.metrics — default export (no collector)', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/metrics/json', { method: 'GET' }),
@@ -125,7 +130,8 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as Record<string, { type?: string; value?: number }>;
+    const body = await response.json();
+    if (!isRecord(body)) throw new Error('expected metrics response object');
     expect(body['weft_test_counter']).toEqual({ type: 'counter', value: 7 });
   });
 
@@ -152,7 +158,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as Record<string, { type?: string; value?: number }>;
+    const body = await response.json();
     expect(body[METRICS.taskBacklog.name]).toEqual({ type: 'gauge', value: 3 });
     expect(body[METRICS.taskRetries.name]).toEqual({ type: 'counter', value: 2 });
     expect(body[METRICS.taskRequeues.name]).toEqual({ type: 'counter', value: 1 });
@@ -182,7 +188,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
   it('shapes Unauthorized fault as 401 via the REST fault shaper', async () => {
     engine = createEngine();
 
-    const unauthorizedOperation = {
+    const unauthorizedOperation = defineOperation({
       ...createGetSystemMetricsOperation(),
       invoke: async () => {
         const fault: OperationFault = {
@@ -192,7 +198,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
         };
         throw fault;
       },
-    };
+    });
 
     // Inject a principal so the access-check layer passes, but the invoke throws
     const response = await handleRequest(
@@ -212,7 +218,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
   it('shapes Forbidden fault as 403 via the REST fault shaper', async () => {
     engine = createEngine();
 
-    const forbiddenOperation = {
+    const forbiddenOperation = defineOperation({
       ...createGetSystemMetricsOperation(),
       invoke: async () => {
         const fault: OperationFault = {
@@ -222,7 +228,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/metrics/json', { method: 'GET' }),
@@ -241,7 +247,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
     engine = createEngine();
 
-    const faultingOperation = {
+    const faultingOperation = defineOperation({
       ...createGetSystemMetricsOperation(),
       producibleFaults: ['Unprocessable'] as const,
       invoke: async () => {
@@ -251,7 +257,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
           data: { reason: 'cannot process' },
         } satisfies OperationFault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/metrics/json', { method: 'GET' }),
@@ -329,7 +335,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
-    const snapshot = result.value as Record<string, { type?: string; value?: number }>;
-    expect(snapshot['weft_stdio_counter']).toEqual({ type: 'counter', value: 3 });
+    if (!isRecord(result.value)) throw new Error('expected metrics result object');
+    expect(result.value['weft_stdio_counter']).toEqual({ type: 'counter', value: 3 });
   });
 });

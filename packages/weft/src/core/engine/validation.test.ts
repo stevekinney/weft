@@ -10,9 +10,11 @@ import {
   normalizeBulkFilterNumber,
 } from './validation.ts';
 import {
-  coerceScheduleId,
   decodeScheduleIdentityFields,
   decodeScheduleRuntimeFields,
+} from './validation/schedule-decode.ts';
+import {
+  coerceScheduleId,
   isValidScheduleIdentifier,
   normalizeScheduleFilter,
   normalizeScheduleOptions,
@@ -681,6 +683,7 @@ describe('engine validation helpers', () => {
             lastMissedFireAt: 1,
             currentWorkflowId: 'child-workflow',
             missedFireCount: 4,
+            skippedCount: 0,
             jitterMs: 30_000,
             queuedRuns: [{ workflowId: 'queued-run', queuedAt: 2, occurrence: 3 }],
           }),
@@ -695,6 +698,7 @@ describe('engine validation helpers', () => {
         nextFireAt: 3,
         currentWorkflowId: 'child-workflow',
         missedFireCount: 4,
+        skippedCount: 0,
         queuedRuns: [{ workflowId: 'queued-run', queuedAt: 2, occurrence: 3 }],
         jitterMs: 30_000,
       } satisfies Pick<
@@ -707,11 +711,13 @@ describe('engine validation helpers', () => {
         | 'nextFireAt'
         | 'currentWorkflowId'
         | 'missedFireCount'
+        | 'skippedCount'
         | 'queuedRuns'
         | 'jitterMs'
       >);
       expect(decodeScheduleRuntimeFields(createScheduleRecord(), 'schedule-id')).toMatchObject({
         missedFireCount: 0,
+        skippedCount: 0,
       });
       expect(warning).toHaveBeenCalled();
     } finally {

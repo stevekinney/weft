@@ -1,307 +1,4 @@
-/**
- * Weft — A Bun-native durable execution engine.
- *
- * Weft runs async workflows to completion across crashes, retries, and days
- * of wall-clock time. Each workflow is a generator function that yields to a
- * {@link Context}; the engine persists a checkpoint at every yield and
- * resumes from the last checkpoint on recovery.
- *
- * For end-to-end usage examples see the {@link Engine} class.
- *
- * This is the package's public re-export barrel: it contains only `export`
- * statements, no logic, and grows one line per public symbol. Line count here
- * is semantically meaningless, so it carries a `max-lines: off` override in
- * `.oxlintrc.json` (unlike logic-bearing files, which keep the numeric ceiling).
- *
- * @module weft
- */
-
-export { VERSION } from './version.ts';
-// Error base + discriminant
-export {
-  WeftError,
-  isWeftError,
-  isWeftErrorCode,
-  isWeftErrorLike,
-  isWeftFault,
-} from './core/weft-error.ts';
-export type { WeftErrorCode } from './core/weft-error.ts';
-// Wire fault code + failure-category mapping
-export {
-  FAULT_CODE_TO_FAILURE_CATEGORY,
-  failureCategoryForFaultCode,
-  isFaultCode,
-} from './core/fault-code.ts';
-export type { FaultCode } from './core/fault-code.ts';
-// Core
-export {
-  DurableActivityScopeError,
-  DurableActivityUnsupportedError,
-  durableActivity,
-} from './core/context/durable-activity.ts';
-export {
-  ActivityReconciliationCapabilityError,
-  ActivityReconciliationConflictError,
-  ActivityReconciliationIndeterminateError,
-  ActivityResolutionError,
-  AsyncActivityTokenNotFoundError,
-  BulkDeleteRequiresTerminalWorkflowsError,
-  BulkOperationConfirmationError,
-  DynamicWorkflowSourceUnavailableError,
-  ENGINE_LEASE_LOST_WARNING_NAME,
-  ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
-  Engine,
-  EngineCreateNameMismatchError,
-  EngineDisposalError,
-  EngineDisposedError,
-  EngineLeaseAcquisitionTimeoutError,
-  EngineLeaseCorruptedError,
-  EngineLeaseNotHeldError,
-  ForkSourceReplacedError,
-  IdempotencyKeyPurgedError,
-  PersistedDataCorruptError,
-  PersistedDataIncompatibleError,
-  ScheduleHandle,
-  StartOrSignalConflictError,
-  WorkflowAlreadyExistsError,
-  WorkflowConcurrencyLimitExceededError,
-  WorkflowHandle,
-  WorkflowNotFoundError,
-  WorkflowNotRegisteredError,
-  WorkflowRevisionUnavailableError,
-  WorkflowSourceNotRegisteredError,
-  WorkflowSuspendNotSupportedError,
-  WorkflowTeardownPendingError,
-  WorkflowTypeNotRegisteredForRecoveryError,
-} from './core/engine';
-// ADR 0002 (MultiEngine per-workflow ownership) error and warning types, routed
-// through the `./core/engine` barrel like every sibling lease error. Reaching
-// into `lease-deposition.ts` directly from the package root would violate that
-// module's documented allowlist (`src/core/engine/**` only).
-// EngineDeposedError stays unexported: it is internal-only per its own
-// documentation and the ADR's error table (never surfaced to user code).
-export {
-  OwnershipModeMismatchError,
-  WORKFLOW_CLAIM_LOST_WARNING_NAME,
-  WORKFLOW_WAKE_DISCARDED_WARNING_NAME,
-  WeftWorkflowClaimLostWarning,
-  WeftWorkflowWakeDiscardedWarning,
-  WorkflowClaimUnavailableError,
-} from './core/engine';
-export type {
-  ActivateWorkflowRevisionOptions,
-  EngineCreateOptions,
-  EngineLeaseHealth,
-  EngineStateNamespace,
-  EngineWorkflowsNamespace,
-  LeaseLostReason,
-  RecoverAllOptions,
-  RecoveredWorkflowInfo,
-  RegistryAgnosticEngine,
-  ResolveWorkflowSourceOptions,
-  WorkflowWakeKind,
-} from './core/engine';
-// The durable workflow catalog's public promotion (WFT-11): `engine.workflows`
-// throws/returns these directly. `WorkflowCatalog` itself and
-// `WorkflowCatalogEntry` stay package-internal — see `core/catalog/index.ts`.
-export {
-  WorkflowCatalogConflictError,
-  WorkflowRevisionNotInstalledError,
-} from './core/catalog/index.ts';
-export type {
-  WorkflowCatalogActivationResult,
-  WorkflowCatalogActivePointer,
-  WorkflowRevisionRecord,
-} from './core/catalog/index.ts';
-// Dynamic workflow sources (WFT-13/14): `workflowSource()` builds a typed
-// handle pairing serializable `WorkflowSourceDescriptor` metadata with a
-// host-side loader capability; `engine.registerSource()` records it as a
-// lazy catalog candidate, `engine.resolveWorkflowSource()` loads, validates,
-// and installs it. See `documentation/guides/workflow-versioning.md#dynamic-workflow-sources`.
-export { WorkflowSourceValidationError, workflowSource } from './core/source/index.ts';
-export type {
-  WorkflowSourceDescriptor,
-  WorkflowSourceDescriptorInput,
-  WorkflowSourceHandle,
-  WorkflowSourceKind,
-  WorkflowSourceRejectionReason,
-} from './core/source/index.ts';
-// Workflow Catalog — reference accounting and removal (WFT-12). Sourced
-// from `core/engine/catalog-removal.ts`, NOT `core/catalog/index.ts` —
-// `core/catalog/**` itself stays package-internal (see that module's own
-// barrel header). No `engine.workflows.*` method namespace here: removal
-// and diagnostics are plain root-exported functions, and the only wire
-// surface is the read-only `weft.catalog.diagnostics` operation.
-export { getWorkflowRevisionDiagnostics, removeWorkflowRevision } from './core/engine';
-export type {
-  WorkflowCatalogRemovalResult,
-  WorkflowRevisionDiagnostics,
-  WorkflowRevisionReferenceCounts,
-} from './core/engine';
-export {
-  DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
-  DEFAULT_MAX_NESTING_DEPTH,
-  DEFAULT_POLL_INTERVAL_MS,
-  DEFAULT_RETRY_POLICY,
-  DEFAULT_VISIBILITY_TIMEOUT_MS,
-  HISTORY_CIRCUIT_BREAKER_REASON,
-  WorkflowBuilderError,
-  query,
-  schedule,
-  signal,
-  update,
-  workflow,
-} from './core/types';
-export type {
-  ActivityArgsFor,
-  ActivityCallOptions,
-  ActivityCallable,
-  ActivityContext,
-  ActivityDefinition,
-  ActivityEntryInput,
-  ActivityFunction,
-  ActivityMap,
-  ActivityMapInput,
-  ActivityObjectInput,
-  ActivityResultFor,
-  ActivityVerificationContext,
-  ActivityVerificationPhase,
-  ActivityVerificationResult,
-  AnyActivityDefinition,
-  AnyWorkflowDefinition,
-  ArchiveAdapter,
-  BuilderState,
-  BuiltWorkflowDefinition,
-  BulkCancelResult,
-  BulkDeleteResult,
-  BulkOperationAction,
-  BulkOperationAuditEvent,
-  BulkOperationCommitOptions,
-  BulkOperationDryRunOptions,
-  BulkOperationDryRunResult,
-  BulkOperationError,
-  BulkOperationFilterSummary,
-  BulkOperationOptions,
-  BulkOperationPrincipal,
-  BulkOperationScopeSummary,
-  BulkRetryFailedResult,
-  BulkSignalAllCommitOptions,
-  BulkSignalAllDryRunOptions,
-  BulkSignalAllOptions,
-  BulkSignalResult,
-  BulkTagResult,
-  Checkpoint,
-  CheckpointState,
-  CheckpointSummary,
-  CompletedReviewEntry,
-  CoordinatedUpdateResult,
-  DefinitionSchema,
-  Duration,
-  EngineOptions,
-  FailureCategory,
-  ForkLineage,
-  ForkOptions,
-  HistoryPolicy,
-  InferActivityEntries,
-  InferActivityEntry,
-  InferWorkflowEntries,
-  InferWorkflowEntry,
-  InitialBuilderState,
-  LaunchMetadata,
-  ListFilter,
-  ListOptions,
-  MarkBuilderState,
-  NormalizeActivities,
-  NormalizedActivityEntry,
-  NormalizedRetentionPolicy,
-  PaginatedResult,
-  PayloadSizePolicy,
-  PendingAsyncActivityInfo,
-  PendingAsyncActivityListOptions,
-  PendingAsyncActivityPage,
-  PendingReviewEntry,
-  PruneCheckpointsOptions,
-  PruneCheckpointsResult,
-  PurgeResult,
-  QueryDefinition,
-  QueryMap,
-  QueryShape,
-  RegisteredWorkflowDefinition,
-  RestartLineage,
-  RetentionOverview,
-  RetentionPolicy,
-  RetryPolicy,
-  ReviewDecision,
-  ReviewListEntry,
-  ReviewListFilter,
-  ReviewStatus,
-  ScheduleDefinition,
-  ScheduleFilter,
-  ScheduleOptions,
-  ScheduleOverlapPolicy,
-  ScheduleQueuedRun,
-  ScheduleRevisionPolicy,
-  ScheduleSpec,
-  ScheduleState,
-  ScheduleStatus,
-  ScheduleSummary,
-  ScheduleUpdateOptions,
-  SearchAttributeDefinition,
-  SearchAttributeHandle,
-  SearchAttributeSchema,
-  SearchAttributeValue,
-  Serializer,
-  SignalDefinition,
-  SignalDeliveryOptions,
-  SignalMap,
-  SignalPayload,
-  StartOptions,
-  StartOrSignalOptions,
-  StartOrSignalSignal,
-  SubmitReviewOptions,
-  TerminationReason,
-  UpdateDefinition,
-  UpdateMap,
-  UpdatePayload,
-  WorkerReplayOperationFailure,
-  WorkerReplayOperationSignature,
-  WorkflowAlreadyRegistered,
-  WorkflowAtomicState,
-  WorkflowAtomicStateOptions,
-  WorkflowBuilder,
-  WorkflowBuilderOptions,
-  WorkflowConcurrencyOptions,
-  WorkflowContext,
-  WorkflowDefinition,
-  WorkflowEvent,
-  WorkflowFinalizerStatus,
-  WorkflowFunction,
-  WorkflowGenerator,
-  WorkflowId,
-  WorkflowKeyedRaceResult,
-  WorkflowLogLevel,
-  WorkflowLogRecord,
-  WorkflowLogger,
-  WorkflowRegistry,
-  WorkflowReplay,
-  WorkflowScheduleProvenance,
-  WorkflowServicesResolution,
-  WorkflowServicesResolverInfo,
-  WorkflowServicesResolverLaunchOptions,
-  WorkflowServicesResolverScheduleInfo,
-  WorkflowSessionState,
-  WorkflowSnapshot,
-  WorkflowState,
-  WorkflowStateNamespace,
-  WorkflowStatus,
-  WorkflowSummary,
-  WorkflowTimelineEntry,
-  WorkflowTimelineOperationDetail,
-  WorkflowTimelineStatus,
-  WorkflowTypeRetentionPolicy,
-} from './core/types';
-// Alerting
-export { AlertManager } from './alerting/index';
+export { AlertManager } from './alerting/index.ts';
 export type {
   AlertAction,
   AlertMetric,
@@ -310,366 +7,67 @@ export type {
   AlertStatus,
   AlertingOptions,
   WebhookTarget,
-} from './alerting/types';
-// Events
-export {
-  ActivityAsyncPendingEvent,
-  ActivityCompletedEvent,
-  ActivityFailedEvent,
-  ActivityStartedEvent,
-  AlertFiredEvent,
-  AlertResolvedEvent,
-  AttributesChangedEvent,
-  CheckpointSizeWarningEvent,
-  ConstraintViolatedEvent,
-  DevelopmentWarningEvent,
-  ScheduleFiredEvent,
-  ScheduleMissedFireEvent,
-  SignalDeliveredEvent,
-  SignalReceivedEvent,
-  StorageSizeReportedEvent,
-  TaskResultDeadLetteredEvent,
-  UpdateCompletedEvent,
-  UpdateReceivedEvent,
-  WorkflowCancelledEvent,
-  WorkflowCompletedEvent,
-  WorkflowDefinitionRegisteredEvent,
-  WorkflowFailedEvent,
-  WorkflowRecoverySkippedEvent,
-  WorkflowResumedEvent,
-  WorkflowRevisionActivatedEvent,
-  WorkflowRevisionActivationRejectedEvent,
-  WorkflowRevisionDrainingEvent,
-  WorkflowRevisionInstalledEvent,
-  WorkflowRevisionRemovedEvent,
-  WorkflowSourceLoadCancelledEvent,
-  WorkflowSourceLoadFailedEvent,
-  WorkflowSourceLoadReadyEvent,
-  WorkflowSourceLoadStartedEvent,
-  WorkflowStartedEvent,
-  WorkflowSuspendedEvent,
-  WorkflowTeardownEvent,
-  WorkflowTimedOutEvent,
-} from './core/events';
+} from './alerting/types.ts';
+export type { WeftClientStorage } from './client/client-storage.ts';
+export type { WorkflowEventTail } from './client/event-tail.ts';
+export { HttpClient, HttpClientError } from './client/index.ts';
 export type {
-  TypedEventTarget,
-  WeftEventMap,
-  WorkflowRecoverySkippedReason,
-  WorkflowTeardownStatus,
-} from './core/events';
-// Runtime — portable helpers for cross-runtime code
+  HttpClientOptions,
+  WorkflowEventStreamOptions,
+  WorkflowEventTransport,
+} from './client/index.ts';
+export type {
+  ClientHandle,
+  ClientScheduleHandle,
+  ClientStartOptions,
+  ClientStartOrSignalOptions,
+  StartOrSignalOutcome,
+  UpdateResult,
+  WeftClient,
+  WeftClientActivity,
+} from './client/interface.ts';
+export { LocalClient } from './client/local.ts';
+export type {
+  KnownWorkflowName,
+  UnknownNameWhenRegistryEmpty,
+} from './client/workflow-name-typing.ts';
+export {
+  ConnectionConfigurationError,
+  DEFAULT_WEFT_ADDRESS,
+  resolveConnection,
+} from './connection.ts';
+export type { ConnectionOptions, ResolvedConnection } from './connection.ts';
+export * from './core/index.ts';
+export * from './core/messaging.ts';
+export * from './core/public-types.ts';
+export * from './core/workflow-registry.ts';
+export * from './diagnostics/index.ts';
+export * from './json-schema.ts';
+export * from './mcp/index.ts';
+export * from './observability/index.ts';
+export { createObservabilityInterceptors } from './observability/index.ts';
+export type { InterceptionContext, ObservabilityOptions } from './observability/index.ts';
+export {
+  METRICS,
+  createMetricsCollectorExporter,
+  createOpenTelemetryMetrics,
+} from './observability/metrics.ts';
+export { getOpenTelemetryApi } from './observability/no-op-telemetry.ts';
+export {
+  formatTraceParent,
+  generateSpanId,
+  generateTraceId,
+  parseTraceParent,
+} from './observability/propagation.ts';
 export {
   detectRuntime,
   detectRuntimeVersion,
   hashBytes,
   hashString,
   sleep,
-} from './runtime/portable';
-export type { RuntimeKind } from './runtime/portable';
-// Compression
-export { createBunCompressor, createCompressor } from './core/compression';
-export type { CompressionAlgorithm, CompressionOptions, Compressor } from './core/compression';
-export { CompressedStorage } from './storage/compressed-storage';
-// Storage — interface, KEYS, and zero-native-dep backends only.
-// Heavy or runtime-bound backends are subpath-only:
-//   @lostgradient/weft/storage/sqlite | @lostgradient/weft/storage/lmdb | @lostgradient/weft/storage/turso
-export { storageDeleteRange } from './storage/delete-range';
-export type { DeleteRangeOptions } from './storage/delete-range';
-export {
-  KEYS,
-  MAX_BATCH_OPERATIONS,
-  MAX_SCAN_LIMIT,
-  StorageBatchOperationLimitExceededError,
-  WEFT_RESERVED_KEY_PREFIXES,
-  assertDurableStorageForRecovery,
-  assertStorageBatchOperationCount,
-  requireStorageCapability,
-  storageBatch,
-  storageConditionalBatch,
-  storageValuesEqual,
-} from './storage/interface';
-export type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  GatedStorageCapabilityKey,
-  ScanOptions,
-  Storage,
-  StorageBatchOperationLimitTarget,
-  StorageCapabilities,
-} from './storage/interface';
-export { MemoryStorage } from './storage/memory';
-export { ScopedStorage, scopedStorage } from './storage/scoped-storage';
-export { copyTextKeyValueRowsToStorage } from './storage/text-value-import';
-export type {
-  CopyTextKeyValueRowsToStorageOptions,
-  CopyTextKeyValueRowsToStorageResult,
-  TextKeyValueRow,
-} from './storage/text-value-import';
-export { jsonCodec, msgpackCodec, withCodec } from './storage/typed-storage';
-export type {
-  CodecStorageOptions,
-  MessagePackValue,
-  StorageCodec,
-  StorageValueParser,
-  TypedBatchOperation,
-  TypedConditionalBatchCondition,
-  TypedStorage,
-} from './storage/typed-storage';
-// Codec
-export {
-  decode,
-  encode,
-  registerSerializer,
-  validateCloneable,
-  type SerializerHandlers,
-} from './core/codec';
-// Payload-size cap
-export { PayloadSizeExceededError } from './core/payload-size';
-
-export {
-  advanceCheckpoint,
-  checkpointSizeBytes,
-  createCheckpoint,
-  deserializeCheckpoint,
-  serializeCheckpoint,
-} from './core/checkpoint';
-// Scheduler
-export { Scheduler, calculateBackoff, parseDuration } from './core/scheduler';
-export type { TimerEntry } from './core/types/checkpoint';
-
-export { constraint } from './core/constraint';
-export type {
-  ConstraintCheckState,
-  ConstraintDefinition,
-  ConstraintViolation,
-} from './core/constraint';
-
-export { ActivityRegistry } from './core/activity-registry';
-export type { ActivityMetadata, ActivityRegistrationOptions } from './core/activity-registry';
-export { activity } from './core/types';
-
-export { Context } from './core/context';
-export type {
-  ContextOperationRequest,
-  ContextOptions,
-  OffloadReference,
-  SagaStep,
-  StoredStreamChunk,
-  StreamReference,
-  StreamSink,
-} from './core/context';
-export { BranchTopologyChangedError } from './core/context/parallel-cache-entry.ts';
-export type {
-  AwaitChildWorkflowOptions,
-  ChildWorkflowHandle,
-  ChildWorkflowOptions,
-  ChildWorkflowParentClosePolicy,
-  ChildWorkflowTarget,
-  DetachedChildWorkflowOptions,
-  WorkflowMapOptions,
-  WorkflowOperation,
-  WorkflowPipeStage,
-  WorkflowPipeStageDefinition,
-  WorkflowReduceInput,
-  WorkflowReduceOptions,
-} from './core/types';
-
-export { StepContext, compileStepWorkflow, isAsyncGeneratorFunction } from './core/step-context';
-export type { StepWorkflowContext, StepWorkflowFunction } from './core/types';
-
-export {
-  composeActivityInterceptors,
-  composeWorkflowInterceptors,
-  interceptor,
-} from './core/interceptor';
-export type {
-  ActivityExecutionInterception,
-  ActivityInterception,
-  ActivityInterceptor,
-  ChildWorkflowInterception,
-  ComposedActivityInterceptor,
-  ComposedWorkflowInterceptor,
-  Interceptor,
-  QueryInterception,
-  SignalInterception,
-  SignalReceivedInterception,
-  SleepInterception,
-  WorkflowInterceptor,
-  WorkflowStartInterception,
-} from './core/interceptor';
-
-export {
-  buildIndexOperations,
-  decodeAttributeValue,
-  encodeAttributeValue,
-  searchAttribute,
-} from './core/search-attributes';
-
-export {
-  ActivityPerAttemptTimeoutError,
-  ActivityScheduleToCloseTimeoutError,
-} from './core/context/activity-schedule-to-close';
-export type { UpdateHandlerOptions } from './core/context/updates';
-export {
-  UpdateCoordinator,
-  UpdateTimeoutError,
-  UpdateValidationError,
-  WorkflowTerminalError,
-} from './core/updates';
-
-export {
-  VersionMismatchError,
-  checkVersionCompatibility,
-  diffCheckpointShapes,
-  inferShape,
-} from './core/versioning';
-export type { FieldDiff, ShapeDescriptor, ShapeDiffOptions } from './core/versioning';
-
-export {
-  WorkflowTimeoutError,
-  checkExpiredDeadlines,
-  createDeadlineOperations,
-  timeRemaining,
-} from './core/timeouts';
-
-export {
-  AtomicState,
-  AtomicStateChangeEvent,
-  AtomicStateConflictError,
-  AtomicStateConflictEvent,
-  AtomicStateExhaustedEvent,
-  OBSERVABLE_SYMBOL,
-} from './core/atomic-state';
-export type {
-  AtomicStateCommitResult,
-  AtomicStateEvent,
-  AtomicStateObserver,
-  AtomicStateOptions,
-  AtomicStateScope,
-  AtomicStateSnapshot,
-  AtomicStateSubscription,
-  SleepFunction,
-} from './core/atomic-state';
-// Durable application command mailbox — storage-backed FIFO commands with
-// receipts, attempt-fenced claims, and durable cancellation (WFT-84).
-export { WaitBudgetElapsedError } from './core/application-primitive-abort';
-export { Mailbox } from './core/mailbox';
-export type {
-  ApplicationCommandAdmission,
-  ApplicationCommandCancellationResult,
-  ApplicationCommandClaim,
-  ApplicationCommandClaimedPayload,
-  ApplicationCommandCleanupResult,
-  ApplicationCommandInput,
-  ApplicationCommandReceipt,
-  ApplicationCommandRejection,
-  ApplicationCommandRenewalResult,
-  ApplicationCommandSettleResult,
-  MailboxCapacity,
-  MailboxClaimResult,
-  MailboxEventSink,
-  MailboxListOptions,
-  MailboxMaintenanceReport,
-  MailboxOptions,
-  MailboxWaitOptions,
-} from './core/mailbox-contract';
-export { MailboxContentionError } from './core/mailbox-internals';
-export {
-  isApplicationCommandLeased,
-  isApplicationCommandTerminalState,
-  isApplicationCommandWaiting,
-} from './core/mailbox-types';
-export type {
-  ApplicationCommandAccepted,
-  ApplicationCommandAvailable,
-  ApplicationCommandCancelling,
-  ApplicationCommandCausation,
-  ApplicationCommandClaimed,
-  ApplicationCommandFailure,
-  ApplicationCommandFailureReason,
-  ApplicationCommandInlinePayload,
-  ApplicationCommandLeasedRecord,
-  ApplicationCommandPayload,
-  ApplicationCommandRecord,
-  ApplicationCommandReferencePayload,
-  ApplicationCommandState,
-  ApplicationCommandTerminalRecord,
-  ApplicationCommandTerminalState,
-  ApplicationCommandWaitingRecord,
-  MailboxRecord,
-} from './core/mailbox-types';
-export { ApplicationCommandValidationError } from './core/mailbox-validation';
-// Durable application delivery outbox — storage-backed at-least-once delivery
-// with durable attempt marking, fenced claims, unknown-outcome policy, and
-// bounded drain (WFT-85).
-export { Outbox } from './core/outbox';
-export type {
-  ApplicationDeliveryAdapter,
-  ApplicationDeliveryAdmission,
-  ApplicationDeliveryCancellationResult,
-  ApplicationDeliveryClaim,
-  ApplicationDeliveryClaimedPayload,
-  ApplicationDeliveryCleanupResult,
-  ApplicationDeliveryHeartbeatResult,
-  ApplicationDeliveryInput,
-  ApplicationDeliveryOperatorResult,
-  ApplicationDeliveryOutcome,
-  ApplicationDeliveryReceipt,
-  ApplicationDeliverySendRequest,
-  ApplicationDeliverySettleResult,
-  OutboxCapacity,
-  OutboxClaimResult,
-  OutboxDeliverResult,
-  OutboxDrainReport,
-  OutboxEventSink,
-  OutboxListOptions,
-  OutboxMaintenanceReport,
-  OutboxOptions,
-  OutboxWaitOptions,
-} from './core/outbox-contract';
-export { ApplicationDeliveryValidationError } from './core/outbox-guards';
-export { OutboxContentionError } from './core/outbox-internals';
-export {
-  isApplicationDeliveryAttempting,
-  isApplicationDeliveryLeased,
-  isApplicationDeliveryTerminalState,
-  isApplicationDeliveryWaiting,
-} from './core/outbox-types';
-export type {
-  ApplicationDeliveryAttempting,
-  ApplicationDeliveryCancelling,
-  ApplicationDeliveryCausation,
-  ApplicationDeliveryClaimed,
-  ApplicationDeliveryFailure,
-  ApplicationDeliveryLeasedRecord,
-  ApplicationDeliveryPayload,
-  ApplicationDeliveryQueued,
-  ApplicationDeliveryRecord,
-  ApplicationDeliveryRetryScheduled,
-  ApplicationDeliveryState,
-  ApplicationDeliveryTerminalRecord,
-  ApplicationDeliveryTerminalState,
-  ApplicationDeliveryUnknownOutcomePolicy,
-  ApplicationDeliveryWaitingRecord,
-  OutboxRecord,
-} from './core/outbox-types';
-// Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
-export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
-export type {
-  AcquireAttempt,
-  AcquireWithSlot,
-  CasSlot,
-  DurableSemaphoreOptions,
-  LockHolder,
-  LockRecord,
-  RenewWithSlot,
-} from './core/concurrency';
-
-export { handleRequest } from './server/handler';
-export type { SchedulingPolicy } from './server/task-queue-types';
-export type { RoutingPolicy } from './worker/registry';
-
-export { createAuthenticator, validateAuthConfig } from './server/authentication';
+} from './runtime/portable.ts';
+export type { RuntimeKind } from './runtime/portable.ts';
+export { createAuthenticator, validateAuthConfig } from './server/authentication.ts';
 export type {
   AuthConfig,
   AuthMethod,
@@ -679,101 +77,163 @@ export type {
   JWTConfig,
   JWTPayload,
   MTLSConfig,
-} from './server/authentication';
-
-export { ReviewCompletedEvent, ReviewRequestedEvent } from './core/review/events.ts';
-export type { WeftReviewEventMap } from './core/review/events.ts';
-export { ReviewCoordinator, ReviewTimeoutError } from './core/review/index.ts';
+} from './server/authentication.ts';
+export { AUTHORIZATION_SCOPES, isAuthorizationScope } from './server/authorization-scope.ts';
+export type { AuthorizationScope } from './server/authorization-scope.ts';
+export * from './server/handler.ts';
+export { handleRequest } from './server/handler.ts';
+/*
+ * The operation catalog, as a public contract.
+ *
+ * `defineOperation` was internal while Weft was its own catalog's only
+ * author. It is exported now because it is not: `@lostgradient/operative` and
+ * `@lostgradient/bureau` already depend on this package, and a gateway serving
+ * all three wants one dispatch pipeline, one transport matrix
+ * (`http`/`jsonRpcHttp`/`jsonRpcWebSocket`/`jsonRpcStdio`), and one AsyncAPI
+ * document rather than a second RPC dialect beside them.
+ *
+ * Exporting the definition surface rather than moving it keeps the 194
+ * operations already registered here, and their tests, exactly where they
+ * are. See `OPERATION_NAME_PATTERN` for the namespace change that makes a
+ * shared catalog expressible.
+ */
+export * from './server/index.ts';
+export { serve } from './server/index.ts';
+export {
+  OPERATION_NAME_PATTERN,
+  isValidOperationName,
+  validateOperationName,
+} from './server/operation-catalog/types.ts';
 export type {
-  EscalationAction,
-  EscalationStep,
-  HumanReviewOptions,
-  HumanReviewResult,
-  ReviewCoordinatorOptions,
-  ReviewDecisionRecord,
-  ReviewOptions,
-  ReviewRequest,
-} from './core/review/index.ts';
-
-export {
-  EffectLog,
-  EffectReplayConflictError,
-  computeSemanticHash,
-} from './core/effect-log/index.ts';
-export type { EffectLogLike, EffectRecord } from './core/effect-log/index.ts';
-export { isJSONValue, normalizeJSONValue } from './core/json.ts';
-export type { JSONPrimitive, JSONValue } from './core/json.ts';
-
-export { createObservabilityInterceptors } from './observability/index';
-export type { InterceptionContext, ObservabilityOptions } from './observability/index';
-export {
-  METRICS,
-  createMetricsCollectorExporter,
-  createOpenTelemetryMetrics,
-} from './observability/metrics';
-export { getOpenTelemetryApi } from './observability/no-op-telemetry';
-export {
-  formatTraceParent,
-  generateSpanId,
-  generateTraceId,
-  parseTraceParent,
-} from './observability/propagation';
-
-export { executeActivity } from './workers/activity-runner';
-export type { ActivityExecutionRequest, ActivityExecutionResult } from './workers/activity-runner';
-export { ActivityWorkerDispatcher } from './workers/activity-worker-dispatcher';
-export type { ActivityWorkerDispatcherOptions } from './workers/activity-worker-dispatcher';
-export {
-  createActivityWorkerEntryUrl,
-  initializeActivityWorkerMessageLoop,
-  revokeActivityWorkerEntryUrl,
-} from './workers/activity-worker-entry';
-export type { ActivityHandlerLookup } from './workers/activity-worker-entry';
-export { WorkerPool } from './workers/pool';
-export type { WorkerPoolOptions } from './workers/pool';
-
-export {
-  DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
-  MAX_CONTRACT_IDENTIFIER_BYTES,
-  MAX_CONTRACT_MESSAGE_COUNT,
-  MAX_CONTRACT_SCHEMA_DEPTH,
-  MAX_NORMALIZED_CONTRACT_BYTES,
-  WORKFLOW_CONTRACT_DIGEST_ALGORITHM,
-  WORKFLOW_CONTRACT_VERSION,
-  WORKFLOW_REVISION_MANIFEST_VERSION,
-  WorkflowContractConversionError,
-  activityContractHash,
-  buildWorkflowContract,
-  buildWorkflowRevisionManifest,
-  canonicalWorkflowContractJson,
-  checkWorkflowCompatibility,
-  contractHash,
-  deriveWorkflowRevision,
-  digestCanonicalWorkflowContract,
-  normalizeWorkflowContract,
-  parseWorkflowRevisionManifest,
-} from './core/contract/index.ts';
+  OperationContext,
+  OperationKind,
+  StreamOperationInvocation,
+  SubscriptionOperationInvocation,
+  TransportAvailability,
+  UnknownKeyPolicy,
+} from './server/operation-catalog/types.ts';
+export { defineOperation } from './server/operation-registry.ts';
 export type {
-  BuildWorkflowRevisionManifestOptions,
-  WorkflowActivityContract,
-  WorkflowCompatibilityPolicy,
-  WorkflowCompatibilityReason,
-  WorkflowCompatibilityVerdict,
-  WorkflowContract,
-  WorkflowContractActivitySource,
-  WorkflowContractMessageSource,
-  WorkflowContractSource,
-  WorkflowMessageContract,
-  WorkflowRevisionManifest,
-  WorkflowRevisionManifestParseResult,
-  WorkflowRevisionManifestParseSuccess,
-  WorkflowRevisionManifestRejectionReason,
-  WorkflowRevisionManifestValidationFailure,
-} from './core/contract/index.ts';
-
-export { HeartbeatManager } from './worker/heartbeat';
-export { RemoteWorker } from './worker/index';
-export { LongPollWorker } from './worker/long-poll';
+  OperationDefinitionInput,
+  SchemaOperationDefinition,
+  StreamSchemaOperationDefinition,
+  SubscriptionSchemaOperationDefinition,
+  UnarySchemaOperationDefinition,
+} from './server/operation-registry.ts';
+/*
+ * The replay-plus-live feed and its subscription plumbing, as public
+ * contracts.
+ *
+ * `createReplayLiveFeed` is generic over its envelope and its backend, and
+ * Weft already instantiates it twice (workflow events, fleet events). A third
+ * consumer — an agent run in `@lostgradient/operative`, a bureau in
+ * `@lostgradient/bureau` — needs the same cursors, the same replay-then-live
+ * join, and the same resume semantics, so it takes them from here rather than
+ * growing a parallel set. `createReplayAwareClosableIterable` goes with them:
+ * a subscription operation outside this package cannot be written without it.
+ *
+ * `createInMemoryReplayLiveBackend` is the live-only backend. Choosing it
+ * first is deliberate and reversible: a durable backend replaces that one
+ * argument and changes nothing above it.
+ *
+ * These exports are grouped by subject in this comment but sorted by module
+ * below, because the formatter orders export statements alphabetically.
+ */
+export { bindFeedLifetime } from './server/bind-feed-lifetime.ts';
+export { createInMemoryReplayLiveBackend } from './server/in-memory-replay-live-backend.ts';
+export type {
+  InMemoryReplayLiveBackend,
+  InMemoryReplayLiveBackendOptions,
+} from './server/in-memory-replay-live-backend.ts';
+export {
+  createReplayAwareClosableIterable,
+  type ClosableAsyncIterable,
+  type ReplayAwareClosableIterable,
+} from './server/operations/event-stream-contracts.ts';
+export type { SchedulingPolicy } from './server/task-queue-types.ts';
+export { createReplayLiveFeed, decodeCursor, encodeCursor } from './server/workflow-event-feed.ts';
+export type {
+  Cursor,
+  ReplayLiveFeed,
+  ReplayLiveFeedBackend,
+  ReplayLiveSubscribeOptions,
+  SequencedEventEnvelope,
+} from './server/workflow-event-feed.ts';
+export * from './service-worker/index.ts';
+export * from './storage/auto.ts';
+export { BunSQLiteStorage } from './storage/bun-sql.ts';
+export * from './storage/cloudflare.ts';
+export { CompressedStorage } from './storage/compressed-storage.ts';
+export { storageDeleteRange } from './storage/delete-range.ts';
+export type { DeleteRangeOptions } from './storage/delete-range.ts';
+export * from './storage/http.ts';
+export * from './storage/indexeddb.ts';
+export {
+  DEFAULT_SCOPE,
+  KEYS,
+  MAX_BATCH_OPERATIONS,
+  MAX_SCAN_LIMIT,
+  StorageBatchOperationLimitExceededError,
+  WEFT_RESERVED_KEY_PREFIXES,
+  assertDurableStorageForRecovery,
+  assertStorageBatchOperationCount,
+  matchesScanOptions,
+  requireStorageCapability,
+  resolvePrefixRangeEnd,
+  storageBatch,
+  storageConditionalBatch,
+  storageCount,
+  storageDeletePrefix,
+  storageHas,
+  storageKeys,
+  storageValuesEqual,
+} from './storage/interface.ts';
+export type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  GatedStorageCapabilityKey,
+  ScanOptions,
+  Storage,
+  StorageBatchOperationLimitTarget,
+  StorageCapabilities,
+} from './storage/interface.ts';
+export {
+  decodeStorageKeyComponent,
+  encodeStorageKeyComponent,
+  formatSortableStorageTimestamp,
+  tryDecodeStorageKeyComponent,
+} from './storage/key-encoding.ts';
+export * from './storage/lmdb.ts';
+export { MemoryStorage } from './storage/memory.ts';
+export * from './storage/neon.ts';
+export { NodeSQLiteStorage } from './storage/node-sqlite.ts';
+export * from './storage/postgres.ts';
+export * from './storage/resolve.ts';
+export { ScopedStorage, scopedStorage } from './storage/scoped-storage.ts';
+export { copyTextKeyValueRowsToStorage } from './storage/text-value-import.ts';
+export type {
+  CopyTextKeyValueRowsToStorageOptions,
+  CopyTextKeyValueRowsToStorageResult,
+  TextKeyValueRow,
+} from './storage/text-value-import.ts';
+export * from './storage/text-value-store.ts';
+export * from './storage/turso.ts';
+export { jsonCodec, msgpackCodec, withCodec } from './storage/typed-storage.ts';
+export type {
+  CodecStorageOptions,
+  MessagePackValue,
+  StorageCodec,
+  StorageValueParser,
+  TypedBatchOperation,
+  TypedConditionalBatchCondition,
+  TypedStorage,
+} from './storage/typed-storage.ts';
+export * from './storage/web-extension.ts';
+export * from './testing/index.ts';
+export { VERSION } from './version.ts';
+export { HeartbeatManager } from './worker/heartbeat.ts';
+export { RemoteWorker } from './worker/index.ts';
+export { LongPollWorker } from './worker/long-poll.ts';
 export {
   MAX_MANIFEST_ACTIVITY_COUNT,
   MAX_MANIFEST_CAPABILITY_COUNT,
@@ -809,45 +269,47 @@ export type {
   WorkerRuntimeIdentity,
   WorkerWorkflowContract,
 } from './worker/manifest/index.ts';
-export { WorkerRegistry } from './worker/registry';
+export * from './worker/protocol.ts';
+export { WorkerRegistry } from './worker/registry.ts';
+export type { RoutingPolicy } from './worker/registry.ts';
 export {
   WorkerProtocolIncompatibleError,
   workerProtocolIncompatibleMessage,
-} from './worker/worker-protocol-incompatible-error';
-export { buildQualifiedActivityTable } from './worker/workflow-activity-binding';
+} from './worker/worker-protocol-incompatible-error.ts';
+export { buildQualifiedActivityTable } from './worker/workflow-activity-binding.ts';
 export type {
   RemoteWorkerActivityFunction,
   RemoteWorkerActivityImplementation,
   RemoteWorkerWorkflowDefinition,
-} from './worker/workflow-activity-binding';
-
-export type { WeftClientStorage } from './client/client-storage';
-export type { WorkflowEventTail } from './client/event-tail';
-export { HttpClient, HttpClientError } from './client/index';
+} from './worker/workflow-activity-binding.ts';
+export { executeActivity } from './workers/activity-runner.ts';
 export type {
-  HttpClientOptions,
-  WorkflowEventStreamOptions,
-  WorkflowEventTransport,
-} from './client/index';
-export type {
-  ClientHandle,
-  ClientStartOptions,
-  StartOrSignalOutcome,
-  UpdateResult,
-  WeftClient,
-  WeftClientActivity,
-} from './client/interface';
-export { LocalClient } from './client/local';
-export type {
-  KnownWorkflowName,
-  UnknownNameWhenRegistryEmpty,
-} from './client/workflow-name-typing';
-
+  ActivityExecutionRequest,
+  ActivityExecutionResult,
+} from './workers/activity-runner.ts';
+export { ActivityWorkerDispatcher } from './workers/activity-worker-dispatcher.ts';
+export type { ActivityWorkerDispatcherOptions } from './workers/activity-worker-dispatcher.ts';
 export {
-  ConnectionConfigurationError,
-  DEFAULT_WEFT_ADDRESS,
-  resolveConnection,
-} from './connection';
-export type { ConnectionOptions, ResolvedConnection } from './connection';
+  createActivityWorkerEntryUrl,
+  initializeActivityWorkerMessageLoop,
+  revokeActivityWorkerEntryUrl,
+} from './workers/activity-worker-entry.ts';
+export type { ActivityHandlerLookup } from './workers/activity-worker-entry.ts';
+export { WorkerPool } from './workers/pool.ts';
+export type { WorkerPoolOptions } from './workers/pool.ts';
 
-export * from './diagnostics/index.ts';
+export * from './client/generated/operation-client.generated.ts';
+export type { JsonRpcCallResult, JsonRpcErrorObject } from './client/json-rpc-request.ts';
+export * from './client/operation-client-runtime.ts';
+export { CodegenEmitError, jsonSchemaToTypeScript } from './json-schema/codegen-emit.ts';
+export * from './server/operation-catalog-snapshot.ts';
+
+export { REGISTRY_VERSION } from './core/registry-snapshot.ts';
+export type { RegistryActivityEntry } from './core/registry-snapshot.ts';
+export {
+  isRemoteTaskTerminalCancelled,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+} from './core/task-ledger/task-ledger.ts';
+export { createLiveOperationRegistry } from './server/rest-bindings.ts';
+export type { LiveOperationRegistryOptions } from './server/rest-bindings.ts';

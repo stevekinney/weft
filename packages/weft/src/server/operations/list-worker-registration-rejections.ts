@@ -68,10 +68,7 @@ export function createListWorkerRegistrationRejectionsOperation(
   options: ListWorkerRegistrationRejectionsOptions = {},
 ) {
   const registry = options.workerRegistry;
-  return defineOperation<
-    ListWorkerRegistrationRejectionsInput,
-    ListWorkerRegistrationRejectionsOutput
-  >({
+  return defineOperation({
     name: 'weft.workers.rejections',
     mcpExposable: false,
     summary: 'List recently declined worker registration attempts',

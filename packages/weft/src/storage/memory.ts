@@ -1,4 +1,4 @@
-import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
+import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
   matchesScanOptions,
@@ -9,8 +9,8 @@ import {
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface';
-import { scopedStorage } from './scoped-storage';
+} from './interface.ts';
+import { scopedStorage } from './scoped-storage.ts';
 
 /**
  * In-memory {@link Storage} implementation.

@@ -11,7 +11,7 @@ import type { MetricDefinition } from './metrics-snapshot.ts';
  *
  * @example
  * ```ts
- * import { METRICS } from '@lostgradient/weft/observability';
+ * import { METRICS } from '@lostgradient/weft';
  *
  * for (const metric of Object.values(METRICS)) {
  *   console.log(metric.name, metric.type, metric.unit);

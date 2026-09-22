@@ -95,7 +95,7 @@ describe('createLazyPostgresPool', () => {
     // The regression this guards: without a disposed flag, this call would import
     // a NEW pool that no future end() can reach — a connection leak that also keeps
     // the "disposed" adapter silently working.
-    await expect(pool.query('SELECT 2')).rejects.toThrow(/disposed and cannot be reused/);
+    expect(pool.query('SELECT 2')).rejects.toThrow(/disposed and cannot be reused/);
     expect(loads).toBe(1); // no second pool was built
   });
 
@@ -112,7 +112,7 @@ describe('createLazyPostgresPool', () => {
       },
     });
 
-    await expect(pool.query('SELECT 1')).rejects.toThrow(
+    expect(pool.query('SELECT 1')).rejects.toThrow(
       /PostgresStorage requires the optional peer dependency "pg".*bun add pg.*npm install pg/s,
     );
 
@@ -132,6 +132,6 @@ describe('createLazyPostgresPool', () => {
       },
     });
 
-    await expect(pool.query('SELECT 1')).rejects.toBe(boom);
+    expect(pool.query('SELECT 1')).rejects.toBe(boom);
   });
 });

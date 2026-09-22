@@ -11,7 +11,7 @@ import {
   runBinaryAndLargeScanStorageConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
-import { TursoStorage } from './turso';
+import { TursoStorage } from './turso.ts';
 
 runStorageCapabilityConformance('TursoStorage', {
   // Local libSQL file mode on a real on-disk database so concurrent
@@ -120,7 +120,7 @@ describe('TursoStorage', () => {
           args: ['lock:holder', encode('held')],
         });
 
-        await expect(
+        expect(
           fixture.storage.conditionalBatch(
             [{ key: 'busy:key', expectedValue: null }],
             [{ type: 'put', key: 'busy:key', value: encode('committed') }],
@@ -196,7 +196,7 @@ describe('TursoStorage', () => {
   it('query rejects non-read-only SQL statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    await expect(storage.query('DELETE FROM kv')).rejects.toThrow(
+    expect(storage.query('DELETE FROM kv')).rejects.toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 
@@ -206,7 +206,7 @@ describe('TursoStorage', () => {
   it('query rejects multiple SQL statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    await expect(storage.query('SELECT key FROM kv; DELETE FROM kv')).rejects.toThrow(
+    expect(storage.query('SELECT key FROM kv; DELETE FROM kv')).rejects.toThrow(
       'Storage query must contain exactly one read-only statement.',
     );
 
@@ -216,7 +216,7 @@ describe('TursoStorage', () => {
   it('query rejects write PRAGMA statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    await expect(storage.query('PRAGMA journal_mode = WAL')).rejects.toThrow(
+    expect(storage.query('PRAGMA journal_mode = WAL')).rejects.toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 

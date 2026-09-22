@@ -20,7 +20,7 @@ import type { Principal } from './principal.ts';
  *
  * @example
  * ```ts
- * import type { WorkerAdmissionRequest } from '@lostgradient/weft/server';
+ * import type { WorkerAdmissionRequest } from '@lostgradient/weft';
  *
  * function summarize(request: WorkerAdmissionRequest): string {
  *   return `${request.workerId} -> ${request.manifest.deployment.name}`;
@@ -41,7 +41,7 @@ export type WorkerAdmissionRequest = Readonly<{
  *
  * @example
  * ```ts
- * import type { WorkerAdmissionDecision } from '@lostgradient/weft/server';
+ * import type { WorkerAdmissionDecision } from '@lostgradient/weft';
  *
  * const rejected: WorkerAdmissionDecision = { status: 'rejected', reason: 'unknown fleet' };
  * console.log(rejected.status); // 'rejected'
@@ -59,7 +59,7 @@ export type WorkerAdmissionDecision =
  *
  * @example
  * ```ts
- * import type { WorkerAdmissionPolicy } from '@lostgradient/weft/server';
+ * import type { WorkerAdmissionPolicy } from '@lostgradient/weft';
  *
  * const onlyBilling: WorkerAdmissionPolicy = ({ manifest }) =>
  *   manifest.deployment.name === 'billing'

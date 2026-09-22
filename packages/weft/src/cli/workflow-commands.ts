@@ -11,7 +11,7 @@
  * @module cli/workflow-commands
  */
 
-import type { ConnectionOptions } from '../connection.ts';
+import type { ConnectionOptions } from '../index.ts';
 import { loadJsonInput } from './json-input.ts';
 import {
   confirmDestructive,

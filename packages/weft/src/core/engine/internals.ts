@@ -32,6 +32,7 @@ import type {
   ComposedWorkflowInterceptor,
   Interceptor,
 } from '../interceptor.ts';
+import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
 import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
@@ -200,6 +201,15 @@ export interface EngineInternals {
    */
   workflowTypeByWorkflowId: Map<string, WorkflowExecutionIdentity>;
   activityWorkerDispatcher: ActivityWorkerDispatcher | null;
+  /**
+   * Non-`null` exactly when `activityExecution.mode === 'remote'`
+   * (COR-152) — mutually exclusive with `activityWorkerDispatcher` by
+   * construction, never both set. `executeActivity`'s leaf dispatch branches
+   * on `internals.options.activityExecution?.mode`, not on this slot's
+   * presence, so remote unavailability can never silently fall through to a
+   * different mode (acceptance criterion 9).
+   */
+  remoteActivityBroker: RemoteActivityBroker | null;
   checkpoints: Map<string, Checkpoint>;
   broadcastChannel: BroadcastChannel | null;
   pendingNestingDepth: number | undefined;
@@ -475,6 +485,24 @@ export function getInternals(engine: object): EngineInternals {
     );
   }
   return internals;
+}
+
+/**
+ * Look up an engine's `EngineInternals` without throwing when it has none.
+ *
+ * A peek, not {@link getInternals}: it must tolerate an object that is not a
+ * real, constructor-initialized `Engine` (a minimal fixture stubbing just the
+ * `ServeOptions.engine` surface a given unit test exercises, as several
+ * `task-polling`/`websocket-worker` characterization tests do). Callers that
+ * genuinely require initialized internals use {@link getInternals} instead.
+ *
+ * Exists so a narrow, read-only predicate ABOUT an engine can live in its own
+ * sibling module rather than here — `internals.ts` is importable only from
+ * `core/engine/**` (`documentation/internal-imports-allowlist.json`), so a
+ * predicate `server/` must call cannot live in this file.
+ */
+export function peekInternals(engine: object): EngineInternals | undefined {
+  return INTERNALS.get(engine);
 }
 
 /**

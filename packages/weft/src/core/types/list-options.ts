@@ -12,10 +12,10 @@ import type { SearchAttributeHandle, SearchAttributeValue } from './search-attri
  * are mutually exclusive on the upper side.
  */
 export interface TimeRange {
-  gte?: number;
-  lte?: number;
-  gt?: number;
-  lt?: number;
+  gte?: number | undefined;
+  lte?: number | undefined;
+  gt?: number | undefined;
+  lt?: number | undefined;
 }
 
 /**
@@ -38,7 +38,7 @@ export interface TimeRange {
  */
 export interface ListFilter {
   /** Match workflows whose {@link WorkflowState.status} is one of the listed values. */
-  status?: WorkflowStatus | WorkflowStatus[];
+  status?: WorkflowStatus | WorkflowStatus[] | undefined;
   /**
    * Match workflows by registered workflow type (e.g. `'order-fulfillment'`).
    *
@@ -48,40 +48,40 @@ export interface ListFilter {
    * const filter: ListFilter = { type: 'order-fulfillment' };
    * ```
    */
-  type?: string;
+  type?: string | undefined;
   /** Match workflow runs launched by this recurring schedule. */
-  scheduleId?: string;
+  scheduleId?: string | undefined;
   /** Match direct child workflows launched by this parent workflow id. */
-  parentWorkflowId?: string;
+  parentWorkflowId?: string | undefined;
   /** Narrow `parentWorkflowId` to one concrete parent run generation. */
-  parentWorkflowExecutionToken?: string;
+  parentWorkflowExecutionToken?: string | undefined;
   /** Match workflows that carry every listed tag. */
-  tags?: string[];
+  tags?: string[] | undefined;
   /** Filter on indexed search attributes (equality, string any-of, or range). */
-  attributes?: readonly AttributeFilter[];
+  attributes?: readonly AttributeFilter[] | undefined;
   /** Maximum number of summaries to return. Server enforces an upper bound. */
-  limit?: number;
+  limit?: number | undefined;
   /** Number of summaries to skip before returning results. */
-  offset?: number;
+  offset?: number | undefined;
   /**
    * Workflow id prefix. Restricted to `[A-Za-z0-9_-]+`; values containing
    * other characters are rejected during validation. Matches by raw
    * `state.id.startsWith(idPrefix)` after candidate enumeration.
    */
-  idPrefix?: string;
+  idPrefix?: string | undefined;
   /** Range filter on `WorkflowState.createdAt` (ms epoch). */
-  createdAt?: TimeRange;
+  createdAt?: TimeRange | undefined;
   /** Range filter on `WorkflowState.updatedAt` (ms epoch). */
-  updatedAt?: TimeRange;
+  updatedAt?: TimeRange | undefined;
   /** Range filter on `WorkflowState.executionDeadline` (ms epoch). */
-  executionDeadline?: TimeRange;
+  executionDeadline?: TimeRange | undefined;
   /**
    * Match by the workflow's `failureCategory`. The engine uses the
    * `failureCategory` search-attribute index to narrow candidate workflow IDs,
    * then still verifies the loaded `WorkflowState.failureCategory` so state
    * remains authoritative when index entries are stale.
    */
-  failureCategory?: FailureCategory | FailureCategory[];
+  failureCategory?: FailureCategory | FailureCategory[] | undefined;
 }
 
 /**
@@ -121,11 +121,9 @@ export type AttributeFilterValue<TKey extends AttributeFilterKey> =
 
 export type AttributeFilterAnyOfValue<TKey extends AttributeFilterKey> =
   TKey extends SearchAttributeHandle<infer TValue>
-    ? TValue extends string[]
+    ? [TValue] extends [string[]]
       ? string[]
-      : TValue extends AttributeFilterScalarValue
-        ? TValue[]
-        : never
+      : Extract<TValue, AttributeFilterScalarValue>[]
     : AttributeFilterScalarValue[];
 
 export type AttributeRangeValue<TKey extends AttributeFilterKey> =
@@ -137,19 +135,19 @@ export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey
   TKey extends SearchAttributeHandle
     ? | {
           key: TKey;
-          value?: AttributeFilterValue<TKey> | AttributeFilterAnyOfValue<TKey>;
-          gt?: never;
-          lt?: never;
-          gte?: never;
-          lte?: never;
+          value?: AttributeFilterValue<TKey> | AttributeFilterAnyOfValue<TKey> | undefined;
+          gt?: undefined;
+          lt?: undefined;
+          gte?: undefined;
+          lte?: undefined;
         }
       | {
           key: TKey;
-          value?: never;
-          gt?: AttributeRangeValue<TKey>;
-          lt?: AttributeRangeValue<TKey>;
-          gte?: AttributeRangeValue<TKey>;
-          lte?: AttributeRangeValue<TKey>;
+          value?: undefined;
+          gt?: AttributeRangeValue<TKey> | undefined;
+          lt?: AttributeRangeValue<TKey> | undefined;
+          gte?: AttributeRangeValue<TKey> | undefined;
+          lte?: AttributeRangeValue<TKey> | undefined;
         }
     : {
         key: TKey;
@@ -157,11 +155,11 @@ export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey
          * Match a single indexed scalar value, or provide a scalar array to match
          * any listed value for the same attribute.
          */
-        value?: AttributeFilterScalarValue | AttributeFilterScalarValue[];
-        gt?: AttributeRangeValue<TKey>;
-        lt?: AttributeRangeValue<TKey>;
-        gte?: AttributeRangeValue<TKey>;
-        lte?: AttributeRangeValue<TKey>;
+        value?: AttributeFilterScalarValue | AttributeFilterScalarValue[] | undefined;
+        gt?: AttributeRangeValue<TKey> | undefined;
+        lt?: AttributeRangeValue<TKey> | undefined;
+        gte?: AttributeRangeValue<TKey> | undefined;
+        lte?: AttributeRangeValue<TKey> | undefined;
       };
 
 export type AttributeFilterList<TAttributeKeys extends readonly AttributeFilterKey[]> = {
@@ -172,7 +170,7 @@ export type TypedListFilter<TAttributeKeys extends readonly AttributeFilterKey[]
   ListFilter,
   'attributes'
 > & {
-  attributes?: AttributeFilterList<TAttributeKeys>;
+  attributes?: AttributeFilterList<TAttributeKeys> | undefined;
 };
 
 // ---------------------------------------------------------------------------

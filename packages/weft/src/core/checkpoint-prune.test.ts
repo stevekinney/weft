@@ -348,7 +348,7 @@ describe('Engine.pruneCheckpoints', () => {
           }),
         );
 
-        await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+        expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
           'storage refused the prune batch',
         );
         // The rejected batch never committed — all three entries remain.
@@ -376,7 +376,7 @@ describe('Engine.pruneCheckpoints', () => {
           }),
         );
 
-        await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+        expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
           'lost its race against a concurrent run replacement',
         );
         // The replacement's different execution token failed the guard before
@@ -428,7 +428,7 @@ describe('Engine.pruneCheckpoints', () => {
         const controller = new AbortController();
         controller.abort();
 
-        await expect(
+        expect(
           engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
         ).rejects.toThrow();
         expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
@@ -530,7 +530,7 @@ describe('Engine.pruneCheckpoints', () => {
     // The fence anchor is captured before the scan starts, so even though the
     // replacement's rewrite happens mid-scan (not merely after it), the
     // destructive batch still fails closed against the pre-scan token.
-    await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+    expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
       'lost its race against a concurrent run replacement',
     );
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
@@ -571,7 +571,7 @@ describe('Engine.pruneCheckpoints', () => {
           await writeCheckpointHistory(storage, 'wf-1', step);
         }
         engine = new Engine({ storage });
-        await expect(engine.pruneCheckpoints('wf-1', { keepLast: 0 })).rejects.toThrow(
+        expect(engine.pruneCheckpoints('wf-1', { keepLast: 0 })).rejects.toThrow(
           'lost its CAS race',
         );
         expect(deleteBatches).toBe(replacementBatch);
@@ -597,7 +597,7 @@ describe('Engine.pruneCheckpoints', () => {
     await writeCheckpointHistory(storage, 'wf-1', 1);
     await writeCheckpointHistory(storage, 'wf-1', 2);
     engine = new Engine({ storage });
-    await expect(
+    expect(
       engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
     ).rejects.toThrow('cancelled during preflight');
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2]);
@@ -625,10 +625,10 @@ describe('Engine.pruneCheckpoints', () => {
       }),
     );
 
-    await expect(engine.pruneCheckpoints('wf-1', { keepLast: -1 })).rejects.toThrow(
+    expect(engine.pruneCheckpoints('wf-1', { keepLast: -1 })).rejects.toThrow(
       'keepLast must be a non-negative integer',
     );
-    await expect(engine.pruneCheckpoints('wf-1', { keepLast: 1.5 })).rejects.toThrow(
+    expect(engine.pruneCheckpoints('wf-1', { keepLast: 1.5 })).rejects.toThrow(
       'keepLast must be a non-negative integer',
     );
   });

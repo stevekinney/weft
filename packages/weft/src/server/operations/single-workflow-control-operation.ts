@@ -2,13 +2,13 @@ import type { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import type { FaultCode } from '../../core/fault-code.ts';
-import type { OperationDefinition } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import type { SchemaOperationDefinition } from '../operation-registry.ts';
 import { defineOperation } from '../operation-registry.ts';
-
-type SingleWorkflowControlInput = {
-  readonly workflowId: string;
-};
+import {
+  assertOperationEngineMethods,
+  type OperationEngineMethodName,
+} from './operation-helpers.ts';
 
 type SingleWorkflowControlErrorMapper = (context: {
   readonly error: unknown;
@@ -17,8 +17,8 @@ type SingleWorkflowControlErrorMapper = (context: {
 }) => OperationFault | undefined;
 
 type SingleWorkflowControlOperationConfiguration<
-  Input extends SingleWorkflowControlInput,
-  Output,
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
 > = {
   readonly name: string;
   readonly summary: string;
@@ -27,20 +27,24 @@ type SingleWorkflowControlOperationConfiguration<
   readonly tags: ReadonlyArray<string>;
   /** Whether this control operation irreversibly mutates state. Required. */
   readonly destructive: boolean;
-  readonly inputSchema: z.ZodType<Input>;
-  readonly outputSchema: z.ZodType<Output>;
+  readonly inputSchema: InputSchema;
+  readonly outputSchema: OutputSchema;
   readonly producibleFaults: ReadonlyArray<FaultCode>;
-  readonly invoke: (context: { readonly engine: Engine; readonly input: Input }) => Promise<Output>;
+  readonly requiredEngineMethods: readonly OperationEngineMethodName[];
+  readonly invoke: (context: {
+    readonly engine: Pick<Engine, OperationEngineMethodName>;
+    readonly input: z.output<InputSchema>;
+  }) => Promise<z.input<OutputSchema>>;
   readonly mapErrorToFault?: SingleWorkflowControlErrorMapper;
 };
 
 export function createSingleWorkflowControlOperation<
-  Input extends SingleWorkflowControlInput,
-  Output,
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
 >(
-  configuration: SingleWorkflowControlOperationConfiguration<Input, Output>,
-): OperationDefinition<Input, Output> {
-  return defineOperation<Input, Output>({
+  configuration: SingleWorkflowControlOperationConfiguration<InputSchema, OutputSchema>,
+): SchemaOperationDefinition<InputSchema, OutputSchema> {
+  return defineOperation({
     name: configuration.name,
     mcpExposable: false,
     summary: configuration.summary,
@@ -53,14 +57,14 @@ export function createSingleWorkflowControlOperation<
     producibleFaults: configuration.producibleFaults,
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-    invoke: async ({ input, engine }): Promise<Output> => {
+    invoke: async ({ input, engine }): Promise<z.input<OutputSchema>> => {
       try {
-        // OperationContext erases the engine so transport adapters can share the registry.
-        return await configuration.invoke({ engine: engine as Engine, input });
+        assertOperationEngineMethods(engine, configuration.requiredEngineMethods);
+        return await configuration.invoke({ engine, input });
       } catch (error) {
         throw mapSingleWorkflowControlErrorToFault(
           error,
-          input.workflowId,
+          readWorkflowId(input),
           configuration.mapErrorToFault,
         );
       }
@@ -68,9 +72,15 @@ export function createSingleWorkflowControlOperation<
   });
 }
 
+function readWorkflowId(input: unknown): string {
+  if (typeof input !== 'object' || input === null) return '';
+  const workflowId = Reflect.get(input, 'workflowId');
+  return typeof workflowId === 'string' ? workflowId : '';
+}
+
 export function extractWorkflowIdFromPath(
   pathParams: Readonly<Record<string, string | undefined>>,
-): SingleWorkflowControlInput {
+): { readonly workflowId: string } {
   return { workflowId: pathParams['id'] ?? '' };
 }
 

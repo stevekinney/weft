@@ -17,16 +17,16 @@ import {
   bulkDeleteWorkflowsOperation,
   bulkDeleteWorkflowsRestBinding,
 } from './bulk-delete-workflows.ts';
-import {
-  bulkOperationOptionsFromInput,
-  listFilterFromBulkInput,
-  parseBulkOperationControlFromBody,
-  parseRequiredBulkListFilter,
-} from './bulk-filter-helpers.ts';
+import { parseRequiredBulkListFilter } from './bulk-filter-body.ts';
+import { listFilterFromBulkInput } from './bulk-filter-input.ts';
 import {
   bulkMutateWorkflowTagsOperation,
   bulkMutateWorkflowTagsRestBinding,
 } from './bulk-mutate-workflow-tags.ts';
+import {
+  bulkOperationOptionsFromInput,
+  parseBulkOperationControlFromBody,
+} from './bulk-operation-controls.ts';
 import {
   bulkSignalWorkflowsOperation,
   bulkSignalWorkflowsRestBinding,
@@ -80,7 +80,7 @@ async function expectJsonError(
 ): Promise<void> {
   expect(response.status).toBe(status);
   expect(response.headers.get('content-type')).toBe('application/json');
-  await expect(response.json()).resolves.toEqual(data === undefined ? { error } : { error, data });
+  expect(response.json()).resolves.toEqual(data === undefined ? { error } : { error, data });
 }
 
 describe('operation coverage regressions', () => {
@@ -276,42 +276,42 @@ describe('operation coverage regressions', () => {
       transport: 'jsonRpcHttp' as const,
     };
 
-    await expect(
+    expect(
       bulkCancelWorkflowsOperation.invoke({
         ...context,
         input: { tags: [''] },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
 
-    await expect(
+    expect(
       bulkDeleteWorkflowsOperation.invoke({
         ...context,
         input: { tags: [''] },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
 
-    await expect(
+    expect(
       bulkSignalWorkflowsOperation.invoke({
         ...context,
         input: { tags: [''], name: 'continue' },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
 
-    await expect(
+    expect(
       bulkMutateWorkflowTagsOperation.invoke({
         ...context,
         input: { filter: { tags: [''] }, tags: ['selected'], operation: 'add' },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
 
-    await expect(
+    expect(
       bulkMutateWorkflowTagsOperation.invoke({
         ...context,
         input: { filter: { tags: ['selected'] }, tags: [''], operation: 'add' },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
 
-    await expect(
+    expect(
       purgeWorkflowsOperation.invoke({
         ...context,
         input: { tags: [''] },
@@ -393,7 +393,7 @@ describe('operation coverage regressions', () => {
       },
     };
 
-    await expect(
+    expect(
       getStreamChunksOperation.invoke({
         input: { workflowId: 'wf-stream', key: 'tokens', after: 7 },
         engine: engine,
@@ -403,7 +403,7 @@ describe('operation coverage regressions', () => {
     ).resolves.toEqual({ chunks: [] });
     expect(capturedAfter).toBe(7);
 
-    await expect(
+    expect(
       streamWorkflowSseOperation.invoke({
         input: { workflowId: 'wf-stream', after: 9 },
         engine: engine,

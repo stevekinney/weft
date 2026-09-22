@@ -9,7 +9,7 @@ function request(overrides: Partial<WorkerAdmissionRequest> = {}): WorkerAdmissi
     queue: 'default',
     manifest: {
       manifestVersion: 1,
-      protocolVersion: 3,
+      protocolVersion: 6,
       sdkVersion: '0.18.0',
       runtime: { name: 'bun', version: '1.3.14' },
       deployment: { name: 'billing', buildId: 'b3', artifactDigest: 'sha256:41d0' },

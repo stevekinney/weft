@@ -23,6 +23,7 @@ describe('Engine with smol: true workers', () => {
     it('executes an activity in a smol worker', async () => {
       const engine = new Engine({
         activityExecution: {
+          mode: 'worker',
           workerUrl: activityWorkerUrl,
           poolSize: 2,
           smol: true,
@@ -53,6 +54,7 @@ describe('Engine with smol: true workers', () => {
     it('handles concurrent workflows with smol activity workers', async () => {
       const engine = new Engine({
         activityExecution: {
+          mode: 'worker',
           workerUrl: activityWorkerUrl,
           poolSize: 2,
           smol: true,
@@ -88,6 +90,7 @@ describe('Engine with smol: true workers', () => {
     it('propagates errors from smol activity workers', async () => {
       const engine = new Engine({
         activityExecution: {
+          mode: 'worker',
           workerUrl: activityWorkerUrl,
           poolSize: 1,
           smol: true,
@@ -111,7 +114,7 @@ describe('Engine with smol: true workers', () => {
 
       const handle = await engine.start('smol-failing', null);
 
-      await expect(handle.result()).rejects.toThrow();
+      expect(handle.result()).rejects.toThrow();
 
       engine[Symbol.dispose]();
     });
@@ -125,6 +128,7 @@ describe('Engine with smol: true workers', () => {
     it('works without smol option (defaults to false)', async () => {
       const engine = new Engine({
         activityExecution: {
+          mode: 'worker',
           workerUrl: activityWorkerUrl,
           poolSize: 1,
         },
@@ -154,6 +158,7 @@ describe('Engine with smol: true workers', () => {
     it('works with smol explicitly set to false', async () => {
       const engine = new Engine({
         activityExecution: {
+          mode: 'worker',
           workerUrl: activityWorkerUrl,
           poolSize: 1,
           smol: false,

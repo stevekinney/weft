@@ -82,9 +82,7 @@ describe('engine.workflows.install', () => {
     );
     await engine.workflows.install(manifest);
 
-    await expect(engine.workflows.install(conflicting)).rejects.toThrow(
-      WorkflowCatalogConflictError,
-    );
+    expect(engine.workflows.install(conflicting)).rejects.toThrow(WorkflowCatalogConflictError);
   });
 
   it('throws WorkflowNotRegisteredError when the engine has no in-process definition for the manifest name', async () => {
@@ -93,7 +91,7 @@ describe('engine.workflows.install', () => {
       buildWorkflowContract({ name: 'never-registered', version: '1.0.0' }),
     );
 
-    await expect(engine.workflows.install(manifest)).rejects.toThrow(WorkflowNotRegisteredError);
+    expect(engine.workflows.install(manifest)).rejects.toThrow(WorkflowNotRegisteredError);
   });
 
   it('never returns a `definition` field: only manifest and installedAt reach the caller', async () => {
@@ -138,7 +136,7 @@ describe('engine.workflows.activate', () => {
     engine = createEngine();
     engine.register(checkout);
 
-    await expect(
+    expect(
       engine.workflows.activate('checkout', 'never-installed', { expectedGeneration: 1 }),
     ).rejects.toThrow(WorkflowRevisionNotInstalledError);
   });
@@ -356,7 +354,7 @@ describe('engine.workflows.preload', () => {
   it('propagates WorkflowSourceNotRegisteredError for a (name, revision) never registerSource()-registered — identical to resolveWorkflowSource()', async () => {
     const engine = createEngine();
 
-    await expect(engine.workflows.preload('never-registered', 'r1')).rejects.toBeInstanceOf(
+    expect(engine.workflows.preload('never-registered', 'r1')).rejects.toBeInstanceOf(
       WorkflowSourceNotRegisteredError,
     );
 
@@ -377,7 +375,7 @@ describe('engine.workflows.preload', () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(
+    expect(
       engine.workflows.preload('lazy-preload', revision, { signal: controller.signal }),
     ).rejects.toBeTruthy();
 

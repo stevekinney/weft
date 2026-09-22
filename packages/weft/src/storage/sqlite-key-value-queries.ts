@@ -1,5 +1,5 @@
-import type { NormalizedDeleteRangeOptions } from './delete-range';
-import { resolvePrefixRangeEnd, type ScanOptions } from './interface';
+import type { NormalizedDeleteRangeOptions } from './delete-range.ts';
+import { resolvePrefixRangeEnd, type ScanOptions } from './interface.ts';
 
 export const SQLITE_CREATE_KEY_VALUE_TABLE = `CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,

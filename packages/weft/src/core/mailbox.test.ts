@@ -316,7 +316,7 @@ describe('Mailbox payload identity', () => {
     const record = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, payload: { form: 'inline', value: 'tampered' } }));
 
-    await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -335,7 +335,7 @@ describe('Mailbox payload identity', () => {
     ],
   ])('rejects %s at the boundary', async (_name, override) => {
     const { mailbox } = createMailboxFixture();
-    await expect(mailbox.admit(commandInput(override))).rejects.toThrow(
+    expect(mailbox.admit(commandInput(override))).rejects.toThrow(
       ApplicationCommandValidationError,
     );
     mailbox.dispose();
@@ -343,7 +343,7 @@ describe('Mailbox payload identity', () => {
 
   it('rejects an inline payload over the configured ceiling', async () => {
     const { mailbox } = createMailboxFixture({ maxInlinePayloadBytes: 64 });
-    await expect(
+    expect(
       mailbox.admit(commandInput({ payload: { form: 'inline', value: 'x'.repeat(512) } })),
     ).rejects.toThrow(/inline ceiling/);
     mailbox.dispose();
@@ -353,7 +353,7 @@ describe('Mailbox payload identity', () => {
     const { mailbox } = createMailboxFixture();
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
-    await expect(
+    expect(
       mailbox.admit(commandInput({ payload: { form: 'inline', value: cyclic } })),
     ).rejects.toThrow(/not encodable by the structured-clone codec/);
     mailbox.dispose();
@@ -364,7 +364,7 @@ describe('Mailbox payload identity', () => {
     // Encodes fine, but nests past the canonical digest's depth ceiling.
     let deep: unknown = 'leaf';
     for (let level = 0; level < 70; level += 1) deep = { deep };
-    await expect(
+    expect(
       mailbox.admit(commandInput({ payload: { form: 'inline', value: deep } })),
     ).rejects.toThrow(/cannot be digested/);
     mailbox.dispose();
@@ -387,7 +387,7 @@ describe('Mailbox input validation', () => {
     ['causation.correlationId', { causation: { correlationId: 'c'.repeat(257) } }],
   ])('rejects an invalid %s', async (_name, override) => {
     const { mailbox } = createMailboxFixture();
-    await expect(mailbox.admit(commandInput(override))).rejects.toThrow(
+    expect(mailbox.admit(commandInput(override))).rejects.toThrow(
       ApplicationCommandValidationError,
     );
     mailbox.dispose();
@@ -395,7 +395,7 @@ describe('Mailbox input validation', () => {
 
   it('rejects a non-object command', async () => {
     const { mailbox } = createMailboxFixture();
-    await expect(mailbox.admit(null as never)).rejects.toThrow(ApplicationCommandValidationError);
+    expect(mailbox.admit(null as never)).rejects.toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
   });
 
@@ -492,8 +492,8 @@ describe('Mailbox observation', () => {
     await admitOne(mailbox);
     const listed = await mailbox.list({ limit: 50_000 });
     expect(listed.length).toBe(1);
-    await expect(mailbox.list({ limit: 0 })).rejects.toThrow(ApplicationCommandValidationError);
-    await expect(mailbox.list({ limit: 1.5 })).rejects.toThrow(ApplicationCommandValidationError);
+    expect(mailbox.list({ limit: 0 })).rejects.toThrow(ApplicationCommandValidationError);
+    expect(mailbox.list({ limit: 1.5 })).rejects.toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
   });
 });
@@ -572,9 +572,9 @@ describe('Mailbox hostile persisted records', () => {
     const key = keyFor(commandId);
     await storage.put(key, new Uint8Array([0xc1, 0xc1, 0xc1]));
 
-    await expect(
-      _name === 'command' ? mailbox.receipt(commandId) : mailbox.capacity(),
-    ).rejects.toThrow(PersistedDataCorruptError);
+    expect(_name === 'command' ? mailbox.receipt(commandId) : mailbox.capacity()).rejects.toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 
@@ -585,7 +585,7 @@ describe('Mailbox hostile persisted records', () => {
       KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'k'),
       encode({ recordVersion: 1, commandId: 42 }),
     );
-    await expect(mailbox.admit(commandInput({ idempotencyKey: 'k' }))).rejects.toThrow(
+    expect(mailbox.admit(commandInput({ idempotencyKey: 'k' }))).rejects.toThrow(
       PersistedDataCorruptError,
     );
     mailbox.dispose();
@@ -595,7 +595,7 @@ describe('Mailbox hostile persisted records', () => {
     const { mailbox, storage } = createMailboxFixture();
     await admitOne(mailbox);
     await storage.put(KEYS.applicationCommandReady('bureau', 'agent-7', 0), encode(42));
-    await expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -606,7 +606,7 @@ describe('Mailbox hostile persisted records', () => {
     const stored = await storage.get(key);
     const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, recordVersion: 2 }));
-    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -617,7 +617,7 @@ describe('Mailbox hostile persisted records', () => {
     const stored = await storage.get(key);
     const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, state: 'levitating' }));
-    await expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -641,15 +641,15 @@ describe('Mailbox disposal', () => {
     mailbox.dispose();
     mailbox.dispose(); // idempotent
 
-    await expect(mailbox.admit(commandInput())).rejects.toThrow(/disposed/);
-    await expect(mailbox.receipt('x')).rejects.toThrow(/disposed/);
-    await expect(mailbox.list()).rejects.toThrow(/disposed/);
-    await expect(mailbox.capacity()).rejects.toThrow(/disposed/);
-    await expect(mailbox.claim()).rejects.toThrow(/disposed/);
-    await expect(mailbox.runMaintenance()).rejects.toThrow(/disposed/);
-    await expect(mailbox.cleanupState('x')).rejects.toThrow(/disposed/);
-    await expect(mailbox.waitForAvailable()).rejects.toThrow(/disposed/);
-    await expect(mailbox.requestCancellation({ commandId: 'x' })).rejects.toThrow(/disposed/);
+    expect(mailbox.admit(commandInput())).rejects.toThrow(/disposed/);
+    expect(mailbox.receipt('x')).rejects.toThrow(/disposed/);
+    expect(mailbox.list()).rejects.toThrow(/disposed/);
+    expect(mailbox.capacity()).rejects.toThrow(/disposed/);
+    expect(mailbox.claim()).rejects.toThrow(/disposed/);
+    expect(mailbox.runMaintenance()).rejects.toThrow(/disposed/);
+    expect(mailbox.cleanupState('x')).rejects.toThrow(/disposed/);
+    expect(mailbox.waitForAvailable()).rejects.toThrow(/disposed/);
+    expect(mailbox.requestCancellation({ commandId: 'x' })).rejects.toThrow(/disposed/);
   });
 
   it('supports `using` disposal', async () => {

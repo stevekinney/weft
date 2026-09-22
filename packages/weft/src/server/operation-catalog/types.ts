@@ -6,16 +6,40 @@ import type { OperationFault, TransportKind } from '../operation-fault.ts';
 import type { Principal } from '../principal.ts';
 
 /**
- * Regex for the canonical `weft.<segment>(.<segment>)+` operation-name form.
- * Mandatory `weft.` prefix and at least one additional dot-separated segment.
+ * Regex for the canonical `<namespace>.<segment>(.<segment>)*` operation-name
+ * form: at least two dot-separated segments, each starting with a lowercase
+ * ASCII letter and continuing with lowercase ASCII letters or digits.
+ *
+ * THE NAMESPACE IS NO LONGER FIXED TO `weft`. It was, and every operation this
+ * package defines still begins with `weft.` — the change is backward
+ * compatible, because the old pattern's language is a strict subset of this
+ * one. What it admits is a catalog shared with other packages: a gateway that
+ * serves `@lostgradient/operative` and `@lostgradient/bureau` alongside Weft needs
+ * `operative.*` and `bureau.*` to be legal names, and those packages already
+ * depend on this one, so registering through this catalog is the path that
+ * keeps one dispatch pipeline, one transport matrix, and one AsyncAPI document
+ * rather than a second RPC dialect beside them.
+ *
+ * The two-segment minimum is retained deliberately: a bare `start` carries no
+ * owner, and an unnamespaced catalog is one collision away from ambiguity
+ * about which package answers a method.
+ *
+ * `rpc.` IS RESERVED, and the negative lookahead is what keeps a guarantee the
+ * mandatory `weft.` prefix used to provide for free. JSON-RPC 2.0 reserves
+ * every method name beginning with `rpc.` for rpc-internal methods and
+ * extensions, and this server answers `rpc.discover` itself. Under a pattern
+ * that admitted any namespace, a registered `rpc.discover` would shadow
+ * discovery, and the only thing standing between that and a served catalog
+ * would be the OpenRPC generator's deduplication guard — a backstop rather
+ * than an impossibility. `openrpc-regressions.test.ts` pins this.
  */
-export const OPERATION_NAME_PATTERN = /^weft\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
+export const OPERATION_NAME_PATTERN = /^(?!rpc\.)[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 
 /** Throws if `name` does not match the canonical operation-name pattern. */
 export function validateOperationName(name: string): void {
   if (!OPERATION_NAME_PATTERN.test(name)) {
     throw new Error(
-      `invalid operation name "${name}" — must match weft.<segment>(.<segment>)+ where each segment starts with a lowercase ASCII letter and may contain lowercase ASCII letters or digits (e.g., "weft.workflows.start", "weft.workflows.list2")`,
+      `invalid operation name "${name}" — must match <namespace>.<segment>(.<segment>)* where each segment starts with a lowercase ASCII letter and may contain lowercase ASCII letters or digits (e.g., "weft.workflows.start", "operative.runs.list2")`,
     );
   }
 }
@@ -70,10 +94,9 @@ export type SubscriptionOperationInvocation<Element, Envelope> = {
  * (`weft.workflows.events` and the fleet-events subscription in
  * `json-rpc-websocket.ts`) use for their own `outputSchema`/envelope — it is
  * NOT the general contract for every `kind: 'subscription'` operation.
- * `executeSubscription` in `stream-pipeline.ts` stays generic over
- * `Envelope` precisely because a catalog subscription can declare any
- * envelope shape its own `outputSchema` validates; other subscription
- * operations are free to use a different shape (see the
+ * `executeSubscription` in `stream-pipeline.ts` returns an erased envelope
+ * precisely because a catalog subscription can declare any envelope shape its
+ * own `outputSchema` validates; other subscription operations are free to use a different shape (see the
  * `subscriptionId`-only regression case in
  * `operation-catalog/dispatch-audit.test.ts`).
  */
@@ -152,7 +175,7 @@ export type OperationContext<Input> = {
  * Common operation fields shared by unary, stream, and subscription kinds.
  * The discriminated union below adds `kind` and `eventSchema` per kind.
  */
-export type OperationDefinitionBase<Input, Output, Element = unknown> = {
+export type OperationDefinitionBase<Input, InvokeOutput, SchemaOutput = InvokeOutput> = {
   readonly name: string;
   readonly mcpExposable: boolean;
   readonly mcpTool?: McpToolMetadata;
@@ -188,7 +211,7 @@ export type OperationDefinitionBase<Input, Output, Element = unknown> = {
    * validates the subscribe envelope. For streams, describes the start/SSE
    * metadata while each yielded element is validated by `eventSchema`.
    */
-  readonly outputSchema: z.ZodType<Output>;
+  readonly outputSchema: z.ZodType<SchemaOutput>;
   readonly access: AccessPolicy;
   readonly parameterizedAccess?: ParameterizedAccessHint;
   /** Fault codes this operation can raise in addition to universal pipeline defaults. */
@@ -198,10 +221,14 @@ export type OperationDefinitionBase<Input, Output, Element = unknown> = {
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
   readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
-  readonly invoke: (
-    context: OperationContext<Input>,
-  ) => Promise<OperationInvocationResult<Output, Element>>;
 };
+
+/** Metadata and schema hooks shared by typed authoring and dispatch stages. */
+export type OperationMetadata<Input, SchemaOutput = unknown> = OperationDefinitionBase<
+  Input,
+  unknown,
+  SchemaOutput
+>;
 
 /**
  * Unary (request/response) operation. `kind` may be omitted (defaults to
@@ -210,13 +237,14 @@ export type OperationDefinitionBase<Input, Output, Element = unknown> = {
  * enforces this at the type level: passing `eventSchema` to a unary
  * operation is a TypeScript error, not a silent runtime mismatch.
  */
-type UnaryOperationDefinition<Input, Output, Element = unknown> = OperationDefinitionBase<
+export type UnaryOperationDefinition<
   Input,
-  Output,
-  Element
-> & {
+  InvokeOutput,
+  SchemaOutput = InvokeOutput,
+> = OperationDefinitionBase<Input, InvokeOutput, SchemaOutput> & {
   readonly kind?: 'unary';
   readonly eventSchema?: never;
+  readonly invoke: (context: OperationContext<Input>) => Promise<InvokeOutput>;
 };
 
 /**
@@ -226,14 +254,14 @@ type UnaryOperationDefinition<Input, Output, Element = unknown> = OperationDefin
  * have no contract to validate per-element output against, which would
  * silently leak un-validated data to consumers.
  */
-type StreamOperationDefinition<Input, Output, Element> = OperationDefinitionBase<
-  Input,
-  Output,
-  Element
-> & {
-  readonly kind: 'stream';
-  readonly eventSchema: z.ZodType<Element>;
-};
+export type StreamOperationDefinition<Input, InvokeOutput, SchemaOutput, InvokeElement, Element> =
+  OperationDefinitionBase<Input, InvokeOutput, SchemaOutput> & {
+    readonly kind: 'stream';
+    readonly eventSchema: z.ZodType<Element>;
+    readonly invoke: (
+      context: OperationContext<Input>,
+    ) => Promise<InvokeOutput | StreamOperationInvocation<InvokeElement>>;
+  };
 
 /**
  * WebSocket subscription operation. `kind: 'subscription'` is required and
@@ -241,13 +269,18 @@ type StreamOperationDefinition<Input, Output, Element> = OperationDefinitionBase
  * rationale as `StreamOperationDefinition` — the type forbids declaring a
  * subscription without its element schema.
  */
-type SubscriptionOperationDefinition<Input, Output, Element> = OperationDefinitionBase<
+export type SubscriptionOperationDefinition<
   Input,
-  Output,
-  Element
-> & {
+  InvokeOutput,
+  SchemaOutput,
+  InvokeElement,
+  Element,
+> = OperationDefinitionBase<Input, InvokeOutput, SchemaOutput> & {
   readonly kind: 'subscription';
   readonly eventSchema: z.ZodType<Element>;
+  readonly invoke: (
+    context: OperationContext<Input>,
+  ) => Promise<SubscriptionOperationInvocation<InvokeElement, InvokeOutput>>;
 };
 
 /**
@@ -258,16 +291,27 @@ type SubscriptionOperationDefinition<Input, Output, Element> = OperationDefiniti
  * rather than a runtime EngineFailure; unary operations cannot
  * accidentally carry an `eventSchema` that the pipeline would never read.
  */
-export type OperationDefinition<Input, Output, Element = unknown> =
-  | UnaryOperationDefinition<Input, Output, Element>
-  | StreamOperationDefinition<Input, Output, Element>
-  | SubscriptionOperationDefinition<Input, Output, Element>;
+export type OperationDefinition<
+  Input,
+  InvokeOutput,
+  SchemaOutput = InvokeOutput,
+  InvokeElement = unknown,
+  Element = InvokeElement,
+> =
+  | UnaryOperationDefinition<Input, InvokeOutput, SchemaOutput>
+  | StreamOperationDefinition<Input, InvokeOutput, SchemaOutput, InvokeElement, Element>
+  | SubscriptionOperationDefinition<Input, InvokeOutput, SchemaOutput, InvokeElement, Element>;
 
 /**
  * An operation with its Input/Output type parameters erased. The dispatcher
  * only feeds values that have been validated by the operation's own schema.
  */
-export type ErasedOperation = OperationDefinition<unknown, unknown>;
+/**
+ * Registry-facing operation metadata. Invocation stays behind the schema-owned
+ * dispatch function so an erased registry entry can never be called with an
+ * invented input type.
+ */
+export type ErasedOperation = RegistrableOperation;
 
 /** Read-only registry of operations keyed by name. */
 export type OperationRegistry = {
@@ -302,10 +346,10 @@ type RegistrableOperationBase = {
   readonly discoverable?: boolean;
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
-  readonly authorize?: (context: OperationContext<never>) => Promise<AuthorizationDecision>;
-  readonly invoke: (
-    context: OperationContext<never>,
-  ) => Promise<OperationInvocationResult<unknown>>;
+  readonly dispatch: (
+    rawInput: unknown,
+    context: DispatchContext,
+  ) => Promise<DispatchResult<unknown>>;
 };
 
 type UnaryRegistrableOperation = RegistrableOperationBase & {

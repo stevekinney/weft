@@ -1,26 +1,28 @@
+import { resolveCliEnvironment } from '../runtime/environment-configuration.ts';
+import {
+  appendCapturedOutput,
+  type CapturedOutput,
+  drainStream,
+  formatOutput,
+  hasProcessTerminated,
+  isExpectedSignalExit,
+  normalizeSignalCode,
+  type RunningSubprocess,
+  stopProcess,
+  type SubprocessSignal,
+  waitForExit,
+} from './subprocess-lifecycle.ts';
+
 const DEFAULT_READY_PATTERN = /(?:WEFT_SUBPROCESS_READY|Weft running on)\s+(\S+)/;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5_000;
 const DEFAULT_EXIT_TIMEOUT_MS = 2_000;
-const MAX_CAPTURED_OUTPUT_LENGTH = 32_768;
 
-type RunningSubprocess = Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
-
-/**
- * Signals supported by the subprocess durability harness.
- *
- * @example
- * ```ts
- * import type { SubprocessSignal } from '@lostgradient/weft/testing';
- * const signal: SubprocessSignal = 'SIGKILL';
- * ```
- */
-export type SubprocessSignal = 'SIGINT' | 'SIGKILL' | 'SIGTERM';
 /**
  * Configuration for starting a Weft server in a child Bun process.
  *
  * @example
  * ```ts
- * import type { SubprocessServerOptions } from '@lostgradient/weft/testing';
+ * import type { SubprocessServerOptions } from '@lostgradient/weft';
  * const options: SubprocessServerOptions = { entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' };
  * ```
  */
@@ -55,7 +57,7 @@ const subprocessServerHandleBrand: unique symbol = Symbol('SubprocessServerHandl
 /** Minimal public view of the child process managed by a {@link SubprocessServerHandle}.
  * @example
  * ```ts
- * import type { SubprocessServerProcess } from '@lostgradient/weft/testing';
+ * import type { SubprocessServerProcess } from '@lostgradient/weft';
  * declare const server: { process: SubprocessServerProcess };
  * const process: SubprocessServerProcess = server.process;
  * ```
@@ -72,7 +74,7 @@ export interface SubprocessServerProcess {
  *
  * @example
  * ```ts
- * import { spawnServerSubprocess, type SubprocessServerHandle } from '@lostgradient/weft/testing';
+ * import { spawnServerSubprocess, type SubprocessServerHandle } from '@lostgradient/weft';
  * const server: SubprocessServerHandle = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * await server.stop();
  * ```
@@ -155,22 +157,6 @@ class SubprocessServerHandleImpl implements SubprocessServerHandle {
   }
 }
 
-function normalizeSignalCode(value: string | null): SubprocessSignal | null {
-  if (value === 'SIGINT' || value === 'SIGKILL' || value === 'SIGTERM') return value;
-  return null;
-}
-
-type CapturedOutput = {
-  stdout: string;
-  stderr: string;
-};
-
-function appendCapturedOutput(current: string, chunk: string): string {
-  const next = current + chunk;
-  if (next.length <= MAX_CAPTURED_OUTPUT_LENGTH) return next;
-  return next.slice(next.length - MAX_CAPTURED_OUTPUT_LENGTH);
-}
-
 function normalizeOptions(options: SubprocessServerOptions): NormalizedSubprocessServerOptions {
   return {
     entrypoint: options.entrypoint,
@@ -214,13 +200,14 @@ function createSubprocessEnvironment(
   explicitEnvironment: Record<string, string | undefined> | undefined,
 ): Record<string, string> {
   const environment: Record<string, string> = {};
-  setEnvironmentIfDefined(environment, 'PATH', Bun.env['PATH']);
-  setEnvironmentIfDefined(environment, 'HOME', Bun.env['HOME']);
-  setEnvironmentIfDefined(environment, 'TMPDIR', Bun.env['TMPDIR']);
-  setEnvironmentIfDefined(environment, 'TEMP', Bun.env['TEMP']);
-  setEnvironmentIfDefined(environment, 'TMP', Bun.env['TMP']);
-  setEnvironmentIfDefined(environment, 'TZ', Bun.env['TZ']);
-  setEnvironmentIfDefined(environment, 'NODE_ENV', Bun.env['NODE_ENV']);
+  const runtimeEnvironment = resolveCliEnvironment();
+  setEnvironmentIfDefined(environment, 'PATH', runtimeEnvironment.path);
+  setEnvironmentIfDefined(environment, 'HOME', runtimeEnvironment.home);
+  setEnvironmentIfDefined(environment, 'TMPDIR', runtimeEnvironment.tmpdir);
+  setEnvironmentIfDefined(environment, 'TEMP', runtimeEnvironment.temp);
+  setEnvironmentIfDefined(environment, 'TMP', runtimeEnvironment.tmp);
+  setEnvironmentIfDefined(environment, 'TZ', runtimeEnvironment.tz);
+  setEnvironmentIfDefined(environment, 'NODE_ENV', runtimeEnvironment.nodeEnv);
 
   for (const [key, value] of Object.entries(explicitEnvironment ?? {})) {
     if (value !== undefined) environment[key] = value;
@@ -322,92 +309,13 @@ async function verifyProcessSurvivedReadiness(
   }
 }
 
-async function drainStream(
-  stream: ReadableStream<Uint8Array> | null,
-  onChunk: (chunk: string) => void,
-): Promise<void> {
-  if (stream === null) return;
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      onChunk(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function formatOutput(output: CapturedOutput): string {
-  return [`stdout:\n${output.stdout || '<empty>'}`, `stderr:\n${output.stderr || '<empty>'}`].join(
-    '\n',
-  );
-}
-
-async function waitForExit(
-  process: RunningSubprocess,
-  timeoutMs: number,
-  label: string,
-): Promise<number> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      process.exited,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
-}
-
-function hasProcessTerminated(process: RunningSubprocess): boolean {
-  return process.exitCode !== null || process.signalCode !== null;
-}
-
-async function stopProcess(
-  process: RunningSubprocess,
-  signal: SubprocessSignal,
-  timeoutMs: number,
-): Promise<void> {
-  if (hasProcessTerminated(process)) return;
-  process.kill(signal);
-  try {
-    await waitForExit(process, timeoutMs, 'subprocess exit');
-  } catch {
-    if (!hasProcessTerminated(process)) {
-      process.kill('SIGKILL');
-      await process.exited.catch(() => undefined);
-    }
-  }
-}
-
-function expectedExitCodeForSignal(signal: SubprocessSignal): number {
-  if (signal === 'SIGKILL') return 137;
-  if (signal === 'SIGTERM') return 143;
-  return 130;
-}
-
-function isExpectedSignalExit(
-  process: RunningSubprocess,
-  signal: SubprocessSignal,
-  exitCode: number,
-): boolean {
-  const signalCode = normalizeSignalCode(process.signalCode);
-  if (signalCode !== null) return signalCode === signal;
-  return exitCode === expectedExitCodeForSignal(signal);
-}
-
 /**
  * Starts a Weft server entrypoint in a real Bun subprocess and waits for the
  * server to print a readiness URL.
  *
  * @example
  * ```ts
- * import { spawnServerSubprocess } from '@lostgradient/weft/testing';
+ * import { spawnServerSubprocess } from '@lostgradient/weft';
  * const server = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * await server.stop();
  * ```
@@ -449,7 +357,7 @@ export async function spawnServerSubprocess(
 /** Kills a running server subprocess and starts a replacement.
  * @example
  * ```ts
- * import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft/testing';
+ * import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft';
  * const server = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * const rebooted = await killAndReboot(server);
  * await rebooted.stop();
@@ -482,7 +390,7 @@ export async function killAndReboot(
 /** Runs a callback with a server subprocess and tears it down afterward.
  * @example
  * ```ts
- * import { withSubprocessServer } from '@lostgradient/weft/testing';
+ * import { withSubprocessServer } from '@lostgradient/weft';
  * declare const options: Parameters<typeof withSubprocessServer>[0];
  * await withSubprocessServer(options, async (server) => fetch(`${server.url}/v1/health`));
  * ```

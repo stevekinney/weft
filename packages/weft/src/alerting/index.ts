@@ -1,4 +1,4 @@
-export { AlertManager } from './alert-manager';
+export { AlertManager } from './alert-manager.ts';
 export type {
   AlertAction,
   AlertMetric,
@@ -7,4 +7,4 @@ export type {
   AlertStatus,
   AlertingOptions,
   WebhookTarget,
-} from './types';
+} from './types.ts';

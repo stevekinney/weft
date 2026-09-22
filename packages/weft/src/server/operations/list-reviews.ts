@@ -1,13 +1,13 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import { reviewListEntrySchema } from '../../core/review/index.ts';
 import type { ReviewListEntry, ReviewListFilter, ReviewStatus } from '../../core/types.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
-const reviewStatusSchema = z.enum(['pending', 'completed']) as z.ZodType<ReviewStatus>;
+const reviewStatusSchema = z.enum(['pending', 'completed']) satisfies z.ZodType<ReviewStatus>;
 const listReviewsInput = z.object({
   status: reviewStatusSchema.optional(),
   workflowId: z.string().min(1).optional(),
@@ -20,7 +20,7 @@ const listReviewsOutput = z.object({
 export type ListReviewsInput = z.infer<typeof listReviewsInput>;
 export type ListReviewsOutput = { items: ReviewListEntry[] };
 
-export const listReviewsOperation = defineOperation<ListReviewsInput, ListReviewsOutput>({
+export const listReviewsOperation = defineOperation({
   name: 'weft.reviews.list',
   mcpExposable: false,
   summary: 'List human review requests',
@@ -31,23 +31,29 @@ export const listReviewsOperation = defineOperation<ListReviewsInput, ListReview
   destructive: false,
   tags: ['Reviews'],
   inputSchema: listReviewsInput,
-  outputSchema: listReviewsOutput as z.ZodType<ListReviewsOutput>,
+  outputSchema: listReviewsOutput,
   access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['reviews:read'] } },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListReviewsOutput> => {
-    const e = engine as Engine;
-    return { items: await e.listReviews(input as ReviewListFilter) };
+    assertOperationEngineMethods(engine, ['listReviews']);
+    const e = engine;
+    const filter: ReviewListFilter = {
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.workflowId === undefined ? {} : { workflowId: input.workflowId }),
+      ...(input.reviewType === undefined ? {} : { reviewType: input.reviewType }),
+    };
+    return { items: await e.listReviews(filter) };
   },
 });
 
-function extractListReviewsInput(request: Request): ListReviewsInput {
+function extractListReviewsInput(request: Request) {
   const url = new URL(request.url);
-  const filter: ListReviewsInput = {};
+  const filter: { status?: string; workflowId?: string; reviewType?: string } = {};
 
   const status = url.searchParams.get('status');
   if (status !== null) {
-    filter.status = status as ReviewStatus;
+    filter.status = status;
   }
 
   const workflowId = url.searchParams.get('workflowId');

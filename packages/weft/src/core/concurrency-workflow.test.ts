@@ -195,7 +195,7 @@ describe('durable mutex inside workflows', () => {
     );
     await flush();
     expect(order).toEqual(['holder:acquired']);
-    await expect(holder.result()).rejects.toThrow('holder crashed before releasing the lock');
+    expect(holder.result()).rejects.toThrow('holder crashed before releasing the lock');
 
     const waiter = await engine.start(
       'lock-contender',

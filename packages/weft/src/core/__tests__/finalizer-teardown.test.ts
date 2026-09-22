@@ -106,7 +106,7 @@ async function startAndCancel(engine: Engine, type: string, id: string): Promise
   const handle = await engine.start(type, null, { id });
   await waitForRecordedState(engine, id);
   await engine.cancel(handle.id);
-  await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+  expect(handle.result()).rejects.toThrow('Workflow cancelled');
 }
 
 /** Register a finalizer-bearing workflow that records `sandboxId` then parks forever. */
@@ -171,7 +171,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-on-timeout', null, { id: 'teardown-timeout-1' });
     await waitForRecordedState(engine, 'teardown-timeout-1');
     await engine.timeout(handle.id);
-    await expect(handle.result()).rejects.toThrow('exceeded execution timeout');
+    expect(handle.result()).rejects.toThrow('exceeded execution timeout');
 
     await engine.scheduler.tick(now);
 
@@ -193,7 +193,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-no-finalizer', null, { id: 'teardown-none-1' });
     await waitForParked(engine, 'teardown-none-1');
     await engine.cancel(handle.id);
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
     await engine.scheduler.tick(now);
 
     // No finalizer declared → no owed marker is ever written.
@@ -226,7 +226,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-no-state', null, { id: 'teardown-nostate-1' });
     await waitForParked(engine, 'teardown-nostate-1');
     await engine.cancel(handle.id);
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
     await engine.scheduler.tick(now);
 
     expect(finalizerRan).toBe(false);
@@ -544,7 +544,7 @@ describe('finalizer teardown interlocks with deletion paths (#446 Phase 2)', () 
     try {
       // Restarting under the same id while teardown is owed must be refused with the
       // distinct, transient error — never silently displacing the prior finalizer.
-      await expect(
+      expect(
         engine.start('teardown-start-new', null, {
           id: 'teardown-startnew-1',
           onTerminalConflict: 'start-new',

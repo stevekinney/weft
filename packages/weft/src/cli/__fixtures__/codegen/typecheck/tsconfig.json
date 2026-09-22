@@ -1,19 +1,8 @@
 {
+  "extends": "../../../../../typescript/library.json",
   "compilerOptions": {
-    "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": false,
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "types": ["bun"],
     "paths": {
-      "@lostgradient/weft": ["../../../../index.ts"],
-      "@lostgradient/weft/client": ["../../../../client/index.ts"]
+      "@lostgradient/weft": ["../../../../index.ts"]
     }
   },
   "include": ["consumer.ts", "weft.generated.d.ts"]

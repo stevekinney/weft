@@ -166,7 +166,7 @@ describe('removeCatalogEntry', () => {
     await storage.put(generationKey, new TextEncoder().encode('not-a-number'));
     await catalog.install(manifest, fakeDefinition('checkout'));
 
-    await expect(removeCatalogEntry(storage, 'checkout', 'pinned-1')).rejects.toThrow(
+    expect(removeCatalogEntry(storage, 'checkout', 'pinned-1')).rejects.toThrow(
       /do not decode as a non-negative integer/,
     );
   });

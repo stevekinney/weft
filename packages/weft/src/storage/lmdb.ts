@@ -1,6 +1,6 @@
-import * as lmdb from 'lmdb';
+import { tryLoadNodeBuiltin } from '../runtime/portable.ts';
 
-import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
+import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
   matchesScanOptions,
@@ -11,15 +11,15 @@ import {
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface';
-import { scopedStorage } from './scoped-storage';
+} from './interface.ts';
+import { scopedStorage } from './scoped-storage.ts';
 
 /**
  * Construction options for {@link LMDBStorage}.
  *
  * @example
  * ```ts
- * import { LMDBStorage, type LMDBStorageOptions } from '@lostgradient/weft/storage/lmdb';
+ * import { LMDBStorage, type LMDBStorageOptions } from '@lostgradient/weft';
  *
  * const options: LMDBStorageOptions = { durability: 'relaxed' };
  * await using storage = new LMDBStorage('./weft-data', options);
@@ -67,6 +67,23 @@ type OpenLMDBEnvironment = (options: {
   noMetaSync?: boolean;
 }) => LMDBDatabase;
 
+function isLmdbModule(value: unknown): value is typeof import('lmdb') {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'open' in value &&
+    typeof value.open === 'function'
+  );
+}
+
+function openLmdbEnvironment(options: Parameters<OpenLMDBEnvironment>[0]): LMDBDatabase {
+  const module = tryLoadNodeBuiltin('node:module');
+  if (module === undefined) throw new Error('LMDBStorage requires Bun or Node.js.');
+  const driver: unknown = module.createRequire(import.meta.url)('lmdb');
+  if (!isLmdbModule(driver)) throw new Error('The lmdb dependency does not provide open().');
+  return driver.open(options);
+}
+
 /**
  * LMDB-backed storage adapter. Reads hit lmdb-js's synchronous memory-mapped
  * path internally, but the Storage interface presents them as Promises and
@@ -79,7 +96,7 @@ type OpenLMDBEnvironment = (options: {
  *
  * @example
  * ```ts
- * import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
+ * import { LMDBStorage } from '@lostgradient/weft';
  * import { workflow, Engine } from '@lostgradient/weft';
  *
  * await using storage = new LMDBStorage('./weft-data');
@@ -100,7 +117,7 @@ export class LMDBStorage implements Storage {
     // without mocking the `lmdb` module (Bun's `mock.module` is process-wide
     // and irreversible) or reaching into private fields. Not part of the
     // public API—mirrors the `databaseConstructor` seam on NodeSQLiteStorage.
-    openEnvironment: OpenLMDBEnvironment = lmdb.open,
+    openEnvironment: OpenLMDBEnvironment = openLmdbEnvironment,
   ) {
     const durability = options?.durability ?? 'full';
     if (durability !== 'full' && durability !== 'relaxed') {

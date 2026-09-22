@@ -9,7 +9,7 @@
  * @module storage/node-sqlite-loader
  */
 
-import { createRequire } from 'node:module';
+import { tryLoadNodeBuiltin } from '../runtime/portable.ts';
 
 /**
  * Minimal `better-sqlite3` `Database` surface this adapter uses. Defined here so
@@ -39,49 +39,101 @@ export type BetterSqliteConstructor = new (path: string) => BetterSqliteDatabase
 let DatabaseConstructor: BetterSqliteConstructor | undefined;
 
 /**
- * Build the actionable error thrown when `better-sqlite3` cannot be loaded —
- * either because the optional dependency is absent or its native binding fails
- * to dlopen.
+ * Which way a `better-sqlite3` load failed. The three have different remedies,
+ * so they are distinguished rather than collapsed.
+ *
+ * - `missing-package`: the module is not installed at all.
+ * - `unbuilt-binding`: the module is installed but `better_sqlite3.node` was
+ *   never compiled, because the package's `install` script did not run.
+ * - `dlopen-failed`: the compiled binding exists but the runtime refused it.
+ */
+export type BetterSqlite3FailureKind = 'missing-package' | 'unbuilt-binding' | 'dlopen-failed';
+
+/**
+ * Classify a `better-sqlite3` load failure, or `undefined` when `error` is not
+ * one and should be rethrown untouched.
+ *
+ * The `errorCode === undefined` branch is the one that matters most and reads
+ * like an accident: `bindings` throws a plain `Error` with no `code` when it
+ * cannot find the compiled addon. That is the signature of an install whose
+ * lifecycle scripts were suppressed — `bun install --ignore-scripts` leaves the
+ * package on disk, fully requirable, with no `build/` directory. Collapsing it
+ * into "the dependency is missing" sent three separate investigations looking
+ * for an absent module that was in fact present (COR-1278).
+ */
+/** Whether `message` names `module` the way a resolver error quotes it. */
+function namesModule(message: string, module: string): boolean {
+  return message.includes(`'${module}'`) || message.includes(`"${module}"`);
+}
+
+/** A `MODULE_NOT_FOUND` for the package itself or for the `bindings` loader it goes through. */
+function classifyModuleNotFound(message: string): BetterSqlite3FailureKind | undefined {
+  const relevant = namesModule(message, 'better-sqlite3') || namesModule(message, 'bindings');
+  return relevant ? 'missing-package' : undefined;
+}
+
+/** A `bindings` lookup that found no compiled addon: the install script never ran. */
+function classifyUncodedFailure(message: string): BetterSqlite3FailureKind | undefined {
+  const locatesBinding =
+    message.startsWith('Could not locate the bindings file.') &&
+    message.includes('better_sqlite3.node');
+  return locatesBinding ? 'unbuilt-binding' : undefined;
+}
+
+export function classifyBetterSqlite3Failure(error: unknown): BetterSqlite3FailureKind | undefined {
+  if (!(error instanceof Error)) return undefined;
+
+  const { message } = error;
+  switch ((error as Error & { code?: unknown }).code) {
+    case 'MODULE_NOT_FOUND':
+      return classifyModuleNotFound(message);
+    case 'ERR_DLOPEN_FAILED':
+      return message.includes('better-sqlite3') ? 'dlopen-failed' : undefined;
+    case undefined:
+      return classifyUncodedFailure(message);
+    default:
+      return undefined;
+  }
+}
+
+/** What to tell the caller for each way the load can fail. */
+const failureGuidance: Record<BetterSqlite3FailureKind, string> = {
+  'missing-package':
+    'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". ' +
+    'Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).',
+  'unbuilt-binding':
+    'NodeSQLiteStorage found "better-sqlite3" installed, but its native binding was never ' +
+    "compiled: the package's install script did not run. Reinstall with lifecycle scripts " +
+    'enabled — bun install --force (an ordinary bun install will NOT rebuild an already-linked ' +
+    'package), or npm rebuild better-sqlite3.',
+  'dlopen-failed':
+    'NodeSQLiteStorage could not load the "better-sqlite3" native binding in this runtime. ' +
+    'The compiled addon is present but was refused; it must be run under Node.js, and built ' +
+    'for this platform and ABI.',
+};
+
+/**
+ * Build the actionable error thrown when `better-sqlite3` cannot be loaded.
+ *
+ * The underlying message is appended rather than swallowed. It was previously
+ * carried only on `cause`, where nothing printed it: a test asserting on the
+ * thrown message showed the same sentence for an absent package and an unbuilt
+ * binding, which is the whole reason COR-1278 took four rounds to diagnose.
  */
 export function createMissingBetterSqlite3Error(cause: unknown): Error {
-  return new Error(
-    'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". ' +
-      'Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).',
-    { cause },
-  );
+  const kind = classifyBetterSqlite3Failure(cause);
+  const guidance = kind ? failureGuidance[kind] : failureGuidance['missing-package'];
+  const underlying = cause instanceof Error ? cause.message : String(cause);
+  return new Error(`${guidance}\nUnderlying error: ${underlying}`, { cause });
 }
 
 /**
  * Whether `error` is a recognizable `better-sqlite3` load failure (missing
- * package or native-binding dlopen failure) worth reshaping into the actionable
- * peer-dependency error rather than re-throwing raw.
+ * package, unbuilt native binding, or dlopen failure) worth reshaping into the
+ * actionable error rather than re-throwing raw.
  */
 export function isBetterSqlite3LoadFailure(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  const errorCode = (error as Error & { code?: unknown }).code;
-
-  if (errorCode === 'MODULE_NOT_FOUND') {
-    return (
-      error.message.includes("'better-sqlite3'") ||
-      error.message.includes('"better-sqlite3"') ||
-      error.message.includes("'bindings'") ||
-      error.message.includes('"bindings"')
-    );
-  }
-
-  if (errorCode === 'ERR_DLOPEN_FAILED') {
-    return error.message.includes('better-sqlite3');
-  }
-
-  if (errorCode === undefined) {
-    return (
-      error.message.startsWith('Could not locate the bindings file.') &&
-      error.message.includes('better_sqlite3.node')
-    );
-  }
-
-  return false;
+  return classifyBetterSqlite3Failure(error) !== undefined;
 }
 
 /**
@@ -99,7 +151,9 @@ export function isBetterSqlite3LoadFailure(error: unknown): boolean {
 function resolveBetterSqlite3Module(): {
   default?: BetterSqliteConstructor;
 } & BetterSqliteConstructor {
-  const requireFromHere = createRequire(import.meta.url);
+  const module = tryLoadNodeBuiltin('node:module');
+  if (module === undefined) throw new Error('NodeSQLiteStorage requires Bun or Node.js.');
+  const requireFromHere = module.createRequire(import.meta.url);
   return requireFromHere('better-sqlite3') as {
     default?: BetterSqliteConstructor;
   } & BetterSqliteConstructor;

@@ -183,7 +183,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       createPersistCallbacks(),
     );
 
-    await expect(
+    expect(
       persistCheckpoint(
         staleSecondOwner,
         initialCheckpoint.workflowId,
@@ -216,7 +216,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       createPersistCallbacks(),
     );
 
-    await expect(
+    expect(
       persistCheckpoint(
         staleSecondOwner,
         initialCheckpoint.workflowId,
@@ -287,6 +287,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       swallowPromiseRejection: async (promise) => {
         await promise;
       },
+      dispatchEvent: () => {},
     });
 
     const newCheckpoint = createCheckpoint('checkpoint-workflow', '1', 4_000);
@@ -328,7 +329,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       step: 1,
       workflowExecutionToken: 'worker-forged-token',
     };
-    await expect(
+    expect(
       persistCheckpoint(
         internals,
         checkpoint.workflowId,
@@ -363,7 +364,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
     delete (workerCheckpointNoToken as { workflowExecutionToken?: string }).workflowExecutionToken;
     expect(workerCheckpointNoToken.workflowExecutionToken).toBeUndefined();
 
-    await expect(
+    expect(
       persistCheckpoint(
         internals,
         checkpoint.workflowId,
@@ -444,7 +445,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       step: 1,
       workflowExecutionToken: 'worker-forged-token',
     };
-    await expect(
+    expect(
       persistCheckpoint(
         internals,
         checkpoint.workflowId,

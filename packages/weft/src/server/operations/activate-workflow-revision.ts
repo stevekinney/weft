@@ -13,9 +13,9 @@
 import { z } from 'zod';
 
 import type { WorkflowCatalogActivationResult } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   activationRefusalToFault,
   readWorkflowCatalogRestBody,
@@ -46,10 +46,7 @@ const activateWorkflowRevisionOutput = z.unknown();
 export type ActivateWorkflowRevisionInput = z.infer<typeof activateWorkflowRevisionInput>;
 export type ActivateWorkflowRevisionOutput = WorkflowCatalogActivationResult;
 
-export const activateWorkflowRevisionOperation = defineOperation<
-  ActivateWorkflowRevisionInput,
-  ActivateWorkflowRevisionOutput
->({
+export const activateWorkflowRevisionOperation = defineOperation({
   name: 'weft.workflows.revisions.activate',
   mcpExposable: false,
   summary: 'Activate an installed workflow revision',
@@ -63,14 +60,15 @@ export const activateWorkflowRevisionOperation = defineOperation<
   destructive: true,
   tags: ['Workflow Catalog'],
   inputSchema: activateWorkflowRevisionInput,
-  outputSchema: activateWorkflowRevisionOutput as z.ZodType<ActivateWorkflowRevisionOutput>,
+  outputSchema: activateWorkflowRevisionOutput,
   access: workflowsAdminAccess,
   producibleFaults: ['NotFound', 'Conflict', 'InvalidParams'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ActivateWorkflowRevisionOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['activate']);
+    const e = engine;
     const name = validateWorkflowNameField(input.name);
     const revision = validateWorkflowRevisionField(input.revision);
     const expectedGeneration = validateExpectedGenerationField(input.expectedGeneration);

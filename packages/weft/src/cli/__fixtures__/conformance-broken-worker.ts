@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
+
 export type ConformanceBrokenWorkerFixture = 'broken';
 
-const serverUrl = Bun.env['WEFT_WORKER_URL'];
+const serverUrl = resolveFixtureEnvironment().workerUrl;
 
 if (serverUrl === undefined) {
-  console.error('WEFT_WORKER_URL is required');
+  process.stderr.write(`WEFT_WORKER_URL is required\n`);
   process.exit(2);
 }
 

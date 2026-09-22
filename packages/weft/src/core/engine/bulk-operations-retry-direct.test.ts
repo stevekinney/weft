@@ -174,7 +174,7 @@ describe('bulk retry direct coverage', () => {
       }
       return MemoryStorage.prototype.get.call(missingStateStorage, key);
     };
-    await expect(
+    expect(
       retryFailedAll(createInternals(missingStateStorage), { status: 'failed' }),
     ).resolves.toEqual({
       retried: 0,
@@ -201,7 +201,7 @@ describe('bulk retry direct coverage', () => {
       }
       return MemoryStorage.prototype.get.call(missingCheckpointStorage, key);
     };
-    await expect(
+    expect(
       retryFailedAll(createInternals(missingCheckpointStorage), { status: 'failed' }),
     ).resolves.toEqual({
       retried: 0,
@@ -231,7 +231,7 @@ describe('bulk retry direct coverage', () => {
       }
       return MemoryStorage.prototype.get.call(changedStatusStorage, key);
     };
-    await expect(
+    expect(
       retryFailedAll(createInternals(changedStatusStorage), { status: 'failed' }),
     ).resolves.toEqual({
       retried: 0,
@@ -260,9 +260,7 @@ describe('bulk retry direct coverage', () => {
     (missingRegistrationInternals as { registrations: Map<string, unknown> }).registrations =
       new Map();
 
-    await expect(
-      retryFailedAll(missingRegistrationInternals, { status: 'failed' }),
-    ).resolves.toEqual({
+    expect(retryFailedAll(missingRegistrationInternals, { status: 'failed' })).resolves.toEqual({
       retried: 0,
       failed: 1,
       errors: [
@@ -291,7 +289,7 @@ describe('bulk retry direct coverage', () => {
       version: '1',
     });
 
-    await expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
+    expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
       retried: 0,
       failed: 1,
       errors: [
@@ -321,7 +319,7 @@ describe('bulk retry direct coverage', () => {
       engine: { start: ReturnType<typeof mock> };
     };
 
-    await expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
+    expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
       retried: 1,
       failed: 0,
       errors: [],

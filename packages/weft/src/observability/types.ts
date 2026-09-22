@@ -5,9 +5,13 @@ import type {
   SignalReceivedInterception,
   SleepInterception,
   WorkflowStartInterception,
-} from '../core/interceptor';
-import type { MetricsCollector as MetricsCollectorClass } from './metrics';
-import type { OpenTelemetryApi, OpenTelemetrySpan, OpenTelemetryTracer } from './no-op-telemetry';
+} from '../core/interceptor.ts';
+import type { MetricsCollector as MetricsCollectorClass } from './metrics.ts';
+import type {
+  OpenTelemetryApi,
+  OpenTelemetrySpan,
+  OpenTelemetryTracer,
+} from './no-op-telemetry.ts';
 
 /**
  * Union of all interception context types the attributeExtractor receives.

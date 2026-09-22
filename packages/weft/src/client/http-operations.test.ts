@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 
-import type { ClientRestOperationBinding } from '../cli/operation-client-runtime.ts';
 import { httpClientCatalogTransport, httpClientOperationTransport } from './http-operations.ts';
 import { HttpClientError } from './http-request.ts';
+import type { ClientRestOperationBinding } from './operation-client-runtime.ts';
 
 const binding: ClientRestOperationBinding = {
   method: 'POST',
@@ -40,7 +40,7 @@ describe('generated REST operation transport', () => {
       { 'weft.test.metadata': binding },
     );
 
-    await expect(
+    expect(
       transport('weft.test.metadata', {
         id: 'path/with space',
         filter: 'waiting',
@@ -104,7 +104,7 @@ describe('generated REST operation transport', () => {
   it('rejects malformed catalog responses as HttpClientError', async () => {
     spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not json', { status: 502 }));
 
-    await expect(
+    expect(
       httpClientCatalogTransport('https://weft.example', {})('weft.test.catalog', {}),
     ).rejects.toMatchObject({
       status: 502,
@@ -119,11 +119,11 @@ describe('generated REST operation transport', () => {
       { 'weft.test.metadata': binding },
     );
 
-    await expect(transport('weft.test.metadata', null)).rejects.toMatchObject({
+    expect(transport('weft.test.metadata', null)).rejects.toMatchObject({
       status: 400,
       message: 'Operation weft.test.metadata input must be an object.',
     });
-    await expect(transport('weft.test.metadata', { value: null })).rejects.toMatchObject({
+    expect(transport('weft.test.metadata', { value: null })).rejects.toMatchObject({
       status: 400,
       message: 'Operation weft.test.metadata requires a non-empty string "id" field.',
     });
@@ -157,7 +157,7 @@ describe('generated REST operation transport', () => {
       { 'weft.test.search': directBodyBinding },
     );
 
-    await expect(
+    expect(
       transport('weft.test.search', {
         tags: ['one', 2, true],
         payload: { query: 'value' },

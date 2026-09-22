@@ -8,6 +8,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { getCheckpointAtOperation, getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -142,7 +143,7 @@ describe('weft.workflows.checkpoints.get', () => {
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     engine = createEngine();
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getCheckpointAtOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -152,7 +153,7 @@ describe('weft.workflows.checkpoints.get', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/workflows/wf-checkpoint-at/checkpoints/1', {

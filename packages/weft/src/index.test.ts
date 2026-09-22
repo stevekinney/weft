@@ -1,27 +1,29 @@
 import { describe, expect, it } from 'bun:test';
 
-import packageJson from '../package.json';
 import { workflow } from './core/types/workflow-function.ts';
-import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
+import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index.ts';
 import {
+  decodeStorageKeyComponent,
+  encodeStorageKeyComponent,
   Engine,
+  formatSortableStorageTimestamp,
   IdempotencyKeyPurgedError,
   isWeftErrorLike,
   MemoryStorage,
   StartOrSignalConflictError,
-  VERSION,
+  tryDecodeStorageKeyComponent,
   WorkflowAlreadyExistsError,
   WorkflowTeardownPendingError,
-} from './index';
+} from './index.ts';
 
 describe('weft', () => {
-  it('exports a version string that matches package.json', () => {
-    // VERSION is hand-maintained in src/version.ts; pin it to package.json so the
-    // two cannot drift. scripts/verify-release-version.ts enforces the same
-    // invariant at release time against the git tag.
-    expect(VERSION).toBe(packageJson.version);
+  it('exports storage key helpers used by workspace consumers', () => {
+    const encoded = encodeStorageKeyComponent('memory:tenant/item');
+    expect(encoded).toBe('memory%3Atenant%2Fitem');
+    expect(decodeStorageKeyComponent(encoded)).toBe('memory:tenant/item');
+    expect(tryDecodeStorageKeyComponent('%GG')).toBeNull();
+    expect(formatSortableStorageTimestamp(123)).toBe('0000000000000123');
   });
-
   it('exports Engine class', () => {
     expect(Engine).toBeDefined();
   });
@@ -69,9 +71,9 @@ describe('weft', () => {
 
     try {
       await engine.start('duplicate-id', null, { id: 'duplicate-id' });
-      await expect(
-        engine.start('duplicate-id', null, { id: 'duplicate-id' }),
-      ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+      expect(engine.start('duplicate-id', null, { id: 'duplicate-id' })).rejects.toBeInstanceOf(
+        WorkflowAlreadyExistsError,
+      );
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -87,7 +89,7 @@ describe('weft', () => {
     try {
       const handle = await engine.start('startorsignal-terminal', null, { id: 'sos-export' });
       await handle.result();
-      await expect(
+      expect(
         engine.startOrSignal(
           'startorsignal-terminal',
           null,
@@ -116,7 +118,7 @@ describe('weft', () => {
       // Purge the run while the `start-idem:` mapping intentionally lives on.
       await engine.purge({ idPrefix: handle.id });
       // The key now maps to a workflow that no longer exists.
-      await expect(
+      expect(
         engine.start('idempotency-purged', null, { idempotencyKey: 'spent-key' }),
       ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {

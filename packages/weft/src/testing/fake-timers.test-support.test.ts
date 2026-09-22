@@ -84,7 +84,7 @@ describe('fake timer testing helpers', () => {
     await expectPromisePending(deferred.promise);
     deferred.resolve('done');
 
-    await expect(deferred.promise).resolves.toBe('done');
+    expect(deferred.promise).resolves.toBe('done');
   });
 
   it('creates never-settling promises without timers', async () => {
@@ -148,7 +148,7 @@ describe('fake timer testing helpers', () => {
   it('waitForRealTimersForTesting fails fast when fake timers are enabled', async () => {
     useFakeTimers();
 
-    await expect(waitForRealTimersForTesting(1)).rejects.toThrow(
+    expect(waitForRealTimersForTesting(1)).rejects.toThrow(
       'waitForRealTimersForTesting() requires real timers',
     );
   });
@@ -156,7 +156,7 @@ describe('fake timer testing helpers', () => {
   it('waitForCondition times out under fake timers', async () => {
     useFakeTimers();
 
-    await expect(
+    expect(
       waitForCondition(() => false, { timeoutMs: 10, intervalMs: 5, label: 'never true' }),
     ).rejects.toThrow('Timed out after 10ms waiting for never true');
   });
@@ -168,7 +168,7 @@ describe('fake timer testing helpers', () => {
 
     await advanceTimersByTime(10);
 
-    await expect(timed).rejects.toThrow('Timed out after 10ms waiting for stalled operation');
+    expect(timed).rejects.toThrow('Timed out after 10ms waiting for stalled operation');
   });
 
   it('waitForCondition retries after predicate errors under fake timers', async () => {
@@ -190,13 +190,13 @@ describe('fake timer testing helpers', () => {
   });
 
   it('waitForCondition validates intervalMs', async () => {
-    await expect(waitForCondition(() => true, { intervalMs: 0 })).rejects.toThrow(
+    expect(waitForCondition(() => true, { intervalMs: 0 })).rejects.toThrow(
       'intervalMs must be a finite, positive number',
     );
   });
 
   it('waitForCondition includes the last real-timer predicate error in timeout failures', async () => {
-    await expect(
+    expect(
       waitForCondition(
         () => {
           throw new Error('still waiting');
@@ -217,13 +217,13 @@ describe('fake timer testing helpers', () => {
   });
 
   it('waitForCondition returns a plain real-timer timeout when the predicate never throws', async () => {
-    await expect(
+    expect(
       waitForCondition(() => false, { timeoutMs: 5, intervalMs: 1, label: 'plain timeout' }),
     ).rejects.toThrow('Timed out after 5ms waiting for plain timeout');
   });
 
   it('rejects negative timer durations', async () => {
-    await expect(advanceTimersByTime(-1)).rejects.toThrow(
+    expect(advanceTimersByTime(-1)).rejects.toThrow(
       'milliseconds must be a finite, non-negative number',
     );
   });

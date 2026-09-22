@@ -1,3 +1,5 @@
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
+
 /**
  * Shared manifest-building helper for conformance worker fixtures.
  *
@@ -44,7 +46,7 @@ export function conformanceManifest(activities: readonly string[]): Record<strin
 
   return {
     manifestVersion: 1,
-    protocolVersion: Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3'),
+    protocolVersion: resolveFixtureEnvironment().protocolVersion,
     sdkVersion: '0.0.0',
     runtime: { name: 'bun', version: Bun.version },
     deployment: {

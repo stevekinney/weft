@@ -1,13 +1,6 @@
 /**
- * Standalone fixture exercised by `definition-schema-to-json.subprocess.test.ts`
- * to deterministically gate the Valibot adapter path. Unlike the in-suite
- * Valibot test (which uses `it.skipIf(!canLoadValibot)` to work around Bun's
- * mid-suite require behavior), this script asserts the conversion
- * unconditionally and exits non-zero on any failure — including the
- * `@valibot/to-json-schema` package being missing or broken. The subprocess
- * test runs this file via `bun` and fails the parent suite when the child's
- * exit code is non-zero. Keep this file as a plain Bun script (no test
- * runner) so the assertion can never silently skip.
+ * Standalone Valibot conversion fixture used by the subprocess regression.
+ * Keep this a plain Bun script so it exercises the ordinary runtime loader.
  */
 
 import * as v from 'valibot';

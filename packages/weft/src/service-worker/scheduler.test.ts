@@ -12,10 +12,10 @@ import {
   type SchedulerContractContext,
 } from '../testing/scheduler-contract.test-support.ts';
 
-import type { TimerEntry } from '../core/types';
-import type { Storage } from '../storage/interface';
-import { MemoryStorage } from '../storage/memory';
-import { ServiceWorkerScheduler } from './scheduler';
+import type { TimerEntry } from '../core/types.ts';
+import type { Storage } from '../storage/interface.ts';
+import { MemoryStorage } from '../storage/memory.ts';
+import { ServiceWorkerScheduler } from './scheduler.ts';
 
 /**
  * Wrap a {@link ServiceWorkerScheduler} so its `cancel(id)` satisfies the

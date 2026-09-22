@@ -1,4 +1,4 @@
-import type { Storage } from '../storage/interface.ts';
+import type { Storage } from '../index.ts';
 import type { StorageBackend } from './types.ts';
 
 /**
@@ -9,11 +9,11 @@ import type { StorageBackend } from './types.ts';
 export async function createStorage(backend: StorageBackend, database: string): Promise<Storage> {
   switch (backend) {
     case 'sqlite': {
-      const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+      const { BunSQLiteStorage } = await import('../index.ts');
       return new BunSQLiteStorage(database);
     }
     case 'lmdb': {
-      const { LMDBStorage } = await import('../storage/lmdb.ts');
+      const { LMDBStorage } = await import('../index.ts');
       return new LMDBStorage(database);
     }
     case 'memory':
@@ -26,6 +26,6 @@ export async function createStorage(backend: StorageBackend, database: string): 
 }
 
 async function createMemoryStorage(): Promise<Storage> {
-  const { MemoryStorage } = await import('../storage/memory.ts');
+  const { MemoryStorage } = await import('../index.ts');
   return new MemoryStorage();
 }

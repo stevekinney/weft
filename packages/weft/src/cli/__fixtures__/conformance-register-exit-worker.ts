@@ -1,19 +1,17 @@
 #!/usr/bin/env bun
 
 import { conformanceManifest } from './conformance-manifest.ts';
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
 
 export type ConformanceRegisterExitWorkerFixture = 'register-exit';
 
-const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
-const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
-  .split(',')
-  .map((activity) => activity.trim())
-  .filter((activity) => activity.length > 0);
+const serverUrl = resolveFixtureEnvironment().workerUrl;
+const protocolVersion = resolveFixtureEnvironment().protocolVersion;
+const activities = resolveFixtureEnvironment().activities;
 const workerId = `register-exit-worker-${crypto.randomUUID()}`;
 
 if (serverUrl === undefined) {
-  console.error('WEFT_WORKER_URL is required');
+  process.stderr.write(`WEFT_WORKER_URL is required\n`);
   process.exit(2);
 }
 
@@ -36,7 +34,9 @@ socket.addEventListener('open', () => {
 });
 
 socket.addEventListener('message', (event) => {
-  const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+  const parsedData: unknown = JSON.parse(String(event.data));
+  if (parsedData === null || typeof parsedData !== 'object' || Array.isArray(parsedData)) return;
+  const parsed = Object.fromEntries(Object.entries(parsedData));
   if (parsed['type'] === 'registerAck') {
     return;
   }

@@ -3,8 +3,8 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-
 import type { Engine } from '../../core/engine.ts';
+
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { KEYS } from '../../storage/interface.ts';
@@ -12,6 +12,7 @@ import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { principalFromApiKey } from '../principal.ts';
 import { waitForStatus } from '../workflow-status.test-support.ts';
 import {
@@ -303,7 +304,7 @@ describe('weft.workflows.bulk.cancel', () => {
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     using engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...bulkCancelWorkflowsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -313,7 +314,7 @@ describe('weft.workflows.bulk.cancel', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

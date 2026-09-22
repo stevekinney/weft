@@ -4,8 +4,6 @@ The workers module provides both in-process worker pools (Web Workers for CPU is
 
 For a guided walkthrough, see the [Remote Workers guide](../guides/remote-workers.md).
 
----
-
 ## In-Process Workers
 
 ### `WorkerPool`
@@ -38,7 +36,7 @@ class WorkerPool implements Disposable, AsyncDisposable {
 | `[Symbol.dispose]()`      | `void`            | Immediate termination -- terminates all workers                                             |
 | `[Symbol.asyncDispose]()` | `Promise<void>`   | Graceful shutdown -- waits for in-flight workers, then terminates                           |
 
-#### `WorkerPoolOptions`
+### `WorkerPoolOptions`
 
 | Field         | Type            | Default | Description                                               |
 | ------------- | --------------- | ------- | --------------------------------------------------------- |
@@ -75,7 +73,7 @@ async function executeActivity(
 ): Promise<ActivityExecutionResult>;
 ```
 
-#### `ActivityExecutionRequest`
+### `ActivityExecutionRequest`
 
 ```ts
 interface ActivityExecutionRequest {
@@ -86,7 +84,7 @@ interface ActivityExecutionRequest {
 }
 ```
 
-#### `ActivityExecutionResult`
+### `ActivityExecutionResult`
 
 ```ts
 interface ActivityExecutionResult {
@@ -99,56 +97,56 @@ interface ActivityExecutionResult {
 
 If `signal` is already aborted when called, returns a failed result immediately without invoking the function.
 
----
-
 ## Remote Workers
 
 ### `RemoteWorker`
 
-WebSocket-based remote worker client. Connects to the Weft server, sends a v3 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
+WebSocket-based remote worker client. Connects to the Weft server, sends a v6 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
 
 ```ts partial
 class RemoteWorker implements Disposable {
   constructor(options: RemoteWorkerOptions);
 
   async connect(): Promise<void>;
-  async disconnect(): Promise<void>;
+  async disconnect(): Promise<{ unacknowledgedResults: number }>;
 
   get inFlight(): number;
   get connected(): boolean;
   get shuttingDown(): boolean;
+  get unacknowledgedResultCount(): number;
 
   [Symbol.dispose](): void;
 }
 ```
 
-| Method / Property    | Returns         | Description                                                                                |
-| -------------------- | --------------- | ------------------------------------------------------------------------------------------ |
-| `connect()`          | `Promise<void>` | Open the WebSocket, register with the server, wait for `registerAck`, and start processing |
-| `disconnect()`       | `Promise<void>` | Graceful shutdown -- finish in-flight tasks, then close                                    |
-| `inFlight`           | `number`        | Number of tasks currently being executed                                                   |
-| `connected`          | `boolean`       | Whether the WebSocket is open                                                              |
-| `shuttingDown`       | `boolean`       | Whether a graceful shutdown is in progress                                                 |
-| `[Symbol.dispose]()` | `void`          | Immediate shutdown -- abort all listeners and close                                        |
+| Method / Property           | Returns                                      | Description                                                                                                                                                            |
+| --------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect()`                 | `Promise<void>`                              | Open the WebSocket, register with the server, wait for `registerAck`, and start processing                                                                             |
+| `disconnect()`              | `Promise<{ unacknowledgedResults: number }>` | Graceful shutdown -- finish in-flight tasks, then close. Resolves with the number of buffered results still awaiting a `taskResultAck` (COR-240, v4)                   |
+| `inFlight`                  | `number`                                     | Number of tasks currently being executed                                                                                                                               |
+| `connected`                 | `boolean`                                    | Whether the WebSocket is open                                                                                                                                          |
+| `shuttingDown`              | `boolean`                                    | Whether a graceful shutdown is in progress                                                                                                                             |
+| `unacknowledgedResultCount` | `number`                                     | Number of buffered results still awaiting a `taskResultAck` (COR-240, v4)                                                                                              |
+| `[Symbol.dispose]()`        | `void`                                       | Immediate shutdown -- abort all listeners and close. Unlike `disconnect()`, this discards any unacknowledged results rather than preserving them for a later reconnect |
 
-#### `RemoteWorkerOptions`
+### `RemoteWorkerOptions`
 
-| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                                                                        |
-| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                                                                                |
-| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter                                                         |
-| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                                                                                |
-| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                                                                              |
-| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                                                                                     |
-| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                                                                                     |
-| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                                                                               |
-| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                                                                                      |
-| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names. Ignored when `manifest` is supplied                                                                                                     |
-| `manifest`            | `WorkerManifest`                                                                                                                      | derived                  | A complete, real manifest — typically from [`buildWorkerManifestFromRegistry`](#buildworkermanifestfromregistryengine-options) — advertised verbatim instead of the `declared-shape:` placeholder. `manifest.workflows` must declare exactly the workflow types in `workflows`, checked at construction |
-| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                                                                                     |
-| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                                                                         |
-| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                                                                          |
+| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                                                                    |
+| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                                                                            |
+| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter                                                     |
+| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                                                                            |
+| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                                                                          |
+| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                                                                                 |
+| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                                                                                 |
+| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                                                                           |
+| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                                                                                  |
+| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names. Ignored when `manifest` is supplied                                                                                                 |
+| `manifest`            | `WorkerManifest`                                                                                                                      | derived                  | A complete, real manifest—typically from [`buildWorkerManifestFromRegistry`](#buildworkermanifestfromregistryengine-options)—advertised verbatim instead of the `declared-shape:` placeholder. `manifest.workflows` must declare exactly the workflow types in `workflows`, checked at construction |
+| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                                                                                 |
+| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                                                                     |
+| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                                                                      |
 
 The worker sends heartbeats every 10 seconds after registration is acknowledged and handles server-initiated `shutdown` messages gracefully. `connect()` rejects if the server sends `registerError` or if the socket closes before acknowledgement.
 
@@ -184,8 +182,6 @@ await worker.connect();
 await worker.disconnect();
 ```
 
----
-
 ### `HeartbeatManager`
 
 Manages periodic heartbeat signals for keeping visibility timeouts alive.
@@ -211,11 +207,9 @@ class HeartbeatManager {
 | `stop()`         | Stop the periodic interval.                                  |
 | `beat(details?)` | Send a one-off heartbeat with optional details payload.      |
 
----
-
 ### `LongPollWorker`
 
-HTTP long-poll fallback for environments without WebSocket support. Polls the server's `/poll` endpoint for tasks and reports results via `/complete`. Implements `Disposable`.
+HTTP long-poll fallback for environments without WebSocket support. Polls `/api/v1/tasks/:queue` for tasks and reports results through `/api/v1/tasks/:queue/result`. Implements `Disposable`.
 
 ```ts partial
 class LongPollWorker implements Disposable {
@@ -231,15 +225,17 @@ class LongPollWorker implements Disposable {
 }
 ```
 
-#### `LongPollWorkerOptions`
+### `LongPollWorkerOptions`
 
-| Field         | Type                                                   | Default     | Description                      |
-| ------------- | ------------------------------------------------------ | ----------- | -------------------------------- |
-| `serverUrl`   | `string`                                               | --          | Base HTTP URL of the Weft server |
-| `activities`  | `Record<string, (input: unknown) => Promise<unknown>>` | --          | Activity functions               |
-| `concurrency` | `number`                                               | `10`        | Maximum concurrent tasks         |
-| `queue`       | `string`                                               | `'default'` | Task queue                       |
-| `pollTimeout` | `number`                                               | `30_000`    | Long-poll timeout in ms          |
+| Field                 | Type                                                   | Default     | Description                                                                                                                                                                                                                                  |
+| --------------------- | ------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`           | `string`                                               | --          | Base HTTP URL of the Weft server                                                                                                                                                                                                             |
+| `activities`          | `Record<string, (input: unknown) => Promise<unknown>>` | --          | Activity functions                                                                                                                                                                                                                           |
+| `concurrency`         | `number`                                               | `10`        | Maximum concurrent tasks                                                                                                                                                                                                                     |
+| `queue`               | `string`                                               | `'default'` | Task queue                                                                                                                                                                                                                                   |
+| `pollTimeout`         | `number`                                               | `30_000`    | Long-poll timeout in ms                                                                                                                                                                                                                      |
+| `heartbeatIntervalMs` | `number`                                               | `10_000`    | Per-activity heartbeat interval (COR-230) — see [Long-poll fallback](../guides/remote-workers.md#long-poll-fallback).                                                                                                                        |
+| `disconnectTimeoutMs` | `number`                                               | `30_000`    | Bound on how long `stop()` waits for in-flight activities to finish after aborting them (COR-220) — matches `RemoteWorker`'s identical bound. A non-cooperative activity that ignores its `AbortSignal` cannot hold `stop()` open past this. |
 
 **Example:**
 
@@ -259,8 +255,6 @@ worker.start();
 // Later:
 await worker.stop();
 ```
-
----
 
 ### `WorkerRegistry`
 
@@ -300,7 +294,7 @@ class WorkerRegistry {
 }
 ```
 
-#### `WorkerRegistryOptions`
+### `WorkerRegistryOptions`
 
 ```ts partial
 interface WorkerRegistryOptions {
@@ -312,7 +306,7 @@ interface WorkerRegistryOptions {
 | -------- | --------------- | ---------------- | ------------------------------ |
 | `policy` | `RoutingPolicy` | `'least-loaded'` | Worker routing policy to apply |
 
-#### `WorkerInfo`
+### `WorkerInfo`
 
 ```ts
 interface WorkerInfo {
@@ -332,7 +326,7 @@ interface WorkerInfo {
 }
 ```
 
-#### `RoutingOptions`
+### `RoutingOptions`
 
 ```ts
 interface RoutingOptions {
@@ -348,7 +342,7 @@ Draining workers are excluded from `findWorker()` so no new tasks are assigned t
 
 `isAssignedToWorker(operationId, workerId)` returns whether an in-flight task is currently owned by a specific worker. The server checks it before accepting `taskResult` frames so stale completions from a displaced worker are rejected instead of mutating engine state.
 
-#### `WorkerDrainOptions`
+### `WorkerDrainOptions`
 
 ```ts
 interface WorkerDrainOptions {
@@ -359,7 +353,7 @@ interface WorkerDrainOptions {
 
 `updatedAt` records the drain start time in epoch milliseconds. When omitted, the registry uses `Date.now()`.
 
-#### `InFlightTask`
+### `InFlightTask`
 
 ```ts
 interface InFlightTask {
@@ -375,6 +369,8 @@ interface InFlightTask {
 ```
 
 `checkExpiredTasks(now)` returns tasks whose visibility deadline has passed, suitable for reassignment.
+
+**Visibility timeout vs. attempt deadline (COR-230).** `visibilityTimeout` governs `deadline` above — the heartbeat-renewable clock. Before v5, a bare session `heartbeat` renewed it for every in-flight task on the connection; as of v5, only a matching `activityHeartbeat` (`operationId` + `attemptToken`) renews a given task's `deadline`, and it can never renew it past that attempt's separate, fixed `attemptDeadline` (`RemoteTaskLeased.attemptDeadline`, `core/task-ledger/task-ledger-types.ts`). `visibilityTimeout` and the attempt deadline are two independent clocks: the first can be renewed indefinitely by a live worker; the second cannot be renewed at all.
 
 ## Canonical worker manifest
 
@@ -401,7 +397,7 @@ import { WORKER_MANIFEST_VERSION, type WorkerManifest } from '@lostgradient/weft
 
 const manifest: WorkerManifest = {
   manifestVersion: WORKER_MANIFEST_VERSION,
-  protocolVersion: 3,
+  protocolVersion: 4,
   sdkVersion: '0.18.0',
   runtime: { name: 'bun', version: '1.3.14' },
   deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
@@ -419,7 +415,7 @@ const manifest: WorkerManifest = {
 console.log(manifest.deployment.buildId);
 ```
 
-Activity keys are canonical runtime activity names, qualified structurally by the workflow that contains them rather than only through a dotted string — so the same activity name may appear under two workflows without collision.
+Activity keys are canonical runtime activity names, qualified structurally by the workflow that contains them rather than only through a dotted string—so the same activity name may appear under two workflows without collision.
 
 `capabilities` is bounded descriptive data. It never grants authorization and never affects routing without an explicit host policy.
 
@@ -437,7 +433,7 @@ if (!result.ok) {
 }
 ```
 
-Prefer `parseWorkerManifestJson()` wherever the received JSON _text_ is still available. Duplicate object keys are only visible before parsing — `JSON.parse` resolves `{"artifactDigest":"a","artifactDigest":"b"}` to one of the two silently — and a manifest that could mean two different artifacts must be rejected, not resolved.
+Prefer `parseWorkerManifestJson()` wherever the received JSON _text_ is still available. Duplicate object keys are only visible before parsing—`JSON.parse` resolves `{"artifactDigest":"a","artifactDigest":"b"}` to one of the two silently—and a manifest that could mean two different artifacts must be rejected, not resolved.
 
 Rejection reasons are a closed union (`WorkerManifestRejectionReason`) precisely so operators can count manifest failures by reason without a high-cardinality metric label. The accompanying `message` and `path` are for diagnostics and must never be used as labels.
 
@@ -460,7 +456,7 @@ const requirement: WorkerExecutionRequirement = { deploymentName: 'billing' };
 const identity: WorkerExecutionIdentity = {
   workerId: 'worker-1',
   manifestDigest: 'sha256:deadbeef',
-  protocolVersion: 3,
+  protocolVersion: 4,
   sdkVersion: '0.18.0',
   runtimeName: 'bun',
   runtimeVersion: '1.3.14',
@@ -476,7 +472,7 @@ const identity: WorkerExecutionIdentity = {
 console.log(executionIdentitySatisfies(requirement, identity)); // true
 ```
 
-An omitted requirement field means policy may choose any eligible value. It is _not_ an empty-string wildcard. Once a task is leased its execution identity is complete and derived from the accepted manifest plus the live session — a worker cannot self-report a different execution identity in its result, which is what makes the identity safe to persist as provenance.
+An omitted requirement field means policy may choose any eligible value. It is _not_ an empty-string wildcard. Once a task is leased its execution identity is complete and derived from the accepted manifest plus the live session—a worker cannot self-report a different execution identity in its result, which is what makes the identity safe to persist as provenance.
 
 ### `computeWorkerManifestDigest(manifest)`
 
@@ -487,7 +483,7 @@ import { computeWorkerManifestDigest, WORKER_MANIFEST_VERSION } from '@lostgradi
 
 const digest = await computeWorkerManifestDigest({
   manifestVersion: WORKER_MANIFEST_VERSION,
-  protocolVersion: 3,
+  protocolVersion: 4,
   sdkVersion: '0.18.0',
   runtime: { name: 'bun', version: '1.3.14' },
   deployment: { name: 'billing', buildId: '2026.08.18-3', artifactDigest: 'sha256:41d0e2' },
@@ -500,7 +496,7 @@ console.log(digest.startsWith('sha256:')); // true
 
 This is a content digest rather than one of the package's FNV-1a helpers, which are documented as cache-key quality: `(deploymentName, buildId)` consistency depends on two different artifacts not colliding.
 
-Use `digestCanonicalWorkerManifest()` when a canonical serialization is already in hand — `parseWorkerManifest()` returns one — to avoid serializing twice.
+Use `digestCanonicalWorkerManifest()` when a canonical serialization is already in hand—`parseWorkerManifest()` returns one—to avoid serializing twice.
 
 ### `buildWorkerManifestFromRegistry(engine, options)`
 
@@ -522,38 +518,23 @@ console.log(manifest.workflows['checkout']?.workflowVersion); // '2.1.0'
 engine[Symbol.dispose]();
 ```
 
-`options.workflows` maps each workflow type to the activity names that instance can execute — the one association the registry cannot supply on its own, since the engine's activity registry is a flat namespace rather than partitioned per workflow. Every key must name a workflow the source `Engine` has registered, and every activity name must be one the same `Engine` has registered; an unregistered name throws `WorkerManifestBuildError` rather than silently omitting the entry.
+`options.workflows` maps each workflow type to the activity names that instance can execute—the one association the registry cannot supply on its own, since the engine's activity registry is a flat namespace rather than partitioned per workflow. Every key must name a workflow the source `Engine` has registered, and every activity name must be one the same `Engine` has registered; an unregistered name throws `WorkerManifestBuildError` rather than silently omitting the entry.
 
-`contractHash` is a real `sha256:`-tagged digest of the workflow's payload schemas (input, output, signals, updates, queries) — `description` and `tags` are excluded so a documentation edit never changes contract identity. `workflowRevision` answers a broader question — "which exact definition was loaded" — so it digests the full registry entry (schemas, `description`, and `tags`) plus the registered `version`; a description/tag edit or a version bump changes `workflowRevision` without necessarily changing `contractHash`, which is the intended distinction between the two fields, not drift in either one. `implementationRevision` on each activity contract is set to `options.deployment.buildId`: a schema identifies the contract, not the code behind it, so there is no honest schema-derived source for "which implementation" is bound.
+`contractHash` is a real `sha256:`-tagged digest of the workflow's payload schemas (input, output, signals, updates, queries)—`description` and `tags` are excluded so a documentation edit never changes contract identity. `workflowRevision` answers a broader question—"which exact definition was loaded"—so it digests the full registry entry (schemas, `description`, and `tags`) plus the registered `version`; a description/tag edit or a version bump changes `workflowRevision` without necessarily changing `contractHash`, which is the intended distinction between the two fields, not drift in either one. `implementationRevision` on each activity contract is set to `options.deployment.buildId`: a schema identifies the contract, not the code behind it, so there is no honest schema-derived source for "which implementation" is bound.
 
-`options.deployment` and `options.runtime` are required, never derived — a build script knows its own deploy target; live runtime detection at build time would assert the wrong identity when the build and deploy environments differ.
+`options.deployment` and `options.runtime` are required, never derived—a build script knows its own deploy target; live runtime detection at build time would assert the wrong identity when the build and deploy environments differ.
 
 ## Fleet and queue observability
 
-Two operator-facing endpoints expose the live worker fleet and the
-in-memory task queue state. Both require the `system:read` scope.
-Workers and task queues are server-wide infrastructure.
+Two operator-facing endpoints expose the live worker fleet and the in-memory task queue state. Both require the `system:read` scope. Workers and task queues are server-wide infrastructure.
 
-The read operations are reachable over
-[JSON-RPC](https://www.jsonrpc.org/specification)
-([HTTP](https://developer.mozilla.org/en-US/docs/Web/HTTP),
-[WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API),
-[stdio](https://en.wikipedia.org/wiki/Standard_streams)) as
-[`weft.workers.list`](#get-apiv1workers) and
-[`weft.task.queues.list`](#get-apiv1task-queues). They take no input parameters.
+The read operations are reachable over [JSON-RPC](https://www.jsonrpc.org/specification) ([HTTP](https://developer.mozilla.org/en-US/docs/Web/HTTP), [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API), [stdio](https://en.wikipedia.org/wiki/Standard_streams)) as [`weft.workers.list`](#get-apiv1workers) and [`weft.task.queues.list`](#get-apiv1task-queues). They take no input parameters.
 
 ### `GET /api/v1/workers`
 
-Returns every connected worker with its queue assignment, advertised
-activities, concurrency, in-flight count, available capacity, connect
-time, last heartbeat, heartbeat age, deployment identity, capabilities,
-start time, and drain health. The top-level `routingPolicy` field reports
-the routing strategy the server was configured with. The top-level
-`deployments` field groups connected workers by reported deployment
-identity and summarizes active, draining, and drained workers.
+Returns every connected worker with its queue assignment, advertised activities, concurrency, in-flight count, available capacity, connect time, last heartbeat, heartbeat age, deployment identity, capabilities, start time, and drain health. The top-level `routingPolicy` field reports the routing strategy the server was configured with. The top-level `deployments` field groups connected workers by reported deployment identity and summarizes active, draining, and drained workers.
 
-The server snapshots `Date.now()` exactly once per request, so every
-`heartbeatAgeMs` in the response is consistent.
+The server snapshots `Date.now()` exactly once per request, so every `heartbeatAgeMs` in the response is consistent.
 
 ```ts
 type WorkerHealth = 'active' | 'draining' | 'drained';
@@ -604,8 +585,7 @@ Workers are sorted by `id` ascending.
 
 ### `POST /api/v1/workers/:workerId/drain`
 
-Marks a connected worker as draining. Requires `system:admin`. The optional
-JSON request body may include a non-empty `reason`.
+Marks a connected worker as draining. Requires `system:admin`. The optional JSON request body may include a non-empty `reason`.
 
 ```json
 { "reason": "maintenance" }
@@ -627,17 +607,13 @@ The JSON-RPC operation name is `weft.workers.drain`.
 
 ### `DELETE /api/v1/workers/:workerId/drain`
 
-Clears the explicit drain marker for one worker. Requires `system:admin`.
-If a deployment-level drain still applies, the worker remains drained by
-that deployment.
+Clears the explicit drain marker for one worker. Requires `system:admin`. If a deployment-level drain still applies, the worker remains drained by that deployment.
 
 The JSON-RPC operation name is `weft.workers.resume`.
 
 ### `POST /api/v1/worker-deployments/:deploymentName/drain`
 
-Marks every current and future worker that reports `deploymentName` as
-draining. Requires `system:admin`. The optional JSON request body may
-include a non-empty `reason`.
+Marks every current and future worker that reports `deploymentName` as draining. Requires `system:admin`. The optional JSON request body may include a non-empty `reason`.
 
 Response:
 
@@ -655,8 +631,7 @@ The JSON-RPC operation name is `weft.worker.deployments.drain`.
 
 ### `DELETE /api/v1/worker-deployments/:deploymentName/drain`
 
-Clears the deployment-level drain marker. Requires `system:admin`. Any
-worker-specific drain markers remain in effect.
+Clears the deployment-level drain marker. Requires `system:admin`. Any worker-specific drain markers remain in effect.
 
 The JSON-RPC operation name is `weft.worker.deployments.resume`.
 
@@ -702,7 +677,7 @@ type WorkerDiagnosticsResponse = {
 };
 ```
 
-Deliberately excludes `capabilities` and every raw payload schema backing a `contractHash` — this surfaces identity for drift detection, not a schema dump.
+Deliberately excludes `capabilities` and every raw payload schema backing a `contractHash`—this surfaces identity for drift detection, not a schema dump.
 
 The JSON-RPC operation name is `weft.workers.diagnostics`.
 
@@ -730,7 +705,7 @@ type ListWorkerRegistrationRejectionsResponse = {
 };
 ```
 
-Deliberately excludes the free-text rejection message and any manifest content — this is a bounded, auditable event log, not a diagnostic dump. The log is in-memory and capped at the 200 most recent entries per server process; it is not persisted.
+Deliberately excludes the free-text rejection message and any manifest content—this is a bounded, auditable event log, not a diagnostic dump. The log is in-memory and capped at the 200 most recent entries per server process; it is not persisted.
 
 The JSON-RPC operation name is `weft.workers.rejections`.
 
@@ -740,11 +715,9 @@ Returns per-queue health. The queue set is the union of three sources:
 
 1. Queues with one or more pending tasks.
 2. Queues with one or more parked long-poll waiters.
-3. Queues that have at least one connected worker (so an idle queue with
-   capacity but no work still appears).
+3. Queues that have at least one connected worker (so an idle queue with capacity but no work still appears).
 
-`inFlight` is summed across the workers currently assigned to that
-queue. `connectedWorkers` counts workers whose `queue` matches.
+`inFlight` is summed across the workers currently assigned to that queue. `connectedWorkers` counts workers whose `queue` matches.
 
 ```ts
 type ListTaskQueuesResponse = {

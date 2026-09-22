@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { encode } from '../codec.ts';
+import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -82,7 +83,7 @@ describe('workflow and activity execution tokens', () => {
     expect(secondToken).toBeString();
     expect(secondToken).not.toBe(firstToken);
     expect(await engine.storage.get(KEYS.teardownSucceeded('stable-token-id'))).toBeNull();
-    await expect(engine.getFinalizerStatus('stable-token-id')).resolves.toBeNull();
+    expect(engine.getFinalizerStatus('stable-token-id')).resolves.toBeNull();
   });
 
   it('exposes workflow and finalizer attempt tokens to finalizers', async () => {
@@ -263,5 +264,48 @@ describe('workflow and activity execution tokens', () => {
     expect(runToken).toBeString();
     expect(externalStore.value).toBe('initial');
     expect(externalStore.rejectedWrites).toEqual(['late-success', 'cleanup']);
+  });
+
+  it('propagates the workflow execution token into a remote-mode activity dispatch (COR-152)', async () => {
+    const requests: RemoteActivityTaskRequest[] = [];
+    const recordingBroker: RemoteActivityBroker = {
+      async enqueue(request) {
+        requests.push(request);
+      },
+    };
+
+    await using engine = new Engine({
+      activityExecution: { mode: 'remote', broker: recordingBroker },
+    });
+
+    const chargeCard = activity({
+      name: 'chargeCard',
+      execute: async (_input: { orderId: string }): Promise<never> => {
+        throw new Error('local execution must never run in remote mode');
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'remote-token-workflow' })
+        .activities({ chargeCard })
+        .execute(async function* (context: WorkflowContext) {
+          return yield* context.run(chargeCard, { orderId: 'ord-1' });
+        }),
+    );
+
+    const handle = await engine.start('remote-token-workflow', null, {
+      id: 'remote-token-workflow-1',
+    });
+
+    await waitForCondition(() => requests.length > 0, {
+      timeoutMs: 2_000,
+      label: 'broker.enqueue to be called',
+    });
+
+    expect(requests[0]?.workflowExecutionToken).toBeString();
+    expect(requests[0]?.workflowExecutionToken?.length).toBeGreaterThan(0);
+
+    await engine.completeAsyncActivity(requests[0]!.operationId, 'charged');
+    expect(await handle.result()).toBe('charged');
   });
 });

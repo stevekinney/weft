@@ -110,7 +110,7 @@ async function setupPendingHelper(scenario: PendingHelperScenario): Promise<Pend
 
 describe('ctx.memo durableActivity helper', () => {
   it('throws a targeted error outside a workflow activation', async () => {
-    await expect(durableActivity('executeTool', { tool: 'outside' })).rejects.toThrow(
+    expect(durableActivity('executeTool', { tool: 'outside' })).rejects.toThrow(
       'durableActivity() can only be called from a ctx.memo() callback',
     );
   });
@@ -174,7 +174,7 @@ describe('ctx.memo durableActivity helper', () => {
     recoveredEngine.register(definition);
     const [recoveredHandle] = await recoveredEngine.recoverAll();
 
-    await expect(recoveredHandle!.result()).resolves.toEqual({
+    expect(recoveredHandle!.result()).resolves.toEqual({
       toolResult: { execution: 1, tool: 'lookup' },
     });
     expect(executeCount).toBe(1);
@@ -229,7 +229,7 @@ describe('ctx.memo durableActivity helper', () => {
     recoveredEngine.register(definition);
     const [recoveredHandle] = await recoveredEngine.recoverAll();
 
-    await expect(recoveredHandle!.result()).resolves.toEqual({
+    expect(recoveredHandle!.result()).resolves.toEqual({
       toolResult: { execution: 2, tool: 'lookup' },
     });
     expect(executeCount).toBe(2);
@@ -273,7 +273,7 @@ describe('ctx.memo durableActivity helper', () => {
     engine.register(definition);
     const handle = await engine.start('helper-retry', null, { id: 'helper-retry-1' });
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       afterResult: 'after-memo',
       stepIndex: 2,
       toolResult: { attempts: 2, tool: 'lookup' },
@@ -348,7 +348,7 @@ describe('ctx.memo durableActivity helper', () => {
     now = 1_000;
     await recoveredEngine.scheduler.tick(now);
 
-    await expect(recoveredHandle!.result()).resolves.toEqual({ attempts: 2 });
+    expect(recoveredHandle!.result()).resolves.toEqual({ attempts: 2 });
     expect(attempts).toBe(2);
     recoveredEngine[Symbol.dispose]();
   });
@@ -375,7 +375,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'typed-helper-callable-1',
     });
 
-    await expect(handle.result()).resolves.toEqual({ echoed: 'typed-input' });
+    expect(handle.result()).resolves.toEqual({ echoed: 'typed-input' });
     expect(
       hasCompletedActivityRecord(await readActivityReconciliationRecords(storage, handle.id)),
     ).toBe(true);
@@ -407,7 +407,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'no-input-helper-callable-1',
     });
 
-    await expect(handle.result()).resolves.toEqual({ calls: 1 });
+    expect(handle.result()).resolves.toEqual({ calls: 1 });
     const [record] = await readActivityReconciliationRecords(storage, handle.id);
     expect(record).toMatchObject({
       activityName: 'noInputTool',
@@ -439,7 +439,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'no-input-bare-helper-1',
     });
 
-    await expect(handle.result()).resolves.toEqual({ calls: 1 });
+    expect(handle.result()).resolves.toEqual({ calls: 1 });
     const [record] = await readActivityReconciliationRecords(storage, handle.id);
     expect(record).toMatchObject({
       activityName: 'noInputBareTool',
@@ -469,7 +469,7 @@ describe('ctx.memo durableActivity helper', () => {
     engine.register(definition);
     const handle = await engine.start('pending-on-return', null, { id: 'pending-on-return-1' });
 
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'durableActivity() calls started inside ctx.memo() must be awaited',
     );
     const records = await readActivityReconciliationRecords(storage, 'pending-on-return-1');
@@ -523,7 +523,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'helper-complete-async-1',
     });
 
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'ActivityContext.completeAsync() is not supported from durableActivity()',
     );
   });
@@ -568,7 +568,7 @@ describe('ctx.memo durableActivity helper', () => {
       workflowTypeByWorkflowId: new Map<string, string>(),
     } as unknown as EngineInternals;
 
-    await expect(
+    expect(
       callMemoFunctionWithDurableActivityScope(
         internals,
         'listener-cleanup-1',
@@ -606,7 +606,7 @@ describe('ctx.memo durableActivity helper', () => {
         workflowTypeByWorkflowId: new Map<string, string>(),
       } as unknown as EngineInternals;
 
-      await expect(
+      expect(
         callMemoFunctionWithDurableActivityScope(
           internals,
           'non-error-memo-failure-1',

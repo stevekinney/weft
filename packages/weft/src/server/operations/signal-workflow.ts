@@ -26,10 +26,7 @@ const signalWorkflowOutput = z.object({
 export type SignalWorkflowInput = z.infer<typeof signalWorkflowInput>;
 export type SignalWorkflowOutput = z.infer<typeof signalWorkflowOutput>;
 
-export const signalWorkflowOperation = createSingleWorkflowControlOperation<
-  SignalWorkflowInput,
-  SignalWorkflowOutput
->({
+export const signalWorkflowOperation = createSingleWorkflowControlOperation({
   name: 'weft.workflows.signal',
   summary: 'Send a signal to a workflow',
   description:
@@ -42,6 +39,7 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
   inputSchema: signalWorkflowInput,
   outputSchema: signalWorkflowOutput,
   producibleFaults: ['NotFound'],
+  requiredEngineMethods: ['signal'],
   invoke: async ({ input, engine }): Promise<SignalWorkflowOutput> => {
     await engine.signal(
       input.workflowId,

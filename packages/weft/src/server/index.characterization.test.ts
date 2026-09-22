@@ -47,7 +47,7 @@ describe('serve()', () => {
   it('exposes stop() which resolves without throwing', async () => {
     await withEngine(async (engine) => {
       const server = serve({ engine, port: 0 });
-      await expect(server.stop()).resolves.toBeUndefined();
+      expect(server.stop()).resolves.toBeUndefined();
     });
   });
 
@@ -55,7 +55,7 @@ describe('serve()', () => {
     await withEngine(async (engine) => {
       const server = serve({ engine, port: 0 });
       await server.stop();
-      await expect(server.stop()).resolves.toBeUndefined();
+      expect(server.stop()).resolves.toBeUndefined();
     });
   });
 
@@ -74,7 +74,7 @@ describe('serve()', () => {
       const b = serve({ engine, port: 0 });
       // Both must stop independently.
       await a.stop();
-      await expect(b.stop()).resolves.toBeUndefined();
+      expect(b.stop()).resolves.toBeUndefined();
     });
   });
 });

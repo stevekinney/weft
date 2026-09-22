@@ -120,6 +120,11 @@ export function disposeEngine(
   internals.strategy[Symbol.dispose]();
   internals.activityWorkerDispatcher?.[Symbol.dispose]();
   internals.activityWorkerDispatcher = null;
+  // No storage or durable state to release here (acceptance criterion 11):
+  // the broker only ever wrote durable task records, which outlive engine
+  // disposal by design. Clearing the slot just stops new dispatches through
+  // an engine that is going away.
+  internals.remoteActivityBroker = null;
   internals.inlineStrategy = null;
   disposeEngineCleanupInterval(internals);
   if (internals.retentionSweepInterval !== null) {

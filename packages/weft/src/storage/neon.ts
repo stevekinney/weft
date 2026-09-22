@@ -11,7 +11,7 @@ import {
  *
  * @example
  * ```ts
- * import { NeonStorage, type NeonStorageOptions } from '@lostgradient/weft/storage/neon';
+ * import { NeonStorage, type NeonStorageOptions } from '@lostgradient/weft';
  *
  * const options: NeonStorageOptions = {
  *   url: 'postgresql://user:password@ep-cool-name.us-east-2.aws.neon.tech/weft?sslmode=require',
@@ -63,7 +63,7 @@ function neonPoolFactory(url: string): PostgresPool {
  *
  * @example
  * ```ts
- * import { NeonStorage } from '@lostgradient/weft/storage/neon';
+ * import { NeonStorage } from '@lostgradient/weft';
  * import { Engine } from '@lostgradient/weft';
  *
  * await using storage = new NeonStorage({

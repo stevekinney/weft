@@ -1,15 +1,5 @@
 import type { CheckpointDivergence } from './interfaces.ts';
 
-type ComparisonHandler = {
-  matches(original: unknown, deserialized: unknown): boolean;
-  compare(
-    original: unknown,
-    deserialized: unknown,
-    path: string,
-    divergences: CheckpointDivergence[],
-  ): void;
-};
-
 export function compareValues(
   original: unknown,
   deserialized: unknown,
@@ -18,8 +8,20 @@ export function compareValues(
 ): void {
   if (original === deserialized) return;
 
-  const handler = comparisonHandlers.find((candidate) => candidate.matches(original, deserialized));
-  handler?.compare(original, deserialized, path, divergences);
+  if (isNullishPair(original, deserialized)) {
+    compareNullishValues(original, deserialized, path, divergences);
+    return;
+  }
+  if (compareBuiltInValues(original, deserialized, path, divergences)) return;
+  if (isTypeMismatch(original, deserialized)) {
+    compareTypeMismatch(original, deserialized, path, divergences);
+    return;
+  }
+  if (isPrimitivePair(original)) {
+    comparePrimitiveValues(original, deserialized, path, divergences);
+    return;
+  }
+  compareObjectValues(original, deserialized, path, divergences);
 }
 
 function checkpointPath(path: string): string {
@@ -219,8 +221,8 @@ function compareArrayValues(
 }
 
 function compareRecordValues(
-  original: Record<string, unknown>,
-  deserialized: Record<string, unknown>,
+  original: object,
+  deserialized: object,
   path: string,
   divergences: CheckpointDivergence[],
 ): void {
@@ -233,7 +235,7 @@ function compareRecordValues(
         divergences,
         propertyPath,
         undefined,
-        deserialized[key],
+        Reflect.get(deserialized, key),
         'Extra key appeared in deserialized object.',
       );
       continue;
@@ -243,14 +245,19 @@ function compareRecordValues(
       recordDivergence(
         divergences,
         propertyPath,
-        original[key],
+        Reflect.get(original, key),
         undefined,
         'Key missing from deserialized object.',
       );
       continue;
     }
 
-    compareValues(original[key], deserialized[key], propertyPath, divergences);
+    compareValues(
+      Reflect.get(original, key),
+      Reflect.get(deserialized, key),
+      propertyPath,
+      divergences,
+    );
   }
 }
 
@@ -271,58 +278,37 @@ function isPrimitivePair(original: unknown): boolean {
   return typeof original !== 'object';
 }
 
-const comparisonHandlers: ComparisonHandler[] = [
-  {
-    matches: isNullishPair,
-    compare: compareNullishValues,
-  },
-  {
-    matches: (original, deserialized) => original instanceof Date && deserialized instanceof Date,
-    compare: (original, deserialized, path, divergences) =>
-      compareDateValues(original as Date, deserialized as Date, path, divergences),
-  },
-  {
-    matches: (original, deserialized) =>
-      original instanceof RegExp && deserialized instanceof RegExp,
-    compare: (original, deserialized, path, divergences) =>
-      compareRegExpValues(original as RegExp, deserialized as RegExp, path, divergences),
-  },
-  {
-    matches: (original, deserialized) => original instanceof Map && deserialized instanceof Map,
-    compare: (original, deserialized, path, divergences) =>
-      compareMapValues(
-        original as Map<unknown, unknown>,
-        deserialized as Map<unknown, unknown>,
-        path,
-        divergences,
-      ),
-  },
-  {
-    matches: (original, deserialized) => original instanceof Set && deserialized instanceof Set,
-    compare: (original, deserialized, path, divergences) =>
-      compareSetValues(original as Set<unknown>, deserialized as Set<unknown>, path, divergences),
-  },
-  {
-    matches: isTypeMismatch,
-    compare: compareTypeMismatch,
-  },
-  {
-    matches: isPrimitivePair,
-    compare: comparePrimitiveValues,
-  },
-  {
-    matches: (original, deserialized) => Array.isArray(original) && Array.isArray(deserialized),
-    compare: (original, deserialized, path, divergences) =>
-      compareArrayValues(original as unknown[], deserialized as unknown[], path, divergences),
-  },
-  {
-    matches: () => true,
-    compare: (original, deserialized, path, divergences) =>
-      compareRecordValues(
-        original as Record<string, unknown>,
-        deserialized as Record<string, unknown>,
-        path,
-        divergences,
-      ),
-  },
-];
+function compareBuiltInValues(
+  original: unknown,
+  deserialized: unknown,
+  path: string,
+  divergences: CheckpointDivergence[],
+): boolean {
+  if (original instanceof Date && deserialized instanceof Date) {
+    compareDateValues(original, deserialized, path, divergences);
+  } else if (original instanceof RegExp && deserialized instanceof RegExp) {
+    compareRegExpValues(original, deserialized, path, divergences);
+  } else if (original instanceof Map && deserialized instanceof Map) {
+    compareMapValues(original, deserialized, path, divergences);
+  } else if (original instanceof Set && deserialized instanceof Set) {
+    compareSetValues(original, deserialized, path, divergences);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+function compareObjectValues(
+  original: unknown,
+  deserialized: unknown,
+  path: string,
+  divergences: CheckpointDivergence[],
+): void {
+  if (typeof original !== 'object' || original === null) return;
+  if (typeof deserialized !== 'object' || deserialized === null) return;
+  if (Array.isArray(original) && Array.isArray(deserialized)) {
+    compareArrayValues(original, deserialized, path, divergences);
+    return;
+  }
+  compareRecordValues(original, deserialized, path, divergences);
+}

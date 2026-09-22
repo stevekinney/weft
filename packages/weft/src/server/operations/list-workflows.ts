@@ -1,19 +1,15 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { WorkflowListScanCapExceededError } from '../../core/engine/workflow-indexes.ts';
-import {
-  ListFilterValidationError,
-  listFilterObjectSchema,
-  normalizeListFilter,
-} from '../../core/list-filter-validation.ts';
+import { ListFilterValidationError } from '../../core/list-filter-validation-error.ts';
+import { listFilterObjectSchema, normalizeListFilter } from '../../core/list-filter-validation.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { ListFilter, PaginatedResult, WorkflowSummary } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 const listIncludeSchema = z
   .union([z.string(), z.array(z.string()).min(1)])
@@ -48,7 +44,7 @@ const listWorkflowsOutput = z.unknown();
 export type ListWorkflowsInput = z.infer<typeof listWorkflowsInput>;
 export type ListWorkflowsOutput = PaginatedResult<WorkflowSummary>;
 
-export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWorkflowsOutput>({
+export const listWorkflowsOperation = defineOperation({
   name: 'weft.workflows.list',
   mcpExposable: false,
   summary: 'List workflows',
@@ -60,13 +56,14 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
   destructive: false,
   tags: ['Workflows'],
   inputSchema: listWorkflowsInput,
-  outputSchema: listWorkflowsOutput as z.ZodType<ListWorkflowsOutput>,
+  outputSchema: listWorkflowsOutput,
   access: { kind: 'public' },
   producibleFaults: ['Unprocessable'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListWorkflowsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['list']);
+    const e = engine;
     const { include, ...filterInput } = input;
 
     // Tag validation lives in `invoke` (not in the REST extractor)
@@ -114,34 +111,30 @@ function toUnprocessable(error: unknown): OperationFault {
   return { code: 'Unprocessable', message, data: { reason: message } };
 }
 
-function extractListWorkflowsInput(request: Request): ListWorkflowsInput {
+function extractListWorkflowsInput(request: Request) {
   const url = new URL(request.url);
-  const filter = extractListFilterFromQuery(url) as ListWorkflowsInput;
+  const filter = extractListFilterFromQuery(url);
 
-  const limit = url.searchParams.get('limit');
-  if (limit !== null) {
-    const parsed = Number(limit);
-    if (Number.isFinite(parsed) && parsed >= 1) {
-      filter.limit = Math.min(Math.floor(parsed), 1000);
-    }
-  }
-
-  const offset = url.searchParams.get('offset');
-  if (offset !== null) {
-    const parsed = Number(offset);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      filter.offset = Math.floor(parsed);
-    }
-  }
+  const limitValue = parseOptionalInteger(url.searchParams.get('limit'), 1, 1000);
+  const offsetValue = parseOptionalInteger(url.searchParams.get('offset'), 0);
 
   const includes = url.searchParams.getAll('include');
-  if (includes.length === 1) {
-    filter.include = includes[0]!;
-  } else if (includes.length > 1) {
-    filter.include = includes;
-  }
+  const include = includes.length === 1 ? includes[0] : includes.length > 1 ? includes : undefined;
 
-  return filter;
+  return {
+    ...filter,
+    ...(limitValue === undefined ? {} : { limit: limitValue }),
+    ...(offsetValue === undefined ? {} : { offset: offsetValue }),
+    ...(include === undefined ? {} : { include }),
+  };
+}
+
+function parseOptionalInteger(value: string | null, minimum: number, maximum?: number) {
+  if (value === null) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < minimum) return undefined;
+  const integer = Math.floor(parsed);
+  return maximum === undefined ? integer : Math.min(integer, maximum);
 }
 
 function shapeListWorkflowsFault(fault: OperationFault): Response {

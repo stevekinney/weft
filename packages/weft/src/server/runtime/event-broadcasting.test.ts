@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { decode, encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
@@ -15,17 +15,20 @@ import {
   TaskResultDeadLetteredEvent,
   WorkerConnectedEvent,
   WorkerDisconnectedEvent,
+  WorkflowCancelledEvent,
   WorkflowResumedEvent,
   WorkflowSuspendedEvent,
   WorkflowTeardownEvent,
 } from '../../core/events.ts';
 import { waitForParityCondition as waitFor } from '../../core/parity/real-timer-wait.test-support.ts';
 import { ReviewCompletedEvent, ReviewRequestedEvent } from '../../core/review/events.ts';
+import { taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { createFleetEventFeed, type FleetEventEnvelope } from '../fleet-event-feed.ts';
 import { CLIENT_VISIBLE_EVENT_TYPES, TOKEN_EVENT_TYPE } from './client-visible-events.ts';
-import { wireEventBroadcasting } from './event-broadcasting.ts';
+import { registerWorkflowEventLifecycle, wireEventBroadcasting } from './event-broadcasting.ts';
+import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 
 class TokenEvent extends Event {
   constructor(
@@ -200,5 +203,51 @@ describe('wireEventBroadcasting', () => {
 
     expect(logged[0]![0]).toBe(`[weft] Failed to append fleet event "${AlertFiredEvent.type}":`);
     expect(logged[0]![1]).toBeInstanceOf(Error);
+  });
+});
+
+describe('registerWorkflowEventLifecycle — cancellation propagation', () => {
+  it('logs and continues when propagating a workflow cancellation to a task fails', async () => {
+    class FailingLedgerReadStorage extends MemoryStorage {
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (key === taskLedgerKey('op-cancel-fails')) {
+          throw new Error('storage unavailable');
+        }
+        return super.get(key);
+      }
+    }
+
+    const engine = new Engine();
+    const context = minimalServerContext();
+    const options = minimalServeOptions(new FailingLedgerReadStorage());
+    context.workflowOperations.set('wf-cancel', new Set(['op-cancel-fails']));
+
+    const cleanedUpWorkflows: string[] = [];
+    const dispose = registerWorkflowEventLifecycle(
+      engine,
+      context,
+      { dispose: () => {}, cleanupWorkflow: (workflowId) => cleanedUpWorkflows.push(workflowId) },
+      options,
+    );
+
+    using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    engine.dispatchEvent(new WorkflowCancelledEvent('wf-cancel'));
+
+    await waitFor(() => errorSpy.mock.calls.length > 0, {
+      label: 'cancellation-propagation failure to be logged',
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[weft] Failed to propagate workflow cancellation to task "op-cancel-fails":',
+      expect.any(Error),
+    );
+    // The reverse-index entries are still cleaned up even though the
+    // propagation attempt itself failed — the failure is logged, not fatal.
+    expect(context.operationToWorkflow.has('op-cancel-fails')).toBe(false);
+    expect(context.workflowOperations.has('wf-cancel')).toBe(false);
+
+    dispose();
+    engine[Symbol.dispose]();
   });
 });

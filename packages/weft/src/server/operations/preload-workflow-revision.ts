@@ -12,11 +12,11 @@
 import { z } from 'zod';
 
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import { isWeftError } from '../../core/weft-error.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   readWorkflowCatalogRestBody,
   throwWorkflowCatalogOperationFault,
@@ -39,10 +39,7 @@ const preloadWorkflowRevisionOutput = z.unknown();
 export type PreloadWorkflowRevisionInput = z.infer<typeof preloadWorkflowRevisionInput>;
 export type PreloadWorkflowRevisionOutput = WorkflowRevisionRecord;
 
-export const preloadWorkflowRevisionOperation = defineOperation<
-  PreloadWorkflowRevisionInput,
-  PreloadWorkflowRevisionOutput
->({
+export const preloadWorkflowRevisionOperation = defineOperation({
   name: 'weft.workflows.revisions.preload',
   mcpExposable: false,
   summary: 'Load, validate, and install a registered dynamic workflow source revision',
@@ -58,14 +55,15 @@ export const preloadWorkflowRevisionOperation = defineOperation<
   destructive: false,
   tags: ['Workflow Catalog'],
   inputSchema: preloadWorkflowRevisionInput,
-  outputSchema: preloadWorkflowRevisionOutput as z.ZodType<PreloadWorkflowRevisionOutput>,
+  outputSchema: preloadWorkflowRevisionOutput,
   access: workflowsAdminAccess,
   producibleFaults: ['InvalidParams', 'NotFound', 'Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<PreloadWorkflowRevisionOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['preload']);
+    const e = engine;
     const name = validateWorkflowNameField(input.name);
     const revision = validateWorkflowRevisionField(input.revision);
 

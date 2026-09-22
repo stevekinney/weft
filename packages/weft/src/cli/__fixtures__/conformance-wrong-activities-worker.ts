@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 
 import { conformanceManifest } from './conformance-manifest.ts';
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
 
 export type ConformanceWrongActivitiesWorkerFixture = 'wrong-activities';
 
-const serverUrl = Bun.env['WEFT_WORKER_URL'];
+const serverUrl = resolveFixtureEnvironment().workerUrl;
 
 if (serverUrl === undefined) {
-  console.error('WEFT_WORKER_URL is required');
+  process.stderr.write(`WEFT_WORKER_URL is required\n`);
   process.exit(2);
 }
 
@@ -17,7 +18,7 @@ socket.addEventListener('open', () => {
   socket.send(
     JSON.stringify({
       type: 'register',
-      protocolVersion: Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3'),
+      protocolVersion: resolveFixtureEnvironment().protocolVersion,
       workerId: 'wrong-activities-worker',
       manifest: conformanceManifest(['other.activity']),
       concurrency: 1,

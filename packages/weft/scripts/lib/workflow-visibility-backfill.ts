@@ -93,49 +93,7 @@ export async function runWorkflowVisibilityBackfill(
     );
   }
 
-  const startCursor = await loadCursor(storage);
-  if (startCursor !== undefined) {
-    logger(`Resuming backfill from cursor ${startCursor}`);
-  }
-
-  let processed = 0;
-  let conflicts = 0;
-  const scanOptions = startCursor !== undefined ? { gt: startCursor } : undefined;
-
-  for await (const [key, value] of storage.scan('wf:', scanOptions)) {
-    if (!isTopLevelWorkflowKey(key)) continue;
-    const workflowId = tryDecodeStorageKeyComponent(key.slice(3));
-    if (workflowId === null) continue;
-
-    const state = decodeWorkflowState(value);
-    const manifestBytes = await storage.get(KEYS.workflowVisibilityManifest(workflowId));
-    const currentManifest = decodeWorkflowVisibilityManifest(manifestBytes);
-    const { batchOps } = buildWorkflowVisibilityIndexOperations(workflowId, currentManifest, state);
-
-    const operations: BatchOperation[] = [
-      ...batchOps,
-      {
-        type: 'put',
-        key: KEYS.workflowVisibilityMetaCursor(),
-        value: encode(key),
-      },
-    ];
-    const committed = await storageConditionalBatch(
-      storage,
-      [{ key, expectedValue: value }],
-      operations,
-    );
-    if (!committed) {
-      conflicts += 1;
-      logger(`Conflict on workflow ${workflowId}; will retry on next pass.`);
-      continue;
-    }
-
-    processed += 1;
-    if (processed % checkpointEvery === 0) {
-      logger(`Processed ${processed} workflows (last: ${workflowId})`);
-    }
-  }
+  const { processed, conflicts } = await backfillWorkflowRows(storage, logger, checkpointEvery);
 
   if (conflicts > 0) {
     logger(
@@ -163,6 +121,73 @@ export async function runWorkflowVisibilityBackfill(
   options.onWatermarkWritten?.();
 
   return { processed, conflicts: 0, watermarkWritten: true };
+}
+
+async function backfillWorkflowRows(
+  storage: Storage,
+  logger: BackfillLogger,
+  checkpointEvery: number,
+): Promise<{ processed: number; conflicts: number }> {
+  const startCursor = await loadCursor(storage);
+  if (startCursor !== undefined) {
+    logger(`Resuming backfill from cursor ${startCursor}`);
+  }
+
+  let processed = 0;
+  let conflicts = 0;
+  const scanOptions = startCursor !== undefined ? { gt: startCursor } : undefined;
+
+  for await (const [key, value] of storage.scan('wf:', scanOptions)) {
+    const result = await indexWorkflow(storage, key, value, conflicts === 0);
+    if (result === 'skipped') continue;
+    if (result === 'conflict') {
+      conflicts += 1;
+      logger(
+        `Conflict on workflow ${tryDecodeStorageKeyComponent(key.slice(3))}; will retry on next pass.`,
+      );
+      continue;
+    }
+
+    processed += 1;
+    if (processed % checkpointEvery === 0) {
+      logger(
+        `Processed ${processed} workflows (last: ${tryDecodeStorageKeyComponent(key.slice(3))})`,
+      );
+    }
+  }
+
+  return { processed, conflicts };
+}
+
+/** Keep the resume cursor behind the first conflict so a later pass retries that workflow. */
+async function indexWorkflow(
+  storage: Storage,
+  key: string,
+  value: Uint8Array,
+  advanceCursor: boolean,
+): Promise<'skipped' | 'committed' | 'conflict'> {
+  if (!isTopLevelWorkflowKey(key)) return 'skipped';
+  const workflowId = tryDecodeStorageKeyComponent(key.slice(3));
+  if (workflowId === null) return 'skipped';
+
+  const state = decodeWorkflowState(value);
+  const manifestBytes = await storage.get(KEYS.workflowVisibilityManifest(workflowId));
+  const currentManifest = decodeWorkflowVisibilityManifest(manifestBytes);
+  const { batchOps } = buildWorkflowVisibilityIndexOperations(workflowId, currentManifest, state);
+  const operations: BatchOperation[] = [...batchOps];
+  if (advanceCursor) {
+    operations.push({
+      type: 'put',
+      key: KEYS.workflowVisibilityMetaCursor(),
+      value: encode(key),
+    });
+  }
+  const committed = await storageConditionalBatch(
+    storage,
+    [{ key, expectedValue: value }],
+    operations,
+  );
+  return committed ? 'committed' : 'conflict';
 }
 
 /**

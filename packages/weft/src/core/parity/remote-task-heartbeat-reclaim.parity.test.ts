@@ -2,12 +2,12 @@ import { describe, expect, it } from 'bun:test';
 
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
-import type { RemoteTaskLeased } from '../../server/task-ledger-types.ts';
-import { decodeRemoteTaskRecord, taskLedgerKey } from '../../server/task-ledger.ts';
 import type { Storage } from '../../storage/interface.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { Engine } from '../engine.ts';
+import type { RemoteTaskLeased } from '../task-ledger/task-ledger-types.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../task-ledger/task-ledger.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
 
 /** Reads the ledger record for `operationId`, asserting it is currently leased. */
@@ -52,6 +52,10 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
     let server: WeftServer | undefined;
     let socket: WebSocket | undefined;
     const taskAttempts: number[] = [];
+    // COR-230: the attempt-fenced `activityHeartbeat` must echo the current
+    // dispatch's `attemptToken`, unlike the retired v4 bare-heartbeat
+    // fan-out this test used to exercise. Captured from each `task` frame.
+    let latestAttemptToken: string | undefined;
 
     try {
       const manualReconciliation = useManualTaskReconciliationForTesting({
@@ -78,9 +82,11 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
           type: string;
           operationId?: string;
           attempt?: number;
+          attemptToken?: string;
         };
         if (message.type !== 'task') return;
         taskAttempts.push(message.attempt ?? 1);
+        latestAttemptToken = message.attemptToken;
       });
 
       await waitForParityCondition(() => server?.registry.size === 1, {
@@ -107,7 +113,39 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       if (socket === undefined) {
         throw new Error('Remote worker socket was not initialized');
       }
+      if (latestAttemptToken === undefined) {
+        throw new Error('Expected a captured attemptToken from the dispatched task frame');
+      }
+
+      // COR-230, acceptance criterion 1: a bare session `heartbeat` proves
+      // the WEBSOCKET is alive, not the ATTEMPT — it must not extend this
+      // (or any) task's visibility deadline, unlike the retired v4
+      // bare-heartbeat fan-out this test used to exercise. Prove the
+      // negative directly, on the durable record, before proving the
+      // positive below — this is the exact split Temporal's own
+      // `RecordActivityTaskHeartbeat` (per-task-token) draws against a
+      // connection-level liveness signal, so strengthening this parity case
+      // to pin BOTH halves is the point of this rewrite.
+      const lastHeartbeatBeforeBare = server.registry.getAll()[0]?.lastHeartbeat ?? 0;
       socket.send(JSON.stringify({ type: 'heartbeat', workerId: 'parity-heartbeat-worker' }));
+      await waitForParityCondition(
+        () => (server?.registry.getAll()[0]?.lastHeartbeat ?? 0) > lastHeartbeatBeforeBare,
+        { label: 'session heartbeat observed by the registry' },
+      );
+      const afterBareHeartbeat = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');
+      expect(afterBareHeartbeat.leaseDeadline).toBe(beforeHeartbeat.leaseDeadline);
+
+      // COR-230: only an `activityHeartbeat` naming this exact attempt
+      // renews it, fenced by `operationId` + `attemptToken` through the same
+      // identity check `taskResult` uses.
+      socket.send(
+        JSON.stringify({
+          type: 'activityHeartbeat',
+          workerId: 'parity-heartbeat-worker',
+          operationId: 'parity-heartbeating-task',
+          attemptToken: latestAttemptToken,
+        }),
+      );
       await waitForParityCondition(
         async () => {
           const current = await readLeasedRecord(engine.storage, 'parity-heartbeating-task');

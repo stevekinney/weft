@@ -20,8 +20,10 @@ import type { WorkerActivityContract, WorkerManifest, WorkerWorkflowContract } f
  * Sort record keys by UTF-16 code unit, the same comparator the registry
  * snapshot uses, so manifest ordering matches the rest of the codebase.
  */
-function sortedKeys(record: Readonly<Record<string, unknown>>): readonly string[] {
-  return Object.keys(record).toSorted();
+function sortedEntries<Value>(record: Readonly<Record<string, Value>>): [string, Value][] {
+  return Object.entries(record).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
 }
 
 /**
@@ -35,9 +37,10 @@ function sortedRecord<In, Out>(
   record: Readonly<Record<string, In>>,
   normalizeValue: (value: In) => Out,
 ): Readonly<Record<string, Out>> {
-  const normalized: Record<string, Out> = Object.create(null) as Record<string, Out>;
-  for (const key of sortedKeys(record)) {
-    normalized[key] = normalizeValue(record[key] as In);
+  const normalized: Record<string, Out> = {};
+  Object.setPrototypeOf(normalized, null);
+  for (const [key, value] of sortedEntries(record)) {
+    normalized[key] = normalizeValue(value);
   }
   return normalized;
 }
@@ -54,14 +57,18 @@ function sortedRecord<In, Out>(
  */
 function cloneJsonValue(value: JSONValue): JSONValue {
   if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((entry) => cloneJsonValue(entry));
+  if (isJsonArray(value)) return value.map((entry) => cloneJsonValue(entry));
 
-  const record = value as { readonly [key: string]: JSONValue };
-  const cloned: Record<string, JSONValue> = Object.create(null) as Record<string, JSONValue>;
-  for (const key of Object.keys(record)) {
-    cloned[key] = cloneJsonValue(record[key] as JSONValue);
+  const cloned: Record<string, JSONValue> = {};
+  Object.setPrototypeOf(cloned, null);
+  for (const [key, entry] of Object.entries(value)) {
+    cloned[key] = cloneJsonValue(entry);
   }
   return cloned;
+}
+
+function isJsonArray(value: JSONValue): value is readonly JSONValue[] {
+  return Array.isArray(value);
 }
 
 function normalizeActivity(activity: WorkerActivityContract): WorkerActivityContract {
@@ -128,11 +135,8 @@ function canonicalActivityJson(activity: WorkerActivityContract): string {
 }
 
 function canonicalWorkflowJson(workflow: WorkerWorkflowContract): string {
-  const activities = sortedKeys(workflow.activities)
-    .map(
-      (name) =>
-        `${JSON.stringify(name)}:${canonicalActivityJson(workflow.activities[name] as WorkerActivityContract)}`,
-    )
+  const activities = sortedEntries(workflow.activities)
+    .map(([name, activity]) => `${JSON.stringify(name)}:${canonicalActivityJson(activity)}`)
     .join(',');
 
   return [
@@ -168,18 +172,12 @@ function canonicalWorkflowJson(workflow: WorkerWorkflowContract): string {
  * ```
  */
 export function canonicalWorkerManifestJson(manifest: WorkerManifest): string {
-  const workflows = sortedKeys(manifest.workflows)
-    .map(
-      (name) =>
-        `${JSON.stringify(name)}:${canonicalWorkflowJson(manifest.workflows[name] as WorkerWorkflowContract)}`,
-    )
+  const workflows = sortedEntries(manifest.workflows)
+    .map(([name, workflow]) => `${JSON.stringify(name)}:${canonicalWorkflowJson(workflow)}`)
     .join(',');
 
-  const capabilities = sortedKeys(manifest.capabilities)
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${canonicalJsonStringify(manifest.capabilities[key] as JSONValue)}`,
-    )
+  const capabilities = sortedEntries(manifest.capabilities)
+    .map(([key, value]) => `${JSON.stringify(key)}:${canonicalJsonStringify(value)}`)
     .join(',');
 
   return [

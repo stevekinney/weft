@@ -1,10 +1,9 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowResultInput = z.object({
   workflowId: z.string().min(1),
@@ -14,23 +13,21 @@ const getWorkflowResultOutput = z.unknown();
 export type GetWorkflowResultInput = z.infer<typeof getWorkflowResultInput>;
 export type GetWorkflowResultOutput = { result: unknown };
 
-export const getWorkflowResultOperation = defineOperation<
-  GetWorkflowResultInput,
-  GetWorkflowResultOutput
->({
+export const getWorkflowResultOperation = defineOperation({
   name: 'weft.workflows.result.get',
   mcpExposable: false,
   summary: 'Get workflow result by id',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: getWorkflowResultInput,
-  outputSchema: getWorkflowResultOutput as z.ZodType<GetWorkflowResultOutput>,
+  outputSchema: getWorkflowResultOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound', 'Unprocessable', 'Timeout'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetWorkflowResultOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['get', 'getHandle']);
+    const e = engine;
     const state = await e.get(input.workflowId);
     if (state === null) {
       const fault: OperationFault = {

@@ -1,8 +1,9 @@
 /**
  * MCP server support for Weft.
  *
- * This subpath is server/runtime-oriented. Browser-safe entry points remain
- * under `@lostgradient/weft`, `@lostgradient/weft/client`, and `@lostgradient/weft/service-worker`.
+ * This subpath is server/runtime-oriented. The browser-safe entry points are
+ * the root `@lostgradient/weft`, `@lostgradient/weft/client`, and
+ * `@lostgradient/weft/service-worker`.
  *
  * @module mcp
  */

@@ -61,7 +61,7 @@ async function simulateCrashedRemoval(
 describe('resolveOrphanedCatalogTombstones', () => {
   it('is a no-op when no tombstones are present', async () => {
     const storage = new MemoryStorage();
-    await expect(resolveOrphanedCatalogTombstones(storage)).resolves.toBeUndefined();
+    expect(resolveOrphanedCatalogTombstones(storage)).resolves.toBeUndefined();
   });
 
   it('finalizes an orphaned tombstone with zero durable non-terminal references', async () => {
@@ -142,6 +142,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
       updatedAt: 1,
       nextFireAt: 60_000,
       missedFireCount: 0,
+      skippedCount: 0,
       queuedRuns: [],
     };
     await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));
@@ -245,7 +246,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
     const storage = new MemoryStorage();
     await storage.put('catalog-tombstone:onlyonepart', new TextEncoder().encode('{}'));
 
-    await expect(resolveOrphanedCatalogTombstones(storage)).rejects.toThrow(
+    expect(resolveOrphanedCatalogTombstones(storage)).rejects.toThrow(
       /does not match the expected/,
     );
   });
@@ -274,7 +275,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
     );
 
     const isolated: Array<{ name: string; revision: string }> = [];
-    await expect(
+    expect(
       resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
@@ -322,7 +323,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
     );
 
     const isolated: Array<{ name: string; revision: string }> = [];
-    await expect(
+    expect(
       resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
@@ -372,7 +373,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
     // propagate out of the sweep — it is swallowed, the tombstone stays
     // exactly as it was (neither restored nor finalized), and the sweep
     // still reports the isolated failure and completes normally.
-    await expect(
+    expect(
       resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
@@ -388,7 +389,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
 describe('resolveCatalogTombstoneIfPresent', () => {
   it('is a no-op when no tombstone exists for the exact (name, revision) key', async () => {
     const storage = new MemoryStorage();
-    await expect(
+    expect(
       resolveCatalogTombstoneIfPresent(storage, 'checkout', 'no-such-revision'),
     ).resolves.toBeUndefined();
   });

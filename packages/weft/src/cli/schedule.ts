@@ -1,6 +1,4 @@
-import type { Engine } from '../core/engine.ts';
-import { registerOnRuntimeEngine, runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
-import type { WorkflowDefinition } from '../core/types.ts';
+import type { Engine, WorkflowDefinition } from '../index.ts';
 import { parseJsonInput } from './json-input.ts';
 import { createStorage } from './storage-factory.ts';
 import type {
@@ -10,6 +8,7 @@ import type {
   ScheduleListCommand,
   ScheduleMutationCommand,
 } from './types.ts';
+import { loadRegistrationsFromModule as loadCliRegistrationsFromModule } from './validation.ts';
 
 function formatScheduleCadence(schedule: { cronExpression?: string; intervalMs?: number }): string {
   if (schedule.intervalMs !== undefined) {
@@ -94,7 +93,7 @@ async function registerScheduleWorkflows(
 ): Promise<void> {
   const loaded = await loadRegistrationsFromModule(workflowsPath);
   for (const definition of Object.values(loaded.registrations)) {
-    registerOnRuntimeEngine(runtimeWorkflowEngine(engine), definition);
+    engine.register(definition);
   }
 }
 
@@ -201,8 +200,7 @@ export async function executeSchedule(options: ScheduleCommand): Promise<Command
     };
   }
 
-  const { Engine } = await import('../core/engine.ts');
-  const { loadRegistrationsFromModule } = await import('../diagnostics/validate.ts');
+  const { Engine } = await import('../index.ts');
   const storage = await createStorage(options.storage, options.database);
   const engine = new Engine({ storage });
 
@@ -212,7 +210,7 @@ export async function executeSchedule(options: ScheduleCommand): Promise<Command
     }
 
     if (options.action === 'create') {
-      return await executeScheduleCreate(options, engine, loadRegistrationsFromModule);
+      return await executeScheduleCreate(options, engine, loadCliRegistrationsFromModule);
     }
 
     return await executeScheduleMutation(options, engine);

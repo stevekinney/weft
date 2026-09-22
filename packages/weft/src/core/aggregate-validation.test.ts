@@ -67,12 +67,20 @@ describe('normalizeAggregateOptions', () => {
       expect.unreachable('expected throw');
     } catch (error) {
       expect(error).toBeInstanceOf(AggregateOptionsValidationError);
-      const validationError = error as AggregateOptionsValidationError;
+      if (!(error instanceof AggregateOptionsValidationError)) throw error;
+      const validationError = error;
       expect(validationError.issues).toEqual([
-        { path: ['groupBy'], message: 'Invalid input', code: 'invalid_union' },
+        {
+          path: ['groupBy', 'attribute'],
+          message: 'Too small: expected string to have >=1 characters',
+          code: 'too_small',
+        },
+        { path: ['groupBy'], message: 'Unrecognized key: "extra"', code: 'unrecognized_keys' },
         { path: [], message: 'Unrecognized key: "extra"', code: 'unrecognized_keys' },
       ]);
-      expect(validationError.message).toBe('groupBy: Invalid input; Unrecognized key: "extra"');
+      expect(validationError.message).toBe(
+        'groupBy.attribute: Too small: expected string to have >=1 characters; groupBy: Unrecognized key: "extra"; Unrecognized key: "extra"',
+      );
     }
   });
 });

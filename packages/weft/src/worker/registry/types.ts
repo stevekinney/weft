@@ -9,6 +9,31 @@ import type { RemoteWorkerCapabilities } from '../protocol.ts';
 export type WorkerHealth = 'active' | 'draining' | 'drained';
 
 /**
+ * Identity of ONE worker-session — the connection-level lease (COR-230),
+ * distinct from `ActivityAttemptLease` (`core/task-ledger/task-ledger-types.ts`),
+ * which identifies one ATTEMPT of one operation independently of which
+ * session currently holds it.
+ *
+ * `sessionGeneration` increments on every accepted `register()` call for a
+ * given `workerId` — including a reconnect of the same process under the
+ * same id — so a session that has been superseded (a fresh registration
+ * landed after this one, whether inside or outside the reconnect grace
+ * window) can be told apart from the one currently live, even though both
+ * share `workerId`. `transport` is always `'websocket'` today:
+ * `WorkerRegistry.register()` is only ever called for WebSocket workers — a
+ * long-poll worker never registers (see `RemoteTaskLeased.executionIdentity`'s
+ * doc comment in `task-ledger-types.ts`), so it has no `WorkerSessionIdentity`
+ * at all, only the synthetic per-claim `workerSessionId` string
+ * `markTaskClaimedByLongPollWorker` mints.
+ */
+export interface WorkerSessionIdentity {
+  readonly workerId: string;
+  readonly sessionGeneration: number;
+  readonly manifestDigest: string;
+  readonly transport: 'websocket';
+}
+
+/**
  * Full internal state record for a connected worker, held by the registry.
  * `drainReason` and `drainStartedAt` are present only when a worker-level
  * drain marker has been set.
@@ -27,6 +52,8 @@ export interface WorkerInfo {
   connectedAt: number;
   lastHeartbeat: number;
   startedAt: number;
+  /** Session generation (COR-230) — see `WorkerSessionIdentity`'s doc comment. Starts at 1 on first registration. */
+  sessionGeneration: number;
   capabilities: RemoteWorkerCapabilities;
   deploymentName?: string;
   buildId?: string;

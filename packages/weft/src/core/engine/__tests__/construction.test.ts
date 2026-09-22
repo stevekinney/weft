@@ -164,6 +164,16 @@ describe('resolveEngineOptions', () => {
     ).toThrow(/Unknown ownership posture "leases"/);
   });
 
+  it('throws on an unknown inlineLaunchScheduling mode rather than silently defaulting it', () => {
+    expect(() =>
+      resolveEngineOptions(
+        new MemoryStorage(),
+        { inlineLaunchScheduling: 'immediate' as any },
+        getNow,
+      ),
+    ).toThrow(/options\.inlineLaunchScheduling must be "event-loop" or "manual"/);
+  });
+
   it("resolves lease tuning durations when ownership is 'lease'", () => {
     const resolved = resolveEngineOptions(
       new MemoryStorage(),

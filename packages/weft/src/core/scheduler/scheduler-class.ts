@@ -53,7 +53,7 @@ const EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE = 1_000;
  * @example
  * ```ts
  * import { Scheduler } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const scheduler = new Scheduler({

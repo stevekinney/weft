@@ -17,7 +17,7 @@ import {
   WorkflowFailedEvent,
   WorkflowStartedEvent,
   WorkflowTimedOutEvent,
-} from './events';
+} from './events.ts';
 
 describe('WorkflowStartedEvent', () => {
   it('sets all properties from constructor arguments', () => {

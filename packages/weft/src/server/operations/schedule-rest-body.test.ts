@@ -7,7 +7,7 @@ import {
 
 describe('schedule REST body extraction', () => {
   it('maps malformed JSON to the shared invalid JSON fault', async () => {
-    await expect(
+    expect(
       parseScheduleRestBodyRequestRecord(
         new Request('http://localhost/v1/schedules', {
           method: 'POST',
@@ -19,7 +19,7 @@ describe('schedule REST body extraction', () => {
   });
 
   it.each([null, 'not-an-object', 42])('rejects JSON %j as a non-object body', async (body) => {
-    await expect(
+    expect(
       parseScheduleRestBodyRequestRecord(
         new Request('http://localhost/v1/schedules', {
           method: 'POST',

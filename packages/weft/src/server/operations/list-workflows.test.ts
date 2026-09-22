@@ -6,34 +6,37 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { decode, encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext, WorkflowState } from '../../core/types.ts';
+import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import {
-  listWorkflowsOperation,
-  listWorkflowsRestBinding,
-  type ListWorkflowsOutput,
-} from './list-workflows.ts';
+import { defineOperation } from '../operation-registry.ts';
+import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (ctx: WorkflowContext) {
   return yield* ctx.waitForSignal<string>('release');
 });
 const crashWorkflow = workflow({ name: 'crash' }).execute(async function* () {
+  yield* [];
   throw new Error('workflow failure');
 });
 
 const createdEngines: Engine[] = [];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function createEngine(storage = new MemoryStorage()): Engine {
   const engine = new Engine({ storage });
@@ -53,12 +56,14 @@ async function startFailedWorkflowWithSplitFailureCategory(
   id: string,
 ): Promise<void> {
   const handle = await engine.start('crash', null, { id });
-  await expect(handle.result()).rejects.toThrow('workflow failure');
+  expect(handle.result()).rejects.toThrow('workflow failure');
 
   const stateBytes = await storage.get(KEYS.workflow(id));
   expect(stateBytes).not.toBeNull();
-  const state = decode(stateBytes!) as WorkflowState;
-  state.failureCategory = null;
+  if (stateBytes === null) throw new Error('expected workflow state bytes');
+  const state = decode(stateBytes);
+  if (!isRecord(state)) throw new Error('expected workflow state record');
+  state['failureCategory'] = null;
   await storage.put(KEYS.workflow(id), encode(state));
   await storage.put(KEYS.attribute(id), encode({ failureCategory: 'application' }));
 }
@@ -155,8 +160,7 @@ describe('weft.workflows.list', () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as ListWorkflowsOutput;
-    expect(body.items.map((item) => item.id)).toEqual(['scheduled-run']);
+    expect(await response.json()).toMatchObject({ items: [{ id: 'scheduled-run' }] });
   });
 
   it('includes failureCategory from search attributes only when requested over REST', async () => {
@@ -178,9 +182,9 @@ describe('weft.workflows.list', () => {
     );
 
     expect(defaultResponse.status).toBe(200);
-    const defaultBody = (await defaultResponse.json()) as ListWorkflowsOutput;
+    const defaultBody = await defaultResponse.json();
     expect(defaultBody.items).toHaveLength(1);
-    expect(defaultBody.items[0]?.failureCategory).toBeUndefined();
+    expect(defaultBody.items?.[0]?.failureCategory).toBeUndefined();
 
     const includedResponse = await handleRequest(
       new Request('http://localhost/v1/workflows?status=failed&include=failureCategory', {
@@ -194,9 +198,9 @@ describe('weft.workflows.list', () => {
     );
 
     expect(includedResponse.status).toBe(200);
-    const includedBody = (await includedResponse.json()) as ListWorkflowsOutput;
+    const includedBody = await includedResponse.json();
     expect(includedBody.items).toHaveLength(1);
-    expect(includedBody.items[0]?.failureCategory).toBe('application');
+    expect(includedBody.items?.[0]?.failureCategory).toBe('application');
 
     const repeatedIncludedResponse = await handleRequest(
       new Request(
@@ -211,9 +215,9 @@ describe('weft.workflows.list', () => {
     );
 
     expect(repeatedIncludedResponse.status).toBe(200);
-    const repeatedIncludedBody = (await repeatedIncludedResponse.json()) as ListWorkflowsOutput;
+    const repeatedIncludedBody = await repeatedIncludedResponse.json();
     expect(repeatedIncludedBody.items).toHaveLength(1);
-    expect(repeatedIncludedBody.items[0]?.failureCategory).toBe('application');
+    expect(repeatedIncludedBody.items?.[0]?.failureCategory).toBe('application');
   });
 
   it('returns 400 when include contains an unsupported field', async () => {
@@ -287,13 +291,12 @@ describe('weft.workflows.list', () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('empty tags');
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('empty tags') });
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...listWorkflowsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -303,7 +306,7 @@ describe('weft.workflows.list', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

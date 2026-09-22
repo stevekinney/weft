@@ -12,10 +12,7 @@ const timeoutWorkflowInput = z.object({
 
 export type TimeoutWorkflowInput = z.infer<typeof timeoutWorkflowInput>;
 
-export const timeoutWorkflowOperation = createSingleWorkflowControlOperation<
-  TimeoutWorkflowInput,
-  null
->({
+export const timeoutWorkflowOperation = createSingleWorkflowControlOperation({
   name: 'weft.workflows.timeout',
   summary: 'Force-timeout a workflow',
   description:
@@ -27,6 +24,7 @@ export const timeoutWorkflowOperation = createSingleWorkflowControlOperation<
   inputSchema: timeoutWorkflowInput,
   outputSchema: z.null(),
   producibleFaults: ['NotFound'],
+  requiredEngineMethods: ['timeout'],
   invoke: async ({ input, engine }): Promise<null> => {
     await engine.timeout(input.workflowId);
     return null;

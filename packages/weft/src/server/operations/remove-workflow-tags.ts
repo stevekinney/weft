@@ -12,6 +12,7 @@ export const removeWorkflowTagsOperation = createSingleWorkflowTagMutationOperat
   name: 'weft.workflows.tags.remove',
   summary: 'Remove workflow tags',
   destructive: false,
+  requiredEngineMethods: ['removeTags'],
   mutateTags: (engine, workflowId, tags) => engine.removeTags(workflowId, ...tags),
 });
 

@@ -28,10 +28,14 @@
  *                 `commitTaskLedgerCompletion`'s crash-resumption branch,
  *                 can. Recovery's job is to make sure that redelivery still
  *                 passes the WebSocket ownership guard after a restart.
- *  - `cancelling` — rehydrate registry ownership only, for the same reason:
- *                 nothing in the current runtime calls `commitCancellation`
- *                 yet (a future project's scope), so there is no action to
- *                 resume, only ownership to preserve.
+ *  - `cancelling` — rehydrate registry ownership (so the worker's
+ *                 redelivered `taskResult(status: 'cancelled')` still passes
+ *                 the WebSocket ownership guard after a restart, same as
+ *                 `completing`) AND restore the cancellation-deadline heap
+ *                 entry (COR-230, acceptance criterion 15) — that entry only
+ *                 ever lived in this process's memory, so a restart between
+ *                 `recordCancellationIntent` and the worker's cooperative
+ *                 result must not leave the deadline unwatched.
  *  - `terminal`, `deadLettered` — already resolved; skipped.
  *
  * A single corrupt or unrecognized record is logged and skipped — ordinary
@@ -44,14 +48,14 @@
  * @module server/runtime/task-ledger-recovery
  */
 
-import type { ServeOptions } from '../index.ts';
 import {
   decodeRemoteTaskRecord,
   type RemoteTaskCancelling,
   type RemoteTaskCompleting,
   type RemoteTaskLeased,
   type RemoteTaskRecord,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import type { ServeOptions } from '../index.ts';
 import type { ServerContext } from './context.ts';
 import { scheduleDelayedDispatch } from './task-dispatch.ts';
 import { reassignOrExpireTask, taskDispatchFromLedgerRecord } from './task-reconciliation.ts';
@@ -146,9 +150,21 @@ async function recoverTaskLedgerRecord(
       await reassignOrExpireTask(context, options, decoded.operationId, decoded);
       return;
     }
-    case 'completing':
+    case 'completing': {
+      rehydrateWorkerOwnership(context, decoded, now);
+      return;
+    }
     case 'cancelling': {
       rehydrateWorkerOwnership(context, decoded, now);
+      // COR-230, acceptance criterion 15: restore the cancellation-deadline
+      // heap entry that only ever lived in this process's memory — a
+      // restart between `recordCancellationIntent` and the worker's
+      // cooperative result (or the deadline's own arrival) must not let a
+      // `cancelling` record sit forever with nothing watching it.
+      context.deadlineTracker.add({
+        operationId: decoded.operationId,
+        deadline: decoded.cancellationDeadline,
+      });
       return;
     }
     case 'terminal':

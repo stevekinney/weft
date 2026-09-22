@@ -1,21 +1,19 @@
 #!/usr/bin/env bun
 
 import { conformanceManifest } from './conformance-manifest.ts';
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
 
 export type ConformanceShortSleepExitWorkerFixture = 'short-sleep-exit';
 
-const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
-const mode = Bun.env['WEFT_SHORT_SLEEP_EXIT_MODE'] ?? 'default';
-const launchStateFile = Bun.env['WEFT_SHORT_SLEEP_EXIT_STATE_FILE'];
-const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
-  .split(',')
-  .map((activity) => activity.trim())
-  .filter((activity) => activity.length > 0);
+const serverUrl = resolveFixtureEnvironment().workerUrl;
+const protocolVersion = resolveFixtureEnvironment().protocolVersion;
+const mode = resolveFixtureEnvironment().shortSleepExitMode;
+const launchStateFile = resolveFixtureEnvironment().shortSleepExitStateFile;
+const activities = resolveFixtureEnvironment().activities;
 const workerId = `short-sleep-worker-${crypto.randomUUID()}`;
 
 if (serverUrl === undefined) {
-  console.error('WEFT_WORKER_URL is required');
+  process.stderr.write(`WEFT_WORKER_URL is required\n`);
   process.exit(2);
 }
 
@@ -108,18 +106,25 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
 
 function handleCancelMessage(parsed: Record<string, unknown>): void {
   const operationId = parsed['operationId'];
+  if (typeof operationId !== 'string') return;
   const attemptToken =
     typeof parsed['attemptToken'] === 'string'
       ? parsed['attemptToken']
-      : taskTokens.get(operationId as string);
-  if (typeof operationId !== 'string') return;
+      : taskTokens.get(operationId);
   if (typeof attemptToken !== 'string' || attemptToken.length === 0) return;
 
+  // COR-230: report the cooperative `cancelled` status, not a generic
+  // `failed` one — the server's ledger now records a distinct cancellation
+  // disposition (acceptance criterion 13) only for a `taskResult` that says
+  // `status: 'cancelled'`; an ordinary `failed` report resolves as a plain
+  // failed completion instead, which is not what a `cancel` control being
+  // honored actually means.
   send({
     type: 'taskResult',
     operationId,
     attemptToken,
-    status: 'failed',
+    status: 'cancelled',
+    cancelled: true,
     error: 'Task cancelled',
   });
 }
@@ -135,7 +140,9 @@ socket.addEventListener('open', () => {
 });
 
 socket.addEventListener('message', (event) => {
-  const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+  const parsedData: unknown = JSON.parse(String(event.data));
+  if (parsedData === null || typeof parsedData !== 'object' || Array.isArray(parsedData)) return;
+  const parsed = Object.fromEntries(Object.entries(parsedData));
   if (parsed['type'] === 'registerAck') {
     heartbeatTimer ??= setInterval(() => send({ type: 'heartbeat', workerId }), 25);
     return;

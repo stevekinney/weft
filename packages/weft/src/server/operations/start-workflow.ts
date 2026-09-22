@@ -114,7 +114,7 @@ function resolveStartWorkflowAccess(error: unknown): never {
   throw fault;
 }
 
-export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartWorkflowOutput>({
+export const startWorkflowOperation = defineOperation({
   name: 'weft.workflows.start',
   mcpExposable: false,
   summary: 'Start a new workflow',

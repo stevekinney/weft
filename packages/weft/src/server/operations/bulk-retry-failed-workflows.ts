@@ -1,49 +1,48 @@
-import { z } from 'zod';
+import { bulkRetryFailedOutputSchema } from './bulk-output-schemas.ts';
+import {
+  assertOperationEngineMethods,
+  engineFailureFault,
+  faultMessage,
+  invalidParamsFault,
+  readOptionalJsonBody,
+} from './operation-helpers.ts';
 
-import { BulkOperationConfirmationError, type Engine } from '../../core/engine.ts';
+import { BulkOperationConfirmationError } from '../../core/engine.ts';
 import type { BulkOperationDryRunResult, BulkRetryFailedResult } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
+import { bulkListFilterInputSchema, type BulkListFilterInput } from './bulk-filter-input.ts';
 import {
-  bulkListFilterInputSchema,
   bulkOperationControlInputSchema,
   bulkOperationOptionsFromInput,
   bulkOperatorAccessPolicy,
-  engineFailureFault,
-  faultMessage,
-  parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
-  readOptionalJsonBody,
-  type BulkListFilterInput,
   type BulkOperationControlInput,
-} from './bulk-filter-helpers.ts';
+} from './bulk-operation-controls.ts';
 import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkRetryFailedWorkflowsInput = bulkListFilterInputSchema.merge(
   bulkOperationControlInputSchema,
 );
-const bulkRetryFailedWorkflowsOutput = z.unknown();
 
 export type BulkRetryFailedWorkflowsInput = BulkListFilterInput & BulkOperationControlInput;
 export type BulkRetryFailedWorkflowsOutput = BulkRetryFailedResult | BulkOperationDryRunResult;
 
-export const bulkRetryFailedWorkflowsOperation = defineOperation<
-  BulkRetryFailedWorkflowsInput,
-  BulkRetryFailedWorkflowsOutput
->({
+export const bulkRetryFailedWorkflowsOperation = defineOperation({
   name: 'weft.workflows.bulk.retryfailed',
   mcpExposable: false,
   summary: 'Retry failed workflows in bulk',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkRetryFailedWorkflowsInput,
-  outputSchema: bulkRetryFailedWorkflowsOutput as z.ZodType<BulkRetryFailedWorkflowsOutput>,
+  outputSchema: bulkRetryFailedOutputSchema,
   access: bulkOperatorAccessPolicy,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }): Promise<BulkRetryFailedWorkflowsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['retryFailedAll']);
+    const e = engine;
 
     const filter = validatedListFilterFromBulkInput(input);
     const operationOptions = bulkOperationOptionsFromInput(input, principal);

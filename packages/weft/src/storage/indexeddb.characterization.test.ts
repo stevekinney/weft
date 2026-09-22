@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { IndexedDBStorage } from './indexeddb';
+import { IndexedDBStorage } from './indexeddb.ts';
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {

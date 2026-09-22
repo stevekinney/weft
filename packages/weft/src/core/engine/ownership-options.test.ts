@@ -213,7 +213,7 @@ describe("ownership: 'workflow-lease' engine construction", () => {
     const handle = await engine.start('ownership-options-workflow-lease-smoke', {
       name: 'world',
     });
-    await expect(handle.result()).resolves.toBe('hello world');
+    expect(handle.result()).resolves.toBe('hello world');
     expect(getInternals(engine).workflowClaimRegistry).not.toBeNull();
   });
 

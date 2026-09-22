@@ -16,6 +16,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { getWorkflowOperation, getWorkflowRestBinding } from './get-workflow.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -50,8 +51,7 @@ describe('weft.workflows.get', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as { id?: string };
-    expect(body.id).toBe(handle.id);
+    expect(await response.json()).toMatchObject({ id: handle.id });
   });
 
   it('returns 404 with the error-message body when the workflow does not exist', async () => {
@@ -75,7 +75,7 @@ describe('weft.workflows.get', () => {
     const handle = await engine.start('hold', {}, {});
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getWorkflowOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -85,7 +85,7 @@ describe('weft.workflows.get', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

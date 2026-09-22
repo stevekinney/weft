@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import { IndexedDBStorage } from './indexeddb';
 import {
   createFakeRequest,
   createFakeTransaction,
   withFailingIndexedDbOpen,
   withFakeIndexedDb,
 } from './indexeddb-fault-harness.test-support.ts';
+import { IndexedDBStorage } from './indexeddb.ts';
 import {
   collect,
   runBasicStorageContract,
@@ -48,7 +48,7 @@ describe('IndexedDBStorage', () => {
 
     await withFailingIndexedDbOpen(openError, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(storage.get('key')).rejects.toBe(openError);
+      expect(storage.get('key')).rejects.toBe(openError);
     });
   });
 
@@ -67,7 +67,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(storage.get('key')).rejects.toBe(requestError);
+      expect(storage.get('key')).rejects.toBe(requestError);
     });
   });
 
@@ -91,7 +91,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(storage.deletePrefix('key:')).rejects.toBe(transactionError);
+      expect(storage.deletePrefix('key:')).rejects.toBe(transactionError);
     });
   });
 
@@ -127,9 +127,9 @@ describe('IndexedDBStorage', () => {
       },
       async () => {
         const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-        await expect(
-          storage.batch([{ type: 'put', key: 'key', value: encode('value') }]),
-        ).rejects.toBe(transactionError);
+        expect(storage.batch([{ type: 'put', key: 'key', value: encode('value') }])).rejects.toBe(
+          transactionError,
+        );
       },
     );
   });
@@ -152,7 +152,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(collect(storage.keys('key:'))).rejects.toBe(cursorError);
+      expect(collect(storage.keys('key:'))).rejects.toBe(cursorError);
     });
   });
 
@@ -201,7 +201,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(collect(storage.scan('key:'))).rejects.toBe(transactionError);
+      expect(collect(storage.scan('key:'))).rejects.toBe(transactionError);
     });
   });
 
@@ -221,7 +221,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(collect(storage.keys('key:'))).rejects.toBe(transactionError);
+      expect(collect(storage.keys('key:'))).rejects.toBe(transactionError);
     });
   });
 
@@ -302,7 +302,7 @@ describe('IndexedDBStorage', () => {
 
     await withFakeIndexedDb({ transaction }, async () => {
       const storage = new IndexedDBStorage(`test-${crypto.randomUUID()}`);
-      await expect(
+      expect(
         storage.conditionalBatch(
           [{ key: 'key', expectedValue: encode('value') }],
           [{ type: 'put', key: 'next', value: encode('next') }],

@@ -5,9 +5,9 @@ export async function executeDoctor(options: {
   database: string;
   json: boolean;
 }): Promise<CommandOutput> {
-  const { collectDiagnostics } = await import('../diagnostics/doctor.ts');
-  const { formatDiagnosticReport } = await import('../diagnostics/format.ts');
-  const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+  const { collectDiagnostics } = await import('../index.ts');
+  const { formatDiagnosticReport } = await import('../index.ts');
+  const { BunSQLiteStorage } = await import('../index.ts');
 
   const storage = new BunSQLiteStorage(options.database);
 

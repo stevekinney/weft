@@ -169,7 +169,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     expect(loader).toHaveBeenCalledTimes(1);
 
     controller.abort();
-    await expect(abortingWaiter).rejects.toBeTruthy();
+    expect(abortingWaiter).rejects.toBeTruthy();
 
     // The shared load must still be alive for `start()`.
     deferred.resolve({ lazyRace: lazy });
@@ -405,7 +405,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
       id: workflowId,
       tags: ['lazy-retry-batch'],
     });
-    await expect(originalHandle.result()).rejects.toBeTruthy();
+    expect(originalHandle.result()).rejects.toBeTruthy();
     engineA[Symbol.dispose]();
 
     await using engineB = new Engine({ storage });

@@ -396,7 +396,7 @@ describe('buildRegistrySnapshot', () => {
     }).execute(async function* () {});
     engine.register(brokenWorkflow);
 
-    await expect(buildRegistrySnapshot(engine)).rejects.toThrow(RegistrySchemaConversionError);
+    expect(buildRegistrySnapshot(engine)).rejects.toThrow(RegistrySchemaConversionError);
     let captured: unknown;
     try {
       await buildRegistrySnapshot(engine);
@@ -738,9 +738,7 @@ describe('buildRegistrySnapshot', () => {
     catalog.resolveActive = (name: string) =>
       name === 'unpointed' ? undefined : originalResolveActive(name);
 
-    await expect(buildRegistrySnapshot(engine)).rejects.toThrow(
-      /Registry snapshot invariant violated/,
-    );
+    expect(buildRegistrySnapshot(engine)).rejects.toThrow(/Registry snapshot invariant violated/);
   });
 });
 

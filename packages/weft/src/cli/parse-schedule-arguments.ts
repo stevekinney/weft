@@ -7,7 +7,7 @@
 
 import { parseArgs } from 'node:util';
 
-import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../core/types.ts';
+import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../index.ts';
 import { parsePersistentStorageBackend } from './storage-backend-arguments.ts';
 import type {
   CliCommand,

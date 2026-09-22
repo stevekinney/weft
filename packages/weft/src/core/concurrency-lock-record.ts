@@ -81,7 +81,7 @@ export interface AcquireAttempt {
  * @example
  * ```ts
  * import { initialLockRecord, AtomicState } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const slot = new AtomicState(new MemoryStorage(), 'state:workflow-scope:default:lock', {
  *   initial: initialLockRecord(),

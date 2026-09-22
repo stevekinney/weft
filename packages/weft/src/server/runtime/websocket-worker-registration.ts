@@ -31,6 +31,7 @@ import type {
 } from '../worker-admission-policy.ts';
 import type { ServerContext } from './context.ts';
 import { rejectRegistration, sendWorkerProtocolMessage } from './websocket-worker-messaging.ts';
+import { runWorkerDisconnectRequeue } from './worker-disconnect-requeue.ts';
 
 const MAX_WORKER_CONCURRENCY = 1_000;
 const DEFAULT_WORKER_CONCURRENCY = 10;
@@ -209,6 +210,13 @@ function evaluateWorkerAdmissionPolicy(
  * slot (the guard never evicts), while clearing the requeue timer before a
  * later rejection would orphan a grace-period-reconnecting worker's
  * in-flight tasks.
+ *
+ * `resumingSessionGeneration` (COR-220), when supplied, is the generation
+ * `registerWorker` already verified this registration PROVES a resume of —
+ * see that function's doc comment. Passed straight through to
+ * `WorkerRegistry.register()`, which is the only place that actually decides
+ * whether to honor it (the current session may have moved on between the
+ * proof check and this synchronous commit).
  */
 function commitWorkerRegistration(
   context: ServerContext,
@@ -219,6 +227,7 @@ function commitWorkerRegistration(
   queue: string,
   concurrency: number,
   acceptedManifestDigest: string,
+  resumingSessionGeneration?: number,
 ): void {
   if (ws.readyState !== WebSocket.OPEN) return;
 
@@ -259,8 +268,11 @@ function commitWorkerRegistration(
   ws.data.workerId = message.workerId;
   ws.data.workerRegistered = true;
   ws.data.workerProtocolVersion = message.protocolVersion;
-  context.registry.register(registrationInfo);
+  context.registry.register(registrationInfo, resumingSessionGeneration);
   context.workerSockets.set(message.workerId, ws);
+  // The generation just committed — always defined immediately after a
+  // successful `register()` call for this exact `workerId`.
+  const sessionGeneration = context.registry.sessionIdentity(message.workerId)?.sessionGeneration;
   sendWorkerProtocolMessage(ws, {
     type: 'registerAck',
     protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
@@ -269,6 +281,7 @@ function commitWorkerRegistration(
     concurrency,
     acceptedManifestDigest,
     serverCapabilities: [],
+    sessionGeneration: sessionGeneration ?? 1,
   });
   options.engine.dispatchEvent(
     new WorkerConnectedEvent(message.workerId, queue, registrationInfo.activities, concurrency),
@@ -299,12 +312,39 @@ function commitWorkerRegistration(
  * workers, since the guard never evicts. See {@link commitWorkerRegistration}
  * for why the digest record specifically runs after, not alongside, the
  * hijack guard.
+ *
+ * **Reconnect proof (COR-220).** After the digest settles, and before that
+ * atomic block, this checks whether `message.workerId` still has a pending
+ * grace-period requeue (`context.pendingWorkerRequeues`). If it does, the
+ * reconnect is PROVEN when `message.resumeSessionGeneration` equals the
+ * still-registered disconnected session's current `sessionGeneration`
+ * (`context.registry.sessionIdentity`) — the old `WorkerInfo` entry is left
+ * in place by the close handler for exactly this comparison, until either
+ * this proof succeeds or the grace timer fires. A proven reconnect carries
+ * that generation forward into `commitWorkerRegistration` unchanged; an
+ * UNPROVEN one (no echo, or a stale one) clears the pending timer and AWAITS
+ * `runWorkerDisconnectRequeue` — the same forfeit the grace timer would
+ * eventually have run — to completion before falling through to the atomic
+ * commit below, which then registers a brand new session. Awaiting the
+ * forfeit here, rather than firing it in the background, is what closes the
+ * "same worker, new session, stale frame" race: no frame the new session is
+ * allowed to send can reach the server before the old session's in-flight
+ * attempts have already been durably rotated away from their old
+ * `attemptToken`s, so no session-generation stamp is needed anywhere in the
+ * `taskResult`/`activityHeartbeat` authorization path to reject them —
+ * `attemptToken` alone remains sufficient, exactly as before this issue. The
+ * new `await` sits BEFORE the atomic block, never inside it, so the
+ * atomicity guarantees above are unaffected; two sockets racing the same
+ * unproven reconnect both forfeit (the second is a safe no-op — nothing is
+ * left in flight to forfeit twice) and then both attempt the atomic commit,
+ * where the existing hijack guard lets exactly one win.
  */
 export async function registerWorker(
   context: ServerContext,
   options: ServeOptions,
   ws: ServerWebSocket<WebSocketData>,
   message: RegisterMessage,
+  cleanupWorkflowIndex: (operationId: string) => void,
 ): Promise<void> {
   // Gate on startup task-ledger recovery (WFT-23) before anything else. A
   // worker's taskResult/heartbeat messages are only accepted once
@@ -399,6 +439,13 @@ export async function registerWorker(
 
   const acceptedManifestDigest = await digestCanonicalWorkerManifest(canonicalJson);
 
+  const resumingSessionGeneration = await resolveReconnectProof(
+    context,
+    options,
+    message,
+    cleanupWorkflowIndex,
+  );
+
   commitWorkerRegistration(
     context,
     options,
@@ -408,5 +455,42 @@ export async function registerWorker(
     queue,
     clampedConcurrency,
     acceptedManifestDigest,
+    resumingSessionGeneration,
   );
+}
+
+/**
+ * Decide whether `message` PROVES a resume of a still-pending disconnected
+ * session for `message.workerId`, and forfeit that session's in-flight work
+ * when it does not — see {@link registerWorker}'s doc comment for the full
+ * rationale and the race this ordering closes.
+ *
+ * Returns the generation to carry forward into `WorkerRegistry.register()`
+ * (proven), or `undefined` (no pending session to prove anything against, or
+ * an unproven reconnect whose forfeit has already been awaited to
+ * completion) — both cases mean `register()` mints a fresh generation.
+ */
+async function resolveReconnectProof(
+  context: ServerContext,
+  options: ServeOptions,
+  message: RegisterMessage,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): Promise<number | undefined> {
+  const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
+  if (pendingRequeue === undefined) return undefined;
+
+  const disconnectedGeneration = context.registry.sessionIdentity(
+    message.workerId,
+  )?.sessionGeneration;
+  const proven =
+    message.resumeSessionGeneration !== undefined &&
+    message.resumeSessionGeneration === disconnectedGeneration;
+  if (proven) {
+    return message.resumeSessionGeneration;
+  }
+
+  clearTimeout(pendingRequeue);
+  context.pendingWorkerRequeues.delete(message.workerId);
+  await runWorkerDisconnectRequeue(context, options, message.workerId, cleanupWorkflowIndex);
+  return undefined;
 }

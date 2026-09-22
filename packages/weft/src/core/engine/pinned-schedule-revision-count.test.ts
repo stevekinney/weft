@@ -19,6 +19,7 @@ function makeScheduleState(overrides: Partial<ScheduleState> & { id: string }): 
     updatedAt: 1,
     nextFireAt: 60_000,
     missedFireCount: 0,
+    skippedCount: 0,
     queuedRuns: [],
     ...overrides,
   };

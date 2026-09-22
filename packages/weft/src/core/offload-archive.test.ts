@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
-import { KEYS } from '../storage/interface';
-import { MemoryStorage } from '../storage/memory';
-import { TestEngine } from '../testing/test-engine';
-import { decode, encode } from './codec';
-import type { OffloadReference } from './context';
-import { Engine } from './engine';
-import { cleanupWorkflowStorage } from './engine/termination/cleanup';
-import type { WorkflowContext } from './types';
-import { workflow } from './types';
+import { KEYS } from '../storage/interface.ts';
+import { MemoryStorage } from '../storage/memory.ts';
+import { TestEngine } from '../testing/test-engine.ts';
+import { decode, encode } from './codec.ts';
+import type { OffloadReference } from './context.ts';
+import { Engine } from './engine.ts';
+import { cleanupWorkflowStorage } from './engine/termination/cleanup.ts';
+import type { WorkflowContext } from './types.ts';
+import { workflow } from './types.ts';
 
 describe('offload, load, and archive', () => {
   it('round-trips data through offload and load', async () => {
@@ -76,7 +76,7 @@ describe('offload, load, and archive', () => {
     engine.register(testWorkflow3);
 
     const handle = await engine.start('test', {});
-    await expect(handle.result()).rejects.toThrow('Offloaded data not found');
+    expect(handle.result()).rejects.toThrow('Offloaded data not found');
   });
 
   it('rejects forged cross-workflow offload references', async () => {
@@ -138,7 +138,7 @@ describe('offload, load, and archive', () => {
 
     const handle = await engine.start('test', {});
 
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'ctx.load() requires a non-empty offload reference key',
     );
   });

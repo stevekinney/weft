@@ -9,11 +9,12 @@ import { StartWorkflowValidationError } from '../../core/start-workflow-validati
 import type { WorkflowDefinition } from '../../core/types.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import type { UnarySchemaOperationDefinition } from '../operation-registry.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { invalidParamsFault } from '../operations/operation-helpers.ts';
 import type {
   AuthorizationDecision,
   OperationContext,
-  OperationDefinition,
   TransportAvailability,
   UnknownKeyPolicy,
 } from './types.ts';
@@ -26,8 +27,8 @@ const StartHandleSchema = z.object({
 
 type StartHandle = z.infer<typeof StartHandleSchema>;
 
-type CatalogWorkflowRegistrationMetadata<Input> = Pick<
-  WorkflowDefinition<Input>,
+type CatalogWorkflowRegistrationMetadata<InputSchema extends z.ZodObject> = Pick<
+  WorkflowDefinition<z.output<InputSchema>>,
   'description' | 'inputSchema' | 'tags'
 >;
 
@@ -52,18 +53,20 @@ type CatalogWorkflowRegistrationMetadata<Input> = Pick<
  *
  * No `mode` field. v1 ships start-only semantics.
  */
-export type CatalogWorkflowOptions<Input> = {
+export type CatalogWorkflowOptions<InputSchema extends z.ZodObject = z.ZodObject> = {
   readonly name: string;
   readonly mcpExposable: boolean;
   readonly workflowType: string;
   readonly summary?: string;
   readonly tags?: ReadonlyArray<string>;
-  readonly inputSchema?: z.ZodObject<z.ZodRawShape>;
-  readonly registration?: CatalogWorkflowRegistrationMetadata<Input>;
+  readonly inputSchema?: InputSchema;
+  readonly registration?: CatalogWorkflowRegistrationMetadata<InputSchema>;
   readonly access: AccessPolicy;
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
-  readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
+  readonly authorize?: (
+    context: OperationContext<z.output<InputSchema>>,
+  ) => Promise<AuthorizationDecision>;
 };
 
 /**
@@ -75,13 +78,19 @@ export type CatalogWorkflowOptions<Input> = {
  * Schemas are opt-in for v1; required when the operation is later flagged
  * as MCP-exposable (see `mcpExposable` ratchet in PR 6).
  */
-export function catalogWorkflow<Input>(
-  options: CatalogWorkflowOptions<Input>,
-): OperationDefinition<Input, StartHandle> {
+export function catalogWorkflow<InputSchema extends z.ZodObject>(
+  options: CatalogWorkflowOptions<InputSchema> & { readonly inputSchema: InputSchema },
+): UnarySchemaOperationDefinition<InputSchema, typeof StartHandleSchema>;
+export function catalogWorkflow(
+  options: CatalogWorkflowOptions,
+): UnarySchemaOperationDefinition<z.ZodObject, typeof StartHandleSchema>;
+export function catalogWorkflow(
+  options: CatalogWorkflowOptions,
+): UnarySchemaOperationDefinition<z.ZodObject, typeof StartHandleSchema> {
   const presentation = resolveCatalogWorkflowPresentation(options);
   validateOperationName(options.name);
 
-  return {
+  return defineOperation({
     name: options.name,
     mcpExposable: options.mcpExposable,
     ...(options.mcpExposable ? { mcpTool: { workflowType: options.workflowType } } : {}),
@@ -138,17 +147,20 @@ export function catalogWorkflow<Input>(
         throw fault;
       }
     },
-  };
+  });
 }
 
-function resolveCatalogWorkflowPresentation<Input>(options: CatalogWorkflowOptions<Input>): {
-  inputSchema: z.ZodType<Input>;
+function resolveCatalogWorkflowPresentation<InputSchema extends z.ZodObject>(
+  options: CatalogWorkflowOptions<InputSchema>,
+): {
+  inputSchema: z.ZodObject;
   summary: string;
   tags: string[];
 } {
-  const inputSchema = (options.inputSchema ??
+  const inputSchema =
+    options.inputSchema ??
     zodObjectFromRegistrationSchema(options.registration?.inputSchema) ??
-    z.object({}).passthrough()) as z.ZodType<Input>;
+    z.object({}).passthrough();
   const summary =
     options.summary ??
     options.registration?.description ??

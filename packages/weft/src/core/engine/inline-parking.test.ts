@@ -74,7 +74,7 @@ describe('engine inline parking helpers', () => {
     const workflowId = 'workflow-parked-resumable';
     const parkedInlineWorkflows = new Set([workflowId]);
 
-    await expect(
+    expect(
       resumeParkedInlineWorkflow(
         { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
         workflowId,
@@ -91,7 +91,7 @@ describe('engine inline parking helpers', () => {
     const workflowId = 'workflow-parked-corrupt';
     const parkedInlineWorkflows = new Set([workflowId]);
 
-    await expect(
+    expect(
       resumeParkedInlineWorkflow(
         { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
         workflowId,
@@ -108,7 +108,7 @@ describe('engine inline parking helpers', () => {
     const workflowId = 'workflow-disposition';
     const terminalizingWorkflows = new Set<string>();
 
-    await expect(
+    expect(
       getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
@@ -116,7 +116,7 @@ describe('engine inline parking helpers', () => {
       ),
     ).resolves.toBe('terminal-or-missing');
 
-    await expect(
+    expect(
       getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
@@ -126,7 +126,7 @@ describe('engine inline parking helpers', () => {
       ),
     ).resolves.toBe('terminal-or-missing');
 
-    await expect(
+    expect(
       getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
@@ -137,7 +137,7 @@ describe('engine inline parking helpers', () => {
       ),
     ).resolves.toBe('corrupt');
 
-    await expect(
+    expect(
       getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
@@ -186,7 +186,7 @@ describe('engine inline parking helpers', () => {
     );
 
     await sleepForTesting(0);
-    await expect(loadWorkflowState(getInternals(engine), workflowId)).resolves.toMatchObject({
+    expect(loadWorkflowState(getInternals(engine), workflowId)).resolves.toMatchObject({
       error: 'inline process failed',
       failureCategory: 'system',
       status: 'failed',

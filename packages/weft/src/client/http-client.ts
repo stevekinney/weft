@@ -1,11 +1,3 @@
-import {
-  CLIENT_OPERATION_NAMES,
-  CLIENT_REST_OPERATION_BINDINGS,
-  type ClientOperationName,
-  type ClientOperationTypes,
-  type ClientOperations,
-} from '../cli/generated/operation-client.generated.ts';
-import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   AttributeFilterKey,
@@ -49,6 +41,13 @@ import { messageName } from '../core/types.ts';
 import type { WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
+import {
+  CLIENT_OPERATION_NAMES,
+  CLIENT_REST_OPERATION_BINDINGS,
+  type ClientOperationName,
+  type ClientOperationTypes,
+  type ClientOperations,
+} from './generated/operation-client.generated.ts';
 import {
   addTagsRequest,
   cancelAllWorkflowRequests,
@@ -101,6 +100,7 @@ import type {
   WeftClientActivity,
 } from './interface.ts';
 import { openClientEventSubscription } from './open-event-subscription.ts';
+import { createCatalogWeftClient } from './operation-client-runtime.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildScheduleBody, buildStartBody, buildStartOrSignalBody } from './start-body.ts';

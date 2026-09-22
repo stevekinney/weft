@@ -191,7 +191,15 @@ export class RemoteWorker implements Disposable {
   #abortController: AbortController;
   #heartbeat: HeartbeatManager;
   #shuttingDown: boolean;
-  #taskAbortControllers: Map<string, AbortController>;
+  /**
+   * Keyed by `operationId`, but the abort decision is also fenced by
+   * `attemptToken` (COR-230, acceptance criterion 11) — a `cancel` control
+   * naming an attempt this worker has already superseded (e.g. it completed
+   * and was later redispatched the same `operationId` under a fresh
+   * attempt) matches nothing and is safely ignored, exactly like the
+   * server's own `taskResult`/`activityHeartbeat` attempt-token fencing.
+   */
+  #taskAbortControllers: Map<string, { controller: AbortController; attemptToken: string }>;
   #composedInterceptor: ComposedInterceptor | null;
   #pendingRegistration: PendingRegistration | null;
   /**
@@ -204,6 +212,19 @@ export class RemoteWorker implements Disposable {
   #disposed: boolean;
   /** Resolved worker id (provided or generated), stable for the instance lifetime. */
   #workerId: string;
+  /**
+   * The `sessionGeneration` from the most recent `registerAck` (protocol v6,
+   * COR-220), echoed back as `register.resumeSessionGeneration` on the next
+   * `connect()` so the server can recognize a reconnect as a PROVEN resume of
+   * this exact session rather than a brand new one. Same lifetime rule as
+   * `#taskResultOutbox`: survives an involuntary socket loss (the whole point
+   * of proving a resume on the automatic or caller-driven reconnect that
+   * follows), and is cleared only by a DELIBERATE `disconnect()` or
+   * `[Symbol.dispose]()` — at that point this worker is no longer trying to
+   * continue any particular session, so a later `connect()` should register
+   * fresh, not claim continuity with a session it chose to leave.
+   */
+  #lastSessionGeneration: number | undefined;
 
   constructor(options: InternalRemoteWorkerOptions) {
     this.#activityTable = resolveActivityTable(options);
@@ -234,6 +255,7 @@ export class RemoteWorker implements Disposable {
       options.maxBufferedResults ?? MAX_BUFFERED_TASK_RESULTS,
     );
     this.#disposed = false;
+    this.#lastSessionGeneration = undefined;
     this.#heartbeat = new HeartbeatManager(() => {
       this.#sendMessage({ type: 'heartbeat', workerId: this.#workerId });
     }, HEARTBEAT_INTERVAL_MS);
@@ -280,7 +302,9 @@ export class RemoteWorker implements Disposable {
       ws.addEventListener(
         'open',
         () => {
-          this.#sendMessage(buildRegisterMessage(this.#workerId, this.#options));
+          this.#sendMessage(
+            buildRegisterMessage(this.#workerId, this.#options, this.#lastSessionGeneration),
+          );
         },
         { signal: this.#abortController.signal },
       );
@@ -313,10 +337,22 @@ export class RemoteWorker implements Disposable {
     });
   }
 
-  /** Gracefully disconnect: finish in-flight, then close. */
-  async disconnect(): Promise<void> {
+  /**
+   * Gracefully disconnect: finish in-flight, then close. Resolves with the
+   * number of buffered results still awaiting a `taskResultAck` when the
+   * disconnect completes — a result whose `taskResult` was sent but never
+   * acknowledged (or never buffered onto a live socket at all) survives the
+   * disconnect and is resent on the next `connect()`, but the caller learns
+   * about it here rather than discovering it silently later.
+   */
+  async disconnect(): Promise<{ unacknowledgedResults: number }> {
     this.#heartbeat.stop();
     await this.#drainAndClose();
+    // Deliberate disconnect — this worker is no longer trying to continue
+    // any particular session, so a later connect() registers fresh rather
+    // than claiming a resume. See `#lastSessionGeneration`'s doc comment.
+    this.#lastSessionGeneration = undefined;
+    return { unacknowledgedResults: this.#taskResultOutbox.size };
   }
 
   /** Get the number of in-flight tasks. */
@@ -334,12 +370,22 @@ export class RemoteWorker implements Disposable {
     return this.#shuttingDown;
   }
 
+  /**
+   * Number of buffered results still awaiting a `taskResultAck`. Zero means
+   * every result this worker has produced has been durably acknowledged by
+   * the server.
+   */
+  get unacknowledgedResultCount(): number {
+    return this.#taskResultOutbox.size;
+  }
+
   [Symbol.dispose](): void {
     // Disposal is terminal. Mark it before clearing the outbox so an activity
     // that resolves after this point is dropped by #sendTaskResult rather than
     // re-buffering a result disposal is discarding.
     this.#disposed = true;
     this.#taskResultOutbox.clear();
+    this.#lastSessionGeneration = undefined;
     this.#abortAllTasks();
     this.#rejectPendingRegistration('Worker disposed before worker registration completed');
     this.#abortController.abort();
@@ -358,7 +404,7 @@ export class RemoteWorker implements Disposable {
 
   /** Abort all in-flight task controllers and clear the map. */
   #abortAllTasks(): void {
-    for (const controller of this.#taskAbortControllers.values()) {
+    for (const { controller } of this.#taskAbortControllers.values()) {
       controller.abort();
     }
     this.#taskAbortControllers.clear();
@@ -368,6 +414,14 @@ export class RemoteWorker implements Disposable {
     this.#shuttingDown = true;
     this.#heartbeat.stop();
     await this.#drainAndClose();
+    // Server-initiated shutdown has no caller to hand a result to — unlike
+    // disconnect(), which returns the count — so report it the same way the
+    // backlog-full and drain-timeout conditions above already do.
+    if (this.#taskResultOutbox.size > 0) {
+      console.warn(
+        `[weft] RemoteWorker shut down with ${this.#taskResultOutbox.size} result(s) still unacknowledged; they will resend on the next connect()`,
+      );
+    }
   }
 
   /** Drain in-flight tasks (with timeout), abort listeners, and close the socket. */
@@ -423,8 +477,13 @@ export class RemoteWorker implements Disposable {
     return parsed.message;
   }
 
-  #handleRegisterAck(): void {
+  #handleRegisterAck(sessionGeneration: number): void {
     if (this.#pendingRegistration === null) return;
+
+    // Cache for the NEXT connect() — see `#lastSessionGeneration`'s doc
+    // comment for the full lifetime rule (kept across an involuntary drop,
+    // cleared only by a deliberate disconnect()/dispose()).
+    this.#lastSessionGeneration = sessionGeneration;
 
     const pending = this.#pendingRegistration;
     // Null the pending registration first so #readySocket() reports ready
@@ -464,9 +523,18 @@ export class RemoteWorker implements Disposable {
     pending.reject(new Error(message));
   }
 
-  #handleCancel(operationId: string): void {
-    const controller = this.#taskAbortControllers.get(operationId);
-    if (controller) controller.abort();
+  /**
+   * Handle a server `cancel` control (COR-230, acceptance criterion 11).
+   * The lookup is fenced by `attemptToken`, not `operationId` alone — a
+   * `cancel` for an attempt this worker no longer holds (already completed,
+   * or superseded by a later redispatch of the same `operationId`) matches
+   * nothing and is ignored rather than aborting whatever now runs under
+   * that operationId.
+   */
+  #handleCancel(operationId: string, attemptToken: string): void {
+    const entry = this.#taskAbortControllers.get(operationId);
+    if (entry === undefined || entry.attemptToken !== attemptToken) return;
+    entry.controller.abort();
   }
 
   async #handleMessage(event: MessageEvent): Promise<void> {
@@ -475,7 +543,7 @@ export class RemoteWorker implements Disposable {
 
     switch (data.type) {
       case 'registerAck':
-        this.#handleRegisterAck();
+        this.#handleRegisterAck(data.sessionGeneration);
         break;
       case 'registerError':
         this.#handleRegisterError(data.message);
@@ -490,7 +558,19 @@ export class RemoteWorker implements Disposable {
         void this.#gracefulShutdown();
         break;
       case 'cancel':
-        this.#handleCancel(data.operationId);
+        this.#handleCancel(data.operationId, data.attemptToken);
+        break;
+      case 'taskResultAck':
+        // A dead-lettered disposition still drains the outbox entry — the
+        // server has made its terminal decision and resending cannot change
+        // it — but the activity's outcome never reached the workflow, so say
+        // so rather than letting the drop look like a clean `applied` ack.
+        if (data.disposition === 'dead-lettered') {
+          console.warn(
+            `[weft] RemoteWorker result for operation ${data.operationId} (attempt ${data.attemptToken}) was dead-lettered by the server; the activity's outcome was not applied to the workflow`,
+          );
+        }
+        this.#taskResultOutbox.acknowledge(data.operationId, data.attemptToken);
         break;
     }
   }
@@ -526,7 +606,10 @@ export class RemoteWorker implements Disposable {
     }
 
     const taskAbortController = new AbortController();
-    this.#taskAbortControllers.set(task.operationId, taskAbortController);
+    this.#taskAbortControllers.set(task.operationId, {
+      controller: taskAbortController,
+      attemptToken: task.attemptToken,
+    });
     this.#inFlight += 1;
 
     try {
@@ -587,41 +670,41 @@ export class RemoteWorker implements Disposable {
   }
 
   /**
-   * Deliver a terminal task result, or buffer it for resend if the socket is
-   * not ready. A result produced while the socket is down (or before
-   * registration completes) must not be silently dropped — the server would
-   * redeliver via visibility timeout and the activity would re-execute.
+   * Deliver a terminal task result, buffering it in the attempt-keyed outbox
+   * first so it survives an ambiguous send (COR-240): `WebSocket.send()`
+   * returning proves only that the frame left this process, not that the
+   * server received it or that its `taskResultAck` made it back. The entry
+   * is buffered unconditionally, before the send is even attempted, and
+   * removed only by `#handleMessage`'s `taskResultAck` case — never here,
+   * regardless of whether the send below succeeds.
    */
   #sendTaskResult(message: TaskResultMessage): void {
     // An activity that resolves after disposal must not re-populate the outbox
     // that disposal just cleared.
     if (this.#disposed) return;
 
-    const socket = this.#readySocket();
-    if (socket !== null) {
-      try {
-        socket.send(JSON.stringify(message));
-        this.#taskResultOutbox.delete(message.operationId);
-        return;
-      } catch {
-        // The socket died in the gap after the readiness check (a real
-        // WebSocket race). Buffer the result and fail the socket so the
-        // reconnect path re-flushes it.
-        this.#taskResultOutbox.buffer(message);
-        this.#failSocket();
-        return;
-      }
-    }
-
     this.#taskResultOutbox.buffer(message);
+
+    const socket = this.#readySocket();
+    if (socket === null) return;
+    try {
+      socket.send(JSON.stringify(message));
+    } catch {
+      // The socket died in the gap after the readiness check (a real
+      // WebSocket race). The result is already buffered above; fail the
+      // socket so the reconnect path re-flushes it.
+      this.#failSocket();
+    }
   }
 
   /**
-   * Flush buffered task results over the (just-registered) socket. Returns
-   * `true` if every buffered result was sent or the buffer was empty; `false`
-   * if a send failed, in which case the socket has been torn down via
-   * `#failSocket()` and the remaining results stay buffered for the next
-   * reconnect. Never throws.
+   * Resend every still-unacknowledged buffered result over the
+   * (just-registered) socket, in insertion order. Returns `true` if every
+   * send was attempted without the socket failing, or the buffer was empty;
+   * `false` if a send failed, in which case the socket has been torn down via
+   * `#failSocket()` and every buffered result — including ones already sent
+   * this pass — stays buffered for the next reconnect, since none of them has
+   * been acknowledged yet. Never throws.
    */
   #flushTaskResultOutbox(): boolean {
     for (const message of this.#taskResultOutbox.drainOrder()) {
@@ -632,7 +715,6 @@ export class RemoteWorker implements Disposable {
       }
       try {
         socket.send(JSON.stringify(message));
-        this.#taskResultOutbox.delete(message.operationId);
       } catch {
         this.#failSocket();
         return false;

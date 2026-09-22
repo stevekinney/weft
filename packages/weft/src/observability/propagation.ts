@@ -27,7 +27,7 @@ function randomHex(byteCount: number): string {
  *
  * @example
  * ```ts
- * import { formatTraceParent, type TraceContext } from '@lostgradient/weft/observability';
+ * import { formatTraceParent, type TraceContext } from '@lostgradient/weft';
  *
  * const context: TraceContext = {
  *   version: '00',
@@ -120,7 +120,7 @@ export function formatTraceParent(context: TraceContext): string {
  *
  * @example
  * ```ts
- * import { extractTraceParent } from '@lostgradient/weft/observability';
+ * import { extractTraceParent } from '@lostgradient/weft';
  *
  * const headers = new Map([
  *   ['traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'],
@@ -139,7 +139,7 @@ export function extractTraceParent(headers: Map<string, string>): TraceContext |
  *
  * @example
  * ```ts
- * import { generateSpanId, generateTraceId, injectTraceParent } from '@lostgradient/weft/observability';
+ * import { generateSpanId, generateTraceId, injectTraceParent } from '@lostgradient/weft';
  *
  * const headers = new Map<string, string>();
  * injectTraceParent(headers, {

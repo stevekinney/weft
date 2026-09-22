@@ -25,7 +25,7 @@ describe('review helpers', () => {
     const review = createReviewRequest();
     await storage.put(KEYS.review(review.workflowId, review.reviewId), encode('malformed'));
 
-    await expect(
+    expect(
       submitReview(
         {
           options: { getNow: () => 2_000 },

@@ -25,7 +25,7 @@ describe('waitForWorkflowStatus', () => {
       }),
     };
 
-    await expect(
+    expect(
       waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 500),
     ).resolves.toBeUndefined();
   });
@@ -35,9 +35,9 @@ describe('waitForWorkflowStatus', () => {
       get: mock(async () => ({ status: 'running' })),
     };
 
-    await expect(
-      waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 20),
-    ).rejects.toThrow('Expected workflow "workflow-1" to reach status "completed"');
+    expect(waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 20)).rejects.toThrow(
+      'Expected workflow "workflow-1" to reach status "completed"',
+    );
   });
 });
 
@@ -117,7 +117,7 @@ describe('storage backend testing helpers', () => {
   });
 
   it('flush resolves without throwing', async () => {
-    await expect(flush()).resolves.toBeUndefined();
+    expect(flush()).resolves.toBeUndefined();
   });
 
   it('flush advances pending zero-delay timers under fake timers', async () => {
@@ -137,7 +137,7 @@ describe('storage backend testing helpers', () => {
     const dispose = mock(() => {});
     const storageCleanup = mock(() => {});
 
-    await expect(
+    expect(
       teardown({ [Symbol.dispose]: dispose } as never, storageCleanup),
     ).resolves.toBeUndefined();
 

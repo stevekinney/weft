@@ -17,10 +17,7 @@ const resumeWorkflowOutput = z.object({
 export type ResumeWorkflowInput = z.infer<typeof resumeWorkflowInput>;
 export type ResumeWorkflowOutput = z.infer<typeof resumeWorkflowOutput>;
 
-export const resumeWorkflowOperation = createSingleWorkflowControlOperation<
-  ResumeWorkflowInput,
-  ResumeWorkflowOutput
->({
+export const resumeWorkflowOperation = createSingleWorkflowControlOperation({
   name: 'weft.workflows.resume',
   summary: 'Resume a suspended or recovered workflow',
   description:
@@ -34,6 +31,7 @@ export const resumeWorkflowOperation = createSingleWorkflowControlOperation<
   inputSchema: resumeWorkflowInput,
   outputSchema: resumeWorkflowOutput,
   producibleFaults: ['NotFound', 'Conflict'],
+  requiredEngineMethods: ['resume'],
   invoke: async ({ input, engine }): Promise<ResumeWorkflowOutput> => {
     const handle = await engine.resume(input.workflowId);
     return { id: handle.id };

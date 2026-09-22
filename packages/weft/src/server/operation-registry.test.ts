@@ -30,18 +30,33 @@ describe('validateOperationName', () => {
     expect(() => validateOperationName('weft.workflows.signals.list')).not.toThrow();
   });
 
-  it('rejects names without the weft prefix', () => {
-    expect(() => validateOperationName('workflows.start')).toThrow(/operation name/);
-    expect(() => validateOperationName('myapp.workflows.start')).toThrow(/operation name/);
+  it('accepts a namespace other than weft', () => {
+    // The catalog is shared: a gateway serving `@lostgradient/operative` and
+    // `@lostgradient/bureau` beside Weft registers their operations here, so
+    // their namespaces have to be legal names rather than a second dialect.
+    expect(() => validateOperationName('operative.runs.start')).not.toThrow();
+    expect(() => validateOperationName('bureau.sessions.list')).not.toThrow();
+    expect(() => validateOperationName('myapp.workflows.start')).not.toThrow();
   });
 
-  it('rejects names with only one segment after the weft prefix', () => {
-    // Both `weft.workflows` and `weft.start` lack the second segment
-    // required by `(?:\.[a-z][a-z0-9]*)+`. The earlier wording of this
-    // test ("no dots after weft") was factually wrong — there IS a dot,
-    // just not enough segments.
-    expect(() => validateOperationName('weft.workflows')).toThrow(/operation name/);
-    expect(() => validateOperationName('weft.start')).toThrow(/operation name/);
+  it('reserves the rpc namespace that JSON-RPC claims', () => {
+    // JSON-RPC 2.0 reserves every method beginning with `rpc.` for
+    // rpc-internal methods, and this server answers `rpc.discover` itself.
+    // The mandatory `weft.` prefix used to make a collision structurally
+    // impossible; the negative lookahead in `OPERATION_NAME_PATTERN` is what
+    // preserves that now that other namespaces are legal.
+    expect(() => validateOperationName('rpc.discover')).toThrow(/operation name/);
+    expect(() => validateOperationName('rpc.anything.else')).toThrow(/operation name/);
+    // `rpc` is reserved only as a namespace, not as a substring.
+    expect(() => validateOperationName('rpcs.discover')).not.toThrow();
+  });
+
+  it('still rejects a name with no namespace segment', () => {
+    // Two segments remain the minimum. A bare `start` carries no owner, and
+    // an unnamespaced catalog is one collision away from ambiguity about
+    // which package answers a method.
+    expect(() => validateOperationName('start')).toThrow(/operation name/);
+    expect(() => validateOperationName('workflows')).toThrow(/operation name/);
   });
 
   it('accepts segments with trailing digits and single-letter segments', () => {
@@ -89,8 +104,9 @@ describe('isValidOperationName (non-throwing variant)', () => {
   });
 
   it('returns false for invalid names', () => {
-    expect(isValidOperationName('workflows.start')).toBe(false);
+    expect(isValidOperationName('workflows')).toBe(false);
     expect(isValidOperationName('')).toBe(false);
+    expect(isValidOperationName('Weft.Workflows.Start')).toBe(false);
   });
 });
 

@@ -1,18 +1,13 @@
-import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
+import { sendJsonRpcRequest } from '../client/json-rpc-request.ts';
+import type { CatalogAccessSnapshot, CatalogOperationSnapshot } from '../index.ts';
+import { createCatalogSnapshot, createLiveOperationRegistry } from '../index.ts';
 import { findNearestCandidate } from './command-suggestions.ts';
-import snapshotData from './generated/operation-catalog.snapshot.json';
 import { loadJsonInput } from './json-input.ts';
-import { sendJsonRpcRequest } from './json-rpc-client.ts';
-import type {
-  CatalogAccessSnapshot,
-  CatalogOperationSnapshot,
-  CatalogSnapshot,
-} from './operation-catalog-snapshot.ts';
 import type { CliCommand, CommandOutput } from './types.ts';
 
 type ApiCommand = Extract<CliCommand, { command: 'api' }>;
 
-const snapshot = snapshotData as CatalogSnapshot;
+const snapshot = createCatalogSnapshot();
 const operationByName = new Map(
   snapshot.operations.map((operation) => [operation.name, operation]),
 );
@@ -179,7 +174,7 @@ export function normalizeValidatedInput(
   if (parsedData === null || typeof parsedData !== 'object' || Array.isArray(parsedData)) {
     return { ok: false, output: usageError(`api: ${operationName} input must be a JSON object`) };
   }
-  return { ok: true, value: parsedData as Record<string, unknown> };
+  return { ok: true, value: Object.fromEntries(Object.entries(parsedData)) };
 }
 
 async function callOperation(

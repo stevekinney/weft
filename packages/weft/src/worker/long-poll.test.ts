@@ -9,6 +9,7 @@ import { LongPollWorker } from './long-poll.ts';
 
 const POLL_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)$/;
 const RESULT_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)\/result$/;
+const HEARTBEAT_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)\/heartbeat$/;
 const LONG_POLL_TEST_TIMEOUT_MS = 2_000;
 
 // ---------------------------------------------------------------------------
@@ -182,6 +183,79 @@ describe('LongPollWorker', () => {
       'long-poll activity abort',
     );
     expect(worker.inFlight).toBe(0);
+  });
+
+  it('stop() is bounded by disconnectTimeoutMs when an activity ignores its AbortSignal (COR-220)', async () => {
+    const activityStarted = createDeferred();
+    // Deliberately never resolved during the test — a non-cooperative
+    // activity that never checks (or never honors) its AbortSignal. This
+    // makes the bound deterministic rather than a race: without a timeout,
+    // stop() could ONLY return if this promise settled, which it never does
+    // on its own.
+    const neverResolves = createDeferred();
+    let pollCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-non-cooperative-1',
+              workerId: 'longpoll-non-cooperative-worker',
+              activityName: 'nonCooperativeActivity',
+              input: null,
+              attemptToken: 'attempt-token-non-cooperative',
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      disconnectTimeoutMs: 100,
+      activities: {
+        // Ignores the AbortSignal entirely — the activity function never
+        // reads `context.signal`, matching a real non-cooperative activity
+        // (blocking native work, or code that simply never checks).
+        nonCooperativeActivity: async () => {
+          activityStarted.resolve();
+          await neverResolves.promise;
+          return 'unreachable';
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(
+      activityStarted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'long-poll non-cooperative activity start',
+    );
+
+    const before = Date.now();
+    await withTimeout(
+      worker.stop(),
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'long-poll stop() bounded by disconnectTimeoutMs',
+    );
+    const elapsedMs = Date.now() - before;
+
+    // Bounded: stop() gave up once disconnectTimeoutMs elapsed rather than
+    // waiting forever for an activity that will never finish on its own.
+    expect(elapsedMs).toBeLessThan(LONG_POLL_TEST_TIMEOUT_MS);
+    // The non-cooperative activity is still running — stop() did not, and
+    // cannot, force it to stop; it only stopped WAITING for it.
+    expect(worker.inFlight).toBe(1);
+
+    neverResolves.resolve();
   });
 
   it('polls GET /api/v1/tasks/:queue for tasks and executes them', async () => {
@@ -748,5 +822,269 @@ describe('LongPollWorker', () => {
     const taskCompletion = completedTasks.find((t) => t.operationId === 'op-lp-headers');
     expect(taskCompletion).toBeDefined();
     expect(taskCompletion.status).toBe('completed');
+  });
+
+  // ---------------------------------------------------------------------------
+  // COR-230, acceptance criterion 5: long-poll activities renew the same
+  // attempt-fenced lease contract WebSocket activities do, via a periodic
+  // heartbeat POST instead of a wire message.
+  // ---------------------------------------------------------------------------
+
+  it('sends periodic activityHeartbeat POSTs, naming operationId and attemptToken, for an in-flight activity (criteria 2, 5)', async () => {
+    const heartbeatBodies: any[] = [];
+    const firstHeartbeatReceived = createDeferred();
+    const releaseActivity = createDeferred();
+    let pollCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-heartbeat-1',
+              workerId: 'longpoll-worker-hb',
+              activityName: 'longRunningActivity',
+              input: null,
+              attemptToken: 'attempt-token-hb',
+              visibilityTimeout: 30_000,
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          heartbeatBodies.push(body);
+          firstHeartbeatReceived.resolve();
+          return Response.json({ ok: true, cancelled: false });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          return Response.json({ ok: true });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      heartbeatIntervalMs: 20,
+      activities: {
+        longRunningActivity: async () => {
+          await releaseActivity.promise;
+          return 'done';
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(firstHeartbeatReceived.promise, LONG_POLL_TEST_TIMEOUT_MS, 'first heartbeat');
+    releaseActivity.resolve();
+    await worker.stop();
+
+    expect(heartbeatBodies.length).toBeGreaterThanOrEqual(1);
+    expect(heartbeatBodies[0]).toEqual({
+      operationId: 'op-heartbeat-1',
+      workerId: 'longpoll-worker-hb',
+      attemptToken: 'attempt-token-hb',
+    });
+  });
+
+  it('aborts the activity and reports status "cancelled" when a heartbeat response says cancelled: true (criteria 5, 13)', async () => {
+    const activityStarted = createDeferred();
+    const activityAborted = createDeferred();
+    const taskResultReceived = createDeferred();
+    const completedTasks: any[] = [];
+    let pollCount = 0;
+    let heartbeatCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-cancel-via-heartbeat',
+              workerId: 'longpoll-worker-cancel',
+              activityName: 'cancellableActivity',
+              input: null,
+              attemptToken: 'attempt-token-cancel',
+              visibilityTimeout: 30_000,
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          heartbeatCount++;
+          // The first heartbeat is answered normally; the server only
+          // decides to cancel after the fact (e.g. an operator call to
+          // `cancelTask`) — the second heartbeat carries that signal.
+          return Response.json({ ok: true, cancelled: heartbeatCount >= 2 });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          completedTasks.push(body);
+          taskResultReceived.resolve();
+          return Response.json({ ok: true });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      heartbeatIntervalMs: 20,
+      activities: {
+        cancellableActivity: async (_input, context) => {
+          activityStarted.resolve();
+          context?.signal.addEventListener('abort', () => activityAborted.resolve(), {
+            once: true,
+          });
+          await activityAborted.promise;
+          throw new Error('Aborted');
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(activityStarted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'activity started');
+    await withTimeout(activityAborted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'activity aborted');
+    await withTimeout(
+      taskResultReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'task result received',
+    );
+    await worker.stop();
+
+    const taskResult = completedTasks.find((t) => t.operationId === 'op-cancel-via-heartbeat');
+    expect(taskResult).toBeDefined();
+    expect(taskResult.status).toBe('cancelled');
+    expect(taskResult.cancelled).toBe(true);
+  });
+
+  it('a cancellation signal for one operation does not abort a different concurrently in-flight operation (criterion 11)', async () => {
+    const bothStarted = createDeferred();
+    const aAborted = createDeferred();
+    const bResultReceived = createDeferred();
+    let aStarted = false;
+    let bStarted = false;
+    let bAbortObserved = false;
+    const completedTasks: any[] = [];
+    let pollCount = 0;
+
+    function checkBothStarted(): void {
+      if (aStarted && bStarted) bothStarted.resolve();
+    }
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-fenced-a',
+              workerId: 'longpoll-worker-fenced',
+              activityName: 'fencedActivity',
+              input: 'a',
+              attemptToken: 'attempt-token-a',
+              visibilityTimeout: 30_000,
+            });
+          }
+          if (pollCount === 2) {
+            return Response.json({
+              operationId: 'op-fenced-b',
+              workerId: 'longpoll-worker-fenced',
+              activityName: 'fencedActivity',
+              input: 'b',
+              attemptToken: 'attempt-token-b',
+              visibilityTimeout: 30_000,
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = (await request.json()) as { operationId: string };
+          // Only op-fenced-a is cancelled — op-fenced-b's heartbeat must
+          // never be told to cancel, and fencing is by operationId +
+          // attemptToken on the CLIENT, so this alone proves the target;
+          // the client-side assertions below prove the fencing held.
+          return Response.json({ ok: true, cancelled: body.operationId === 'op-fenced-a' });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          completedTasks.push(body);
+          if (body.operationId === 'op-fenced-b') bResultReceived.resolve();
+          return Response.json({ ok: true });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      concurrency: 2,
+      heartbeatIntervalMs: 20,
+      activities: {
+        fencedActivity: async (input, context) => {
+          if (input === 'a') {
+            aStarted = true;
+            checkBothStarted();
+            context?.signal.addEventListener('abort', () => aAborted.resolve(), { once: true });
+            await aAborted.promise;
+            throw new Error('Aborted');
+          }
+          bStarted = true;
+          checkBothStarted();
+          context?.signal.addEventListener('abort', () => {
+            bAbortObserved = true;
+          });
+          // b resolves on its own — it must never be aborted by a's
+          // cancellation, which the fencing (operationId + attemptToken) is
+          // responsible for guaranteeing.
+          await bothStarted.promise;
+          await aAborted.promise;
+          return 'b-completed-despite-a-cancellation';
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(bothStarted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'both activities started');
+    await withTimeout(aAborted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'op-fenced-a aborted');
+    await withTimeout(
+      bResultReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'op-fenced-b result received',
+    );
+    // Checked BEFORE `stop()`: shutdown deliberately aborts every controller
+    // still tracked (including one whose activity already returned but
+    // whose bookkeeping hasn't been cleaned up yet) — that is normal
+    // teardown, not the fencing behavior under test. The fencing claim is
+    // "b's OWN execution was never aborted by a's cancellation", which is
+    // fully settled by the time its result was received above.
+    expect(bAbortObserved).toBe(false);
+    await worker.stop();
+
+    const bResult = completedTasks.find((t) => t.operationId === 'op-fenced-b');
+    expect(bResult).toBeDefined();
+    expect(bResult.status).toBe('completed');
+    expect(bResult.value).toBe('b-completed-despite-a-cancellation');
   });
 });

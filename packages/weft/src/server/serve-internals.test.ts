@@ -8,6 +8,7 @@ import {
   assertAuthenticationPosture,
   buildBunServeConfig,
   buildFetchHandler,
+  clampCancellationGracePeriod,
   clampWorkerReconnectGracePeriod,
   registerStackDisposers,
   resolveNetworkConfig,
@@ -50,6 +51,42 @@ describe('clampWorkerReconnectGracePeriod', () => {
 
   it('floors fractional values', () => {
     expect(clampWorkerReconnectGracePeriod(123.7)).toBe(123);
+  });
+});
+
+describe('clampCancellationGracePeriod', () => {
+  it('returns the 30000ms default when undefined', () => {
+    expect(clampCancellationGracePeriod(undefined)).toBe(30_000);
+  });
+
+  it('returns the 30000ms default for non-finite values', () => {
+    expect(clampCancellationGracePeriod(Number.NaN)).toBe(30_000);
+    expect(clampCancellationGracePeriod(Number.POSITIVE_INFINITY)).toBe(30_000);
+    expect(clampCancellationGracePeriod(Number.NEGATIVE_INFINITY)).toBe(30_000);
+  });
+
+  it('honors 0 as the explicit no-grace bypass', () => {
+    expect(clampCancellationGracePeriod(0)).toBe(0);
+  });
+
+  it('honors finite positive values inside the 1..300000 range', () => {
+    expect(clampCancellationGracePeriod(1)).toBe(1);
+    expect(clampCancellationGracePeriod(1_000)).toBe(1_000);
+    expect(clampCancellationGracePeriod(300_000)).toBe(300_000);
+  });
+
+  it('clamps negative values to 0', () => {
+    expect(clampCancellationGracePeriod(-1)).toBe(0);
+    expect(clampCancellationGracePeriod(-1_000)).toBe(0);
+  });
+
+  it('clamps values above 300000 to 300000', () => {
+    expect(clampCancellationGracePeriod(300_001)).toBe(300_000);
+    expect(clampCancellationGracePeriod(10_000_000)).toBe(300_000);
+  });
+
+  it('floors fractional values', () => {
+    expect(clampCancellationGracePeriod(123.7)).toBe(123);
   });
 });
 

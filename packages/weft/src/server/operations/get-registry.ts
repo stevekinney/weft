@@ -18,7 +18,7 @@
 
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
+import { Engine } from '../../core/engine.ts';
 import {
   buildRegistrySnapshot,
   REGISTRY_VERSION,
@@ -32,36 +32,32 @@ import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getRegistryInput = z.object({});
 
-// We validate the response envelope (`registryVersion` and the presence of
-// `workflows` / `activities` as objects) but treat the inner dictionaries
-// as opaque values rather than running them through `z.record(...)`. The
-// reason: `z.record()` rebuilds the input by iterating own keys and
-// assigning to a fresh `{}`, which silently drops `__proto__`-named entries
-// even though `buildRegistrySnapshot` constructs null-prototype maps that
-// preserve them. Trusting the builder's TypeScript types (it returns a
-// strongly-typed `RegistrySnapshot`) and pinning the envelope is enough
-// for discovery; codegen consumers separately validate the response with
-// their own Zod schema.
-const objectValue = z
-  .unknown()
-  .refine((value) => typeof value === 'object' && value !== null && !Array.isArray(value), {
-    message: 'expected an object',
-  });
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
+function isObjectList(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isRecord);
+}
+
+// The refinement validators deliberately return their original values. Zod
+// record/object parsers rebuild dictionaries and lose null-prototype keys such
+// as `__proto__`, while the snapshot builder preserves those keys. Validate
+// the envelope here; the typed builder owns the contents of each dictionary.
 const getRegistryOutput = z
   .object({
     registryVersion: z.literal(REGISTRY_VERSION),
     generatedAt: z.string(),
-    workflows: z.array(objectValue),
-    activeRevisions: objectValue,
-    activities: objectValue,
+    workflows: z.unknown().refine(isObjectList, 'expected an array of objects'),
+    activeRevisions: z.unknown().refine(isRecord, 'expected an object'),
+    activities: z.unknown().refine(isRecord, 'expected an object'),
   })
   .strict();
 
 export type GetRegistryInput = z.infer<typeof getRegistryInput>;
 export type GetRegistryOutput = RegistrySnapshot;
 
-export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistryOutput>({
+export const getRegistryOperation = defineOperation({
   name: 'weft.system.registry',
   mcpExposable: false,
   summary: 'Get a snapshot of eager workflows and registered activities with their JSON Schemas',
@@ -72,7 +68,7 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
   destructive: false,
   tags: ['System'],
   inputSchema: getRegistryInput,
-  outputSchema: getRegistryOutput as z.ZodType<GetRegistryOutput>,
+  outputSchema: getRegistryOutput,
   access: {
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['system:read'] },
@@ -82,7 +78,10 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine }): Promise<GetRegistryOutput> => {
     try {
-      return await buildRegistrySnapshot(engine as Engine);
+      if (!(engine instanceof Engine)) {
+        throw new TypeError('Registry snapshot requires a concrete Engine instance.');
+      }
+      return await buildRegistrySnapshot(engine);
     } catch (error) {
       // Log the typed conversion/limit error to the server console before
       // the operation pipeline reduces it to a generic `EngineFailure`. The

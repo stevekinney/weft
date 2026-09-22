@@ -223,7 +223,7 @@ describe('Outbox maintenance scan', () => {
     await claimOne(outbox);
     await storage.put(KEYS.applicationDelivery('bureau', 'agent-7', 'zzz'), encode({ nope: 1 }));
     clock.advance(100);
-    await expect(outbox.runMaintenance()).rejects.toThrow(PersistedDataCorruptError);
+    expect(outbox.runMaintenance()).rejects.toThrow(PersistedDataCorruptError);
     await storage.delete(KEYS.applicationDelivery('bureau', 'agent-7', 'zzz'));
     expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 1 });
     expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('retry-scheduled');
@@ -232,7 +232,7 @@ describe('Outbox maintenance scan', () => {
 
   it('rejects an invalid maintenance instant', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.runMaintenance(Number.NaN)).rejects.toThrow(/runMaintenance/);
+    expect(outbox.runMaintenance(Number.NaN)).rejects.toThrow(/runMaintenance/);
     outbox.dispose();
   });
 });

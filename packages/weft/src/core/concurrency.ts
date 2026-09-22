@@ -52,7 +52,7 @@ export type { AcquireAttempt, LockHolder, LockRecord } from './concurrency-lock-
  * @example
  * ```ts
  * import { AtomicState, type CasSlot, type LockRecord } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * // AtomicState satisfies CasSlot structurally (its methods return promises).
  * const slot: CasSlot<LockRecord, Promise<LockRecord>, Promise<LockRecord | undefined>> =
@@ -137,7 +137,7 @@ const DEFAULT_LEASE_MS = 30_000;
  * ```ts
  * import { DurableSemaphore } from '@lostgradient/weft';
  * import { AtomicState } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const slot = new AtomicState<import('@lostgradient/weft').LockRecord>(

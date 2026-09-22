@@ -13,13 +13,13 @@
  */
 
 import { isJSONValue } from '../../core/json.ts';
-import type { TaskDispatch } from '../index.ts';
-import type { CreateQueuedInput } from '../task-ledger-transitions.ts';
+import type { CreateQueuedInput } from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   isValidOperationId,
   isValidWorkflowRevision,
   REMOTE_TASK_RECORD_VERSION,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import type { TaskDispatch } from '../index.ts';
 import type { ServerContext } from './context.ts';
 
 /**

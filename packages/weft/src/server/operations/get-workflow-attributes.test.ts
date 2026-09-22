@@ -13,6 +13,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import {
   getWorkflowAttributesOperation,
   getWorkflowAttributesRestBinding,
@@ -22,6 +23,7 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 
@@ -79,7 +81,7 @@ describe('weft.workflows.attributes.get', () => {
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const { engine } = createEngineWithStorage();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getWorkflowAttributesOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -89,7 +91,7 @@ describe('weft.workflows.attributes.get', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

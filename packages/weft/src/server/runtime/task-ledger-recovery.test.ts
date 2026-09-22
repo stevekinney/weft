@@ -8,9 +8,6 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
@@ -20,7 +17,10 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
 import { runTaskLedgerRecovery } from './task-ledger-recovery.ts';
@@ -131,6 +131,7 @@ function cancellingFixture(overrides: Partial<RemoteTaskCancelling> = {}): Remot
     lastHeartbeatAt: now,
     cancellationReason: 'workflow cancelled',
     cancellationRequestedAt: now,
+    cancellationDeadline: now + 30_000,
     retryCount: 0,
     requeueCount: 0,
     ...overrides,
@@ -342,7 +343,7 @@ describe('runTaskLedgerRecovery — completing', () => {
       value: 'done',
     });
     expect(resumed.ok).toBe(true);
-    expect(resumed.ok && resumed.terminal.state).toBe('terminal');
+    expect(resumed.ok && resumed.terminal?.state).toBe('terminal');
   });
 });
 
@@ -442,7 +443,7 @@ describe('runTaskLedgerRecovery — scan failure', () => {
     const stored = leasedFixture({ operationId: 'op-before-scan-failure' });
     await storage.put(taskLedgerKey(stored.operationId), encodeRemoteTaskRecord(stored));
 
-    await expect(runTaskLedgerRecovery(context, options)).rejects.toThrow(
+    expect(runTaskLedgerRecovery(context, options)).rejects.toThrow(
       'simulated storage scan failure',
     );
   });

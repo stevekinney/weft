@@ -26,6 +26,16 @@ import {
   WorkflowCompletedEvent,
   WorkflowSuspendedEvent,
 } from '../core/events.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  isRemoteTaskTerminalResolved,
+  taskLedgerKey,
+  type RemoteTaskLeased,
+  type RemoteTaskQueued,
+  type RemoteTaskRecord,
+  type RemoteTaskTerminalResolved,
+} from '../core/task-ledger/task-ledger.ts';
 import type { RetryPolicy, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MCP_PROTOCOL_VERSION } from '../mcp/protocol.ts';
@@ -50,16 +60,6 @@ import { anonymousPrincipal } from './principal.ts';
 import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
 import { useManualTaskReconciliationForTesting } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
-import {
-  decodeRemoteTaskRecord,
-  encodeRemoteTaskRecord,
-  isRemoteTaskTerminalResolved,
-  taskLedgerKey,
-  type RemoteTaskLeased,
-  type RemoteTaskQueued,
-  type RemoteTaskRecord,
-  type RemoteTaskTerminalResolved,
-} from './task-ledger.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -1308,7 +1308,7 @@ describe('serve', () => {
       const response = route.GET!(new Request('http://weft.test/assets/app.js'));
 
       expect(response.headers.get('content-length')).toBe('9');
-      await expect(response.text()).rejects.toThrow(
+      expect(response.text()).rejects.toThrow(
         'Dashboard asset ended before its verified content length was read.',
       );
     } finally {
@@ -1450,7 +1450,7 @@ describe('serve', () => {
       readFailure = true;
       const failedResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
       expect(failedResponse.status).toBe(200);
-      await expect(failedResponse.text()).rejects.toThrow('asset read failed');
+      expect(failedResponse.text()).rejects.toThrow('asset read failed');
       readFailure = false;
       const cancelledResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
       const reader = cancelledResponse.body!.getReader();
@@ -1909,7 +1909,7 @@ describe('serve', () => {
       });
 
       expect(response.status).toBe(401);
-      await expect(response.json()).resolves.toEqual({ error: 'No valid credentials provided' });
+      expect(response.json()).resolves.toEqual({ error: 'No valid credentials provided' });
     },
   );
 
@@ -2447,6 +2447,7 @@ describe('worker WebSocket protocol', () => {
       concurrency: 5,
       acceptedManifestDigest: expect.any(String),
       serverCapabilities: [],
+      sessionGeneration: 1,
     });
 
     ws.close();
@@ -2756,7 +2757,7 @@ describe('worker WebSocket protocol', () => {
     );
   });
 
-  it('extends persisted task visibility deadlines on heartbeat', async () => {
+  it('extends persisted task visibility deadlines on activityHeartbeat, never on a bare session heartbeat (COR-230)', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
@@ -2781,7 +2782,34 @@ describe('worker WebSocket protocol', () => {
     // measurably greater than `before` (no event to await for the gap itself)
     // fixed delay: pre-dispatch settle
     await waitForRealTimersForTesting(25);
+
+    // Acceptance criterion 1: a bare worker-SESSION heartbeat renews no
+    // activity-attempt lease at all — before COR-230 this alone would have
+    // extended the deadline below. Prove the negative first, on the durable
+    // record, so a regression that resurrects the old fan-out is caught even
+    // if the positive `activityHeartbeat` assertion below would still pass.
+    const beforeBareHeartbeat = server.registry.getAll()[0]?.lastHeartbeat ?? 0;
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-extend' }));
+    await waitFor(() => (server?.registry.getAll()[0]?.lastHeartbeat ?? 0) > beforeBareHeartbeat, {
+      label: 'session heartbeat observed by the registry',
+    });
+    const afterBareHeartbeat = await readLedgerRecord(engine.storage, 'heartbeat-op');
+    if (afterBareHeartbeat === null || afterBareHeartbeat.state !== 'leased') {
+      throw new Error('Expected "heartbeat-op" to still have a leased ledger record');
+    }
+    expect(afterBareHeartbeat.leaseDeadline).toBe(before.leaseDeadline);
+
+    // Acceptance criterion 2: an `activityHeartbeat` naming this exact
+    // attempt — `operationId` + `attemptToken`, echoing the attempt token
+    // the ledger recorded at claim time — is what renews the lease.
+    ws.send(
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-heartbeat-extend',
+        operationId: 'heartbeat-op',
+        attemptToken: before.attemptToken,
+      }),
+    );
     await waitFor(
       async () => {
         const current = await readLedgerRecord(engine.storage, 'heartbeat-op');
@@ -2791,7 +2819,7 @@ describe('worker WebSocket protocol', () => {
           current.leaseDeadline > before.leaseDeadline
         );
       },
-      { label: 'heartbeat extended the inflight deadline' },
+      { label: 'activityHeartbeat extended the inflight deadline' },
     );
 
     const afterRecord = await readLedgerRecord(engine.storage, 'heartbeat-op');
@@ -2805,7 +2833,7 @@ describe('worker WebSocket protocol', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('logs heartbeat visibility persistence failures', async () => {
+  it('logs activityHeartbeat visibility persistence failures (COR-230)', async () => {
     engine = createEngine();
     const storage = engine.storage as MemoryStorage;
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
@@ -2825,6 +2853,11 @@ describe('worker WebSocket protocol', () => {
         input: null,
         visibilityTimeout: 200,
       });
+
+      const leasedRecord = await readLedgerRecord(storage, 'heartbeat-write-fail-op');
+      if (leasedRecord === null || leasedRecord.state !== 'leased') {
+        throw new Error('Expected "heartbeat-write-fail-op" to have a leased ledger record');
+      }
 
       // Only the heartbeat's lease-renewal write should fail — installed
       // after dispatch's own create+claim write to the same ledger key has
@@ -2848,7 +2881,18 @@ describe('worker WebSocket protocol', () => {
         },
       );
 
-      ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-write-fail' }));
+      // COR-230: only an `activityHeartbeat` naming this exact attempt drives
+      // the lease-renewal write this test fails — a bare session `heartbeat`
+      // no longer touches the ledger at all, so it could never reach this
+      // failure path.
+      ws.send(
+        JSON.stringify({
+          type: 'activityHeartbeat',
+          workerId: 'w-heartbeat-write-fail',
+          operationId: 'heartbeat-write-fail-op',
+          attemptToken: leasedRecord.attemptToken,
+        }),
+      );
       await waitFor(
         () =>
           errorSpy.mock.calls.some(
@@ -4861,15 +4905,38 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
+    // COR-230: 'cancelled' became a valid long-poll status (acceptance
+    // criterion 13's counterpart to the WebSocket transport's
+    // `taskResult(status: 'cancelled')`) — use a status no transport
+    // recognizes to keep this test's premise ("an invalid status value")
+    // intact.
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operationId: 'bad-status-op', status: 'cancelled' }),
+      body: JSON.stringify({ operationId: 'bad-status-op', status: 'bogus' }),
     });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: 'status must be "completed" or "failed"',
+      error: 'status must be "completed", "failed", or "cancelled"',
+    });
+  });
+
+  it('accepts a long-poll task result with status "cancelled" (COR-230, acceptance criterion 13)', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0 });
+
+    // 'cancelled' is a recognized status but still requires attemptToken —
+    // proven separately from the "invalid status" case above.
+    const response = await fetch(`${server.url}/v1/tasks/default/result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationId: 'cancelled-status-op', status: 'cancelled' }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'attemptToken must be a non-empty string',
     });
   });
 
@@ -5856,8 +5923,8 @@ describe('visibility timeout persistence', () => {
     try {
       server = serveTestServer({ engine, port: 0 });
 
-      await expect(server.ready).rejects.toThrow('recovery scan failed');
-      await expect(
+      expect(server.ready).rejects.toThrow('recovery scan failed');
+      expect(
         server.dispatchTask({
           operationId: 'blocked-by-recovery-failure',
           activityName: 'test.charge',
@@ -6802,7 +6869,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('does not reassign a task when a heartbeat extended its deadline past a stale heap entry', async () => {
+  it('does not reassign a task when an activityHeartbeat extended its deadline past a stale heap entry (COR-230)', async () => {
     ({ engine, storage } = createEngineWithStorage());
 
     // WFT-89 review round 4 (Codex): three prior rounds tried to prove a
@@ -6874,7 +6941,18 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     // margin before sending the heartbeat so the two `Date.now()` reads
     // can never collide.
     await waitForRealTimersForTesting(1000);
-    ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-stale-heap' }));
+    // COR-230: only an `activityHeartbeat` naming this exact attempt renews
+    // its lease — a bare session `heartbeat` would not touch this record at
+    // all, so it could never produce the stale-heap-vs-extended-deadline race
+    // this test exists to prove is handled correctly.
+    ws.send(
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-heartbeat-stale-heap',
+        operationId: 'heartbeat-stale-heap-op',
+        attemptToken: initialRecord.attemptToken,
+      }),
+    );
 
     let extendedDeadline = initialRecord.leaseDeadline;
     await waitFor(
@@ -6884,7 +6962,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         extendedDeadline = persisted.leaseDeadline;
         return extendedDeadline > initialRecord.leaseDeadline;
       },
-      { label: 'heartbeat extended stale heap deadline' },
+      { label: 'activityHeartbeat extended stale heap deadline' },
     );
 
     expect(extendedDeadline).toBeGreaterThan(initialRecord.leaseDeadline);
@@ -8304,6 +8382,45 @@ describe('worker shutdown and cancel propagation', () => {
     expect(server.registry.getWorker('shutdown-w1')).toBeUndefined();
   });
 
+  it('shutdownWorker marks the worker routing-ineligible before the shutdown control is ever sent (COR-230, criterion 14)', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    let shutdownReceived = false;
+    // Never close the socket in response to shutdown — this test only cares
+    // about routing eligibility at the instant `shutdownWorker` is called,
+    // not about the eventual disconnect.
+    ws.addEventListener('message', (event) => {
+      const parsed = JSON.parse(String(event.data)) as { type: string };
+      if (parsed.type === 'shutdown') shutdownReceived = true;
+    });
+
+    await registerWorker(ws, {
+      workerId: 'shutdown-drain-w1',
+      activities: ['test.charge'],
+      concurrency: 5,
+    });
+
+    // Eligible for routing before shutdown begins.
+    expect(server.registry.findWorker('test.charge')).toBeDefined();
+
+    const shutdownPromise = server.shutdownWorker('shutdown-drain-w1', { timeoutMs: 50 });
+
+    // Synchronously ineligible the instant `shutdownWorker` was called —
+    // `markWorkerDraining` runs before the WebSocket send, in the same
+    // synchronous prefix of the function, so there is no window where a
+    // fresh dispatch could still land on a worker already being shut down.
+    expect(server.registry.findWorker('test.charge')).toBeUndefined();
+    expect(server.registry.getWorker('shutdown-drain-w1')?.drainStartedAt).toBeDefined();
+
+    await shutdownPromise;
+    expect(shutdownReceived).toBe(true);
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
+  });
+
   it('shutdownWorker returns after the timeout when the worker stays connected', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
@@ -8440,7 +8557,7 @@ describe('worker shutdown and cancel propagation', () => {
     expect(server.taskQueue.pendingCount('default')).toBe(1);
   });
 
-  it('cancelTask sends cancel to the correct worker', async () => {
+  it('cancelTask records durable cancellation intent before sending cancel to the correct worker, with attemptToken (COR-230)', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
@@ -8467,9 +8584,24 @@ describe('worker shutdown and cancel propagation', () => {
       label: 'cancel task assignment registered',
     });
 
-    const result = server.cancelTask('cancel-op-1');
+    const leasedRecord = await readLedgerRecord(engine.storage, 'cancel-op-1');
+    if (leasedRecord === null || leasedRecord.state !== 'leased') {
+      throw new Error('Expected "cancel-op-1" to have a leased ledger record');
+    }
+
+    const result = await server.cancelTask('cancel-op-1');
 
     expect(result).toBe(true);
+
+    // Acceptance criterion 10: durable intent (Leased -> Cancelling) is
+    // committed before the control is sent — by the time cancelTask's
+    // promise resolves, the ledger already reflects it.
+    const cancellingRecord = await readLedgerRecord(engine.storage, 'cancel-op-1');
+    if (cancellingRecord === null || cancellingRecord.state !== 'cancelling') {
+      throw new Error('Expected "cancel-op-1" to have a cancelling ledger record');
+    }
+    expect(cancellingRecord.attemptToken).toBe(leasedRecord.attemptToken);
+
     await waitFor(() => received.some((m) => m.type === 'cancel'), {
       label: 'cancel message received',
     });
@@ -8477,17 +8609,48 @@ describe('worker shutdown and cancel propagation', () => {
     const cancelMessage = received.find((m) => m.type === 'cancel');
     expect(cancelMessage).toBeDefined();
     expect(cancelMessage!.operationId).toBe('cancel-op-1');
+    // Acceptance criterion 11: the control carries the attempt token.
+    expect(cancelMessage!.attemptToken).toBe(leasedRecord.attemptToken);
 
     ws.close();
     await waitForRealTimersForTesting(50);
   });
 
-  it('cancelTask returns false when no worker has the task', async () => {
+  it('cancelTask returns false when no ledger record exists for the operation', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
-    const result = server.cancelTask('non-existent-op');
+    const result = await server.cancelTask('non-existent-op');
     expect(result).toBe(false);
+  });
+
+  it('cancelTask commits a queued task straight to cancelled with no worker delivery (COR-230, criterion 9)', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0 });
+
+    // No worker registered for this activity — dispatchTask falls back to
+    // the long-poll queue, leaving the ledger record `queued`.
+    const dispatched = await server.dispatchTask({
+      operationId: 'cancel-queued-op',
+      activityName: 'test.charge',
+      workflowType: 'test',
+      input: { amount: 100 },
+    });
+    expect(dispatched).toBe(true);
+
+    const queuedRecord = await readLedgerRecord(engine.storage, 'cancel-queued-op');
+    if (queuedRecord === null || queuedRecord.state !== 'queued') {
+      throw new Error('Expected "cancel-queued-op" to have a queued ledger record');
+    }
+
+    const result = await server.cancelTask('cancel-queued-op');
+    expect(result).toBe(true);
+
+    const terminalRecord = await readLedgerRecord(engine.storage, 'cancel-queued-op');
+    if (terminalRecord === null || terminalRecord.state !== 'terminal') {
+      throw new Error('Expected "cancel-queued-op" to have a terminal ledger record');
+    }
+    expect(terminalRecord.disposition).toBe('cancelled');
   });
 
   it('workflow cancellation propagates cancel to workers', async () => {

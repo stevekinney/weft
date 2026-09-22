@@ -19,6 +19,7 @@ import {
 } from './dashboard-assets.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
+import type { RegistrableOperation } from './operation-catalog.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
 import type { CorsOptions } from './runtime/cors.ts';
 import {
@@ -86,7 +87,7 @@ export {
 } from './authentication.ts';
 
 // Re-export every option/handle *type* named in ServeOptions / WeftServer /
-// TaskDispatch so a consumer of `@lostgradient/weft/server` can name them all
+// TaskDispatch so a consumer of `@lostgradient/weft` can name them all
 // from this entry point. (AuthConfig/RateLimitConfig ship from the auth block
 // above; CorsOptions from its own export above.) The `Engine` instance you pass
 // to `serve()` comes from the root `@lostgradient/weft` — its canonical home —
@@ -115,7 +116,7 @@ export { TaskQueue } from './task-queue.ts';
  *
  * @example
  * ```ts
- * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft/server';
+ * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft';
  *
  * // A mounted dashboard shell owns these specific page routes.
  * console.log(DASHBOARD_PAGE_ROUTES[0]); // '/'
@@ -141,7 +142,7 @@ export const DASHBOARD_PAGE_ROUTES = [
  *
  * @example
  * ```ts
- * import type { DashboardPageRoute } from '@lostgradient/weft/server';
+ * import type { DashboardPageRoute } from '@lostgradient/weft';
  *
  * const workflowRoute: DashboardPageRoute = '/workflows/*';
  * void workflowRoute;
@@ -157,7 +158,7 @@ export type DashboardPageRoute = (typeof DASHBOARD_PAGE_ROUTES)[number];
  *
  * @example
  * ```ts
- * import type { DashboardRouteTarget } from '@lostgradient/weft/server';
+ * import type { DashboardRouteTarget } from '@lostgradient/weft';
  *
  * const dashboard: DashboardRouteTarget = new Response('<!doctype html><div id="app"></div>', {
  *   headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -172,7 +173,7 @@ export type DashboardRouteTarget = Bun.Serve.Routes<unknown, string>[string];
  *
  * @example
  * ```ts
- * import type { UnauthenticatedAccessPolicy } from '@lostgradient/weft/server';
+ * import type { UnauthenticatedAccessPolicy } from '@lostgradient/weft';
  *
  * const unauthenticatedAccess: UnauthenticatedAccessPolicy = 'reject';
  * void unauthenticatedAccess;
@@ -189,7 +190,7 @@ export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
  *
  * @example
  * ```ts
- * import { serve, type ServeOptions } from '@lostgradient/weft/server';
+ * import { serve, type ServeOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -216,6 +217,20 @@ export interface ServeOptions {
    * (`storage`, event listening, `dispatchEvent`). See #708.
    */
   engine: RegistryAgnosticEngine;
+  /**
+   * Operations declared outside this package, served alongside Weft's own.
+   *
+   * This is what makes the catalog shared rather than Weft-private.
+   * `@lostgradient/operative` and `@lostgradient/bureau` declare subscriptions with
+   * `defineOperation`, and a gateway serving all three passes them here to
+   * get one dispatch pipeline, one access policy, one transport matrix, and
+   * one set of discovery documents instead of a second RPC surface beside
+   * this one.
+   *
+   * A duplicate name fails registry construction — synchronously, before a
+   * port is bound — so a foreign operation cannot shadow one of Weft's.
+   */
+  operations?: ReadonlyArray<RegistrableOperation>;
   port?: number;
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */
@@ -291,6 +306,14 @@ export interface ServeOptions {
    * `[0, 5_000]`.
    */
   workerReconnectGracePeriodMs?: number;
+  /**
+   * How long (in ms) a leased-origin `cancelTask` waits for the worker's
+   * cooperative `taskResult(status: 'cancelled')` before the periodic
+   * reconciliation scan force-settles the attempt as cancelled with
+   * `uncertain: true` (COR-230, acceptance criterion 15). Defaults to
+   * `30_000`. Values are clamped to `[0, 300_000]`.
+   */
+  cancellationGracePeriodMs?: number;
   /**
    * How long (in ms) an adopted terminal task-ledger record is retained
    * before the periodic reconciliation scan reaps it. Defaults to `undefined`
@@ -379,7 +402,7 @@ export interface ServeOptions {
  *
  * @example
  * ```ts
- * import { type TaskDispatch } from '@lostgradient/weft/server';
+ * import { type TaskDispatch } from '@lostgradient/weft';
  *
  * const task: TaskDispatch = {
  *   operationId: crypto.randomUUID(),
@@ -450,14 +473,14 @@ export interface TaskDispatch {
  * block exits.
  *
  * Both `registry` ({@link WorkerRegistry}) and `taskQueue` ({@link TaskQueue})
- * are re-exported from `'@lostgradient/weft/server'`, so you can name these
+ * are re-exported from `'@lostgradient/weft'`, so you can name these
  * types without a second import. Still prefer `WeftServer` methods
  * (`dispatchTask`, `shutdownWorker`, etc.) over reaching into `taskQueue`
  * directly — it is exposed for inspection, not as a stable mutation surface.
  *
  * @example
  * ```ts
- * import { serve, type WeftServer } from '@lostgradient/weft/server';
+ * import { serve, type WeftServer } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -518,8 +541,18 @@ export interface WeftServer extends AsyncDisposable {
   shutdownWorker(workerId: string, options?: { timeoutMs?: number }): Promise<boolean>;
   /** Send a shutdown message to all connected workers and wait for them to disconnect. */
   shutdownAllWorkers(options?: { timeoutMs?: number }): Promise<void>;
-  /** Send a cancel message for a specific operation to the worker handling it. Returns true if the worker was found. */
-  cancelTask(operationId: string): boolean;
+  /**
+   * Request cancellation of `operationId` (COR-230). Durably records
+   * cancellation intent through the task ledger before any control is sent
+   * to a worker — a queued task commits straight to a cancelled terminal
+   * record with no worker delivery; a leased task commits `Leased -->
+   * Cancelling` first, then best-effort sends the `cancel` control. Returns
+   * `true` once intent is durably recorded (or already was), regardless of
+   * whether delivery to a live worker succeeded; `false` when there is no
+   * live attempt left to cancel (already resolved some other way, or a
+   * result is already mid-commit).
+   */
+  cancelTask(operationId: string, cancellationReason?: string): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +577,7 @@ export interface WeftServer extends AsyncDisposable {
  * @example
  * ```ts
  * import { Engine, MemoryStorage, workflow } from '@lostgradient/weft';
- * import { serve } from '@lostgradient/weft/server';
+ * import { serve } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(
@@ -672,7 +705,8 @@ export function serve(options: ServeOptions): WeftServer {
     shutdownWorker: (workerId, shutdownOptions) =>
       shutdownWorkerImpl(context, workerId, shutdownOptions),
     shutdownAllWorkers: (shutdownOptions) => shutdownAllWorkersImpl(context, shutdownOptions),
-    cancelTask: (operationId) => cancelTask(context, operationId),
+    cancelTask: (operationId, cancellationReason) =>
+      cancelTask(context, options, operationId, cancellationReason),
     [Symbol.asyncDispose]() {
       return stack[Symbol.asyncDispose]();
     },

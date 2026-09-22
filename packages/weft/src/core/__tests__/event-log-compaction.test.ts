@@ -705,7 +705,7 @@ describe('engine event-log compaction', () => {
     const engine = new Engine({ storage, history: { retentionWindow: 1 }, archive: rejecting });
     registerCountingWorkflow(engine, 4);
     const handle = await engine.start('counting', null);
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     await flush();
 
     // Checkpoint still durable, log still verifiable despite archive failure.
@@ -727,7 +727,7 @@ describe('engine event-log compaction', () => {
     });
     registerCountingWorkflow(engine2, 4);
     const handle2 = await engine2.start('counting', null);
-    await expect(handle2.result()).resolves.toBe('done');
+    expect(handle2.result()).resolves.toBe('done');
     await flush();
     expect(await storage2.get(KEYS.checkpoint(handle2.id))).not.toBeNull();
     engine2[Symbol.dispose]();

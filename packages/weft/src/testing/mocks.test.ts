@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { ActivityMockRegistry } from './mocks';
+import { ActivityMockRegistry } from './mocks.ts';
 
 interface EmailInput {
   to: string;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
+import { record } from './protocol.test-support.ts';
 
 import type { DefinitionSchemaDirection } from '../core/types/definition-schema-to-json.ts';
 import {
@@ -137,13 +138,9 @@ describe('AsyncAPI channel builders', () => {
       operation('weft.workflows.streams.sse'),
       definitionSchemaToJsonSchema,
     );
-    const token = messages['weft_workflows_streams_sse_tokenEvent'] as {
-      payload: Record<string, unknown>;
-      'x-weft-event-schema': Record<string, unknown>;
-      'x-weft-sse-frame': string;
-    };
+    const token = record(messages['weft_workflows_streams_sse_tokenEvent'], 'token message');
     expect(token).toBeDefined();
-    expect(token.payload).toEqual({ type: 'string' });
+    expect(token['payload']).toEqual({ type: 'string' });
     expect(token['x-weft-sse-frame']).toContain('data: <token-text>');
     // Logical schema preserved, but as an extension — not the wire payload.
     expect(token['x-weft-event-schema']).toBeDefined();
@@ -160,18 +157,15 @@ describe('AsyncAPI channel builders', () => {
       operation('weft.workflows.events'),
       definitionSchemaToJsonSchema,
     );
-    const terminated = messages['weft_workflows_events_terminated'] as
-      { payload: Record<string, unknown> } | undefined;
+    const terminated = messages['weft_workflows_events_terminated'];
     expect(terminated).toBeDefined();
-    const properties = terminated!.payload['properties'] as Record<string, unknown>;
-    const params = properties['params'] as Record<string, unknown>;
-    const paramsProperties = params['properties'] as Record<string, unknown>;
-    const reason = paramsProperties['reason'] as { enum: ReadonlyArray<string> };
-    expect([...reason.enum].toSorted()).toEqual([
-      'client-unsubscribed',
-      'server-closed',
-      'validation-failed',
-    ]);
+    const terminatedRecord = record(terminated, 'terminated message');
+    const payload = record(terminatedRecord['payload'], 'terminated payload');
+    const properties = record(payload['properties'], 'payload properties');
+    const params = record(properties['params'], 'params');
+    const paramsProperties = record(params['properties'], 'params properties');
+    const reason = record(paramsProperties['reason'], 'reason schema');
+    expect(reason['enum']).toEqual(['client-unsubscribed', 'server-closed', 'validation-failed']);
   });
 
   it('uses output-direction conversion for websocket output and event schemas', () => {

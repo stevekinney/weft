@@ -6,24 +6,31 @@
  * carrying workflowId/headers through to the redispatched TaskDispatch.
  */
 
-import { describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
+import { recordCancellationIntent } from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
   taskLedgerKey,
+  type RemoteTaskCancelling,
   type RemoteTaskLeased,
   type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  restoreRealTimers,
+  useFakeTimers,
+  waitForCondition,
+} from '../../testing/fake-timers.test-support.ts';
+import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import {
   reassignOrExpireTask,
   reconcileOrphanedRecords,
+  scanExpiredTasks,
   taskDispatchFromLedgerRecord,
 } from './task-reconciliation.ts';
 
@@ -117,6 +124,42 @@ function terminalFixture(
     retentionGeneration: 0,
     ...overrides,
   };
+}
+
+/** A leased-origin cancelling record (COR-230, `Leased --> Cancelling`), built through
+ * the real transition rather than hand-assembled, so it carries every field
+ * `recordCancellationIntent` actually sets (cancellationDeadline included). */
+function cancellingFixture(
+  now: number,
+  overrides: {
+    operationId?: string;
+    cancellationGracePeriodMilliseconds?: number;
+  } = {},
+): RemoteTaskCancelling {
+  const leased = leasedFixture({
+    operationId: overrides.operationId ?? 'op-cancelling',
+    createdAt: now,
+    firstQueuedAt: now,
+    lastQueuedAt: now,
+    startedAt: now,
+    lastHeartbeatAt: now,
+    leaseDeadline: now + 30_000,
+  });
+  const result = recordCancellationIntent(
+    leased,
+    {
+      expectedGeneration: leased.generation,
+      expectedAttempt: leased.attempt,
+      cancellationReason: 'operator requested',
+      cancellationToken: 'cancel-token',
+      cancellationGracePeriodMilliseconds: overrides.cancellationGracePeriodMilliseconds ?? 5_000,
+    },
+    now,
+  );
+  if (!result.ok || result.nextRecord.state !== 'cancelling') {
+    throw new Error('Expected recordCancellationIntent to produce a cancelling record');
+  }
+  return result.nextRecord;
 }
 
 describe('reassignOrExpireTask', () => {
@@ -401,5 +444,140 @@ describe('reconcileOrphanedRecords — terminal retention (WFT-24)', () => {
     expect(
       decodeRemoteTaskRecord(await options.engine.storage.get(taskLedgerKey(stored.operationId))),
     ).not.toBeNull();
+  });
+});
+
+describe('scanExpiredTasks — cancelling records (COR-230, criterion 15)', () => {
+  afterEach(() => {
+    restoreRealTimers();
+  });
+
+  it('re-tracks the heap entry when a fresh read shows the cancellation deadline has not actually passed', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    const now = 1_000_000;
+    useFakeTimers(now);
+
+    // The heap entry's own deadline (`now`) already expired, but the
+    // durably stored record's real cancellationDeadline is later — a fresh
+    // read racing ahead of a stale heap entry, per the function's own
+    // comment. Re-tracking (not dropping) it is what lets the later,
+    // correct deadline still fire the forced settlement on time.
+    const cancelling = cancellingFixture(now, { cancellationGracePeriodMilliseconds: 10_000 });
+    await options.engine.storage.put(
+      taskLedgerKey(cancelling.operationId),
+      encodeRemoteTaskRecord(cancelling),
+    );
+    context.deadlineTracker.add({ operationId: cancelling.operationId, deadline: now });
+
+    await scanExpiredTasks(context, options, NOOP_CLEANUP, now);
+
+    expect(context.deadlineTracker.peekDeadline()).toBe(cancelling.cancellationDeadline);
+    const persisted = decodeRemoteTaskRecord(
+      await options.engine.storage.get(taskLedgerKey(cancelling.operationId)),
+    );
+    expect(persisted?.state).toBe('cancelling');
+  });
+
+  it('leaves the record cancelling when the forced settlement loses the race', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions(new LosesCasStorage());
+    const now = 1_000_000;
+    useFakeTimers(now);
+
+    const cancelling = cancellingFixture(now, { cancellationGracePeriodMilliseconds: 0 });
+    await options.engine.storage.put(
+      taskLedgerKey(cancelling.operationId),
+      encodeRemoteTaskRecord(cancelling),
+    );
+    context.deadlineTracker.add({ operationId: cancelling.operationId, deadline: now });
+
+    // No throw, no unhandled rejection — the lost-race branch is a silent
+    // "something else already resolved this record" continue.
+    await scanExpiredTasks(context, options, NOOP_CLEANUP, now);
+
+    const persisted = decodeRemoteTaskRecord(
+      await options.engine.storage.get(taskLedgerKey(cancelling.operationId)),
+    );
+    expect(persisted?.state).toBe('cancelling');
+  });
+});
+
+describe('reconcileOrphanedRecords — cancelling records (COR-230, criterion 15)', () => {
+  it('skips a cancelling record another in-flight path is already processing', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    const now = Date.now();
+    const cancelling = cancellingFixture(now, { operationId: 'op-cancel-claimed' });
+    await options.engine.storage.put(
+      taskLedgerKey(cancelling.operationId),
+      encodeRemoteTaskRecord(cancelling),
+    );
+    context.processingOperations.add(cancelling.operationId);
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    // Untouched: still claimed by the other path, still cancelling.
+    expect(context.processingOperations.has(cancelling.operationId)).toBe(true);
+    const persisted = decodeRemoteTaskRecord(
+      await options.engine.storage.get(taskLedgerKey(cancelling.operationId)),
+    );
+    expect(persisted?.state).toBe('cancelling');
+  });
+
+  it("re-tracks a cancelling record's deadline when the full-ledger sweep finds it not yet due", async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    const now = Date.now();
+    const cancelling = cancellingFixture(now, {
+      operationId: 'op-cancel-not-due',
+      cancellationGracePeriodMilliseconds: 60_000,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(cancelling.operationId),
+      encodeRemoteTaskRecord(cancelling),
+    );
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(context.deadlineTracker.peekDeadline()).toBe(cancelling.cancellationDeadline);
+    const persisted = decodeRemoteTaskRecord(
+      await options.engine.storage.get(taskLedgerKey(cancelling.operationId)),
+    );
+    expect(persisted?.state).toBe('cancelling');
+  });
+
+  it('force-settles a due cancelling record found by the full-ledger sweep and cleans up', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    // Already past its (zero-grace-period) deadline by construction.
+    const cancelling = cancellingFixture(Date.now() - 5_000, {
+      operationId: 'op-cancel-due-sweep',
+      cancellationGracePeriodMilliseconds: 0,
+    });
+    await options.engine.storage.put(
+      taskLedgerKey(cancelling.operationId),
+      encodeRemoteTaskRecord(cancelling),
+    );
+    const cleanedUpWorkflows: string[] = [];
+
+    await reconcileOrphanedRecords(context, options, (workflowId) =>
+      cleanedUpWorkflows.push(workflowId),
+    );
+
+    expect(context.processingOperations.has(cancelling.operationId)).toBe(false);
+    // cleanupWorkflowIndex is called with the operationId here (matching
+    // every other call site in this file), not workflowId.
+    expect(cleanedUpWorkflows).toEqual([cancelling.operationId]);
+    const persisted = decodeRemoteTaskRecord(
+      await options.engine.storage.get(taskLedgerKey(cancelling.operationId)),
+    );
+    expect(persisted?.state).toBe('terminal');
+    expect(persisted?.state === 'terminal' && persisted.disposition).toBe('cancelled');
+    expect(
+      persisted?.state === 'terminal' &&
+        persisted.disposition === 'cancelled' &&
+        persisted.uncertain,
+    ).toBe(true);
   });
 });

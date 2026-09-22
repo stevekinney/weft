@@ -11,12 +11,14 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { purgeWorkflowsOperation, purgeWorkflowsRestBinding } from './purge-workflows.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 
@@ -128,7 +130,7 @@ describe('weft.workflows.purge', () => {
 
   it('maps EngineFailure faults to a 500 response', async () => {
     const engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...purgeWorkflowsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -138,7 +140,7 @@ describe('weft.workflows.purge', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(request({}), engine, {

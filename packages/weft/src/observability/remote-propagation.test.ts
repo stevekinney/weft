@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { ActivityInterception } from '../core/interceptor';
-import { createObservabilityInterceptors, extractTraceParent } from './index';
-import type { OpenTelemetryApi, OpenTelemetrySpan, OpenTelemetryTracer } from './no-op-telemetry';
+import type { ActivityInterception } from '../core/interceptor.ts';
+import { createObservabilityInterceptors, extractTraceParent } from './index.ts';
+import type {
+  OpenTelemetryApi,
+  OpenTelemetrySpan,
+  OpenTelemetryTracer,
+} from './no-op-telemetry.ts';
 
 /**
  * Drive a generator to completion, pumping each yielded value back in.

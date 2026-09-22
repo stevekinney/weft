@@ -224,7 +224,7 @@ export type EscalationAction =
  * ```ts
  * import { workflow, ReviewTimeoutError } from '@lostgradient/weft';
  * import type { Context, WorkflowContext } from '@lostgradient/weft';
- * import { TestEngine } from '@lostgradient/weft/testing';
+ * import { TestEngine } from '@lostgradient/weft';
  *
  * const engine = new TestEngine({ startTime: 0 });
  * engine.register(
@@ -272,7 +272,7 @@ export class ReviewTimeoutError extends WeftError<'ReviewTimeoutError'> {
  * @example Attach an event target and a fixed clock for tests
  * ```ts
  * import { ReviewCoordinator, type ReviewCoordinatorOptions } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const options: ReviewCoordinatorOptions = {
@@ -299,7 +299,7 @@ export interface ReviewCoordinatorOptions {
  * @example Create a review and later submit a decision
  * ```ts
  * import { ReviewCoordinator } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const coordinator = new ReviewCoordinator(storage);

@@ -223,4 +223,15 @@ describe('weft.catalog.diagnostics — REST GET /v1/catalog/:name/revisions/:rev
       liveRegistry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
     });
   });
+
+  it('throws when invoked directly with a context whose engine is not a concrete Engine instance', async () => {
+    await expect(
+      getCatalogDiagnosticsOperation.invoke({
+        engine: {},
+        principal: { method: 'unauthenticated' },
+        transport: 'jsonRpcStdio',
+        input: { name: 'anything', revision: 'anything' },
+      }),
+    ).rejects.toThrow('Catalog diagnostics requires a concrete Engine instance.');
+  });
 });

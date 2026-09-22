@@ -3,14 +3,15 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-
 import type { Engine } from '../../core/engine.ts';
+
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { waitForStatus } from '../workflow-status.test-support.ts';
 import {
   createBulkTestEngine,
@@ -119,8 +120,8 @@ describe('weft.workflows.bulk.signal', () => {
         requestId: 'bulk-signal-request',
       }),
     });
-    await expect(firstHandle.result()).resolves.toBe('first:released');
-    await expect(secondHandle.result()).resolves.toBe('second:released');
+    expect(firstHandle.result()).resolves.toBe('first:released');
+    expect(secondHandle.result()).resolves.toBe('second:released');
     const untouchedState = await engine.get(otherHandle.id);
     expect(untouchedState?.status).toBe('running');
 
@@ -188,7 +189,7 @@ describe('weft.workflows.bulk.signal', () => {
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     using engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...bulkSignalWorkflowsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -198,7 +199,7 @@ describe('weft.workflows.bulk.signal', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

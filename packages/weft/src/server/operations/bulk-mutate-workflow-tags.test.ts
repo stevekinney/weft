@@ -3,14 +3,15 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-
 import type { Engine } from '../../core/engine.ts';
+
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import {
   bulkMutateWorkflowTagsOperation,
   bulkMutateWorkflowTagsRestBinding,
@@ -24,6 +25,7 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 
@@ -218,7 +220,7 @@ describe('weft.workflows.bulk.tags', () => {
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     using engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...bulkMutateWorkflowTagsOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -228,7 +230,7 @@ describe('weft.workflows.bulk.tags', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

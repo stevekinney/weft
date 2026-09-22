@@ -273,7 +273,7 @@ describe('schedule test support', () => {
     const clock = { now: START };
     using engine = createEngine(clock);
 
-    await expect(
+    expect(
       tickToNextFire(engine, clock, {
         describe: async () => null,
       }),

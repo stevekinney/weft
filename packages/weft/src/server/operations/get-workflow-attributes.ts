@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { SearchAttributeValue } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -14,23 +14,21 @@ const getWorkflowAttributesOutput = z.unknown();
 export type GetWorkflowAttributesInput = z.infer<typeof getWorkflowAttributesInput>;
 export type GetWorkflowAttributesOutput = Record<string, SearchAttributeValue>;
 
-export const getWorkflowAttributesOperation = defineOperation<
-  GetWorkflowAttributesInput,
-  GetWorkflowAttributesOutput
->({
+export const getWorkflowAttributesOperation = defineOperation({
   name: 'weft.workflows.attributes.get',
   mcpExposable: false,
   summary: 'Get workflow attributes by id',
   destructive: false,
   tags: ['Attributes'],
   inputSchema: getWorkflowAttributesInput,
-  outputSchema: getWorkflowAttributesOutput as z.ZodType<GetWorkflowAttributesOutput>,
+  outputSchema: getWorkflowAttributesOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetWorkflowAttributesOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getAttributes']);
+    const e = engine;
     const attributes = await e.getAttributes(input.workflowId);
     if (attributes === null) {
       const fault: OperationFault = {

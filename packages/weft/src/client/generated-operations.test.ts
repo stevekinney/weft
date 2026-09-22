@@ -12,25 +12,25 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
-import {
-  CATALOG_OPERATION_NAMES,
-  CLIENT_OPERATION_NAMES,
-} from '../cli/generated/operation-client.generated.ts';
 import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { encodeScheduleRunMetadata } from '../core/engine/schedule-run-metadata.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { serve, type WeftServer } from '../server/index.ts';
 import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskDeadLettered,
   type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
-} from '../server/task-ledger.ts';
+} from '../core/task-ledger/task-ledger.ts';
+import type { WorkflowContext } from '../core/types.ts';
+import { workflow } from '../core/types.ts';
+import { serve, type WeftServer } from '../server/index.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  CATALOG_OPERATION_NAMES,
+  CLIENT_OPERATION_NAMES,
+} from './generated/operation-client.generated.ts';
 import { HttpClient } from './http-client.ts';
 import { LocalClient } from './local.ts';
 
@@ -165,9 +165,9 @@ describe('LocalClient catalog operations', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const client = new LocalClient(engine);
     try {
-      await expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
+      expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
       // call() resolves the same operation by name with identical typing.
-      await expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
+      expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
     } finally {
       engine[Symbol.dispose]();
     }
@@ -177,12 +177,12 @@ describe('LocalClient catalog operations', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const client = new LocalClient(engine);
     try {
-      await expect(client.operations['weft.system.lease']({})).resolves.toEqual({
+      expect(client.operations['weft.system.lease']({})).resolves.toEqual({
         mode: 'none',
         status: 'disabled',
         holdsLease: false,
       });
-      await expect(client.call('weft.system.lease', {})).resolves.toEqual({
+      expect(client.call('weft.system.lease', {})).resolves.toEqual({
         mode: 'none',
         status: 'disabled',
         holdsLease: false,
@@ -201,7 +201,7 @@ describe('LocalClient catalog operations', () => {
         taskLedgerKey(operationId),
         encodeRemoteTaskRecord(deadLetteredLedgerFixture(operationId)),
       );
-      await expect(client.call(REST_ONLY_OPERATION, { operationId })).resolves.toEqual({
+      expect(client.call(REST_ONLY_OPERATION, { operationId })).resolves.toEqual({
         ok: true,
       });
       expect(await engine.storage.get(taskLedgerKey(operationId))).toBeNull();
@@ -217,11 +217,11 @@ describe('LocalClient catalog operations', () => {
       await client.storage.put('client:a', new Uint8Array([1, 2]));
       await client.storage.batch([{ type: 'put', key: 'client:b', value: new Uint8Array([3]) }]);
       expect(await client.storage.get('client:a')).toEqual(new Uint8Array([1, 2]));
-      await expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
+      expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
         ['client:a', new Uint8Array([1, 2])],
         ['client:b', new Uint8Array([3])],
       ]);
-      await expect(
+      expect(
         client.storage.conditionalBatch(
           [{ key: 'client:c', expectedValue: null }],
           [{ type: 'put', key: 'client:c', value: new Uint8Array([4]) }],
@@ -253,12 +253,10 @@ describe('LocalClient catalog operations', () => {
     const engine = new Engine({ storage });
     const client = new LocalClient(engine);
     try {
-      await expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
+      expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
         storage.capabilities(),
       );
-      await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
-        storage.capabilities(),
-      );
+      expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(storage.capabilities());
     } finally {
       engine[Symbol.dispose]();
     }
@@ -277,12 +275,12 @@ describe('LocalClient catalog operations', () => {
         encode({ status: 'owed', attempts: 1, token: 'claim' }),
       );
 
-      await expect(
+      expect(
         client.operations['weft.workflows.scheduleprovenance.get']({
           workflowId: 'local-observed-run',
         }),
       ).resolves.toEqual({ scheduleId: 'local-schedule', occurrence: 1_000 });
-      await expect(
+      expect(
         client.operations['weft.workflows.finalizer.get']({ workflowId: 'local-observed-run' }),
       ).resolves.toEqual({ status: 'pending', attempts: 1 });
     } finally {
@@ -297,7 +295,7 @@ describe('LocalClient catalog operations', () => {
       // bulk.delete requires a confirmation token / dry-run discipline; an empty
       // unfiltered request is rejected by the operation pipeline. The point is
       // that the in-process transport throws rather than silently resolving.
-      await expect(client.operations['weft.workflows.bulk.delete']({})).rejects.toThrow();
+      expect(client.operations['weft.workflows.bulk.delete']({})).rejects.toThrow();
     } finally {
       engine[Symbol.dispose]();
     }
@@ -348,17 +346,17 @@ describe('HttpClient catalog operations', () => {
   });
 
   it('routes a previously-unexposed op (get-system-metrics) over JSON-RPC', async () => {
-    await expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
-    await expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
+    expect(client.operations['weft.system.metrics']({})).resolves.toBeDefined();
+    expect(client.call('weft.system.metrics', {})).resolves.toBeDefined();
   });
 
   it('routes lease health over JSON-RPC', async () => {
-    await expect(client.operations['weft.system.lease']({})).resolves.toEqual({
+    expect(client.operations['weft.system.lease']({})).resolves.toEqual({
       mode: 'none',
       status: 'disabled',
       holdsLease: false,
     });
-    await expect(client.call('weft.system.lease', {})).resolves.toEqual({
+    expect(client.call('weft.system.lease', {})).resolves.toEqual({
       mode: 'none',
       status: 'disabled',
       holdsLease: false,
@@ -436,10 +434,10 @@ describe('HttpClient catalog operations', () => {
   });
 
   it('reports the remote engine storage capability profile over JSON-RPC', async () => {
-    await expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
+    expect(client.operations['weft.storage.capabilities']({})).resolves.toEqual(
       engine.storage.capabilities(),
     );
-    await expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
+    expect(client.call('weft.storage.capabilities', {})).resolves.toEqual(
       engine.storage.capabilities(),
     );
   });
@@ -454,12 +452,12 @@ describe('HttpClient catalog operations', () => {
       encode({ status: 'running', attempts: 1, token: 'claim', claimedAt: 1_500 }),
     );
 
-    await expect(
+    expect(
       client.operations['weft.workflows.scheduleprovenance.get']({
         workflowId: 'http-observed-run',
       }),
     ).resolves.toEqual({ scheduleId: 'http-schedule', occurrence: 2_000 });
-    await expect(
+    expect(
       client.operations['weft.workflows.finalizer.get']({ workflowId: 'http-observed-run' }),
     ).resolves.toEqual({ status: 'running', attempts: 2, startedAt: 1_500 });
   });
@@ -471,7 +469,7 @@ describe('HttpClient catalog operations', () => {
       encodeRemoteTaskRecord(deadLetteredLedgerFixture(operationId)),
     );
 
-    await expect(client.operations[REST_ONLY_OPERATION]({ operationId })).resolves.toEqual({
+    expect(client.operations[REST_ONLY_OPERATION]({ operationId })).resolves.toEqual({
       ok: true,
     });
     expect(await engine.storage.get(taskLedgerKey(operationId))).toBeNull();
@@ -493,11 +491,11 @@ describe('HttpClient catalog operations', () => {
     await client.storage.put('client:a/slash', new Uint8Array([1, 2]));
     await client.storage.batch([{ type: 'put', key: 'client:b', value: new Uint8Array([3]) }]);
     expect(await client.storage.get('client:a/slash')).toEqual(new Uint8Array([1, 2]));
-    await expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
+    expect(Array.fromAsync(client.storage.scan('client:'))).resolves.toEqual([
       ['client:a/slash', new Uint8Array([1, 2])],
       ['client:b', new Uint8Array([3])],
     ]);
-    await expect(
+    expect(
       client.storage.conditionalBatch(
         [{ key: 'client:c', expectedValue: null }],
         [{ type: 'put', key: 'client:c', value: new Uint8Array([4]) }],
@@ -527,7 +525,7 @@ describe('HttpClient catalog operations', () => {
   it('surfaces JSON-RPC operation faults as thrown errors', async () => {
     // weft.workflows.get on a missing id produces a NotFound fault, which the
     // catalog transport rethrows rather than returning a success envelope.
-    await expect(
+    expect(
       client.operations['weft.workflows.get']({ workflowId: 'catalog-ops-missing' }),
     ).rejects.toThrow();
   });

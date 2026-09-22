@@ -11,7 +11,7 @@
  * @module core/contract/manifest-parse-schema
  */
 
-import { isRecord } from '../../worker/manifest/is-record.ts';
+import { isPlainRecord } from '../../worker/manifest/is-plain-record.ts';
 import { utf8ByteLength } from '../../worker/manifest/utf8.ts';
 import { isJSONValue } from '../json.ts';
 import { validateWorkflowOrActivityName, type NameKind } from '../types/name-grammar.ts';
@@ -72,7 +72,7 @@ function cloneJsonSafe(value: unknown): unknown {
 
 /** Validate one `inputSchema`/`outputSchema` fragment from untrusted input. */
 function parseSchemaFragment(value: unknown, path: string): ParseOutcome<Record<string, unknown>> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return workflowRevisionManifestFailure('invalid-field', 'must be a JSON object', path);
   }
   if (!withinDepth(value, MAX_CONTRACT_SCHEMA_DEPTH)) {
@@ -93,7 +93,7 @@ export function parseSchemaPair(
   value: unknown,
   path: string,
 ): ParseOutcome<WorkflowMessageContract | WorkflowActivityContract> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return workflowRevisionManifestFailure('invalid-field', 'must be a JSON object', path);
   }
 
@@ -184,7 +184,7 @@ export function parseContractRecord(
   path: string,
   keyKind: NameKind | undefined,
 ): ParseOutcome<Readonly<Record<string, WorkflowMessageContract | WorkflowActivityContract>>> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return workflowRevisionManifestFailure('invalid-field', 'must be a JSON object', path);
   }
 

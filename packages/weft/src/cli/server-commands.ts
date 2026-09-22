@@ -15,8 +15,7 @@
  * @module cli/server-commands
  */
 
-import { resolveConnection } from '../connection.ts';
-import { CATALOG_OPERATION_NAMES } from './generated/operation-client.generated.ts';
+import { CATALOG_OPERATION_NAMES, resolveConnection } from '../index.ts';
 import { messageOf, prettyJson } from './output.ts';
 import type { CommandOutput, ServerCommand } from './types.ts';
 

@@ -1,7 +1,12 @@
-import type { ActivityDefinition, WorkflowDefinition } from '../core/types.ts';
-import type { ValidationReport } from '../diagnostics/validate.ts';
+import type { ActivityDefinition, WorkflowDefinition } from '../index.ts';
 import type { CommandOutput } from './types.ts';
 import { expandGlobEntryPaths } from './utilities.ts';
+import {
+  formatValidationReport,
+  loadRegistrationsFromModule as loadCliRegistrationsFromModule,
+  validateRegistrations as validateCliRegistrations,
+  type ValidationReport,
+} from './validation.ts';
 
 type LoadRegistrationsFromModule = (modulePath: string) => Promise<{
   registrations: Record<string, WorkflowDefinition>;
@@ -124,12 +129,10 @@ export async function executeValidate(options: {
   }
 
   const expandedEntryPaths = await expandValidateEntryPaths(options.entryPaths);
-  const { loadRegistrationsFromModule, validateRegistrations, formatValidationReport } =
-    await import('../diagnostics/validate.ts');
   const summary = await collectValidationEntries(
     expandedEntryPaths,
-    loadRegistrationsFromModule,
-    validateRegistrations,
+    loadCliRegistrationsFromModule,
+    validateCliRegistrations,
   );
   const exitCode = summary.hasLoadErrors ? 2 : summary.hasValidationErrors ? 1 : 0;
 

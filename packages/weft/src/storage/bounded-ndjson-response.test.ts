@@ -8,7 +8,7 @@ describe('readBoundedNdjsonResponse', () => {
   it('accepts a response exactly at the byte limit and rejects the next byte', async () => {
     const boundaryResponse = new Response(textEncoder.encode('one\ntwo'));
 
-    await expect(
+    expect(
       Array.fromAsync(
         readBoundedNdjsonResponse(boundaryResponse, {
           maximumBytes: 7,
@@ -18,7 +18,7 @@ describe('readBoundedNdjsonResponse', () => {
     ).resolves.toEqual(['one', 'two']);
 
     const oversizedResponse = new Response(textEncoder.encode('one\ntwo!'));
-    await expect(
+    expect(
       Array.fromAsync(
         readBoundedNdjsonResponse(oversizedResponse, {
           maximumBytes: 7,
@@ -41,7 +41,7 @@ describe('readBoundedNdjsonResponse', () => {
       }),
     );
 
-    await expect(
+    expect(
       Array.fromAsync(
         readBoundedNdjsonResponse(response, {
           maximumBytes: encoded.byteLength,
@@ -66,7 +66,7 @@ describe('readBoundedNdjsonResponse', () => {
       sizeLimitError: () => new Error('response too large'),
     })[Symbol.asyncIterator]();
 
-    await expect(iterator.next()).resolves.toEqual({ done: false, value: 'first' });
+    expect(iterator.next()).resolves.toEqual({ done: false, value: 'first' });
     await iterator.return?.();
 
     expect(cancelled).toBe(true);

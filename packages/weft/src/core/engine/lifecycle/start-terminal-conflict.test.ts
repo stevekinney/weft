@@ -162,7 +162,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const engine = createEngine();
 
     const first = await engine.start('throws-immediately', null, { id: 'reuse-failed' });
-    await expect(first.result()).rejects.toThrow('boom');
+    expect(first.result()).rejects.toThrow('boom');
     await waitForCondition(async () => (await statusOf(engine, 'reuse-failed')) === 'failed', {
       timeoutMs: 2000,
       label: 'first run reached failed',
@@ -246,7 +246,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     });
     expect(await statusOf(engine, 'still-running')).toBe('running');
 
-    await expect(
+    expect(
       engine.start('echo-input', 'displace', {
         id: 'still-running',
         onTerminalConflict: 'start-new',
@@ -274,7 +274,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     });
     expect(await statusOf(engine, 'pending-delayed')).toBe('pending');
 
-    await expect(
+    expect(
       engine.start('echo-input', 'displace', {
         id: 'pending-delayed',
         onTerminalConflict: 'start-new',
@@ -293,10 +293,10 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const first = await engine.start('echo-input', 'first', { id: 'no-policy', defer: false });
     expect(await first.result()).toBe('first');
 
-    await expect(engine.start('echo-input', 'second', { id: 'no-policy' })).rejects.toBeInstanceOf(
+    expect(engine.start('echo-input', 'second', { id: 'no-policy' })).rejects.toBeInstanceOf(
       WorkflowAlreadyExistsError,
     );
-    await expect(
+    expect(
       engine.start('echo-input', 'second', { id: 'no-policy', onTerminalConflict: 'error' }),
     ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
 
@@ -307,7 +307,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     it("rejects 'start-new' without an explicit id and writes nothing", async () => {
       const storage = new MemoryStorage();
       const engine = createEngine(storage);
-      await expect(
+      expect(
         engine.start('echo-input', null, { onTerminalConflict: 'start-new' }),
       ).rejects.toBeInstanceOf(StartWorkflowValidationError);
       // The validation fires before any id is generated or persisted, so the
@@ -318,7 +318,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
 
     it("rejects 'start-new' combined with an idempotencyKey", async () => {
       const engine = createEngine();
-      await expect(
+      expect(
         engine.start('echo-input', null, {
           idempotencyKey: 'k',
           onTerminalConflict: 'start-new',
@@ -340,7 +340,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       await seeded.result();
       // A repeat call with the same key AND the (illegal) policy must throw, not
       // silently return the existing run.
-      await expect(
+      expect(
         engine.start('echo-input', 'again', {
           idempotencyKey: 'dedup-key',
           onTerminalConflict: 'start-new',
@@ -351,7 +351,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
 
     it('rejects an unknown onTerminalConflict value', async () => {
       const engine = createEngine();
-      await expect(
+      expect(
         engine.start('echo-input', null, {
           id: 'bad-policy',
           // Untyped caller smuggling an out-of-union value.
@@ -377,7 +377,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
 
       // Oversized restart input: rejected AFTER the duplicate-id decision but
       // BEFORE the destructive purge, so the prior run must survive.
-      await expect(
+      expect(
         engine.start('echo-input', 'x'.repeat(1024), {
           id: 'keep-on-reject',
           onTerminalConflict: 'start-new',
@@ -401,7 +401,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       });
       expect(await first.result()).toBe('original');
 
-      await expect(
+      expect(
         engine.start('echo-input', 'replacement', {
           id: 'overflow-keep',
           onTerminalConflict: 'start-new',
@@ -478,7 +478,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       expect(await first.result()).toBe('survivor');
 
       failNextStatePut = true;
-      await expect(
+      expect(
         engine.start('echo-input', 'replacement', {
           id: 'commit-fail',
           onTerminalConflict: 'start-new',
@@ -632,7 +632,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const first = await engine.start(type, 'old-input', {
       id: 'terminal-conflict-revision-id',
     });
-    await expect(first.result()).resolves.toBe('old-input');
+    expect(first.result()).resolves.toBe('old-input');
     const firstSummary = await engine.get(first.id);
     expect(firstSummary?.revision).toBe(revisionV1);
 

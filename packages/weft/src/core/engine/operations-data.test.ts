@@ -18,7 +18,7 @@ describe('data operation helpers', () => {
       },
     };
 
-    await expect(
+    expect(
       processLoadOperation({ storage: new MemoryStorage() } as never, 'workflow-id', operation, {
         persistCheckpoint: async () => {},
         runOperationWithResult: async (_workflowId, _operation, execute) => {
