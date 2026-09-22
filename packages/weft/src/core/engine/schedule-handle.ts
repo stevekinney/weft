@@ -1,4 +1,9 @@
-import type { ScheduleSpec, ScheduleSummary, ScheduleUpdateOptions } from '../types.ts';
+import type {
+  ScheduleSpec,
+  ScheduleSummary,
+  ScheduleTransitionOptions,
+  ScheduleUpdateOptions,
+} from '../types.ts';
 
 /**
  * Narrow engine view a {@link ScheduleHandle} delegates to. The full
@@ -6,9 +11,9 @@ import type { ScheduleSpec, ScheduleSummary, ScheduleUpdateOptions } from '../ty
  * lifecycle operations.
  */
 export interface ScheduleHandleEngine {
-  pauseSchedule(scheduleId: string): Promise<void>;
-  resumeSchedule(scheduleId: string): Promise<void>;
-  cancelSchedule(scheduleId: string): Promise<void>;
+  pauseSchedule(scheduleId: string, options?: ScheduleTransitionOptions): Promise<void>;
+  resumeSchedule(scheduleId: string, options?: ScheduleTransitionOptions): Promise<void>;
+  cancelSchedule(scheduleId: string, options?: ScheduleTransitionOptions): Promise<void>;
   updateSchedule(
     scheduleId: string,
     newSpec: string | ScheduleSpec,
@@ -22,6 +27,11 @@ export interface ScheduleHandleEngine {
  * `handle.pause()`, `handle.resume()`, `handle.cancel()`, or
  * `handle.update(spec, options?)` to manage the schedule lifecycle.
  * `handle.describe()` returns the current {@link ScheduleSummary}.
+ *
+ * `pause`/`resume`/`cancel` accept an optional {@link ScheduleTransitionOptions}
+ * (COR-67) so a caller keeping its own durable projection in step with this
+ * schedule can commit its own operations atomically with the status
+ * transition — see that type's doc comment for the atomicity guarantee.
  *
  * @example
  * ```ts
@@ -48,16 +58,16 @@ export class ScheduleHandle {
     this.#engine = engine;
   }
 
-  async pause(): Promise<void> {
-    await this.#engine.pauseSchedule(this.id);
+  async pause(options?: ScheduleTransitionOptions): Promise<void> {
+    await this.#engine.pauseSchedule(this.id, options);
   }
 
-  async resume(): Promise<void> {
-    await this.#engine.resumeSchedule(this.id);
+  async resume(options?: ScheduleTransitionOptions): Promise<void> {
+    await this.#engine.resumeSchedule(this.id, options);
   }
 
-  async cancel(): Promise<void> {
-    await this.#engine.cancelSchedule(this.id);
+  async cancel(options?: ScheduleTransitionOptions): Promise<void> {
+    await this.#engine.cancelSchedule(this.id, options);
   }
 
   async update(newSpec: string | ScheduleSpec, options?: ScheduleUpdateOptions): Promise<void> {

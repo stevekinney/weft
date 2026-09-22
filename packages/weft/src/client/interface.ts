@@ -6,11 +6,6 @@
  * @module client/interface
  */
 
-import type {
-  ClientOperationName,
-  ClientOperationTypes,
-  ClientOperations,
-} from '../cli/generated/operation-client.generated.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type { StartOrSignalOutcome as EngineStartOrSignalOutcome } from '../core/engine/handles.ts';
 import type { TypedEventTarget, WeftEventMap } from '../core/events.ts';
@@ -57,6 +52,11 @@ import type {
 } from '../core/types.ts';
 import type { WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
+import type {
+  ClientOperationName,
+  ClientOperationTypes,
+  ClientOperations,
+} from './generated/operation-client.generated.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 /**
@@ -66,7 +66,7 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
  *
  * @example
  * ```ts
- * import type { ClientStartOptions } from '@lostgradient/weft/client';
+ * import type { ClientStartOptions } from '@lostgradient/weft';
  *
  * const options: ClientStartOptions = {
  *   id: 'welcome-ada',
@@ -84,7 +84,7 @@ export type ClientStartOptions = Omit<StartOptions, 'defer' | 'services'> & {
  * Remote-capable start-or-signal options, including terminal restart policy.
  * @example
  * ```ts
- * import type { ClientStartOrSignalOptions } from '@lostgradient/weft/client';
+ * import type { ClientStartOrSignalOptions } from '@lostgradient/weft';
  * const options: ClientStartOrSignalOptions = {
  *   id: 'github:installations:42:sync',
  *   onTerminalConflict: 'start-new',
@@ -104,7 +104,7 @@ export type ClientStartOrSignalOptions = ClientStartOptions &
  *
  * @example
  * ```ts
- * import type { StartOrSignalOutcome } from '@lostgradient/weft/client';
+ * import type { StartOrSignalOutcome } from '@lostgradient/weft';
  *
  * const outcome: StartOrSignalOutcome = 'started';
  * void outcome;
@@ -123,7 +123,7 @@ export type StartOrSignalOutcome = EngineStartOrSignalOutcome;
  * @example
  * ```ts
  * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowCompletedEvent } from '@lostgradient/weft';
- * import type { ClientHandle } from '@lostgradient/weft/client';
+ * import type { ClientHandle } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
@@ -250,7 +250,7 @@ export interface ClientHandle<TResult = unknown>
  * @example
  * ```ts
  * import { workflow, Engine, MemoryStorage, LocalClient } from '@lostgradient/weft';
- * import type { ClientScheduleHandle } from '@lostgradient/weft/client';
+ * import type { ClientScheduleHandle } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'sent'; }));
@@ -299,7 +299,7 @@ export type UpdateResult = {
  *
  * @example
  * ```ts
- * import type { WeftClientActivity } from '@lostgradient/weft/client';
+ * import type { WeftClientActivity } from '@lostgradient/weft';
  * declare const activity: WeftClientActivity;
  * void activity.listPending('order-1');
  * ```

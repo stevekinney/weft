@@ -16,17 +16,15 @@
  * @module cli/server-client
  */
 
-import type { ConnectionOptions } from '../connection.ts';
 import {
   CATALOG_OPERATION_NAMES,
-  type CatalogOperationName,
-  type CatalogOperationTypes,
-} from './generated/operation-client.generated.ts';
-import {
   CatalogClientError,
   createCatalogWeftClient,
   httpJsonRpcTransport,
-} from './operation-client-runtime.ts';
+  type CatalogOperationName,
+  type CatalogOperationTypes,
+  type ConnectionOptions,
+} from '../index.ts';
 import { messageOf } from './output.ts';
 
 /** Successful or failed result of a catalog operation call, never thrown. */

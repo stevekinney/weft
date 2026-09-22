@@ -49,9 +49,9 @@ describe('HTTP client storage facade', () => {
     const storage = createHttpClientStorage('https://weft.example', {});
 
     await storage.batch([{ type: 'delete', key: 'delete-me' }]);
-    await expect(
-      Array.fromAsync(storage.scan('prefix/', { reverse: false, limit: 3 })),
-    ).resolves.toEqual([]);
+    expect(Array.fromAsync(storage.scan('prefix/', { reverse: false, limit: 3 }))).resolves.toEqual(
+      [],
+    );
 
     expect(requests[0]?.init?.body).toBe(
       JSON.stringify({ operations: [{ type: 'delete', key: 'delete-me' }] }),
@@ -77,7 +77,7 @@ describe('HTTP client storage facade', () => {
     );
     const storage = createHttpClientStorage('https://weft.example', {});
 
-    await expect(Array.fromAsync(storage.scan('prefix'))).rejects.toThrow(
+    expect(Array.fromAsync(storage.scan('prefix'))).rejects.toThrow(
       'HttpClient storage scan response contained an invalid NDJSON entry.',
     );
   });
@@ -98,7 +98,7 @@ describe('HTTP client storage facade', () => {
     );
     const storage = createHttpClientStorage('https://weft.example', {});
 
-    await expect(Array.fromAsync(storage.scan('prefix'))).rejects.toThrow(
+    expect(Array.fromAsync(storage.scan('prefix'))).rejects.toThrow(
       'HttpClient storage scan response exceeded the maximum allowed size.',
     );
   });
@@ -107,7 +107,7 @@ describe('HTTP client storage facade', () => {
     spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ applied: 'yes' }));
     const storage = createHttpClientStorage('https://weft.example', {});
 
-    await expect(storage.conditionalBatch([], [])).rejects.toThrow(
+    expect(storage.conditionalBatch([], [])).rejects.toThrow(
       'HttpClient storage conditional batch response must include a boolean "applied" field.',
     );
   });

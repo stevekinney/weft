@@ -429,7 +429,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       attempts: 1,
       completedAt: expect.any(Number),
     });
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toMatchObject({
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toMatchObject({
       status: 'succeeded',
       attempts: 1,
     });
@@ -998,7 +998,7 @@ describe('Engine.getFinalizerStatus', () => {
     await engine.storage.put(KEYS.workflow(workflowId), encode(terminalState(workflowId, 'type')));
     await engine.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim('token', 2)));
 
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
       status: 'pending',
       attempts: 2,
     });
@@ -1007,7 +1007,7 @@ describe('Engine.getFinalizerStatus', () => {
       KEYS.teardownOwed(workflowId),
       encode({ status: 'running', attempts: 2, token: 'token', claimedAt: 500 }),
     );
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
       status: 'running',
       attempts: 3,
       startedAt: 500,
@@ -1028,7 +1028,7 @@ describe('Engine.getFinalizerStatus', () => {
       }),
     );
 
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
       status: 'failed',
       attempts: 8,
       failedAt: 900,
@@ -1039,7 +1039,7 @@ describe('Engine.getFinalizerStatus', () => {
       KEYS.workflow(workflowId),
       encode({ ...terminalState(workflowId, 'type'), workflowExecutionToken: 'new-run' }),
     );
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
   });
 
   it('does not attribute an unqualified historical outcome to a current tokenized run', async () => {
@@ -1051,7 +1051,7 @@ describe('Engine.getFinalizerStatus', () => {
       encode({ type: 'type', lastError: 'old failure', attempts: 8, deadLetteredAt: 900 }),
     );
 
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
   });
 
   it('treats an undecodable success record as absent', async () => {
@@ -1060,7 +1060,7 @@ describe('Engine.getFinalizerStatus', () => {
 
     await engine.storage.put(KEYS.teardownSucceeded(workflowId), new Uint8Array([0xc1]));
 
-    await expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
   });
 });
 

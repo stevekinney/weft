@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { WorkflowTimelineEntry } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -15,17 +15,14 @@ const getWorkflowTimelineOutput = z.unknown();
 export type GetWorkflowTimelineInput = z.infer<typeof getWorkflowTimelineInput>;
 export type GetWorkflowTimelineOutput = WorkflowTimelineEntry[];
 
-export const getWorkflowTimelineOperation = defineOperation<
-  GetWorkflowTimelineInput,
-  GetWorkflowTimelineOutput
->({
+export const getWorkflowTimelineOperation = defineOperation({
   name: 'weft.workflows.timeline.get',
   mcpExposable: false,
   summary: 'Get the structured execution timeline for a workflow',
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getWorkflowTimelineInput,
-  outputSchema: getWorkflowTimelineOutput as z.ZodType<GetWorkflowTimelineOutput>,
+  outputSchema: getWorkflowTimelineOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
@@ -35,7 +32,8 @@ export const getWorkflowTimelineOperation = defineOperation<
   // json and msgpack is REST-specific and lives in the binding's
   // `shapeSuccess`, not on the operation output type.
   invoke: async ({ input, engine }): Promise<GetWorkflowTimelineOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['get', 'getTimeline']);
+    const e = engine;
     const state = await e.get(input.workflowId);
     if (state === null) {
       const fault: OperationFault = {

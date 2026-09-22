@@ -14,13 +14,12 @@
 
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { WorkflowReplay } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 
 const replayWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -32,7 +31,7 @@ const replayWorkflowOutput = z.unknown();
 export type ReplayWorkflowInput = z.infer<typeof replayWorkflowInput>;
 export type ReplayWorkflowOutput = WorkflowReplay;
 
-export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, ReplayWorkflowOutput>({
+export const replayWorkflowOperation = defineOperation({
   name: 'weft.workflows.replay',
   mcpExposable: false,
   summary: 'Replay a workflow to a historical checkpoint step',
@@ -47,7 +46,7 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: replayWorkflowInput,
-  outputSchema: replayWorkflowOutput as z.ZodType<ReplayWorkflowOutput>,
+  outputSchema: replayWorkflowOutput,
   access: {
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['workflows:read'] },
@@ -57,7 +56,8 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ReplayWorkflowOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['get', 'replayTo']);
+    const e = engine;
 
     // Confirm the workflow exists first: 404 takes precedence over the step check.
     const state = await e.get(input.workflowId);

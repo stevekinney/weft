@@ -23,14 +23,18 @@ import { toScheduleSummary } from './engine/schedules.ts';
 import {
   decodeScheduleIdentityFields,
   decodeScheduleState,
+} from './engine/validation/schedule-decode.ts';
+import {
   normalizeScheduleOptions,
   normalizeScheduleSpec,
   normalizeScheduleUpdateOptions,
 } from './engine/validation/schedule.ts';
 import {
   CleanupWarningEvent,
+  ScheduleAttemptedEvent,
   ScheduleFiredEvent,
   ScheduleMissedFireEvent,
+  ScheduleSkippedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
@@ -306,6 +310,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     backfill: false,
     revisionPolicy: 'active-at-fire',
     missedFireCount: 0,
+    skippedCount: 0,
     queuedRuns: [],
     updatedAt: 1,
     workflowType: 'workflow',
@@ -364,7 +369,7 @@ describe('schedule validation helpers', () => {
       ),
     );
 
-    await expect(engine.schedule(type, null, { every: false as never })).rejects.toThrow(
+    expect(engine.schedule(type, null, { every: false as never })).rejects.toThrow(
       'Schedule interval "every" must be a duration string or a number of milliseconds',
     );
 
@@ -543,6 +548,40 @@ describe('schedule record decoding', () => {
       '[weft] Ignoring malformed schedule "schedule-state" with a pinnedRevision but no revisionPolicy.',
     );
   });
+
+  it('rejects schedule records with an invalid skippedCount (COR-1224)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        skippedCount: -1,
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with invalid skippedCount.',
+    );
+  });
+
+  it('rejects schedule records with an invalid lastSkippedAt (COR-1224)', () => {
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    const state = createScheduleState();
+    const decoded = decodeScheduleState(
+      encode({
+        ...state,
+        lastSkippedAt: 'not-a-timestamp',
+      }),
+    );
+
+    expect(decoded).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[weft] Ignoring malformed schedule "schedule-state" with invalid lastSkippedAt.',
+    );
+  });
 });
 
 describe('recurring schedules', () => {
@@ -564,7 +603,7 @@ describe('recurring schedules', () => {
     const state = createScheduleState();
 
     try {
-      await expect(settleBackfillScheduleStateForEngine(engine, state)).resolves.toEqual(state);
+      expect(settleBackfillScheduleStateForEngine(engine, state)).resolves.toEqual(state);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -582,7 +621,7 @@ describe('recurring schedules', () => {
       });
       await scheduleHandle.cancel();
 
-      await expect(engine.resumeSchedule('cancelled-schedule')).rejects.toThrow(
+      expect(engine.resumeSchedule('cancelled-schedule')).rejects.toThrow(
         'has been cancelled and cannot be resumed',
       );
     } finally {
@@ -615,7 +654,7 @@ describe('recurring schedules', () => {
       await storage.put(scheduleRunKey, encode({ invalid: true }));
       storage.cleanupKeyToReject = scheduleRunKey;
 
-      await expect(handleScheduledWorkflowTerminalForEngine(engine, workflowId)).rejects.toThrow(
+      expect(handleScheduledWorkflowTerminalForEngine(engine, workflowId)).rejects.toThrow(
         `Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`,
       );
       expect(await storage.get(scheduleRunKey)).not.toBeNull();
@@ -856,6 +895,7 @@ describe('recurring schedules', () => {
     expect(skippedDescription).toMatchObject({
       lastMissedFireAt: firstFireAt + 120_000,
       missedFireCount: 3,
+      skippedCount: 0,
       nextFireAt: firstFireAt + 180_000,
     });
     expect(skippedDescription.lastFireAt).toBeUndefined();
@@ -932,7 +972,7 @@ describe('recurring schedules', () => {
       },
     );
 
-    await expect(schedule.describe()).resolves.toMatchObject({
+    expect(schedule.describe()).resolves.toMatchObject({
       id: 'described-schedule',
       description: 'Run the described workflow',
       intervalMs: 60_000,
@@ -945,7 +985,7 @@ describe('recurring schedules', () => {
       return 'done';
     });
 
-    await expect(recoveredEngine.getSchedule('described-schedule')).resolves.toMatchObject({
+    expect(recoveredEngine.getSchedule('described-schedule')).resolves.toMatchObject({
       id: 'described-schedule',
       description: 'Run the described workflow',
       intervalMs: 60_000,
@@ -1005,7 +1045,7 @@ describe('recurring schedules', () => {
       return 'done';
     });
 
-    await expect(scheduleWithoutCron('missing-cron-echo', null)).rejects.toThrow(
+    expect(scheduleWithoutCron('missing-cron-echo', null)).rejects.toThrow(
       'A cron string or schedule spec must be provided when scheduling by workflow type.',
     );
 
@@ -1173,9 +1213,7 @@ describe('recurring schedules', () => {
       KEYS.scheduleTick(replacementFireAt, 'update-atomicity-schedule'),
     );
 
-    await expect(schedule.update('*/30 * * * * *')).rejects.toThrow(
-      'simulated schedule batch failure',
-    );
+    expect(schedule.update('*/30 * * * * *')).rejects.toThrow('simulated schedule batch failure');
 
     const storedScheduleBytes = await storage.get(KEYS.schedule('update-atomicity-schedule'));
     expect(storedScheduleBytes).not.toBeNull();
@@ -1356,7 +1394,7 @@ describe('recurring schedules', () => {
     });
     const before = await storage.get(KEYS.schedule('invalid-description'));
 
-    await expect(schedule.update('*/5 * * * * *', { description: null as never })).rejects.toThrow(
+    expect(schedule.update('*/5 * * * * *', { description: null as never })).rejects.toThrow(
       'options.description must be a string when provided',
     );
     expect(await storage.get(KEYS.schedule('invalid-description'))).toEqual(before);
@@ -1561,7 +1599,7 @@ describe('recurring schedules', () => {
       expect(updateSettled).toBe(false);
       storage.releaseBatch.resolve();
       await tickPromise;
-      await expect(updatePromise).rejects.toThrow(
+      expect(updatePromise).rejects.toThrow(
         'Failed to persist schedule "serialized-update-failure" while processing its timer',
       );
 
@@ -1686,6 +1724,198 @@ describe('recurring schedules', () => {
       secondEngine?.[Symbol.dispose]();
       errorSpy.mockRestore();
     }
+  });
+
+  it('dispatches schedule:attempted once per tick, before the overlap decision, and schedule:skipped only on a blocked collision (WFT-136)', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+
+    registerWorkflow(engine, 'observed-skip', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const observed: string[] = [];
+    const attempted: ScheduleAttemptedEvent[] = [];
+    const skipped: ScheduleSkippedEvent[] = [];
+    engine.addEventListener(ScheduleAttemptedEvent.type, (event) => {
+      observed.push(event.type);
+      attempted.push(event);
+    });
+    engine.addEventListener(ScheduleFiredEvent.type, (event) => {
+      observed.push(event.type);
+    });
+    engine.addEventListener(ScheduleSkippedEvent.type, (event) => {
+      observed.push(event.type);
+      skipped.push(event);
+    });
+
+    const schedule = await engine.schedule('observed-skip', null, '* * * * *', {
+      id: 'observed-skip-schedule',
+      overlap: 'skip',
+    });
+
+    const firstOccurrence = requireNextFireAt(await schedule.describe());
+    await tickEngine(engine, clock, firstOccurrence);
+    const [blockingWorkflowId] = await listRunningWorkflowIds(engine);
+    expect(blockingWorkflowId).toBeDefined();
+
+    const secondOccurrence = requireNextFireAt(await schedule.describe());
+    await tickEngine(engine, clock, secondOccurrence);
+
+    // The collision drops the occurrence: still exactly one run, and the
+    // attempted signal is what distinguishes this from a stopped schedule.
+    expect(await listRunningWorkflowIds(engine)).toEqual([blockingWorkflowId!]);
+    expect(observed).toEqual([
+      ScheduleAttemptedEvent.type,
+      ScheduleFiredEvent.type,
+      ScheduleAttemptedEvent.type,
+      ScheduleSkippedEvent.type,
+    ]);
+
+    expect(attempted.map((event) => event.occurrence)).toEqual([firstOccurrence, secondOccurrence]);
+    expect(attempted.map((event) => event.scheduleId)).toEqual([
+      'observed-skip-schedule',
+      'observed-skip-schedule',
+    ]);
+    expect(attempted.map((event) => event.attemptedAt)).toEqual([
+      firstOccurrence,
+      secondOccurrence,
+    ]);
+
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({
+      scheduleId: 'observed-skip-schedule',
+      occurrence: secondOccurrence,
+      skippedAt: secondOccurrence,
+      blockingWorkflowId,
+      policy: 'skip',
+    });
+
+    await releaseRunningWorkflows(engine);
+    engine[Symbol.dispose]();
+  });
+
+  it('records a dropped occurrence on the durable schedule record, not only as a live event (COR-1224)', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
+    const engine = createEngine(clock, storage);
+
+    registerWorkflow(engine, 'durable-skip-count', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const schedule = await engine.schedule('durable-skip-count', null, '* * * * *', {
+      id: 'durable-skip-count-schedule',
+      overlap: 'skip',
+    });
+
+    // A fresh schedule has never skipped.
+    const initial = await schedule.describe();
+    expect(initial.skippedCount).toBe(0);
+    expect(initial.lastSkippedAt).toBeUndefined();
+
+    await tickEngine(engine, clock, requireNextFireAt(initial));
+    const [blockingWorkflowId] = await listRunningWorkflowIds(engine);
+    expect(blockingWorkflowId).toBeDefined();
+
+    // A fire is not a skip.
+    const afterFire = await schedule.describe();
+    expect(afterFire.skippedCount).toBe(0);
+
+    const collision = requireNextFireAt(afterFire);
+    await tickEngine(engine, clock, collision);
+
+    const afterSkip = await schedule.describe();
+    expect(afterSkip.skippedCount).toBe(1);
+    expect(afterSkip.lastSkippedAt).toBe(collision);
+
+    // A second collision accumulates rather than replacing.
+    const secondCollision = requireNextFireAt(afterSkip);
+    await tickEngine(engine, clock, secondCollision);
+
+    const afterSecondSkip = await schedule.describe();
+    expect(afterSecondSkip.skippedCount).toBe(2);
+    expect(afterSecondSkip.lastSkippedAt).toBe(secondCollision);
+
+    // The count is on the persisted record, so it survives losing the engine
+    // that observed the collisions — which is the whole point of recording it
+    // durably rather than trusting a live listener to have been present.
+    await releaseRunningWorkflows(engine);
+    engine[Symbol.dispose]();
+
+    const recoveredEngine = createEngine(clock, storage);
+    registerWorkflow(recoveredEngine, 'durable-skip-count', async function* () {
+      return 'done';
+    });
+    const recovered = await recoveredEngine.getSchedule('durable-skip-count-schedule');
+    expect(recovered?.skippedCount).toBe(2);
+    expect(recovered?.lastSkippedAt).toBe(secondCollision);
+
+    recoveredEngine[Symbol.dispose]();
+  });
+
+  it('dispatches schedule:attempted with no schedule:skipped when a tick has no collision to block (WFT-136)', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+
+    registerWorkflow(engine, 'observed-uncontended', async function* () {
+      return 'done';
+    });
+
+    const attempted: ScheduleAttemptedEvent[] = [];
+    const skipped: ScheduleSkippedEvent[] = [];
+    engine.addEventListener(ScheduleAttemptedEvent.type, (event) => attempted.push(event));
+    engine.addEventListener(ScheduleSkippedEvent.type, (event) => skipped.push(event));
+
+    const schedule = await engine.schedule('observed-uncontended', null, '* * * * *', {
+      id: 'observed-uncontended-schedule',
+      overlap: 'skip',
+    });
+
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+
+    expect(attempted).toHaveLength(2);
+    expect(skipped).toEqual([]);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('dispatches schedule:attempted without schedule:skipped when a queue-overlap collision buffers the occurrence (WFT-136)', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+
+    registerWorkflow(engine, 'observed-queue', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const attempted: ScheduleAttemptedEvent[] = [];
+    const skipped: ScheduleSkippedEvent[] = [];
+    engine.addEventListener(ScheduleAttemptedEvent.type, (event) => attempted.push(event));
+    engine.addEventListener(ScheduleSkippedEvent.type, (event) => skipped.push(event));
+
+    const schedule = await engine.schedule('observed-queue', null, '* * * * *', {
+      id: 'observed-queue-schedule',
+      overlap: 'queue',
+    });
+
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+    expect(await listRunningWorkflowIds(engine)).toHaveLength(1);
+
+    await tickEngine(engine, clock, requireNextFireAt(await schedule.describe()));
+
+    // Buffered, not dropped — a queued occurrence still runs later, so it is
+    // not a skip.
+    expect(attempted).toHaveLength(2);
+    expect(skipped).toEqual([]);
+    const queuedDescription = await schedule.describe();
+    expect(queuedDescription.queuedRuns).toHaveLength(1);
+
+    await releaseRunningWorkflows(engine);
+    engine[Symbol.dispose]();
   });
 
   it("Overlap policy is configurable. { overlap: 'skip' } does not start a new run while the previous run is still executing.", async () => {
@@ -2092,7 +2322,7 @@ describe('recurring schedules', () => {
       const resultPromise = engine.getHandle(firstWorkflowId).result();
 
       await engine.signal(firstWorkflowId, 'release', 'completed');
-      await expect(resultPromise).resolves.toBe('completed');
+      expect(resultPromise).resolves.toBe('completed');
       await drainEngine();
 
       expect(terminalEvents).toHaveLength(1);
@@ -2858,18 +3088,19 @@ describe('recurring schedules', () => {
         updatedAt: clock.now,
         nextFireAt: clock.now + 60_000,
         missedFireCount: 0,
+        skippedCount: 0,
         queuedRuns: [],
       }),
     );
-    await expect(engine.getSchedule('old-descriptionless-schedule')).resolves.toMatchObject({
+    expect(engine.getSchedule('old-descriptionless-schedule')).resolves.toMatchObject({
       id: 'old-descriptionless-schedule',
     });
-    await expect(
+    expect(
       engine.schedule('validated-schedule-workflow', null, '* * * * *', {
         overlap: 'bogus' as unknown as never,
       }),
     ).rejects.toThrow('options.overlap');
-    await expect(engine.getSchedule('')).rejects.toThrow('scheduleId');
+    expect(engine.getSchedule('')).rejects.toThrow('scheduleId');
 
     engine[Symbol.dispose]();
   });

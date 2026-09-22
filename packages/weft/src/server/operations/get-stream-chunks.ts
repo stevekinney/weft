@@ -1,11 +1,10 @@
 import { z } from 'zod';
 
 import type { StoredStreamChunk } from '../../core/context.ts';
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
@@ -22,22 +21,20 @@ const getStreamChunksInput = z.object({
 export type GetStreamChunksInput = z.infer<typeof getStreamChunksInput>;
 export type GetStreamChunksOutput = { chunks: StoredStreamChunk[] };
 
-export const getStreamChunksOperation = defineOperation<
-  GetStreamChunksInput,
-  GetStreamChunksOutput
->({
+export const getStreamChunksOperation = defineOperation({
   name: 'weft.workflows.streams.chunks',
   mcpExposable: false,
   summary: 'Read stored stream chunks for a workflow stream key',
   destructive: false,
   tags: ['Streams'],
   inputSchema: getStreamChunksInput,
-  outputSchema: z.object({ chunks: z.array(z.unknown()) }) as z.ZodType<GetStreamChunksOutput>,
+  outputSchema: z.object({ chunks: z.array(z.unknown()) }),
   access: { kind: 'public' },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetStreamChunksOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getStreamChunks']);
+    const e = engine;
 
     // REST passes the raw query string; JSON-RPC may pass an already-parsed
     // number. Either way, run the shared validator so both transports hit

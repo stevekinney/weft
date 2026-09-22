@@ -294,7 +294,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', failingArea);
     try {
       const storage = new WebExtensionStorage();
-      await expect(storage.put('key', encode('value'))).rejects.toThrow('set failed');
+      expect(storage.put('key', encode('value'))).rejects.toThrow('set failed');
     } finally {
       restore();
     }
@@ -330,13 +330,11 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage();
-      await expect(storage.get('__weftStorageKeyspace')).rejects.toThrow(
+      expect(storage.get('__weftStorageKeyspace')).rejects.toThrow('reserved for adapter metadata');
+      expect(storage.put('__weftStorageKeyspace', encode('value'))).rejects.toThrow(
         'reserved for adapter metadata',
       );
-      await expect(storage.put('__weftStorageKeyspace', encode('value'))).rejects.toThrow(
-        'reserved for adapter metadata',
-      );
-      await expect(
+      expect(
         storage.batch([
           { type: 'put', key: 'safe', value: encode('safe') },
           { type: 'delete', key: '__weftStorageKeyspace' },
@@ -395,7 +393,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
-      await expect(storage.put('key', encode('value'))).rejects.toThrow(
+      expect(storage.put('key', encode('value'))).rejects.toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
     } finally {
@@ -416,11 +414,11 @@ describe('WebExtensionStorage', () => {
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
 
-      await expect(storage.deletePrefix('wf:')).rejects.toThrow(
+      expect(storage.deletePrefix('wf:')).rejects.toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
       // An empty prefix is still a write attempt and must be rejected up front.
-      await expect(storage.deletePrefix('missing:')).rejects.toThrow(
+      expect(storage.deletePrefix('missing:')).rejects.toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
 
@@ -461,14 +459,12 @@ describe('WebExtensionStorage', () => {
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
 
-      await expect(storage.deleteRange('ev:wf:', { lt: 'ev:wf:02' })).rejects.toThrow(
+      expect(storage.deleteRange('ev:wf:', { lt: 'ev:wf:02' })).rejects.toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
 
       // Invalid options still throw the validation error, never silently no-op.
-      await expect(storage.deleteRange('ev:wf:', {})).rejects.toThrow(
-        /at least one of gt\/gte\/lt\/lte/,
-      );
+      expect(storage.deleteRange('ev:wf:', {})).rejects.toThrow(/at least one of gt\/gte\/lt\/lte/);
 
       expect(area.data.has('ev:wf:01')).toBe(true);
       expect(area.removeCallCount).toBe(0);
@@ -526,7 +522,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage({ area: 'sync' });
-      await expect(storage.put('large', encode('x'.repeat(128)))).rejects.toThrow(
+      expect(storage.put('large', encode('x'.repeat(128)))).rejects.toThrow(
         'WebExtensionStorage sync item quota exceeded',
       );
     } finally {
@@ -541,7 +537,7 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage({ area: 'sync' });
       await storage.put('small', encode('ok'));
 
-      await expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
+      expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
         'WebExtensionStorage sync total quota exceeded',
       );
     } finally {
@@ -565,7 +561,7 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage({ area: 'sync' });
       await storage.put('small', encode('ok'));
 
-      await expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
+      expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
         'WebExtensionStorage sync total quota exceeded',
       );
     } finally {

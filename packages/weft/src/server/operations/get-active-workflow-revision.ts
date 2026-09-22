@@ -17,10 +17,10 @@
 import { z } from 'zod';
 
 import type { WorkflowCatalogActivePointer } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   validateWorkflowNameField,
   workflowsReadAccess,
@@ -34,10 +34,7 @@ const getActiveWorkflowRevisionOutput = z.unknown();
 export type GetActiveWorkflowRevisionInput = z.infer<typeof getActiveWorkflowRevisionInput>;
 export type GetActiveWorkflowRevisionOutput = WorkflowCatalogActivePointer;
 
-export const getActiveWorkflowRevisionOperation = defineOperation<
-  GetActiveWorkflowRevisionInput,
-  GetActiveWorkflowRevisionOutput
->({
+export const getActiveWorkflowRevisionOperation = defineOperation({
   name: 'weft.workflows.active.get',
   mcpExposable: false,
   summary: 'Get the currently active revision pointer for a workflow',
@@ -48,14 +45,15 @@ export const getActiveWorkflowRevisionOperation = defineOperation<
   destructive: false,
   tags: ['Workflow Catalog'],
   inputSchema: getActiveWorkflowRevisionInput,
-  outputSchema: getActiveWorkflowRevisionOutput as z.ZodType<GetActiveWorkflowRevisionOutput>,
+  outputSchema: getActiveWorkflowRevisionOutput,
   access: workflowsReadAccess,
   producibleFaults: ['NotFound', 'InvalidParams'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetActiveWorkflowRevisionOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['getActive']);
+    const e = engine;
     const name = validateWorkflowNameField(input.name);
     const pointer = await e.workflows.getActive(name);
     if (pointer === null) {

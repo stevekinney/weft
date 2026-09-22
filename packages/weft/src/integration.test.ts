@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from './testing/fake-timers.test-support.ts';
 
 import { workflow } from './core/types/workflow-function.ts';
-import { Engine, MemoryStorage, WorkflowCompletedEvent, WorkflowStartedEvent } from './index';
+import { Engine, MemoryStorage, WorkflowCompletedEvent, WorkflowStartedEvent } from './index.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
@@ -64,7 +64,7 @@ describe('integration: full workflow lifecycle', () => {
     const handle = await engine.start('long-running', {});
     await handle.cancel();
 
-    await expect(handle.result()).rejects.toThrow();
+    expect(handle.result()).rejects.toThrow();
   });
 
   it('events fire for complete lifecycle', async () => {
@@ -155,7 +155,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('TestEngine with time control', async () => {
-    const { TestEngine } = await import('./testing/test-engine');
+    const { TestEngine } = await import('./testing/test-engine.ts');
 
     const engine = new TestEngine({ startTime: 0 });
 
@@ -178,7 +178,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('BunSQLiteStorage works as engine backend', async () => {
-    const { BunSQLiteStorage } = await import('./storage/bun-sql');
+    const { BunSQLiteStorage } = await import('./storage/bun-sql.ts');
 
     using storage = new BunSQLiteStorage(':memory:');
     const engine = new Engine({ storage });

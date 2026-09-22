@@ -13,7 +13,7 @@
 import { isJSONValue, type JSONValue } from '../../core/json.ts';
 import type { ManifestValidationFailure } from './failure.ts';
 import { manifestFailure } from './failure.ts';
-import { isRecord } from './is-record.ts';
+import { isPlainRecord } from './is-plain-record.ts';
 import {
   MAX_MANIFEST_CAPABILITY_COUNT,
   MAX_MANIFEST_CAPABILITY_DEPTH,
@@ -109,7 +109,7 @@ export function parseManifestCapabilities(
   value: unknown,
   path: string,
 ): { ok: true; capabilities: Readonly<Record<string, JSONValue>> } | ManifestValidationFailure {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return manifestFailure('invalid_field', 'must be a JSON object', path);
   }
 

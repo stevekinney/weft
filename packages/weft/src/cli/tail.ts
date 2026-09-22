@@ -14,7 +14,7 @@
  * @module cli/tail
  */
 
-import { resolveConnection, type ConnectionOptions } from '../connection.ts';
+import { resolveConnection, type ConnectionOptions } from '../index.ts';
 import { color, messageOf } from './output.ts';
 import type { CommandOutput, TailCommand } from './types.ts';
 

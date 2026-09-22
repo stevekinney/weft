@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import type { StandardJSONSchemaV1 } from '../core/types/definition-schema.ts';
 import { extractComponentsSchemas } from './openapi-schemas.ts';
 import {
   createOperationRegistry,
@@ -11,9 +10,13 @@ import {
 } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 
+async function* eventFixture() {
+  yield {};
+}
+
 function makeOperation(options: {
   readonly name: string;
-  readonly inputSchema: z.ZodType;
+  readonly inputSchema: z.ZodObject;
   readonly outputSchema: z.ZodType;
   readonly eventSchema?: z.ZodType;
 }): RegistrableOperation {
@@ -35,10 +38,7 @@ function makeOperation(options: {
       access: { kind: 'public' },
       transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
       unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-      invoke: async () => {
-        async function* iter() {}
-        return iter();
-      },
+      invoke: async () => eventFixture(),
     });
   }
   return defineOperation({
@@ -73,9 +73,11 @@ function makeDirectionalSchema(
   vendor: string,
   inputShape: Record<string, unknown>,
   outputShape: Record<string, unknown>,
-): StandardJSONSchemaV1 {
-  return {
-    '~standard': {
+): z.ZodType {
+  const schema = z.custom<unknown>();
+  Object.defineProperty(schema, '~standard', {
+    configurable: true,
+    value: {
       version: 1,
       vendor,
       jsonSchema: {
@@ -83,7 +85,8 @@ function makeDirectionalSchema(
         output: () => outputShape,
       },
     },
-  };
+  });
+  return schema;
 }
 
 describe('extractComponentsSchemas', () => {
@@ -199,8 +202,8 @@ describe('extractComponentsSchemas', () => {
       makeOperation({
         name: 'weft.directional.stream',
         inputSchema: z.object({ id: z.string() }),
-        outputSchema: outputSchema as unknown as z.ZodType,
-        eventSchema: eventSchema as unknown as z.ZodType,
+        outputSchema,
+        eventSchema,
       }),
     ]);
 

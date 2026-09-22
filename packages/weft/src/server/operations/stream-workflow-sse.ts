@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
 import type { StoredStreamChunk } from '../../core/context.ts';
-import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import {
+  assertOperationEngineMethods,
+  invalidParamsFault,
+  shapeRestFault,
+} from './operation-helpers.ts';
 import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
 
 const TOKENS_STREAM_KEY = 'tokens';
@@ -23,10 +26,7 @@ const streamWorkflowSseInput = z.object({
 export type StreamWorkflowSseInput = z.infer<typeof streamWorkflowSseInput>;
 export type StreamWorkflowSseOutput = { chunks: StoredStreamChunk[] };
 
-export const streamWorkflowSseOperation = defineOperation<
-  StreamWorkflowSseInput,
-  StreamWorkflowSseOutput
->({
+export const streamWorkflowSseOperation = defineOperation({
   name: 'weft.workflows.streams.sse',
   mcpExposable: false,
   kind: 'stream',
@@ -34,7 +34,7 @@ export const streamWorkflowSseOperation = defineOperation<
   destructive: false,
   tags: ['Streams'],
   inputSchema: streamWorkflowSseInput,
-  outputSchema: z.object({ chunks: z.array(z.unknown()) }) as z.ZodType<StreamWorkflowSseOutput>,
+  outputSchema: z.object({ chunks: z.array(z.unknown()) }),
   eventSchema: z.object({ sequence: z.number(), value: z.unknown() }),
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
@@ -45,7 +45,8 @@ export const streamWorkflowSseOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<StreamWorkflowSseOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['get', 'getStreamChunks']);
+    const e = engine;
 
     // 404 wins precedence over a bad cursor: check workflow existence
     // before parsing `Last-Event-ID`.

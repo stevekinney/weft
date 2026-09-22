@@ -9,6 +9,12 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { encode } from '../../core/codec.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
+  type RemoteTaskQueued,
+} from '../../core/task-ledger/task-ledger.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
@@ -16,12 +22,6 @@ import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
 } from '../../worker/registry-fixtures.test-support.ts';
-import {
-  decodeRemoteTaskRecord,
-  encodeRemoteTaskRecord,
-  taskLedgerKey,
-  type RemoteTaskQueued,
-} from '../task-ledger.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
@@ -268,7 +268,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-no-workflow-type',
         activityName: 'doWork',
@@ -282,7 +282,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-qualifier-mismatch',
         activityName: 'otherWorkflow.doWork',
@@ -296,7 +296,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-non-json-input',
         activityName: 'doWork',
@@ -310,7 +310,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: '.',
         activityName: 'doWork',
@@ -324,7 +324,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: '..',
         activityName: 'doWork',
@@ -380,7 +380,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op.v2.retry',
         activityName: 'doWork',
@@ -398,7 +398,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 1n as never,
         activityName: 'doWork',
@@ -412,7 +412,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-empty-revision',
         activityName: 'doWork',
@@ -427,7 +427,7 @@ describe('dispatchTaskImpl', () => {
     context = createMinimalContext();
     options = createMinimalOptions();
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-oversized-revision',
         activityName: 'doWork',
@@ -700,7 +700,7 @@ describe('dispatchTaskImpl revision staleness (WFT-20)', () => {
       encode(minimalWorkflowState({ id: 'wf-stale', revision: 'revision-current' })),
     );
 
-    await expect(
+    expect(
       dispatchTaskImpl(context, options, {
         operationId: 'op-stale-revision',
         activityName: 'doWork',

@@ -143,9 +143,7 @@ describe('ctx.services — worker mode rejection', () => {
     });
     engine.register(wf);
 
-    await expect(engine.start('worker-wf', null, { services: { a: 1 } })).rejects.toThrow(
-      /services/i,
-    );
+    expect(engine.start('worker-wf', null, { services: { a: 1 } })).rejects.toThrow(/services/i);
     await engine[Symbol.asyncDispose]();
   });
 });
@@ -387,7 +385,7 @@ describe('ctx.services — recovery re-provision', () => {
 
     // recoverAll itself must not throw — the engine survives; the unresolvable
     // run is failed, not propagated.
-    await expect(secondEngine.recoverAll()).resolves.toBeDefined();
+    expect(secondEngine.recoverAll()).resolves.toBeDefined();
     await flush();
 
     // The single unresolvable run is now terminally failed (not left running,
@@ -747,7 +745,7 @@ describe('ctx.services — terminal cleanup', () => {
       KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       new Uint8Array(0),
     );
-    await expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toEqual({
+    expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toEqual({
       scheduleId: 'purge-schedule-metadata',
       occurrence: 1_767_225_600_000,
     });
@@ -761,7 +759,7 @@ describe('ctx.services — terminal cleanup', () => {
         KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       ),
     ).toBeNull();
-    await expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toBeNull();
+    expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 
@@ -807,9 +805,7 @@ describe('ctx.services — terminal cleanup', () => {
         ),
       ),
     ).toBeNull();
-    await expect(
-      engine.getScheduleProvenance('retention-schedule-metadata-run'),
-    ).resolves.toBeNull();
+    expect(engine.getScheduleProvenance('retention-schedule-metadata-run')).resolves.toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });

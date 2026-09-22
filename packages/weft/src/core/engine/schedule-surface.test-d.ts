@@ -26,6 +26,7 @@ const metadata: ScheduleSummary = {
   createdAt: 1,
   updatedAt: 1,
   missedFireCount: 0,
+  skippedCount: 0,
   nextFireAt: null,
   queuedRuns: [],
 };

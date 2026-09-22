@@ -15,7 +15,7 @@ describe('replay scenario test support', () => {
     try {
       registerScenarioHandlers(engine, 'race-takes-first');
       const handle = await engine.start('race-takes-first', null);
-      await expect(handle.result()).resolves.toBe('fast');
+      expect(handle.result()).resolves.toBe('fast');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -28,7 +28,7 @@ describe('replay scenario test support', () => {
       registerScenarioHandlers(engine, 'fork-from-checkpoint');
       const handle = await engine.start('fork-from-checkpoint', null);
       await engine.signal(handle.id, 'branch', 'right');
-      await expect(handle.result()).resolves.toBe('phase-one:right');
+      expect(handle.result()).resolves.toBe('phase-one:right');
     } finally {
       engine[Symbol.dispose]();
     }

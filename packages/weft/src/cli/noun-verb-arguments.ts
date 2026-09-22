@@ -13,15 +13,6 @@ import type { CliCommand, CompletionShell } from './types.ts';
 const DEFAULT_WAIT_TIMEOUT_MS = 30000;
 const VALID_COMPLETION_SHELLS = new Set(['zsh', 'bash', 'fish']);
 
-function optionalField<Key extends string, Value>(
-  key: Key,
-  value: Value | undefined,
-): Record<Key, Value> | Record<string, never> {
-  // The computed-key object is a known single-entry record; the cast narrows
-  // the inferred index signature back to the precise `Record<Key, Value>`.
-  return value === undefined ? {} : ({ [key]: value } as Record<Key, Value>);
-}
-
 const CONNECTION_OPTIONS = {
   server: { type: 'string' },
   token: { type: 'string' },
@@ -63,14 +54,9 @@ export function parseServerArguments(args: string[]): CliCommand {
   return {
     command: 'server',
     action,
-    ...optionalField('server', values.server),
-    ...optionalField('token', values.token),
-    ...optionalField('profile', values.profile),
+    ...connectionFields(values),
     wait: values.wait ?? false,
     waitTimeoutMs,
-    help: values.help ?? false,
-    json: values.json ?? false,
-    quiet: values.quiet ?? false,
   };
 }
 
@@ -96,11 +82,13 @@ function parseWorkflowValues(args: string[]) {
   });
 }
 
-function workflowConnectionFields(values: WorkflowValues) {
+function connectionFields(
+  values: Pick<WorkflowValues, 'server' | 'token' | 'profile' | 'help' | 'json' | 'quiet'>,
+) {
   return {
-    ...optionalField('server', values.server),
-    ...optionalField('token', values.token),
-    ...optionalField('profile', values.profile),
+    ...(values.server !== undefined ? { server: values.server } : {}),
+    ...(values.token !== undefined ? { token: values.token } : {}),
+    ...(values.profile !== undefined ? { profile: values.profile } : {}),
     help: values.help ?? false,
     json: values.json ?? false,
     quiet: values.quiet ?? false,
@@ -111,29 +99,32 @@ const WORKFLOW_ACTION_BUILDERS: Record<
   string,
   (values: WorkflowValues, rest: string[]) => CliCommand
 > = {
-  ls: (values) => ({
-    command: 'workflow',
-    action: 'ls',
-    ...workflowConnectionFields(values),
-    ...optionalField('type', values.type),
-    ...optionalField('status', values.status),
-    ...optionalField('limit', parsePositiveInteger(values.limit, '--limit')),
-  }),
+  ls: (values) => {
+    const limit = parsePositiveInteger(values.limit, '--limit');
+    return {
+      command: 'workflow',
+      action: 'ls',
+      ...connectionFields(values),
+      ...(values.type !== undefined ? { type: values.type } : {}),
+      ...(values.status !== undefined ? { status: values.status } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    };
+  },
   get: (values, rest) => buildWorkflowGetOrEvents('get', values, rest),
   events: (values, rest) => buildWorkflowGetOrEvents('events', values, rest),
   start: (values, rest) => ({
     command: 'workflow',
     action: 'start',
-    ...workflowConnectionFields(values),
+    ...connectionFields(values),
     workflowType: requirePositional(rest[0], 'workflow start', '<workflow-type>'),
-    ...optionalField('input', values.input),
-    ...optionalField('inputFile', values['input-file']),
-    ...optionalField('id', values.id),
+    ...(values.input !== undefined ? { input: values.input } : {}),
+    ...(values['input-file'] !== undefined ? { inputFile: values['input-file'] } : {}),
+    ...(values.id !== undefined ? { id: values.id } : {}),
   }),
   cancel: (values, rest) => ({
     command: 'workflow',
     action: 'cancel',
-    ...workflowConnectionFields(values),
+    ...connectionFields(values),
     workflowId: requirePositional(rest[0], 'workflow cancel', '<workflow-id>'),
     yes: values.yes ?? false,
     dryRun: values['dry-run'] ?? false,
@@ -141,11 +132,11 @@ const WORKFLOW_ACTION_BUILDERS: Record<
   signal: (values, rest) => ({
     command: 'workflow',
     action: 'signal',
-    ...workflowConnectionFields(values),
+    ...connectionFields(values),
     workflowId: requirePositional(rest[0], 'workflow signal', '<workflow-id> <signal-name>'),
     signalName: requirePositional(rest[1], 'workflow signal', '<workflow-id> <signal-name>'),
-    ...optionalField('input', values.input),
-    ...optionalField('inputFile', values['input-file']),
+    ...(values.input !== undefined ? { input: values.input } : {}),
+    ...(values['input-file'] !== undefined ? { inputFile: values['input-file'] } : {}),
   }),
 };
 
@@ -157,7 +148,7 @@ function buildWorkflowGetOrEvents(
   return {
     command: 'workflow',
     action,
-    ...workflowConnectionFields(values),
+    ...connectionFields(values),
     workflowId: requirePositional(rest[0], `workflow ${action}`, '<workflow-id>'),
   };
 }
@@ -177,7 +168,7 @@ export function parseWorkflowArguments(args: string[]): CliCommand {
   // is shown before the command executes. Use 'ls' (no required positionals)
   // as the action placeholder regardless of what the user typed.
   if (values.help) {
-    return { command: 'workflow', action: 'ls', ...workflowConnectionFields(values) };
+    return { command: 'workflow', action: 'ls', ...connectionFields(values) };
   }
   return builder(values, positionals.slice(1));
 }
@@ -186,27 +177,15 @@ export function parseWorkflowArguments(args: string[]): CliCommand {
 export function parseTailArguments(args: string[]): CliCommand {
   const { values, positionals } = parseArgs({
     args,
-    options: {
-      server: { type: 'string' },
-      token: { type: 'string' },
-      profile: { type: 'string' },
-      help: { type: 'boolean', short: 'h', default: false },
-      json: { type: 'boolean', short: 'j', default: false },
-      quiet: { type: 'boolean', short: 'q', default: false },
-    },
+    options: CONNECTION_OPTIONS,
     strict: true,
     allowPositionals: true,
   });
 
   return {
     command: 'tail',
-    ...optionalField('server', values.server),
-    ...optionalField('token', values.token),
-    ...optionalField('profile', values.profile),
-    ...optionalField('workflowId', positionals[0]),
-    help: values.help ?? false,
-    json: values.json ?? false,
-    quiet: values.quiet ?? false,
+    ...connectionFields(values),
+    ...(positionals[0] !== undefined ? { workflowId: positionals[0] } : {}),
   };
 }
 

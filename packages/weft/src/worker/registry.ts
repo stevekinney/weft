@@ -37,6 +37,7 @@ import type {
   WorkerInfo,
   WorkerRegistrationInfo,
   WorkerRegistryOptions,
+  WorkerSessionIdentity,
   WorkerSummary,
 } from './registry/types.ts';
 
@@ -52,6 +53,7 @@ export type {
   WorkerInfo,
   WorkerRegistrationInfo,
   WorkerRegistryOptions,
+  WorkerSessionIdentity,
   WorkerSummary,
 } from './registry/types.ts';
 
@@ -69,7 +71,7 @@ export type {
  *
  * const manifest: WorkerManifest = {
  *   manifestVersion: 1,
- *   protocolVersion: 3,
+ *   protocolVersion: 6,
  *   sdkVersion: '0.18.0',
  *   runtime: { name: 'bun', version: '1.3.14' },
  *   deployment: { name: 'billing', buildId: 'b3', artifactDigest: 'sha256:41d0' },
@@ -143,13 +145,45 @@ export class WorkerRegistry {
     this.#deploymentConsistency.record(deploymentName, buildId, artifactDigest);
   }
 
-  /** Register a worker. */
-  register(info: WorkerRegistrationInfo): void {
+  /**
+   * Register a worker.
+   *
+   * `resumingSessionGeneration` (COR-220) names the generation the CALLER has
+   * already verified this registration is a PROVEN resume of — the caller
+   * (`commitWorkerRegistration`) is the one that checks a `register` frame's
+   * `resumeSessionGeneration` echo against the pending disconnected session's
+   * generation and a still-live grace window; this method only ever trusts
+   * that decision, it never re-derives it. When it is supplied AND still
+   * matches the current session's generation at the moment this call
+   * actually commits (the two can only differ if the caller's earlier check
+   * has gone stale — see the doc comment on the generation line below), the
+   * session's generation is left UNCHANGED — a proven resume is the same
+   * session continuing, not a new one — and `inFlight` is derived from
+   * whatever is still tracked for this `workerId`, exactly as before COR-220,
+   * so its in-flight attempts and their leases are untouched. Any other case
+   * (omitted, or genuinely stale) is an ordinary new session: `inFlight` is
+   * still derived from `#inFlightTasks` for compatibility with any caller
+   * that has not yet released them, but a caller taking the unproven-forfeit
+   * path must call `unregister()`/release its in-flight tasks BEFORE this,
+   * or the fresh session's derived `inFlight` count double-counts work that
+   * is about to be reassigned elsewhere.
+   */
+  register(info: WorkerRegistrationInfo, resumingSessionGeneration?: number): void {
     const now = Date.now();
     // Reconnect during grace preserves in-flight tasks under the same workerId;
     // derive `inFlight` rather than resetting to 0 so concurrency limits hold.
     let inFlight = 0;
     for (const task of this.#inFlightTasks.values()) if (task.workerId === info.id) inFlight += 1;
+    // Session generation (COR-230, widened COR-220): every accepted
+    // `register()` for this `workerId` is a NEW session UNLESS the caller has
+    // already proven this is a resume of the CURRENT session — the only case
+    // that leaves the generation unchanged. Starts at 1 rather than 0 so an
+    // absent prior session reads as "session #1", not "session #0".
+    const currentGeneration = this.#workers.get(info.id)?.sessionGeneration;
+    const sessionGeneration =
+      resumingSessionGeneration !== undefined && resumingSessionGeneration === currentGeneration
+        ? resumingSessionGeneration
+        : (currentGeneration ?? 0) + 1;
     this.#workers.set(info.id, {
       id: info.id,
       queue: info.queue,
@@ -165,7 +199,26 @@ export class WorkerRegistry {
       inFlight,
       connectedAt: now,
       lastHeartbeat: now,
+      sessionGeneration,
     });
+  }
+
+  /**
+   * The {@link WorkerSessionIdentity} of the currently connected session for
+   * `workerId`, or `undefined` if no session is currently registered —
+   * `unregister()`'d, never registered, or a stale generation that has
+   * since been superseded (this always reflects the CURRENT one, by
+   * construction, since `#workers` holds exactly one entry per `workerId`).
+   */
+  sessionIdentity(workerId: string): WorkerSessionIdentity | undefined {
+    const info = this.#workers.get(workerId);
+    if (info === undefined) return undefined;
+    return {
+      workerId: info.id,
+      sessionGeneration: info.sessionGeneration,
+      manifestDigest: info.acceptedManifestDigest,
+      transport: 'websocket',
+    };
   }
 
   /** Unregister a worker. Purges fair-share counters and in-flight task entries for this worker. */

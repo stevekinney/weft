@@ -13,7 +13,7 @@ describe('readRestBodyBounded', () => {
       },
     });
 
-    await expect(
+    expect(
       readRestBodyBounded(
         new Request('http://localhost/body', {
           method: 'POST',
@@ -31,7 +31,7 @@ describe('readRestBodyBounded', () => {
 
 describe('readOptionalRestJsonBody', () => {
   it('returns undefined for an empty JSON body', async () => {
-    await expect(
+    expect(
       readOptionalRestJsonBody(
         new Request('http://localhost/body', {
           method: 'POST',
@@ -42,7 +42,7 @@ describe('readOptionalRestJsonBody', () => {
   });
 
   it('parses a non-empty JSON body', async () => {
-    await expect(
+    expect(
       readOptionalRestJsonBody(
         new Request('http://localhost/body', {
           method: 'POST',

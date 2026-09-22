@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'bun:test';
 
-import { type CodegenWorkflowEntry, emitRegistryDeclaration } from './codegen-emit-registry.ts';
+import {
+  CodegenPackageNameError,
+  type CodegenWorkflowEntry,
+  emitRegistryDeclaration,
+} from './codegen-emit-registry.ts';
+
+/**
+ * A package name deliberately unrelated to the one this workspace publishes.
+ *
+ * Every case below emits against it, so the suite proves the emitted
+ * `declare module '…'` follows its argument rather than any name compiled into
+ * the emitter — an assertion against weft's own name would pass just as well
+ * for a hardcoded constant, which is the defect these cases exist to catch.
+ */
+const testPackageName = '@example/package-under-test';
+
+function emit(activeWorkflows: Record<string, CodegenWorkflowEntry>): string {
+  return emitRegistryDeclaration(activeWorkflows, testPackageName);
+}
 
 function buildWorkflows(
   workflows: Record<string, Omit<CodegenWorkflowEntry, 'revision' | 'workflowVersion'>> = {},
@@ -14,8 +32,8 @@ function buildWorkflows(
 
 describe('emitRegistryDeclaration', () => {
   it('emits a valid empty file when there are no active workflows', () => {
-    const output = emitRegistryDeclaration(buildWorkflows());
-    expect(output).toContain("declare module '@lostgradient/weft' {");
+    const output = emit(buildWorkflows());
+    expect(output).toContain(`declare module '${testPackageName}' {`);
     expect(output).toContain('interface WorkflowRegistry {}');
     // Activity names are typed per-workflow via the builder's
     // `.activities({...})` step, not via a global module augmentation.
@@ -24,13 +42,36 @@ describe('emitRegistryDeclaration', () => {
     expect(output.endsWith('\n')).toBe(true);
   });
 
+  it('augments whatever package name it is given, with no name of its own', () => {
+    // Two different names through the same workflows must differ only in the
+    // `declare module '…'` line. A constant compiled into the emitter would
+    // make both outputs identical, which is the regression this guards.
+    const workflows = buildWorkflows({ welcome: { inputSchema: { type: 'string' } } });
+    const first = emitRegistryDeclaration(workflows, '@first/name');
+    const second = emitRegistryDeclaration(workflows, '@second/name');
+    expect(first).toContain(`declare module '@first/name' {`);
+    expect(second).toContain(`declare module '@second/name' {`);
+    expect(first.replace(`'@first/name'`, `'@second/name'`)).toBe(second);
+  });
+
+  it('refuses a package name npm would not accept rather than emitting broken TypeScript', () => {
+    // A name carrying a quote would close the emitted string literal and turn
+    // the generated `.d.ts` into a syntax error in the consumer's editor.
+    // Rejecting at the boundary keeps a bad manifest from propagating that far.
+    for (const invalid of ['', "has'quote", 'has space', 'UPPERCASE']) {
+      expect(() => emitRegistryDeclaration(buildWorkflows(), invalid)).toThrow(
+        CodegenPackageNameError,
+      );
+    }
+  });
+
   it('documents in the banner that the augmentation types both engine and client call sites', () => {
     // The emitted `WorkflowRegistry` augmentation is the single source of
     // truth for `engine.start`, the client (`WeftClient.start`/`schedule`),
     // and `result()` output narrowing. The banner records that intent so the
     // generated file is self-explanatory and consumers know it is not
     // engine-only.
-    const output = emitRegistryDeclaration(buildWorkflows());
+    const output = emit(buildWorkflows());
     expect(output).toContain('type engine and client call sites');
   });
 
@@ -46,7 +87,7 @@ describe('emitRegistryDeclaration', () => {
         outputSchema: { type: 'string' },
       },
     });
-    expect(emitRegistryDeclaration(workflows)).toBe(emitRegistryDeclaration(workflows));
+    expect(emit(workflows)).toBe(emit(workflows));
   });
 
   it('sorts keys deterministically regardless of insertion order', () => {
@@ -62,8 +103,8 @@ describe('emitRegistryDeclaration', () => {
       alpha: { inputSchema: { type: 'string' } },
       zeta: { inputSchema: { type: 'string' } },
     });
-    const outputA = emitRegistryDeclaration(workflowsA);
-    const outputB = emitRegistryDeclaration(workflowsB);
+    const outputA = emit(workflowsA);
+    const outputB = emit(workflowsB);
     expect(outputA).toBe(outputB);
     expect(outputA.indexOf('"alpha"')).toBeLessThan(outputA.indexOf('"zeta"'));
   });
@@ -80,26 +121,24 @@ describe('emitRegistryDeclaration', () => {
       revision: 'sha256:b',
       workflowVersion: '1.0.0',
     };
-    const output = emitRegistryDeclaration(workflows);
+    const output = emit(workflows);
     expect(output).toContain('"__proto__"');
     expect(output).toContain('"valid"');
   });
 
   it('emits unknown for workflows with no schemas', () => {
-    const output = emitRegistryDeclaration(buildWorkflows({ bare: {} }));
+    const output = emit(buildWorkflows({ bare: {} }));
     expect(output).toContain('"bare": { input: unknown; output: unknown;');
   });
 
   it('quotes names with special characters', () => {
-    const output = emitRegistryDeclaration(
-      buildWorkflows({ 'kebab-name': {}, 'with "quote"': {} }),
-    );
+    const output = emit(buildWorkflows({ 'kebab-name': {}, 'with "quote"': {} }));
     expect(output).toContain('"kebab-name"');
     expect(output).toContain('"with \\"quote\\""');
   });
 
   it('emits revision and workflowVersion as string-literal fields on every entry', () => {
-    const output = emitRegistryDeclaration(
+    const output = emit(
       buildWorkflows({
         welcome: { inputSchema: { type: 'string' }, outputSchema: { type: 'string' } },
       }),
@@ -123,7 +162,7 @@ describe('emitRegistryDeclaration', () => {
       const workflows: Record<string, CodegenWorkflowEntry> = {
         w: { revision: hostile, workflowVersion: '1.0.0' },
       };
-      const output = emitRegistryDeclaration(workflows);
+      const output = emit(workflows);
       // The value must appear only inside a JSON.stringify-quoted literal —
       // proven by round-tripping the emitted revision field back through
       // JSON.parse and confirming it recovers the original hostile string.
@@ -142,7 +181,7 @@ describe('emitRegistryDeclaration', () => {
     };
 
     it('hoists a non-trivial input schema shared by two or more workflows into one alias referenced by every entry', () => {
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           checkout: { inputSchema: sharedInputSchema, outputSchema: { type: 'string' } },
           reorder: { inputSchema: sharedInputSchema, outputSchema: { type: 'boolean' } },
@@ -156,7 +195,7 @@ describe('emitRegistryDeclaration', () => {
     });
 
     it('keeps a single-occurrence schema inline (no alias emitted)', () => {
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           checkout: { inputSchema: sharedInputSchema },
         }),
@@ -166,7 +205,7 @@ describe('emitRegistryDeclaration', () => {
     });
 
     it('never aliases trivial types even when repeated across many workflows', () => {
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           a: { outputSchema: { type: 'string' } },
           b: { outputSchema: { type: 'string' } },
@@ -180,14 +219,14 @@ describe('emitRegistryDeclaration', () => {
     });
 
     it('emits alias declarations before, never inside, declare module', () => {
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           checkout: { inputSchema: sharedInputSchema },
           reorder: { inputSchema: sharedInputSchema },
         }),
       );
       const aliasIndex = output.indexOf('type __WeftSchema_');
-      const moduleIndex = output.indexOf("declare module '@lostgradient/weft'");
+      const moduleIndex = output.indexOf(`declare module '${testPackageName}'`);
       expect(aliasIndex).toBeGreaterThan(-1);
       expect(aliasIndex).toBeLessThan(moduleIndex);
 
@@ -205,7 +244,7 @@ describe('emitRegistryDeclaration', () => {
       const inputA = { type: 'object', properties: { a: { type: 'string' } } };
       const inputB = { type: 'object', properties: { b: { type: 'number' } } };
 
-      const forward = emitRegistryDeclaration(
+      const forward = emit(
         buildWorkflows({
           w1: { inputSchema: inputA },
           w2: { inputSchema: inputA },
@@ -213,7 +252,7 @@ describe('emitRegistryDeclaration', () => {
           w4: { inputSchema: inputB },
         }),
       );
-      const reversed = emitRegistryDeclaration(
+      const reversed = emit(
         buildWorkflows({
           w4: { inputSchema: inputB },
           w3: { inputSchema: inputB },
@@ -249,7 +288,7 @@ describe('emitRegistryDeclaration', () => {
         required: ['note', 'cartId'],
         additionalProperties: false,
       };
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           checkout: { inputSchema: schemaA },
           reorder: { inputSchema: schemaB },
@@ -266,7 +305,7 @@ describe('emitRegistryDeclaration', () => {
       // inputSchema undefined -> canonicalKey 'null', tsType 'unknown' for
       // both. `unknown` is trivial, so no alias is emitted even though the
       // (degenerate) schema "recurs".
-      const output = emitRegistryDeclaration(
+      const output = emit(
         buildWorkflows({
           noInputA: { outputSchema: { type: 'string' } },
           noInputB: { outputSchema: { type: 'string' } },

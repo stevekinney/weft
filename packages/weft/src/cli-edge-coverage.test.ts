@@ -5,10 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { executeSchedule, executeTimeline, parseCliArguments } from './cli/index.ts';
-import { advanceCheckpoint, createCheckpoint, serializeCheckpoint } from './core/checkpoint.ts';
-import { encode } from './core/codec.ts';
-import { BunSQLiteStorage } from './storage/bun-sql.ts';
-import { KEYS } from './storage/interface.ts';
+import {
+  advanceCheckpoint,
+  BunSQLiteStorage,
+  createCheckpoint,
+  encode,
+  KEYS,
+  serializeCheckpoint,
+} from './index.ts';
 
 const databasesToDelete = new Set<string>();
 

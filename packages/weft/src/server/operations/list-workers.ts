@@ -42,9 +42,13 @@ const routingPolicySchema = z.enum([
   'least-loaded',
   'round-robin',
   'fair-share',
-]) as z.ZodType<RoutingPolicy>;
+]) satisfies z.ZodType<RoutingPolicy>;
 
-const workerHealthSchema = z.enum(['active', 'draining', 'drained']) as z.ZodType<WorkerHealth>;
+const workerHealthSchema = z.enum([
+  'active',
+  'draining',
+  'drained',
+]) satisfies z.ZodType<WorkerHealth>;
 
 const remoteWorkerJsonValueSchema: z.ZodType<RemoteWorkerJsonValue> = z.lazy(() =>
   z.union([
@@ -118,7 +122,7 @@ type ListWorkersOptions = {
 export function createListWorkersOperation(options?: ListWorkersOptions) {
   const registry = options?.workerRegistry;
   const clock = options?.clock ?? Date.now;
-  return defineOperation<ListWorkersInput, ListWorkersOutput>({
+  return defineOperation({
     name: 'weft.workers.list',
     mcpExposable: false,
     summary: 'List connected workers, their advertised activities, and saturation',

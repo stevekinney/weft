@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { CompressedStorage } from './compressed-storage';
-import type { Storage } from './interface';
-import { MemoryStorage } from './memory';
+import { CompressedStorage } from './compressed-storage.ts';
+import type { Storage } from './interface.ts';
+import { MemoryStorage } from './memory.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,7 +145,7 @@ describe('malformed inner payloads', () => {
     const headerless = new Uint8Array([0x80, 0xa1, 0x61, 0x01]);
     await inner.put('malformed-key', headerless);
 
-    await expect(storage.get('malformed-key')).rejects.toThrow(
+    expect(storage.get('malformed-key')).rejects.toThrow(
       'Compression payload missing magic byte 0xC1.',
     );
   });
@@ -159,11 +159,11 @@ describe('malformed inner payloads', () => {
     await inner.put('malformed:b', headerless);
 
     const iterator = storage.scan('malformed:')[Symbol.asyncIterator]();
-    await expect(iterator.next()).resolves.toEqual({
+    expect(iterator.next()).resolves.toEqual({
       done: false,
       value: ['malformed:a', framedValue],
     });
-    await expect(iterator.next()).rejects.toThrow('Compression payload missing magic byte 0xC1.');
+    expect(iterator.next()).rejects.toThrow('Compression payload missing magic byte 0xC1.');
   });
 });
 
@@ -238,7 +238,7 @@ describe('key transparency', () => {
     const stored = await inner.get('wf:%E0%A4%A:ckpt');
     expect(stored).not.toBeNull();
     expect(stored![1]).toBe(0x01);
-    await expect(storage.get('wf:%E0%A4%A:ckpt')).resolves.toEqual(value);
+    expect(storage.get('wf:%E0%A4%A:ckpt')).resolves.toEqual(value);
   });
 });
 

@@ -6,6 +6,7 @@
 //   - transition.ts: fork, resume, recoverAll, and resume-from-storage
 //   - checkpoint-launch.ts: launchWorkflowFromCheckpoint and its inline/worker helpers
 //   - recovery-revision-groups.ts: recoverAll's per-(type, revision) preload barrier (WFT-17/WFT-18)
+//   - prepare-and-launch.ts: engine.prepare()/handle.launch()/handle.abandon() (COR-75)
 
 export {
   EMPTY_STORAGE_VALUE,
@@ -69,3 +70,11 @@ export { launchWorkflowFromCheckpoint } from './lifecycle/checkpoint-launch.ts';
 export { fork, recoverAll, resume } from './lifecycle/transition.ts';
 
 export { resumeWorkflowFromStorage } from './lifecycle/resume.ts';
+
+export {
+  abandonPreparedWorkflow,
+  launchPreparedWorkflow,
+  prepareWorkflow,
+  type PrepareWorkflowResult,
+  type PreparedWorkflowContext,
+} from './lifecycle/prepare-and-launch.ts';

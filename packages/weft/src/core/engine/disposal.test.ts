@@ -158,7 +158,7 @@ describe('disposeEngine', () => {
     // The waiter map is cleared AND the pending promise was rejected (settled),
     // mirroring the signalWaiters precedent.
     expect(internals.resultResolvers.size).toBe(0);
-    await expect(promise).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(promise).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('makes handle.result() reject (not hang) when the engine is disposed mid-flight', async () => {
@@ -178,7 +178,7 @@ describe('disposeEngine', () => {
     // dispose() rejects the pending result waiter synchronously, so the promise
     // is already settled here. Without the fix the waiter map is cleared but the
     // promise is never settled, so this await would hang and the test times out.
-    await expect(resultPromise).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(resultPromise).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('rejects every pending result waiter when several workflows are in flight', async () => {
@@ -222,7 +222,7 @@ describe('disposeEngine', () => {
 
     // The waiter map is empty post-dispose, so without the `disposed` guard this
     // would register a fresh waiter the torn-down engine never settles.
-    await expect(handle.result()).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(handle.result()).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('keeps a resolved handle result cached across dispose', async () => {
@@ -234,7 +234,7 @@ describe('disposeEngine', () => {
     );
     const handle = await engine.start('quick', null);
     // Settle the result first; the waiter is resolved and removed from the map.
-    await expect(handle.result()).resolves.toBe('finished');
+    expect(handle.result()).resolves.toBe('finished');
 
     engine[Symbol.dispose]();
 
@@ -242,7 +242,7 @@ describe('disposeEngine', () => {
     // second call on the SAME handle returns the cached resolved value and never
     // re-enters the disposed guard. A handle that already produced a result
     // keeps it across dispose.
-    await expect(handle.result()).resolves.toBe('finished');
+    expect(handle.result()).resolves.toBe('finished');
   });
 
   it('rejects a fresh handle result() after dispose even for a completed workflow', async () => {
@@ -262,7 +262,7 @@ describe('disposeEngine', () => {
     // Symbol.dispose contract (a disposed resource throws on use), rather than
     // reaching back into storage for a completed result.
     const freshHandle = engine.getHandle('quick-fresh');
-    await expect(freshHandle.result()).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(freshHandle.result()).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('leaves external update callers bounded by their own timeout, not EngineDisposedError', async () => {
@@ -423,7 +423,7 @@ describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
     await waitForLoaderInvoked(loader);
 
     engine[Symbol.dispose]();
-    await expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
     expect(dispatched).toEqual(['cancelled']);
 
     // The shared load itself was never aborted (single-flight contract) —
@@ -465,7 +465,7 @@ describe('disposeEngine — dynamic workflow sources (WFT-15/16)', () => {
     // `() => {}` silently swallows the load-cancelled dispatch instead of
     // throwing for lack of a real event target.
     expect(() => disposeEngine(getInternals(engine))).not.toThrow();
-    await expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(waiter).rejects.toBeInstanceOf(EngineDisposedError);
 
     deferred.resolve({ lazyBareDispose: lazy });
   });
@@ -542,7 +542,7 @@ describe('defer:false synchronous launch', () => {
       }),
     );
 
-    await expect(engine.start('worker-defer', null, { defer: false })).rejects.toThrow(
+    expect(engine.start('worker-defer', null, { defer: false })).rejects.toThrow(
       /defer.*inline|inline.*defer/i,
     );
     await engine[Symbol.asyncDispose]();
@@ -559,9 +559,9 @@ describe('defer:false synchronous launch', () => {
       }),
     );
 
-    await expect(
-      engine.start('delayed-defer', null, { defer: false, startAfter: '1h' }),
-    ).rejects.toThrow(/delayed start|startAt|startAfter/i);
+    expect(engine.start('delayed-defer', null, { defer: false, startAfter: '1h' })).rejects.toThrow(
+      /delayed start|startAt|startAfter/i,
+    );
     engine[Symbol.dispose]();
   });
 });

@@ -14,10 +14,7 @@ const cancelWorkflowOutput = z.undefined();
 export type CancelWorkflowInput = z.infer<typeof cancelWorkflowInput>;
 export type CancelWorkflowOutput = z.infer<typeof cancelWorkflowOutput>;
 
-export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
-  CancelWorkflowInput,
-  CancelWorkflowOutput
->({
+export const cancelWorkflowOperation = createSingleWorkflowControlOperation({
   name: 'weft.workflows.cancel',
   summary: 'Cancel a running workflow',
   description:
@@ -30,6 +27,7 @@ export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
   inputSchema: cancelWorkflowInput,
   outputSchema: cancelWorkflowOutput,
   producibleFaults: ['NotFound'],
+  requiredEngineMethods: ['cancel'],
   invoke: async ({ input, engine }): Promise<CancelWorkflowOutput> => {
     await engine.cancel(input.workflowId);
     return undefined;

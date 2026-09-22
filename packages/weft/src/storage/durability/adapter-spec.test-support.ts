@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 
 import { BunSQLiteStorage } from '../bun-sql.ts';
+import { resolveStorageEnvironment } from '../environment-configuration.ts';
 import type { BatchOperation, Storage } from '../interface.ts';
 import { NodeSQLiteStorage } from '../node-sqlite.ts';
 import { TursoStorage } from '../turso.ts';
@@ -306,7 +307,7 @@ export class FixtureScope {
 
   cleanup(): void {
     if (this.#failed) return;
-    if (process.env['WEFT_KEEP_DURABILITY_FIXTURES'] === '1') return;
+    if (resolveStorageEnvironment().keepDurabilityFixtures) return;
     while (this.#directories.length > 0) {
       const directory = this.#directories.pop();
       if (directory === undefined) break;

@@ -13,9 +13,9 @@
 import { z } from 'zod';
 
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   readWorkflowCatalogRestBody,
   throwWorkflowCatalogOperationFault,
@@ -33,10 +33,7 @@ const installWorkflowRevisionOutput = z.unknown();
 export type InstallWorkflowRevisionInput = z.infer<typeof installWorkflowRevisionInput>;
 export type InstallWorkflowRevisionOutput = WorkflowRevisionRecord;
 
-export const installWorkflowRevisionOperation = defineOperation<
-  InstallWorkflowRevisionInput,
-  InstallWorkflowRevisionOutput
->({
+export const installWorkflowRevisionOperation = defineOperation({
   name: 'weft.workflows.revisions.install',
   mcpExposable: false,
   summary: 'Durably install a workflow revision manifest',
@@ -52,14 +49,15 @@ export const installWorkflowRevisionOperation = defineOperation<
   destructive: false,
   tags: ['Workflow Catalog'],
   inputSchema: installWorkflowRevisionInput,
-  outputSchema: installWorkflowRevisionOutput as z.ZodType<InstallWorkflowRevisionOutput>,
+  outputSchema: installWorkflowRevisionOutput,
   access: workflowsAdminAccess,
   producibleFaults: ['InvalidParams', 'Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<InstallWorkflowRevisionOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['install']);
+    const e = engine;
     const manifest = await validateManifestField(input.manifest);
     try {
       return await e.workflows.install(manifest);

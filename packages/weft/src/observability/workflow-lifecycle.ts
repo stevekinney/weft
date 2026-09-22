@@ -3,8 +3,8 @@ import {
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
   WorkflowTimedOutEvent,
-} from '../core/events';
-import type { ObservabilityState } from './types';
+} from '../core/events.ts';
+import type { ObservabilityState } from './types.ts';
 
 const WORKFLOW_SPAN_TTL_MS = 60 * 60 * 1000;
 const WORKFLOW_SPAN_MAX_SIZE = 10_000;

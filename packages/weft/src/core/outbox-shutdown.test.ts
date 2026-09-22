@@ -137,7 +137,7 @@ describe('Outbox drain', () => {
 
   it('validates the drain budget', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.drain({ timeoutMs: Number.NaN })).rejects.toThrow(/timeoutMs/);
+    expect(outbox.drain({ timeoutMs: Number.NaN })).rejects.toThrow(/timeoutMs/);
     outbox.dispose();
   });
 });
@@ -175,7 +175,7 @@ describe('Outbox disposal', () => {
       using outbox = new Outbox({ storage, namespace: 'n', ownerId: 'o' });
       captured = outbox;
     }
-    await expect(captured.receipt('x')).rejects.toThrow(/disposed/);
+    expect(captured.receipt('x')).rejects.toThrow(/disposed/);
     captured.dispose();
     // The default id source mints usable delivery ids.
     using fresh = new Outbox({ storage, namespace: 'n', ownerId: 'o' });

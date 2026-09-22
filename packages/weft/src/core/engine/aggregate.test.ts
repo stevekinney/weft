@@ -216,7 +216,7 @@ describe('engine.aggregate', () => {
     engine.register(failsWorkflow);
 
     const handle = await engine.start('fails', null, { id: 'failed-1' });
-    await expect(handle.result()).rejects.toThrow('boom');
+    expect(handle.result()).rejects.toThrow('boom');
     await storage.delete(KEYS.attribute('failed-1'));
 
     const result = await engine.aggregate(
@@ -269,7 +269,7 @@ describe('engine.aggregate', () => {
     engine.register(typedWorkflow);
     await startAndComplete(engine, 'typed', 'wf-1');
 
-    await expect(
+    expect(
       engine.aggregate(undefined, { groupBy: { attribute: 'unknownAttribute' } }),
     ).rejects.toThrow(/Unknown search attribute/);
     engine[Symbol.dispose]();

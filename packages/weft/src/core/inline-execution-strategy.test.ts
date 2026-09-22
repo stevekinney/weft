@@ -1048,7 +1048,7 @@ describe('InlineExecutionStrategy', () => {
     it('supports explicit async disposal', async () => {
       setup();
 
-      await expect(strategy[Symbol.asyncDispose]()).resolves.toBeUndefined();
+      expect(strategy[Symbol.asyncDispose]()).resolves.toBeUndefined();
       expect(() => strategy[Symbol.dispose]()).not.toThrow();
     });
   });

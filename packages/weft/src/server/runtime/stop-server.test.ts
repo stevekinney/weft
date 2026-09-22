@@ -12,7 +12,7 @@ describe('stopBunServerForShutdown', () => {
       },
     };
 
-    await expect(stopBunServerForShutdown(server as never)).rejects.toThrow('stop failed');
+    expect(stopBunServerForShutdown(server as never)).rejects.toThrow('stop failed');
 
     expect(consoleError).toHaveBeenCalledWith('[weft] Bun server stop failed:', error);
     consoleError.mockRestore();

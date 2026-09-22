@@ -62,7 +62,7 @@ export function matchDirectRoute(method: string, pathname: string): RouteMatch |
  *
  * @example Extract route params from a synthetic custom route
  * ```ts
- * import { extractRouteParameters } from '@lostgradient/weft/server/handler';
+ * import { extractRouteParameters } from '@lostgradient/weft';
  *
  * const pattern = /^\/projects\/([^/]+)\/workflows\/([^/]+)$/;
  * const match = pattern.exec('/projects/acme/workflows/wf-42');
@@ -102,7 +102,7 @@ export function extractRouteParameters(
  *
  * @example
  * ```ts
- * import { getRequiredRouteParameter } from '@lostgradient/weft/server/handler';
+ * import { getRequiredRouteParameter } from '@lostgradient/weft';
  *
  * const params = { workflowId: 'wf-123' };
  * const id = getRequiredRouteParameter(params, 'workflowId', 'GET /v1/workflows/:workflowId');

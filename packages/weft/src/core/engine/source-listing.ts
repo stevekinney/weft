@@ -1,5 +1,4 @@
 import { compareCodepoint } from '../compare-codepoint.ts';
-import type { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 
 export type WorkflowSourceListing = Readonly<{
@@ -10,7 +9,7 @@ export type WorkflowSourceListing = Readonly<{
 }>;
 
 /** List registered dynamic sources using process-local state only. */
-export function listWorkflowSources(engine: Engine): WorkflowSourceListing[] {
+export function listWorkflowSources(engine: object): WorkflowSourceListing[] {
   const internals = getInternals(engine);
   const sources: WorkflowSourceListing[] = [];
   for (const [name, revisions] of internals.sources.byName) {

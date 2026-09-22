@@ -308,29 +308,27 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await waitForRunning?.(handle.id);
       await waitForQueryReadyForTesting(client, handle.id);
 
-      await expect(client.query(handle.id, 'echoInput', { detail: true })).resolves.toEqual({
+      expect(client.query(handle.id, 'echoInput', { detail: true })).resolves.toEqual({
         detail: true,
       });
-      await expect(handle.query('echoInput', { source: 'handle' })).resolves.toEqual({
+      expect(handle.query('echoInput', { source: 'handle' })).resolves.toEqual({
         source: 'handle',
       });
-      await expect(
+      expect(
         client.update(handle.id, 'rename', { source: 'client' }, { timeout: 1000 }),
       ).resolves.toEqual({
         accepted: true,
         input: 'payload',
         payload: { source: 'client' },
       });
-      await expect(
-        handle.update('rename', { source: 'handle' }, { timeout: 1000 }),
-      ).resolves.toEqual({
+      expect(handle.update('rename', { source: 'handle' }, { timeout: 1000 })).resolves.toEqual({
         accepted: true,
         input: 'payload',
         payload: { source: 'handle' },
       });
 
       await handle.signal('continue', 'done');
-      await expect(handle.result()).resolves.toBe('payload:done');
+      expect(handle.result()).resolves.toBe('payload:done');
     });
 
     it('getHandle re-attaches to a running workflow and awaits its result', async () => {
@@ -359,7 +357,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       });
       // Let it run to completion before re-attaching, so result() must come from
       // persisted state rather than a live in-flight subscription.
-      await expect(started.result()).resolves.toBe('finished');
+      expect(started.result()).resolves.toBe('finished');
 
       const reattached = await client.getHandle(started.id);
       if (reattached === null) throw new Error('getHandle returned null for a terminal workflow');
@@ -369,7 +367,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
     it('getHandle returns null for an unknown workflow id', async () => {
       const client = getClient();
-      await expect(client.getHandle(`${idPrefix}-get-handle-missing`)).resolves.toBeNull();
+      expect(client.getHandle(`${idPrefix}-get-handle-missing`)).resolves.toBeNull();
     });
 
     it('round-trips workflow attributes and tag mutations through handle helpers', async () => {
@@ -383,21 +381,21 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await waitForQueryReadyForTesting(client, handle.id);
 
       await handle.setAttributes({ priority: 'high' });
-      await expect(handle.getAttributes()).resolves.toEqual({ priority: 'high' });
+      expect(handle.getAttributes()).resolves.toEqual({ priority: 'high' });
       await client.setAttributes(handle.id, { owner: 'contract', priority: 'critical' });
-      await expect(client.getAttributes(handle.id)).resolves.toEqual({
+      expect(client.getAttributes(handle.id)).resolves.toEqual({
         owner: 'contract',
         priority: 'critical',
       });
 
       await handle.addTags('beta', 'release-candidate');
       await handle.removeTags('initial');
-      await expect(client.get(handle.id)).resolves.toMatchObject({
+      expect(client.get(handle.id)).resolves.toMatchObject({
         tags: ['beta', 'release-candidate'],
       });
 
       await handle.signal('continue', 'done');
-      await expect(handle.result()).resolves.toBe('tagged:done');
+      expect(handle.result()).resolves.toBe('tagged:done');
     });
 
     it('deduplicates typed zero-payload signalIds through client and handle methods', async () => {
@@ -417,7 +415,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       });
       await handle.signal(clientContractContinueSignal, undefined, { signalId: 'second' });
 
-      await expect(handle.result()).resolves.toBe('signal-id:done');
+      expect(handle.result()).resolves.toBe('signal-id:done');
     });
 
     it('preserves typed signal payloads that overlap delivery options', async () => {
@@ -437,8 +435,8 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await client.signal(clientHandle.id, clientContractObjectSignal, { signalId: 'payload' });
       await handleHandle.signal(clientContractObjectSignal, { signalId: 'payload' });
 
-      await expect(clientHandle.result()).resolves.toBe('client:payload');
-      await expect(handleHandle.result()).resolves.toBe('handle:payload');
+      expect(clientHandle.result()).resolves.toBe('client:payload');
+      expect(handleHandle.result()).resolves.toBe('handle:payload');
     });
 
     it('startOrSignal reports outcome "started" then "signalled" across calls (#466)', async () => {
@@ -578,7 +576,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       );
 
       expect(schedule.id).toBe(`${idPrefix}-schedule`);
-      await expect(schedule.describe()).resolves.toEqual(
+      expect(schedule.describe()).resolves.toEqual(
         expect.objectContaining({
           backfill: true,
           cronExpression: '0 * * * *',
@@ -595,27 +593,27 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       // revisionPolicy round-trips across both transports (WFT-20): omitted
       // defaults to 'active-at-fire'; 'pinned' captures a pinnedRevision.
       await schedule.update('0 * * * *', { revisionPolicy: 'pinned' });
-      await expect(schedule.describe()).resolves.toEqual(
+      expect(schedule.describe()).resolves.toEqual(
         expect.objectContaining({
           revisionPolicy: 'pinned',
           pinnedRevision: expect.any(String),
         }),
       );
       await schedule.update('0 * * * *', { revisionPolicy: 'active-at-fire' });
-      await expect(schedule.describe()).resolves.toEqual(
+      expect(schedule.describe()).resolves.toEqual(
         expect.objectContaining({ revisionPolicy: 'active-at-fire' }),
       );
-      await expect(client.getSchedule(schedule.id)).resolves.toEqual(
+      expect(client.getSchedule(schedule.id)).resolves.toEqual(
         expect.objectContaining({ id: schedule.id }),
       );
-      await expect(client.listSchedules()).resolves.toEqual(
+      expect(client.listSchedules()).resolves.toEqual(
         expect.objectContaining({
           items: expect.arrayContaining([expect.objectContaining({ id: schedule.id })]),
         }),
       );
 
       await schedule.pause();
-      await expect(client.getSchedule(schedule.id)).resolves.toEqual(
+      expect(client.getSchedule(schedule.id)).resolves.toEqual(
         expect.objectContaining({ status: 'paused' }),
       );
 
@@ -624,7 +622,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         jitter: '30s',
         overlap: 'allow',
       });
-      await expect(schedule.describe()).resolves.toEqual(
+      expect(schedule.describe()).resolves.toEqual(
         expect.objectContaining({
           backfill: true,
           cronExpression: '30 * * * *',
@@ -636,12 +634,12 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       );
 
       await client.resumeSchedule(schedule.id);
-      await expect(client.getSchedule(schedule.id)).resolves.toEqual(
+      expect(client.getSchedule(schedule.id)).resolves.toEqual(
         expect.objectContaining({ status: 'active' }),
       );
 
       await schedule.cancel();
-      await expect(client.getSchedule(schedule.id)).resolves.toEqual(
+      expect(client.getSchedule(schedule.id)).resolves.toEqual(
         expect.objectContaining({ nextFireAt: null, status: 'cancelled' }),
       );
     });
@@ -663,16 +661,16 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       // Parked, not finished: the workflow is suspended on the async activity.
       await waitForRunning?.(handle.id);
-      await expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
-      await expect(client.activity.listPending(handle.id)).resolves.toEqual({
+      expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+      expect(client.activity.listPending(handle.id)).resolves.toEqual({
         items: [expect.objectContaining({ token })],
       });
 
       await client.activity.complete(token, { decision: 'approved' });
 
-      await expect(client.activity.listPending(handle.id)).resolves.toEqual({ items: [] });
+      expect(client.activity.listPending(handle.id)).resolves.toEqual({ items: [] });
 
-      await expect(handle.result()).resolves.toEqual({
+      expect(handle.result()).resolves.toEqual({
         input: 'complete-case',
         resolved: { decision: 'approved' },
       });
@@ -690,7 +688,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       // `complete(token)` with no result must behave identically across transports:
       // over HTTP `undefined` is omitted from the body and arrives as `undefined`.
       await client.activity.complete(token);
-      await expect(handle.result()).resolves.toEqual({
+      expect(handle.result()).resolves.toEqual({
         input: 'no-result-case',
         resolved: undefined,
       });
@@ -738,7 +736,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       // First completion consumes the single-use token.
       await client.activity.complete(token, { decision: 'first' });
-      await expect(handle.result()).resolves.toEqual({
+      expect(handle.result()).resolves.toEqual({
         input: 'single-use-case',
         resolved: { decision: 'first' },
       });
@@ -774,11 +772,11 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         .then(() => ({ kind: 'resolved' as const }))
         .catch((error: unknown) => ({ kind: 'rejected' as const, error }));
       expect(settled.kind).toBe('rejected');
-      await expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+      expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
 
       // The token survived: a within-limit retry still completes the workflow.
       await client.activity.complete(token, { ok: true });
-      await expect(handle.result()).resolves.toEqual({
+      expect(handle.result()).resolves.toEqual({
         input: 'oversize-case',
         resolved: { ok: true },
       });

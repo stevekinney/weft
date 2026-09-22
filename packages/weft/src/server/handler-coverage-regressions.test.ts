@@ -76,7 +76,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: 'ok' });
+    expect(response.json()).resolves.toEqual({ status: 'ok' });
   });
 
   it('returns 400 when a conflicting REST binding path parameter cannot be decoded', async () => {
@@ -91,7 +91,7 @@ describe('handleRequest coverage regressions', () => {
       access: { kind: 'public' },
       transports: { http: true, jsonRpcHttp: false, jsonRpcWebSocket: false, jsonRpcStdio: false },
       unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-      invoke: async () => ({ ok: true }),
+      invoke: async () => ({ ok: true as const }),
     });
     const binding: UnknownRestBinding = {
       method: 'GET',
@@ -113,7 +113,7 @@ describe('handleRequest coverage regressions', () => {
     );
 
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: 'Malformed route parameter encoding' });
+    expect(response.json()).resolves.toEqual({ error: 'Malformed route parameter encoding' });
   });
 
   it('maps malformed fault-like throws to internal server errors', async () => {
@@ -148,7 +148,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(500);
-    await expect(response.text()).resolves.toBe('{"error":"Internal server error"}');
+    expect(response.text()).resolves.toBe('{"error":"Internal server error"}');
   });
 
   it('maps schedule error messages to their canonical HTTP fault statuses', async () => {

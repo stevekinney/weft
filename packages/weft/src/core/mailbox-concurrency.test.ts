@@ -234,7 +234,7 @@ describe('Mailbox state and event atomicity', () => {
       return original(conditions, operations);
     };
 
-    await expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
+    expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
 
     const persisted = await collectKeys(
       storage,

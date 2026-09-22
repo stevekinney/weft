@@ -1071,8 +1071,8 @@ describe('handleRequest', () => {
           auditEvent: expect.objectContaining({ requestId: 'bulk-route-signal' }),
         }),
       );
-      await expect(firstHandle.result()).resolves.toBe('first:released');
-      await expect(secondHandle.result()).resolves.toBe('second:released');
+      expect(firstHandle.result()).resolves.toBe('first:released');
+      expect(secondHandle.result()).resolves.toBe('second:released');
       const untouchedState = await engine.get(untouchedHandle.id);
       expect(untouchedState?.status).toBe('running');
 

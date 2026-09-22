@@ -27,7 +27,7 @@ import type {
  *
  * @example
  * ```ts
- * import type { TaskResultMessage } from '@lostgradient/weft/worker-protocol';
+ * import type { TaskResultMessage } from '@lostgradient/weft';
  *
  * const message: TaskResultMessage = {
  *   type: 'taskResult', operationId: 'op-1', status: 'completed', value: { ok: true },

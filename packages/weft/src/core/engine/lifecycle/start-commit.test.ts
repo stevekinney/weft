@@ -79,15 +79,15 @@ describe('start-commit lifecycle helpers', () => {
       ],
     };
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(context as never, () => ({
         conditions: [],
         operations: [{ type: 'put', key: 'start-idempotent', value: new Uint8Array([2]) }],
       })),
     ).resolves.toBeUndefined();
-    await expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
-    await expect(storage.get('start-additional')).resolves.toEqual(new Uint8Array([1]));
-    await expect(storage.get('start-idempotent')).resolves.toEqual(new Uint8Array([2]));
+    expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
+    expect(storage.get('start-additional')).resolves.toEqual(new Uint8Array([1]));
+    expect(storage.get('start-idempotent')).resolves.toEqual(new Uint8Array([2]));
   });
 
   it('throws the idempotency sentinel when a start precondition loses its race without concurrency admission', async () => {
@@ -102,7 +102,7 @@ describe('start-commit lifecycle helpers', () => {
     await storage.put(condition.key, expectedValue);
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(context as never, () => ({
         conditions: [condition],
         operations: [],
@@ -116,7 +116,7 @@ describe('start-commit lifecycle helpers', () => {
 
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -143,7 +143,7 @@ describe('start-commit lifecycle helpers', () => {
     await storage.put(condition.key, new Uint8Array([2]));
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -183,7 +183,7 @@ describe('start-commit lifecycle helpers', () => {
     await storage.put(signalCondition.key, new Uint8Array([2]));
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -210,7 +210,7 @@ describe('start-commit lifecycle helpers', () => {
     // Storage agrees with the condition (key absent) - as it would after a purge.
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         { ...context, duplicateIdCondition: { key: workflowKey, expectedValue: null } } as never,
         undefined,
@@ -234,7 +234,7 @@ describe('start-commit lifecycle helpers', () => {
     const workflowKey = KEYS.workflow('workflow-start-commit');
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -266,7 +266,7 @@ describe('start-commit lifecycle helpers', () => {
     await storage.put('workflow-concurrency', new Uint8Array([7]));
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -319,7 +319,7 @@ describe('start-commit lifecycle helpers', () => {
       return realConditionalBatch(conditions, operations);
     };
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -365,15 +365,15 @@ describe('start-commit lifecycle helpers', () => {
     // `persistStartBatch`'s claimFold branch merging CALLER conditions (not
     // just the fold's own), distinct from an ordinary claimed start with no
     // preconditions.
-    await expect(
+    expect(
       buildAndCommitStartBatch(context as never, () => ({
         conditions: [idempotentCondition],
         operations: [{ type: 'put', key: 'start-idempotent-mapping', value: new Uint8Array([1]) }],
       })),
     ).resolves.toBeUndefined();
 
-    await expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
-    await expect(storage.get('start-idempotent-mapping')).resolves.toEqual(new Uint8Array([1]));
+    expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
+    expect(storage.get('start-idempotent-mapping')).resolves.toEqual(new Uint8Array([1]));
     expect(registry.currentEpoch(context.workflowId)).toBe(1);
   });
 
@@ -426,7 +426,7 @@ describe('start-commit lifecycle helpers', () => {
       } as never,
     };
 
-    await expect(
+    expect(
       buildAndCommitStartBatch(
         {
           ...context,
@@ -440,6 +440,6 @@ describe('start-commit lifecycle helpers', () => {
       ),
     ).rejects.toBeInstanceOf(WorkflowRevisionUnavailableError);
     expect(entryReads).toBe(3);
-    await expect(storage.get(`wf:${context.workflowId}`)).resolves.toBeNull();
+    expect(storage.get(`wf:${context.workflowId}`)).resolves.toBeNull();
   });
 });

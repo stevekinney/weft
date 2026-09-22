@@ -85,7 +85,7 @@ describe('engine signals', () => {
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);
 
-    await expect(
+    expect(
       signal(internals as never, 'workflow-delivered-before-throw', 'release', 'payload', {
         ...createSignalCallbacks(),
         getComposedInterceptor: () =>
@@ -117,7 +117,7 @@ describe('engine signals', () => {
   it('rejects signal interceptors that call next more than once', async () => {
     const internals = createSignalInternals();
 
-    await expect(
+    expect(
       signal(internals as never, 'workflow-double-next', 'release', 'payload', {
         ...createSignalCallbacks(),
         getComposedInterceptor: () =>
@@ -262,7 +262,7 @@ describe('engine signals', () => {
     const internals = createSignalInternals(storage);
     const callbacks = createSignalCallbacks();
 
-    await expect(
+    expect(
       signal(internals as never, 'workflow-no-conditional-batch', 'release', 'first', callbacks, {
         signalId: 'no-conditional-batch',
       }),
@@ -415,7 +415,7 @@ describe('engine signals', () => {
     const callbacks = createSignalCallbacks();
     const oversizeSignalId = 'x'.repeat(129);
 
-    await expect(
+    expect(
       signal(internals as never, 'workflow-oversize-signal-id', 'release', 'first', callbacks, {
         signalId: oversizeSignalId,
       }),
@@ -437,7 +437,7 @@ describe('engine signals', () => {
     const internals = createSignalInternals(storage);
     const callbacks = createSignalCallbacks();
 
-    await expect(
+    expect(
       signal(internals as never, 'workflow-empty-signal-id', 'release', 'first', callbacks, {
         signalId: '',
       }),
@@ -453,7 +453,7 @@ describe('engine signals', () => {
     const callbacks = createSignalCallbacks();
     const oversizeSignalId = 'x'.repeat(129);
 
-    await expect(
+    expect(
       bufferSignalPayloads(
         internals as never,
         'workflow-oversize-default-signal-id',

@@ -5,10 +5,11 @@ import type { FaultCode } from '../core/fault-code.ts';
 import { buildErrorResponses } from './openapi-error-responses.ts';
 import { generateOpenApiDocument } from './openapi.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
+import { defineOperation } from './operation-registry.ts';
+import { isRecord } from './protocol.test-support.ts';
 
 function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
-  // Test-only cast: invoke parameter variance is intentionally relaxed in test fixtures.
-  const base = {
+  const base = defineOperation({
     name: 'weft.test.errors',
     mcpExposable: false,
     destructive: false,
@@ -20,24 +21,25 @@ function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'reject' as const, jsonRpc: 'reject' as const },
     invoke: async () => ({}),
-  } as ErasedOperation;
+  });
   return producibleFaults === undefined ? base : { ...base, producibleFaults };
 }
 
 function responseSchema(response: unknown): unknown {
-  if (response === null || typeof response !== 'object') return undefined;
-  const content = (response as Record<string, unknown>)['content'];
-  if (content === null || typeof content !== 'object') return undefined;
-  const applicationJson = (content as Record<string, unknown>)['application/json'];
-  if (applicationJson === null || typeof applicationJson !== 'object') return undefined;
-  return (applicationJson as Record<string, unknown>)['schema'];
+  if (!isRecord(response)) return undefined;
+  const content = response['content'];
+  if (!isRecord(content)) return undefined;
+  const applicationJson = content['application/json'];
+  if (!isRecord(applicationJson)) return undefined;
+  return applicationJson['schema'];
 }
 
 describe('OpenAPI error responses', () => {
   it('documents the generated canonical REST fault component and audited data fields (#720, #763, #771)', () => {
     const document = generateOpenApiDocument();
-    const components = document['components'] as Record<string, unknown> | undefined;
-    const schemas = components?.['schemas'] as Record<string, unknown> | undefined;
+    const components = isRecord(document['components']) ? document['components'] : undefined;
+    const schemas =
+      components && isRecord(components['schemas']) ? components['schemas'] : undefined;
 
     expect(schemas?.['Error']).toEqual({
       type: 'object',

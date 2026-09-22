@@ -1,53 +1,51 @@
-import { z } from 'zod';
+import { bulkDeleteOutputSchema } from './bulk-output-schemas.ts';
+import {
+  assertOperationEngineMethods,
+  engineFailureFault,
+  faultMessage,
+  invalidParamsFault,
+  readOptionalJsonBody,
+  unprocessableFault,
+} from './operation-helpers.ts';
 
 import {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
-  type Engine,
 } from '../../core/engine.ts';
 import type { BulkDeleteResult, BulkOperationDryRunResult } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
+import { bulkListFilterInputSchema, type BulkListFilterInput } from './bulk-filter-input.ts';
 import {
-  bulkListFilterInputSchema,
   bulkOperationControlInputSchema,
   bulkOperationOptionsFromInput,
   bulkOperatorAccessPolicy,
-  engineFailureFault,
-  faultMessage,
-  parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
-  readOptionalJsonBody,
-  unprocessableFault,
-  type BulkListFilterInput,
   type BulkOperationControlInput,
-} from './bulk-filter-helpers.ts';
+} from './bulk-operation-controls.ts';
 import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkDeleteWorkflowsInput = bulkListFilterInputSchema.merge(bulkOperationControlInputSchema);
-const bulkDeleteWorkflowsOutput = z.unknown();
 
 export type BulkDeleteWorkflowsInput = BulkListFilterInput & BulkOperationControlInput;
 export type BulkDeleteWorkflowsOutput = BulkDeleteResult | BulkOperationDryRunResult;
 
-export const bulkDeleteWorkflowsOperation = defineOperation<
-  BulkDeleteWorkflowsInput,
-  BulkDeleteWorkflowsOutput
->({
+export const bulkDeleteWorkflowsOperation = defineOperation({
   name: 'weft.workflows.bulk.delete',
   mcpExposable: false,
   summary: 'Delete terminal workflows in bulk',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkDeleteWorkflowsInput,
-  outputSchema: bulkDeleteWorkflowsOutput as z.ZodType<BulkDeleteWorkflowsOutput>,
+  outputSchema: bulkDeleteOutputSchema,
   access: bulkOperatorAccessPolicy,
   producibleFaults: ['Unprocessable'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }): Promise<BulkDeleteWorkflowsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['deleteAll']);
+    const e = engine;
 
     const filter = validatedListFilterFromBulkInput(input);
     const operationOptions = bulkOperationOptionsFromInput(input, principal);

@@ -216,7 +216,7 @@ describe('bulk purge helpers', () => {
     };
     internals.tearDownAfterDeposition = null;
 
-    await expect(purgeWorkflow(internals as never, state, () => {})).rejects.toThrow(
+    expect(purgeWorkflow(internals as never, state, () => {})).rejects.toThrow(
       `Purge commit for workflow "${state.id}" lost its precondition.`,
     );
   });
@@ -283,7 +283,7 @@ describe('bulk purge helpers', () => {
       return realConditionalBatch(conditions, operations);
     };
 
-    await expect(purgeWorkflow(internals, state, () => {})).rejects.toThrow(
+    expect(purgeWorkflow(internals, state, () => {})).rejects.toThrow(
       `Purge commit for workflow "${state.id}" lost its precondition.`,
     );
     // The concurrent purge's generation 2 must survive untouched.

@@ -1,11 +1,10 @@
 /**
- * Storage adapter conformance helpers for third-party adapter authors.
+ * Internal storage adapter conformance suites.
  *
- * Imported via `@lostgradient/weft/storage/testing`. These helpers register
- * `bun:test` suites against a caller-provided adapter factory, so this subpath
- * is intended for Bun test files rather than production runtime bundles.
- *
- * @module @lostgradient/weft/storage/testing
+ * These helpers register `bun:test` suites for this package's adapter tests.
+ * Import them relatively from storage tests. Runtime consumers use the storage
+ * interfaces and implementations exported by `@lostgradient/weft`; suite registration
+ * is deliberately excluded from that root so it works outside the test runner.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -25,7 +24,7 @@ import {
  * @example
  * ```ts
  * import type { CapabilityConformanceOptions } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage, type StorageCapabilities } from '@lostgradient/weft/storage';
+ * import { MemoryStorage, type StorageCapabilities } from '@lostgradient/weft';
  *
  * const expected = {
  *   persistence: 'ephemeral',
@@ -55,7 +54,7 @@ export type CapabilityConformanceOptions = {
  * @example
  * ```ts
  * import type { ConcurrentConditionalBatchConformanceOptions } from '@lostgradient/weft/storage/testing';
- * import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
+ * import { BunSQLiteStorage } from '@lostgradient/weft';
  *
  * const options: ConcurrentConditionalBatchConformanceOptions = {
  *   create: () => new BunSQLiteStorage(':memory:'),
@@ -73,7 +72,7 @@ export type ConcurrentConditionalBatchConformanceOptions = {
  * @example
  * ```ts
  * import type { BinaryAndLargeScanConformanceOptions } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage } from '@lostgradient/weft/storage';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const options: BinaryAndLargeScanConformanceOptions = {
  *   create: () => new MemoryStorage(),
@@ -93,7 +92,7 @@ export type BinaryAndLargeScanConformanceOptions = {
  * @example
  * ```ts
  * import type { BasicStorageContractOptions } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage } from '@lostgradient/weft/storage';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const options: BasicStorageContractOptions = {
  *   create: () => new MemoryStorage(),
@@ -112,7 +111,7 @@ export type BasicStorageContractOptions = {
  * @example
  * ```ts
  * import { runBinaryAndLargeScanStorageConformance } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage } from '@lostgradient/weft/storage';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * runBinaryAndLargeScanStorageConformance('MemoryStorage', {
  *   create: () => new MemoryStorage(),
@@ -173,7 +172,7 @@ export function runBinaryAndLargeScanStorageConformance(
  * @example
  * ```ts
  * import { runStorageCapabilityConformance } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage, type StorageCapabilities } from '@lostgradient/weft/storage';
+ * import { MemoryStorage, type StorageCapabilities } from '@lostgradient/weft';
  *
  * const expected = {
  *   persistence: 'ephemeral',
@@ -271,7 +270,7 @@ export function runStorageCapabilityConformance(
  * @example
  * ```ts
  * import { runConcurrentConditionalBatchConformance } from '@lostgradient/weft/storage/testing';
- * import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
+ * import { BunSQLiteStorage } from '@lostgradient/weft';
  *
  * runConcurrentConditionalBatchConformance('BunSQLiteStorage', {
  *   create: () => new BunSQLiteStorage(':memory:'),
@@ -314,7 +313,7 @@ export function runConcurrentConditionalBatchConformance(
  * @example
  * ```ts
  * import { runBasicStorageContract } from '@lostgradient/weft/storage/testing';
- * import { MemoryStorage } from '@lostgradient/weft/storage';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * runBasicStorageContract('MemoryStorage', {
  *   create: () => new MemoryStorage(),

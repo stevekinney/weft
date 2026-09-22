@@ -1,195 +1,182 @@
-/**
- * Operation-name validation and the typed `defineOperation` builder.
- *
- * The full list of runtime operations (workflow start/signal/update/query,
- * schedules, reviews, attributes, etc.) is populated incrementally by the
- * transport-adapter phases (Phases 9-13). This module supplies:
- *
- *   - `validateOperationName` / `isValidOperationName` — the regex that
- *     `OpenRPC` discovery and the JSON-RPC dispatcher both enforce.
- *     Operation names must follow `weft.<segment>(.<segment>)+` with
- *     lowercase ASCII segments. The form is single-source-of-truth here.
- *
- *   - `defineOperation` — a fully-typed builder that returns a concrete
- *     `OperationDefinition<Input, Output>`. Use this when authoring
- *     individual operations so the `Input`/`Output` types flow through
- *     `authorize` and `invoke` without the `as unknown as ErasedOperation`
- *     cast required at the registry boundary.
- */
-
 import type { z } from 'zod';
 
-import type { AuthorizationScope } from './authorization-scope.ts';
-import type { AccessPolicy, ScopeRequirement } from './authorization.ts';
-import { validateOperationName } from './operation-catalog.ts';
-import type {
-  OperationDefinition,
-  OperationDefinitionBase,
-  ParameterizedAccessHint,
+import {
+  dispatchStream,
+  dispatchSubscription,
+  dispatchUnary,
+} from './operation-catalog/operation-dispatch.ts';
+import { snapshotOperationMetadata } from './operation-catalog/operation-metadata.ts';
+import {
+  validateOperationName,
+  type AuthorizationDecision,
+  type DispatchContext,
+  type DispatchResult,
+  type OperationContext,
+  type OperationDefinitionBase,
+  type StreamOperationInvocation,
+  type SubscriptionOperationInvocation,
 } from './operation-catalog/types.ts';
 
-// Re-exported so callers that import the typed builder also get the name
-// validators from the same module surface. Both import paths are
-// supported, but the canonical source of truth is `operation-catalog.ts`
-// — prefer importing from there for validator-only use, and from this
-// module when also using `defineOperation`.
-export { isValidOperationName, validateOperationName } from './operation-catalog.ts';
+export { isValidOperationName, validateOperationName } from './operation-catalog/types.ts';
 
-/**
- * Input shape for `defineOperation`. Mirrors `OperationDefinition` but
- * makes `tags` optional (default `[]`) so individual operation modules
- * stay terse.
- *
- * `authorize` is optional. When absent, the operation's `access` policy
- * is the sole authorization gate — `invoke` runs as soon as the policy
- * passes. When present, BOTH `access` AND `authorize` must permit the
- * call: the policy runs first, then the parameter-aware hook.
- */
-type OperationDefinitionInputBase<Input, Output, Element = unknown> = Omit<
-  OperationDefinitionBase<Input, Output, Element>,
-  'tags'
+type SchemaOperationInputBase<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+> = Omit<
+  OperationDefinitionBase<z.output<InputSchema>, z.input<OutputSchema>, z.output<OutputSchema>>,
+  'tags' | 'inputSchema' | 'outputSchema' | 'authorize'
 > & {
+  readonly inputSchema: InputSchema;
+  readonly outputSchema: OutputSchema;
   readonly tags?: ReadonlyArray<string>;
+  readonly authorize?: (
+    context: OperationContext<NoInfer<z.output<InputSchema>>>,
+  ) => Promise<AuthorizationDecision>;
 };
 
-/**
- * Discriminated input for `defineOperation`, mirroring the discriminated
- * union on `OperationDefinition`. Streaming and subscription kinds REQUIRE
- * `eventSchema`; unary kinds forbid it. The compiler rejects shapes that
- * don't satisfy this constraint, eliminating the runtime EngineFailure
- * that would otherwise fire when a streaming operation tries to validate
- * elements without a schema.
- */
-export type OperationDefinitionInput<Input, Output, Element = unknown> =
-  | (OperationDefinitionInputBase<Input, Output, Element> & {
-      readonly kind?: 'unary';
-      readonly eventSchema?: never;
-    })
-  | (OperationDefinitionInputBase<Input, Output, Element> & {
-      readonly kind: 'stream';
-      readonly eventSchema: z.ZodType<Element>;
-    })
-  | (OperationDefinitionInputBase<Input, Output, Element> & {
-      readonly kind: 'subscription';
-      readonly eventSchema: z.ZodType<Element>;
-    });
+type UnaryOperationInput<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+> = SchemaOperationInputBase<InputSchema, OutputSchema> & {
+  readonly kind?: 'unary';
+  readonly eventSchema?: never;
+  readonly invoke: (
+    context: OperationContext<NoInfer<z.output<InputSchema>>>,
+  ) => Promise<NoInfer<z.input<OutputSchema>>>;
+};
 
-/**
- * Typed builder for a single operation. Validates the name at construction
- * — registration-time errors then point at the offending source line, not
- * at the eventual registry assembly. Defensively shallow-copies every
- * mutable container in the input (`tags`, `access`, `transports`,
- * `unknownKeyPolicy`) so that a caller mutating their original references
- * after this call cannot change the returned definition. The registry
- * deep-freezes these again at insertion as defense in depth.
- *
- * Returns a fully-typed `OperationDefinition<Input, Output>` so caller-
- * side `Input`/`Output` types flow through to `authorize` / `invoke`
- * without an `as` cast.
- *
- * Note: the registry re-validates `name` at assembly time. The
- * duplication is deliberate — the registry accepts any
- * `RegistrableOperation` (including hand-rolled object literals), and
- * the assembly check is the trust boundary that OpenRPC discovery and
- * JSON-RPC dispatch rely on.
- */
-export function defineOperation<Input, Output, Element = unknown>(
-  input: OperationDefinitionInput<Input, Output, Element>,
-): OperationDefinition<Input, Output, Element> {
+type StreamOperationInput<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+> = SchemaOperationInputBase<InputSchema, OutputSchema> & {
+  readonly kind: 'stream';
+  readonly eventSchema: EventSchema;
+  readonly invoke: (
+    context: OperationContext<NoInfer<z.output<InputSchema>>>,
+  ) => Promise<
+    NoInfer<z.input<OutputSchema>> | StreamOperationInvocation<NoInfer<z.input<EventSchema>>>
+  >;
+};
+
+type SubscriptionOperationInput<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+> = SchemaOperationInputBase<InputSchema, OutputSchema> & {
+  readonly kind: 'subscription';
+  readonly eventSchema: EventSchema;
+  readonly invoke: (
+    context: OperationContext<NoInfer<z.output<InputSchema>>>,
+  ) => Promise<
+    SubscriptionOperationInvocation<NoInfer<z.input<EventSchema>>, NoInfer<z.input<OutputSchema>>>
+  >;
+};
+
+export type OperationDefinitionInput<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType = never,
+> =
+  | UnaryOperationInput<InputSchema, OutputSchema>
+  | StreamOperationInput<InputSchema, OutputSchema, EventSchema>
+  | SubscriptionOperationInput<InputSchema, OutputSchema, EventSchema>;
+
+type DispatchEntry<Result> = {
+  readonly tags: ReadonlyArray<string>;
+  readonly dispatch: (
+    rawInput: unknown,
+    context: DispatchContext,
+  ) => Promise<DispatchResult<Result>>;
+};
+
+export type UnarySchemaOperationDefinition<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+> = UnaryOperationInput<InputSchema, OutputSchema> & DispatchEntry<z.input<OutputSchema>>;
+
+export type StreamSchemaOperationDefinition<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+> = StreamOperationInput<InputSchema, OutputSchema, EventSchema> &
+  DispatchEntry<z.input<OutputSchema> | StreamOperationInvocation<z.input<EventSchema>>>;
+
+export type SubscriptionSchemaOperationDefinition<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+> = SubscriptionOperationInput<InputSchema, OutputSchema, EventSchema> &
+  DispatchEntry<SubscriptionOperationInvocation<z.input<EventSchema>, z.input<OutputSchema>>>;
+
+export type SchemaOperationDefinition<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType = never,
+> =
+  | UnarySchemaOperationDefinition<InputSchema, OutputSchema>
+  | StreamSchemaOperationDefinition<InputSchema, OutputSchema, EventSchema>
+  | SubscriptionSchemaOperationDefinition<InputSchema, OutputSchema, EventSchema>;
+
+/** Derive authoring contracts from schemas and capture one immutable dispatch policy. */
+export function defineOperation<InputSchema extends z.ZodObject, OutputSchema extends z.ZodType>(
+  input: UnaryOperationInput<InputSchema, OutputSchema>,
+): UnarySchemaOperationDefinition<InputSchema, OutputSchema>;
+export function defineOperation<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+>(
+  input: StreamOperationInput<InputSchema, OutputSchema, EventSchema>,
+): StreamSchemaOperationDefinition<InputSchema, OutputSchema, EventSchema>;
+export function defineOperation<
+  InputSchema extends z.ZodObject,
+  OutputSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+>(
+  input: SubscriptionOperationInput<InputSchema, OutputSchema, EventSchema>,
+): SubscriptionSchemaOperationDefinition<InputSchema, OutputSchema, EventSchema>;
+export function defineOperation(
+  input: OperationDefinitionInput<z.ZodObject, z.ZodType, z.ZodType>,
+): SchemaOperationDefinition<z.ZodObject, z.ZodType, z.ZodType> {
   validateOperationName(input.name);
-  // The discriminated union on the input forces `eventSchema` to match
-  // `kind`. We construct the same shape on the output: streaming /
-  // subscription branches carry `eventSchema`, unary does not. The
-  // explicit branching is what TypeScript needs to narrow the assembled
-  // object literal against the union variants.
-  const baseFields = {
-    name: input.name,
-    mcpExposable: input.mcpExposable,
-    ...(input.mcpTool === undefined
-      ? {}
-      : { mcpTool: { workflowType: input.mcpTool.workflowType } }),
-    summary: input.summary,
-    ...(input.description === undefined ? {} : { description: input.description }),
-    tags: [...(input.tags ?? [])],
-    destructive: input.destructive,
+  const metadata = snapshotOperationMetadata({ ...input, tags: input.tags ?? [] });
+  const fields = {
+    ...metadata,
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
-    ...(input.parameterizedAccess === undefined
-      ? {}
-      : { parameterizedAccess: copyParameterizedAccessHint(input.parameterizedAccess) }),
-    ...(input.producibleFaults === undefined
-      ? {}
-      : { producibleFaults: [...input.producibleFaults] }),
-    ...(input.discoverable === undefined ? {} : { discoverable: input.discoverable }),
-    // Deep-copy `access` so `scoped` and `optionalAuth` variants don't
-    // leak aliasing through their nested `ScopeRequirement` object and
-    // `scopes` array. Without this, a caller mutating the nested scope
-    // list between `defineOperation` returning and the registry running
-    // `freezeAccessPolicy` could silently change the operation's
-    // authorization requirements — the JSDoc's isolation promise must
-    // hold from the moment the builder returns.
-    access: copyAccessPolicy(input.access),
-    transports: { ...input.transports },
-    unknownKeyPolicy: { ...input.unknownKeyPolicy },
     ...(input.authorize === undefined ? {} : { authorize: input.authorize }),
-    invoke: input.invoke,
   };
   if (input.kind === 'stream') {
-    return { ...baseFields, kind: 'stream', eventSchema: input.eventSchema };
+    const operation = Object.freeze({
+      ...fields,
+      kind: input.kind,
+      eventSchema: input.eventSchema,
+      invoke: input.invoke,
+    });
+    return Object.freeze({
+      ...operation,
+      dispatch: (rawInput: unknown, context: DispatchContext) =>
+        dispatchStream(operation, { rawInput, context }),
+    });
   }
   if (input.kind === 'subscription') {
-    return { ...baseFields, kind: 'subscription', eventSchema: input.eventSchema };
+    const operation = Object.freeze({
+      ...fields,
+      kind: input.kind,
+      eventSchema: input.eventSchema,
+      invoke: input.invoke,
+    });
+    return Object.freeze({
+      ...operation,
+      dispatch: (rawInput: unknown, context: DispatchContext) =>
+        dispatchSubscription(operation, { rawInput, context }),
+    });
   }
-  return {
-    ...baseFields,
-  };
-}
-
-function copyParameterizedAccessHint(hint: ParameterizedAccessHint): ParameterizedAccessHint {
-  return {
-    discriminator: hint.discriminator,
-    ...(hint.defaultValue === undefined ? {} : { defaultValue: hint.defaultValue }),
-    variants: hint.variants.map((variant) => ({
-      value: variant.value,
-      access: copyAccessPolicy(variant.access),
-    })),
-  };
-}
-
-/**
- * Deep-copy an `AccessPolicy`. For scope-bearing variants, copies every
- * nested `ScopeRequirement` object AND its `scopes` array.
- * Mirrors `freezeAccessPolicy` in `operation-catalog.ts` but returns
- * mutable structures (the registry applies the freeze at insertion).
- */
-function copyAccessPolicy(policy: AccessPolicy): AccessPolicy {
-  if (policy.kind === 'scoped') {
-    return {
-      kind: 'scoped',
-      scopes: copyScopeRequirement(policy.scopes),
-    };
-  }
-  if (policy.kind === 'scopedAlternatives') {
-    return {
-      kind: 'scopedAlternatives',
-      alternatives: policy.alternatives.map(copyScopeRequirement) as [
-        ScopeRequirement,
-        ...ScopeRequirement[],
-      ],
-    };
-  }
-  if (policy.kind === 'optionalAuth') {
-    return {
-      kind: 'optionalAuth',
-      authenticatedScopes: copyScopeRequirement(policy.authenticatedScopes),
-    };
-  }
-  return { ...policy };
-}
-
-function copyScopeRequirement(requirement: ScopeRequirement): ScopeRequirement {
-  return {
-    kind: requirement.kind,
-    scopes: [...requirement.scopes] as [AuthorizationScope, ...AuthorizationScope[]],
-  };
+  const operation = Object.freeze({ ...fields, kind: 'unary' as const, invoke: input.invoke });
+  return Object.freeze({
+    ...operation,
+    dispatch: (rawInput: unknown, context: DispatchContext) =>
+      dispatchUnary(operation, { rawInput, context }),
+  });
 }

@@ -7,6 +7,8 @@
  * @module runtime/portable
  */
 
+import { readEnvironmentVariable as readConfiguredEnvironmentVariable } from './environment-configuration.ts';
+
 // ---------------------------------------------------------------------------
 // Runtime detection
 // ---------------------------------------------------------------------------
@@ -141,9 +143,7 @@ export function detectRuntimeVersion(): string {
  * @internal
  */
 export function readEnvironmentVariable(name: string): string | undefined {
-  const bun = getBunGlobal();
-  if (bun !== undefined) return bun.env[name];
-  return getProcess()?.env?.[name];
+  return readConfiguredEnvironmentVariable(name);
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +267,8 @@ export function hashString(data: string): string {
  * this helper.
  * @internal
  */
+export function tryLoadNodeBuiltin(id: 'bun:sqlite'): typeof import('bun:sqlite') | undefined;
+export function tryLoadNodeBuiltin(id: 'node:crypto'): typeof import('node:crypto') | undefined;
 export function tryLoadNodeBuiltin(id: 'node:fs'): typeof import('node:fs') | undefined;
 export function tryLoadNodeBuiltin(
   id: 'node:fs/promises',

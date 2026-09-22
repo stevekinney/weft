@@ -169,7 +169,7 @@ describe('persistWorkerCheckpoint vs. a start-new replacement — WFT-21 Codex r
       // specific message — a tight match so a downstream throw (e.g. an
       // unrelated timeline/feed error after the write already landed)
       // could never masquerade as the fence itself having worked.
-      await expect(
+      expect(
         persistCheckpoint(
           internals,
           originalHandle.id,
@@ -184,7 +184,7 @@ describe('persistWorkerCheckpoint vs. a start-new replacement — WFT-21 Codex r
       expect(replacementCheckpointAfter).toEqual(replacementCheckpointBefore);
 
       await engine.signal(replacedHandle.id, 'go', 'done');
-      await expect(replacedHandle.result()).resolves.toBe('done');
+      expect(replacedHandle.result()).resolves.toBe('done');
     } finally {
       engine[Symbol.dispose]();
     }

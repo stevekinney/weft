@@ -70,7 +70,7 @@ describe('WorkflowCatalog.install', () => {
 
     await catalog.install(manifest, fakeDefinition('checkout'));
 
-    await expect(catalog.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
+    expect(catalog.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
       WorkflowCatalogConflictError,
     );
   });
@@ -90,7 +90,7 @@ describe('WorkflowCatalog.install', () => {
     // `reader` has never seen `pinned-1` in its own cache, but durable
     // storage already holds different content under that exact key —
     // `install()` must read through and reject, not silently last-write-win.
-    await expect(reader.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
+    expect(reader.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
       WorkflowCatalogConflictError,
     );
 
@@ -130,7 +130,7 @@ describe('WorkflowCatalog.install', () => {
       new TextEncoder().encode(JSON.stringify({ manifest, installedAt: Date.now() })),
     );
 
-    await expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
+    expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
       WorkflowRevisionTombstonedError,
     );
     // No entry was resurrected.
@@ -169,7 +169,7 @@ describe('WorkflowCatalog.install', () => {
       return originalConditionalBatch(conditions, operations);
     };
 
-    await expect(
+    expect(
       catalog.install(manifest, fakeDefinition('checkout'), { removalGeneration: null }),
     ).rejects.toThrow(WorkflowCatalogConflictError);
   });
@@ -180,7 +180,7 @@ describe('WorkflowCatalog.install', () => {
     const manifest = await manifestFor('checkout', '1.0.0');
     const invalid = { ...manifest, name: '1invalid' } as WorkflowRevisionManifest;
 
-    await expect(catalog.install(invalid, fakeDefinition('1invalid'))).rejects.toThrow();
+    expect(catalog.install(invalid, fakeDefinition('1invalid'))).rejects.toThrow();
   });
 
   it('revalidates a cache hit against durable storage rather than trusting it outright — a peer that durably removed and tombstoned this exact entry is not masked by a stale cache hit (WFT-21, Codex review round 14, P1 item TYR4)', async () => {
@@ -206,7 +206,7 @@ describe('WorkflowCatalog.install', () => {
     // finds the entry durably absent, evicts the stale cache entry, and
     // falls through to the ordinary not-cached path — which fails closed on
     // the tombstone exactly like a genuinely fresh install would.
-    await expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
+    expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
       WorkflowRevisionTombstonedError,
     );
     expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
@@ -297,7 +297,7 @@ describe('WorkflowCatalog.activateRegistered', () => {
     await catalog.install(manifest, fakeDefinition('checkout'));
     storage.conditionalBatch = async () => false;
 
-    await expect(
+    expect(
       catalog.activateRegistered('checkout', manifest, fakeDefinition('checkout')),
     ).rejects.toThrow(WorkflowCatalogActivationConflictError);
   });
@@ -505,9 +505,9 @@ describe('WorkflowCatalog.activateCandidate', () => {
     const v2 = await manifestFor('checkout', '2.0.0');
     const fresh = new WorkflowCatalog(storage);
 
-    await expect(
-      fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 }),
-    ).rejects.toThrow(WorkflowCatalogActiveEntryMissingError);
+    expect(fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 })).rejects.toThrow(
+      WorkflowCatalogActiveEntryMissingError,
+    );
   });
 
   it('refuses an omitted expectedGeneration on a 2nd-or-later activation: two refreshers cannot silently last-write-win', async () => {
@@ -577,7 +577,7 @@ describe('WorkflowCatalog.activateCandidate', () => {
       return originalConditionalBatch(conditions, operations);
     };
 
-    await expect(catalog.activateCandidate('checkout', manifest)).rejects.toThrow(
+    expect(catalog.activateCandidate('checkout', manifest)).rejects.toThrow(
       WorkflowRevisionNotInstalledError,
     );
     expect(catalog.resolveActive('checkout')).toBeUndefined();

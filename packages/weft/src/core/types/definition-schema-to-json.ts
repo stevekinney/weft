@@ -153,7 +153,7 @@ export function loadValibotConverter(
   // Weft is installed as a dependency. `node:module` is loaded through
   // `tryLoadNodeBuiltin` (process.getBuiltinModule) rather than a static
   // `import { createRequire } from 'node:module'`, so this module — reachable
-  // from the browser-facing `@lostgradient/weft/client` bundle via the
+  // from the browser-facing `@lostgradient/weft` bundle via the
   // catalog's Valibot schema adapter — carries no static Node built-in import.
   const resolver = requireModule ?? loadNodeRequire();
   if (resolver === undefined) {

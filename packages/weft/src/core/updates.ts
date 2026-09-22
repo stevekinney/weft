@@ -8,10 +8,10 @@
  */
 
 import { sleep } from '../runtime/portable.ts';
-import type { BatchOperation, Storage } from '../storage/interface';
-import { KEYS } from '../storage/interface';
-import { decode, encode } from './codec';
-import type { WorkflowStatus } from './types';
+import type { BatchOperation, Storage } from '../storage/interface.ts';
+import { KEYS } from '../storage/interface.ts';
+import { decode, encode } from './codec.ts';
+import type { WorkflowStatus } from './types.ts';
 import { WeftError } from './weft-error.ts';
 
 // ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ const DEFAULT_CLEANUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * @example
  * ```ts
  * import { UpdateCoordinator } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const coordinator = new UpdateCoordinator(storage);

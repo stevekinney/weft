@@ -143,7 +143,7 @@ describe('constraint primitive', () => {
     engine.register(constrainedSagaWorkflow);
 
     const handle = await engine.start('constrained-saga', null);
-    await expect(handle.result()).rejects.toThrow('Constraint violated: positiveBalance');
+    expect(handle.result()).rejects.toThrow('Constraint violated: positiveBalance');
 
     // The ConstraintViolatedEvent must have fired.
     expect(violationEvents).toHaveLength(1);
@@ -211,7 +211,7 @@ describe('constraint primitive', () => {
     engine.register(failFastWorkflow);
 
     const handle = await engine.start('fail-fast', null);
-    await expect(handle.result()).rejects.toThrow('Constraint violated: hardLimit');
+    expect(handle.result()).rejects.toThrow('Constraint violated: hardLimit');
 
     // Event must have fired.
     expect(violationEvents).toHaveLength(1);
@@ -364,7 +364,7 @@ describe('constraint primitive', () => {
 
     try {
       const handle = await engine.start('throwing-check-workflow', null);
-      await expect(handle.result()).resolves.toBe('done');
+      expect(handle.result()).resolves.toBe('done');
       expect(warning).toHaveBeenCalledWith(
         '[weft] Constraint "throwing-check" check() threw an error:',
         expect.objectContaining({ message: 'constraint dependency unavailable' }),

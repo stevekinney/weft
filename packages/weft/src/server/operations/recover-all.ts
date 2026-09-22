@@ -1,11 +1,10 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 // Intentionally accept no input fields. `acknowledgeUnknownWorkflowTypes` is
 // the dangerous opt-out that lets recovery silently skip unknown stored
@@ -22,7 +21,7 @@ const recoverAllOutput = z.object({
 export type RecoverAllInput = z.infer<typeof recoverAllInput>;
 export type RecoverAllOutput = z.infer<typeof recoverAllOutput>;
 
-export const recoverAllOperation = defineOperation<RecoverAllInput, RecoverAllOutput>({
+export const recoverAllOperation = defineOperation({
   name: 'weft.recover.all',
   mcpExposable: false,
   summary: 'Recover all interrupted workflows',
@@ -35,7 +34,8 @@ export const recoverAllOperation = defineOperation<RecoverAllInput, RecoverAllOu
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine }): Promise<RecoverAllOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['recoverAll']);
+    const typedEngine = engine;
 
     try {
       const handles = await typedEngine.recoverAll();

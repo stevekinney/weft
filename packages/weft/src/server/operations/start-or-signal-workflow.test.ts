@@ -207,7 +207,7 @@ describe('weft.workflows.startorsignal', () => {
     });
     await waitForRecordedFinalizerState(engine, 'sos-rest-teardown-pending');
     await engine.cancel(handle.id);
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
 
     const drive = engine.scheduler.tick(now);
     await finalizer.started;

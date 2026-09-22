@@ -1,13 +1,11 @@
 import type { ServerWebSocket } from 'bun';
 
 import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
-import { WorkerDisconnectedEvent } from '../../core/events.ts';
 import { handleMcpHttpRequest } from '../../mcp/http.ts';
 import type { PrometheusExporter } from '../../observability/metrics.ts';
 import type { AuthConfig, AuthContext } from '../authentication.ts';
 import type { HandlerOptions } from '../handler.ts';
 import { authContextToPrincipal, handleRequest } from '../handler.ts';
-import type { ServeOptions } from '../index.ts';
 import { handleJsonRpcHttpRequestSafely } from '../json-rpc-transport-helpers.ts';
 import {
   closeJsonRpcWebSocketSession,
@@ -17,12 +15,14 @@ import {
 } from '../json-rpc-websocket-runtime.ts';
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
 import { API_PREFIX } from '../route-model.ts';
-import { decodeRemoteTaskRecord, taskLedgerKey } from '../task-ledger.ts';
 import type { ServerContext } from './context.ts';
 import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
 import { gateRequest } from './request-gate.ts';
-import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
-import { reassignOrExpireTask } from './task-reconciliation.ts';
+import {
+  handleTaskHeartbeatRequest,
+  handleTaskPollRequest,
+  handleTaskResultRequest,
+} from './task-polling.ts';
 import {
   acquireWorkflowStreamConnection,
   addStreamSocket,
@@ -35,6 +35,7 @@ import {
 } from './websocket-stream.ts';
 import { handleWebSocketUpgrade } from './websocket-upgrade.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
+import { runWorkerDisconnectRequeue } from './worker-disconnect-requeue.ts';
 
 type ServerFetchOptions = {
   // Widened to `RegistryAgnosticEngine` (see its JSDoc / #708) to match the
@@ -215,6 +216,17 @@ async function dispatchServerFetchRequest(
     return taskResultResponse;
   }
 
+  const taskHeartbeatResponse = await handleTaskHeartbeatRequest(
+    context,
+    options,
+    request,
+    url,
+    taskPrincipal,
+  );
+  if (taskHeartbeatResponse !== null) {
+    return taskHeartbeatResponse;
+  }
+
   // JSON-RPC HTTP endpoint. Claimed here so `handleRequest` doesn't
   // see `/jsonrpc` and return 404 from its REST route table. The
   // adapter enforces method (POST only) and content-type internally.
@@ -392,13 +404,24 @@ export function createServerWebSocketHandlers(
         // re-register inside the window keeps its in-flight work. `0`
         // disables the grace period and runs the requeue inline.
         if (context.workerReconnectGracePeriodMs <= 0) {
-          runWorkerDisconnectRequeue(context, options, workerId, ws, cleanupWorkflowIndex);
+          void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
           return;
         }
 
         // Cancel any previously-scheduled requeue for this worker before
         // scheduling a new one (defensive — close should only fire once per
         // socket, but a future change could break that invariant silently).
+        //
+        // Contract this grace branch owns (COR-220): the disconnected
+        // `WorkerInfo` entry in `context.registry` is deliberately left
+        // UNTOUCHED here — no `unregister()`, no mutation of its
+        // `sessionGeneration` — for as long as this timer is pending.
+        // `resolveReconnectProof` (`websocket-worker-registration.ts`) reads
+        // `context.registry.sessionIdentity(workerId)` during that window to
+        // decide whether a reconnecting `register` PROVES a resume of this
+        // exact session; a future change that cleans up the registry entry
+        // any earlier than the timer firing (or the proof succeeding) would
+        // silently make every reconnect look unproven.
         const existing = context.pendingWorkerRequeues.get(workerId);
         if (existing !== undefined) clearTimeout(existing);
 
@@ -408,85 +431,10 @@ export function createServerWebSocketHandlers(
           // period. If so, the fresh socket replaces `workerSockets[workerId]`
           // and the timer becomes a no-op.
           if (context.workerSockets.get(workerId) !== ws) return;
-          runWorkerDisconnectRequeue(context, options, workerId, ws, cleanupWorkflowIndex);
+          void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
         }, context.workerReconnectGracePeriodMs);
         context.pendingWorkerRequeues.set(workerId, timer);
       }
     },
   };
-}
-
-/**
- * Run the worker-disconnect requeue path for `workerId`: remove its in-flight
- * tracking, unregister it, drop affinity, and reassign each in-flight task.
- * Called either inline from the close handler (when the grace period is 0) or
- * from the deferred-requeue timer after the grace period elapses without a
- * reconnect.
- */
-function runWorkerDisconnectRequeue(
-  context: ServerContext,
-  options: ServeOptions,
-  workerId: string,
-  _ws: ServerWebSocket<WebSocketData>,
-  cleanupWorkflowIndex: (operationId: string) => void,
-): void {
-  // Capture in-flight tasks from the in-memory registry (source of truth)
-  // before cleanup so they can be reassigned even if storage hasn't committed yet.
-  const inFlightTasks = context.registry.getWorkerTasks(workerId);
-
-  // Remove in-flight tracking synchronously to allow re-dispatch.
-  for (const task of inFlightTasks) {
-    context.registry.completeTask(task.operationId);
-    context.deadlineTracker.remove(task.operationId);
-  }
-
-  context.registry.unregister(workerId);
-  context.workerSockets.delete(workerId);
-  options.engine.dispatchEvent(new WorkerDisconnectedEvent(workerId, inFlightTasks.length));
-
-  // Clean up affinity entries that pointed at this worker.
-  for (const [workflowId, affinityWorkerId] of context.workerAffinity) {
-    if (affinityWorkerId === workerId) {
-      context.workerAffinity.delete(workflowId);
-    }
-  }
-
-  // Clean up workflow→operations reverse index for tasks owned by this worker.
-  for (const task of inFlightTasks) {
-    cleanupWorkflowIndex(task.operationId);
-  }
-
-  // Requeue each in-flight task with incremented attempt, respecting retry policy.
-  // The in-memory registry is the source of truth for *which* tasks to reassign.
-  // Full task metadata (activityName, input, etc.) is read from storage.
-  for (const task of inFlightTasks) {
-    void (async () => {
-      try {
-        const record = decodeRemoteTaskRecord(
-          await options.engine.storage.get(taskLedgerKey(task.operationId)),
-        );
-
-        if (record !== null && record.state === 'leased') {
-          await reassignOrExpireTask(
-            context,
-            options,
-            task.operationId,
-            record,
-            'worker-disconnect',
-          );
-        } else {
-          // Storage write hadn't committed, or a result/timeout/cancellation
-          // already settled this attempt — nothing to reassign.
-          console.warn(
-            `[weft] No leased ledger record found for task "${task.operationId}" — skipping reassignment`,
-          );
-        }
-      } catch (error) {
-        console.error(
-          `[weft] Failed to reassign task "${task.operationId}" from worker "${workerId}":`,
-          error,
-        );
-      }
-    })();
-  }
 }

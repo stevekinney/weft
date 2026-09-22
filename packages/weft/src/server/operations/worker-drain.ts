@@ -79,7 +79,7 @@ const adminAccess: AccessPolicy = {
 export function createDrainWorkerOperation(options?: WorkerDrainOperationOptions) {
   const registry = options?.workerRegistry;
   const clock = options?.clock ?? Date.now;
-  return defineOperation<WorkerDrainInput, WorkerDrainOutput>({
+  return defineOperation({
     name: 'weft.workers.drain',
     mcpExposable: false,
     summary: 'Mark a connected worker as draining',
@@ -111,7 +111,7 @@ export function createDrainWorkerOperation(options?: WorkerDrainOperationOptions
 
 export function createClearWorkerDrainOperation(options?: WorkerDrainOperationOptions) {
   const registry = options?.workerRegistry;
-  return defineOperation<WorkerDrainClearInput, WorkerDrainOutput>({
+  return defineOperation({
     name: 'weft.workers.resume',
     mcpExposable: false,
     summary: 'Clear a connected worker drain marker',
@@ -136,7 +136,7 @@ export function createClearWorkerDrainOperation(options?: WorkerDrainOperationOp
 export function createDrainDeploymentOperation(options?: WorkerDrainOperationOptions) {
   const registry = options?.workerRegistry;
   const clock = options?.clock ?? Date.now;
-  return defineOperation<DeploymentDrainInput, WorkerDrainOutput>({
+  return defineOperation({
     name: 'weft.worker.deployments.drain',
     mcpExposable: false,
     summary: 'Mark a worker deployment as draining',
@@ -160,7 +160,7 @@ export function createDrainDeploymentOperation(options?: WorkerDrainOperationOpt
 
 export function createClearDeploymentDrainOperation(options?: WorkerDrainOperationOptions) {
   const registry = options?.workerRegistry;
-  return defineOperation<DeploymentDrainClearInput, WorkerDrainOutput>({
+  return defineOperation({
     name: 'weft.worker.deployments.resume',
     mcpExposable: false,
     summary: 'Clear a worker deployment drain marker',

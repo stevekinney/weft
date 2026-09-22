@@ -1,10 +1,9 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 import {
   mapScheduleErrorToFault,
   validateScheduleInputCadence,
@@ -124,7 +123,7 @@ function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreat
   return { type, spec, id, description, overlap, backfill, jitter, revisionPolicy };
 }
 
-export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
+export const createScheduleOperation = defineOperation({
   name: 'weft.schedules.create',
   mcpExposable: false,
   summary: 'Create a recurring schedule',
@@ -143,7 +142,8 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<CreateScheduleOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['schedule']);
+    const typedEngine = engine;
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the same error messages verbatim. Validation order:

@@ -1,3 +1,4 @@
+import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import type { Duration } from './retry-retention.ts';
 import type { WorkflowDefinition } from './workflow-function.ts';
 
@@ -182,6 +183,74 @@ export type ScheduleUpdateOptions = Pick<
 >;
 
 /**
+ * Options accepted by {@link Engine.pauseSchedule}, {@link Engine.resumeSchedule},
+ * and {@link Engine.cancelSchedule} (COR-67). A consumer that keeps its own
+ * durable projection in step with the engine's schedule state uses these to
+ * fold that projection's write into the SAME storage commit that persists the
+ * schedule's status transition, so the two are atomic — both land, or neither
+ * does. Without this, the caller's own record is fire-and-forget after the
+ * engine's commit: a crash between the two writes (or a rejected commit)
+ * leaves them observably out of sync.
+ *
+ * `additionalOperations` are put/delete operations against the caller's OWN
+ * storage keys — never one of Weft's reserved prefixes (see
+ * `WEFT_RESERVED_KEY_PREFIXES`) — appended to the same batch as the schedule
+ * state write. `extraConditions` are optional expected-value guards, also
+ * against the caller's own keys: every listed key must currently hold the
+ * given value (`null` means "must be absent") or the ENTIRE commit — the
+ * caller's operations AND the schedule state transition — is rejected and
+ * NEITHER lands.
+ *
+ * When `extraConditions` is supplied and loses the compare-and-swap,
+ * `onExtraConditionsLost` (if provided) supplies the thrown error, so the
+ * caller can distinguish "my own guard was stale" (a concurrent write to one
+ * of my keys) from any other failure. Omitting it falls back to a generic
+ * "lost its precondition" `Error`. A lost engine-owned fence (for example this
+ * engine losing its lease) is never reported through `onExtraConditionsLost`
+ * — that surfaces as `EngineDeposedError` instead, exactly as it does for
+ * every other engine-owned write.
+ *
+ * @example
+ * ```ts
+ * import { Engine, workflow, type ScheduleTransitionOptions } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
+ * const handle = await engine.schedule('report', null, '0 9 * * *', { id: 'daily-report' });
+ *
+ * const options: ScheduleTransitionOptions = {
+ *   additionalOperations: [
+ *     {
+ *       type: 'put',
+ *       key: 'app:projection:daily-report:paused',
+ *       value: new TextEncoder().encode('true'),
+ *     },
+ *   ],
+ * };
+ * await engine.pauseSchedule('daily-report', options);
+ * engine[Symbol.dispose]();
+ * ```
+ */
+export interface ScheduleTransitionOptions {
+  /**
+   * Caller-owned put/delete operations committed atomically with the schedule
+   * state transition.
+   */
+  additionalOperations?: BatchOperation[];
+  /**
+   * Caller-owned expected-value guards. The commit — the caller's operations
+   * AND the schedule state transition together — is rejected unless every
+   * condition currently holds.
+   */
+  extraConditions?: ConditionalBatchCondition[];
+  /**
+   * Builds the error thrown when `extraConditions` loses the compare-and-swap.
+   * Omit to get a generic "lost its precondition" `Error`.
+   */
+  onExtraConditionsLost?: () => Error;
+}
+
+/**
  * Declarative recurring schedule definition returned by {@link schedule}. Supply
  * exactly one of `cron` (cron cadence) or `every` (fixed interval).
  *
@@ -280,6 +349,26 @@ export interface ScheduleMetadata {
   lastMissedFireAt?: number;
   /** Lifetime count of occurrences skipped because a non-backfill timer was late. */
   missedFireCount: number;
+  /**
+   * How many occurrences the overlap policy has dropped because a prior fire
+   * was still running — in practice `overlap: 'skip'` collisions (COR-1224).
+   *
+   * Distinct from {@link ScheduleMetadata.missedFireCount}, which counts
+   * occurrences the engine's timer never evaluated because it ran late. A skip
+   * is a decision taken on a tick that WAS observed; a missed fire is a window
+   * that was not.
+   *
+   * This is a counter rather than a durable event row per dropped tick, and
+   * deliberately so: a schedule whose fires outlast its cadence collides on
+   * every tick, so a per-tick durable record would grow without bound and
+   * advance the durable event cursor for a fact whose content is "nothing
+   * happened". A counter plus {@link ScheduleMetadata.lastSkippedAt} answers
+   * the operator's actual question — is this schedule colliding, and when did
+   * it last do so — in O(1) per schedule.
+   */
+  skippedCount: number;
+  /** When the most recent occurrence was dropped by the overlap policy. */
+  lastSkippedAt?: number;
   nextFireAt: number | null;
   currentWorkflowId?: string;
   /** Ordered durable occurrences waiting behind `currentWorkflowId`. */

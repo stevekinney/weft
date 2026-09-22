@@ -112,7 +112,7 @@ describe('completed review storage helpers', () => {
     await storage.put(KEYS.leaseEpoch(), epochBytes);
     storage.conditionalBatch = mock(async () => false);
 
-    await expect(
+    expect(
       persistCompletedReviewRecord(
         {
           deposed: false,

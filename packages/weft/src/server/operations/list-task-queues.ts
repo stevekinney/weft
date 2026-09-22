@@ -31,7 +31,11 @@ import type { TaskQueue } from '../task-queue.ts';
 
 const listTaskQueuesInput = z.object({});
 
-const schedulingPolicySchema = z.enum(['priority', 'fifo', 'lifo']) as z.ZodType<SchedulingPolicy>;
+const schedulingPolicySchema = z.enum([
+  'priority',
+  'fifo',
+  'lifo',
+]) satisfies z.ZodType<SchedulingPolicy>;
 
 export type TaskQueueHealth = {
   queue: string;
@@ -82,7 +86,7 @@ export function createListTaskQueuesOperation(options?: ListTaskQueuesOptions) {
   const workerRegistry = options?.workerRegistry;
   const taskQueue = options?.taskQueue;
   const clock = options?.clock ?? Date.now;
-  return defineOperation<ListTaskQueuesInput, ListTaskQueuesOutput>({
+  return defineOperation({
     name: 'weft.task.queues.list',
     mcpExposable: false,
     summary: 'List task queues with backlog, waiting pollers, and per-queue saturation',

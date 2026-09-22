@@ -211,66 +211,6 @@ async function expectWebSocketProjectionMatchesReplay(
   }
 }
 
-function isRelevantTraceabilityRow(cells: string[]): boolean {
-  const category = cells[3] ?? '';
-  const status = cells[4] ?? '';
-  const evidenceTest = cells[8] ?? '';
-  const closeable = cells[12] ?? '';
-
-  const isRelevantCategory = category === 'behavioral' || category === 'cross-cutting-structural';
-  return (
-    isRelevantCategory &&
-    closeable === 'true' &&
-    status === 'shipped' &&
-    evidenceTest !== 'n/a' &&
-    evidenceTest !== ''
-  );
-}
-
-function parseEvidenceTestReference(
-  rowId: string,
-  evidenceTest: string,
-): { fileName: string; title: string } {
-  const normalizedEvidenceTest = evidenceTest.replaceAll('`', '').trim();
-  const colonIndex = normalizedEvidenceTest.indexOf(':');
-  if (colonIndex === -1) {
-    throw new Error(
-      `Matrix row "${rowId}" has unparseable evidence_test "${evidenceTest}" (missing colon).`,
-    );
-  }
-
-  const fileName = normalizedEvidenceTest.slice(0, colonIndex).trim();
-  // Some criterion titles include embedded quotes (e.g. 8b-3 contains
-  // `paramStructure: "by-name"`). Match from the first " to the LAST "
-  // in the cell so the full quoted title is captured.
-  const afterColon = normalizedEvidenceTest.slice(colonIndex + 1);
-  const firstQuote = afterColon.indexOf('"');
-  const lastQuote = afterColon.lastIndexOf('"');
-  if (firstQuote === -1 || lastQuote <= firstQuote) {
-    throw new Error(
-      `Matrix row "${rowId}" has unparseable evidence_test "${evidenceTest}" (missing quoted title).`,
-    );
-  }
-  const title = afterColon.slice(firstQuote + 1, lastQuote);
-
-  return { fileName, title };
-}
-
-async function resolveTraceabilityTestFile(fileName: string): Promise<Bun.BunFile> {
-  const directFilePath = `${import.meta.dir}/${fileName}`;
-  const directFile = Bun.file(directFilePath);
-  if (await directFile.exists()) {
-    return directFile;
-  }
-
-  const matchingPaths = await Array.fromAsync(new Bun.Glob(`**/${fileName}`).scan(import.meta.dir));
-  if (matchingPaths.length === 1) {
-    return Bun.file(`${import.meta.dir}/${matchingPaths[0]}`);
-  }
-
-  return directFile;
-}
-
 describe('Operation-catalog acceptance coverage', () => {
   let server: WeftServer | undefined;
   const feeds: Array<{ dispose(): void }> = [];
@@ -592,8 +532,100 @@ describe('Operation-catalog acceptance coverage', () => {
     expect(stdioBody.result?.id).toBe(handle.id);
   });
 
-  it('Every new primitive from this document has a dedicated test file under src/ (either as a colocated src/**/*.test.ts file or under src/**/__tests__/) and every acceptance criterion above is covered by at least one test(...) call whose failure message names the criterion.', async () => {
+  it('transport contracts retain named regression coverage', async () => {
     const fileExpectations = [
+      [
+        'operation-catalog-live-verification.test.ts',
+        'The runtime API has one transport-neutral operation catalog',
+      ],
+      [
+        'discovery-parity.test.ts',
+        'Both /openapi.json and /openrpc.json are generated from the same operation catalog',
+      ],
+      [
+        'discovery-parity.test.ts',
+        'rpc.discover returns the same OpenRPC document exposed at /openrpc.json',
+      ],
+      [
+        'openapi.test.ts',
+        '/openapi.json is a full OpenAPI 3.1 contract for the REST-ish HTTP surface. It includes path and query parameters, request bodies, response schemas by status code, shared error objects, and security declarations.',
+      ],
+      [
+        'cross-transport-parity.test.ts',
+        'REST and JSON-RPC requests dispatch into the same Engine methods',
+      ],
+      [
+        'operations/cross-transport-contract.test.ts',
+        'registers all data-driven runtime operations and serves them identically over REST and JSON-RPC',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'External subscriptions project from existing typed EventTarget events. Engine and WorkflowHandle events remain the source of truth for watch and stream semantics.',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'One server-side event projection layer feeds every live transport. WebSocket watch and token messages, SSE responses, JSON-RPC subscription notifications, and cursor-based replay all project from the same event stream model.',
+      ],
+      [
+        'sequence-cursor.test.ts',
+        'All live views share the same sequence and cursor semantics. Replay, resume, and ordering rules are identical across HTTP, WebSocket, and the stable stdio JSON-RPC transport.',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'JSON-RPC 2.0 is supported over three runtime transports. POST /jsonrpc, WebSocket upgrade on /jsonrpc, and newline-delimited JSON over a dedicated stdio runtime entrypoint.',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'Runtime JSON-RPC methods use stable namespaced names. Examples: weft.workflows.start, weft.workflows.get, weft.workflows.signal.',
+      ],
+      [
+        'openrpc.test.ts',
+        'JSON-RPC uses named params only. The OpenRPC contract documents paramStructure: "by-name" so generated clients and manual callers converge on one request shape.',
+      ],
+      [
+        'json-rpc-dispatch.test.ts',
+        'Batch requests are supported. The shared dispatcher validates and executes JSON-RPC batches without inventing transport-specific behavior.',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'Notifications are opt-in per call. Per JSON-RPC 2.0, the caller opts in to fire-and-forget by omitting the id field',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'Subscription notifications reuse the shared event projection layer. Watch and stream APIs are documented as projections of current engine events rather than bespoke server-side state machines.',
+      ],
+      [
+        'json-rpc-protocol.test.ts',
+        'Reserved JSON-RPC protocol errors follow the specification exactly. -32700, -32600, -32601, -32602, and -32603 keep their standard meanings.',
+      ],
+      [
+        'fault-to-json-rpc.test.ts',
+        'Weft domain failures use a separate stable application error range outside the reserved protocol band. Business and workflow errors do not overload the reserved JSON-RPC codes.',
+      ],
+      [
+        'fault-to-json-rpc.test.ts',
+        'JSON-RPC error.data carries structured machine-readable detail. At minimum it includes the canonical Weft application code and the related HTTP status when the same failure is exposed over REST.',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'REST and JSON-RPC share one engine-error mapping layer. The same engine failure produces equivalent transport-level semantics across both surfaces.',
+      ],
+      [
+        'operations/cross-transport-contract.test.ts',
+        'enforces scope-based authorization identically over REST, JSON-RPC HTTP, WebSocket, and stdio',
+      ],
+      [
+        'operations/replay-workflow-authorization.test.ts',
+        'WebSocket sessions bind authenticated identity at upgrade time',
+      ],
+      [
+        'operation-catalog-acceptance.test.ts',
+        'stdio is a separate opt-in local entrypoint, disabled by default. It is not implicitly enabled by serve() and is not treated as a public unauthenticated surface.',
+      ],
+      [
+        'operations/replay-workflow-authorization.test.ts',
+        'stdio authorization uses the same operation-level policy hook once a session exists',
+      ],
       [
         'openapi.test.ts',
         '/openapi.json is a full OpenAPI 3.1 contract for the REST-ish HTTP surface',
@@ -642,46 +674,11 @@ describe('Operation-catalog acceptance coverage', () => {
         'operation-catalog-acceptance.test.ts',
         'stdio is a separate opt-in local entrypoint, disabled by default',
       ],
-      [
-        'operation-catalog-acceptance.test.ts',
-        'Every new primitive from this document has a dedicated test file',
-      ],
     ] as const;
 
     for (const [fileName, criterionText] of fileExpectations) {
       const content = await Bun.file(`${import.meta.dir}/${fileName}`).text();
       expect(content).toContain(criterionText);
-    }
-
-    const matrixPath = new URL('../../reference/track-8-traceability.md', import.meta.url).pathname;
-    const matrixText = await Bun.file(matrixPath).text();
-    const cachedFileContents = new Map<string, string>();
-
-    for (const line of matrixText.split('\n')) {
-      if (!line.startsWith('|')) continue;
-      const cells = line.split('|').map((c) => c.trim());
-      if (cells.length < 13) continue;
-      if (!isRelevantTraceabilityRow(cells)) continue;
-
-      const rowId = cells[1] ?? '';
-      const evidenceTest = cells[8] ?? '';
-      const { fileName, title } = parseEvidenceTestReference(rowId, evidenceTest);
-      const file = await resolveTraceabilityTestFile(fileName);
-      expect(
-        await file.exists(),
-        `Matrix row "${rowId}" points at missing test file "${fileName}".`,
-      ).toBe(true);
-
-      let content = cachedFileContents.get(fileName);
-      if (content === undefined) {
-        content = await file.text();
-        cachedFileContents.set(fileName, content);
-      }
-
-      expect(
-        content.includes(title),
-        `Matrix row "${rowId}" expects test title "${title}" in "${fileName}".`,
-      ).toBe(true);
     }
   });
 });

@@ -1,6 +1,6 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
 import { KEYS, encodeStorageKeyComponent, storageHas } from '../../../storage/interface.ts';
-import { CleanupWarningEvent } from '../../events.ts';
+import { CleanupWarningEvent, RemoteActivityCancellationRequestedEvent } from '../../events.ts';
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
@@ -363,7 +363,7 @@ export async function cleanupWorkflowStorage(
 export function cleanupTerminalWorkflowMemory(
   internals: EngineInternals,
   workflowId: string,
-  callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection'>,
+  callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection' | 'dispatchEvent'>,
 ): void {
   settleSleepTimerAcknowledgements(internals, workflowId, 'terminal');
   internals.workflowsNeedingTerminalCleanup.delete(workflowId);
@@ -374,6 +374,12 @@ export function cleanupTerminalWorkflowMemory(
   for (const [token, pending] of internals.pendingAsyncActivities) {
     if (pending.workflowId === workflowId) {
       internals.pendingAsyncActivities.delete(token);
+      // Acceptance criterion 10: best-effort ask a `serve()`d server to
+      // request cancellation of the matching durable task. Fired for every
+      // discarded token regardless of origin — see
+      // `RemoteActivityCancellationRequestedEvent`'s doc comment for why
+      // that is safe for an ordinary (non-remote) `ctx.completeAsync()` token.
+      callbacks.dispatchEvent(new RemoteActivityCancellationRequestedEvent(token, workflowId));
     }
   }
   internals.eventLogHeads.delete(workflowId);

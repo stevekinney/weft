@@ -150,7 +150,7 @@ describe('query()', () => {
       heartbeatDetails: new Map(),
       inlineStrategy: null,
     } as unknown as Parameters<typeof query>[0];
-    await expect(query(internals, 'wf-1', 'custom')).rejects.toThrow(
+    expect(query(internals, 'wf-1', 'custom')).rejects.toThrow(
       'Workflow queries are not supported when using the worker execution strategy.',
     );
   });

@@ -56,12 +56,12 @@ describe('weft.workflows.events authorization', () => {
       scopes: ['streams:read'],
     });
 
-    await expect(
+    expect(
       workflowEventsSubscriptionOperation.authorize!(
         authorizationContext({ workflowId: 'wf-auth', selector: 'events' }, eventsPrincipal),
       ),
     ).resolves.toEqual({ allowed: true });
-    await expect(
+    expect(
       workflowEventsSubscriptionOperation.authorize!(
         authorizationContext({ workflowId: 'wf-auth', selector: 'tokens' }, streamsPrincipal),
       ),

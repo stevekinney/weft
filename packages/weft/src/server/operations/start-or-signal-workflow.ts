@@ -180,10 +180,7 @@ function resolveStartOrSignalWorkflowFault(error: unknown): never {
   throw fault;
 }
 
-export const startOrSignalWorkflowOperation = defineOperation<
-  StartOrSignalWorkflowInput,
-  StartOrSignalWorkflowOutput
->({
+export const startOrSignalWorkflowOperation = defineOperation({
   name: 'weft.workflows.startorsignal',
   mcpExposable: false,
   summary: 'Atomically start a workflow or signal it if it already exists',

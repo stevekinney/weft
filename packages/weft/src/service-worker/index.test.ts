@@ -10,8 +10,8 @@ import {
   createPeriodicSyncHandler,
   normalizePathPrefix,
   ServiceWorkerScheduler,
-} from './index';
-import type { ServiceWorkerScheduler as ServiceWorkerSchedulerInstance } from './scheduler';
+} from './index.ts';
+import type { ServiceWorkerScheduler as ServiceWorkerSchedulerInstance } from './scheduler.ts';
 
 // ---------------------------------------------------------------------------
 // Minimal types mirroring the shapes in the implementation
@@ -154,7 +154,7 @@ describe('createFetchHandler', () => {
     expect(delegated).not.toBeNull();
     expect(new URL(delegated!.url).pathname).toBe('/v1/workflows');
     expect(delegated!.headers.get('Content-Type')).toBe('application/json');
-    await expect(delegated!.json()).resolves.toEqual({
+    expect(delegated!.json()).resolves.toEqual({
       type: 'checkout',
       input: { cartId: 'cart-1' },
     });
@@ -222,7 +222,7 @@ describe('createFetchHandler', () => {
     handler(event);
     const response = await (event.respondWith.mock.calls[0]![0] as Promise<Response>);
     expect(response.status).toBe(200);
-    await expect(response.text()).resolves.toContain('workflow:started');
+    expect(response.text()).resolves.toContain('workflow:started');
   });
 });
 

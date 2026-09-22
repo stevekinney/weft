@@ -9,7 +9,7 @@
  *
  * @example
  * ```ts
- * import { WEFT_RESERVED_KEY_PREFIXES } from '@lostgradient/weft/storage';
+ * import { WEFT_RESERVED_KEY_PREFIXES } from '@lostgradient/weft';
  *
  * const key = 'wf:order-123';
  * const isWeftKey = WEFT_RESERVED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));

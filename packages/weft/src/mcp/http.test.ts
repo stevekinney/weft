@@ -536,19 +536,19 @@ describe('MCP Streamable HTTP transport', () => {
       requestId: 'argument-errors',
     };
 
-    await expect(callMcpTool('missing_tool', {}, context)).resolves.toMatchObject({
+    expect(callMcpTool('missing_tool', {}, context)).resolves.toMatchObject({
       isError: true,
       content: [{ text: 'Unknown tool: missing_tool' }],
     });
-    await expect(callMcpTool('start_workflow', [], context)).resolves.toMatchObject({
+    expect(callMcpTool('start_workflow', [], context)).resolves.toMatchObject({
       isError: true,
       content: [{ text: 'Tool arguments must be a JSON object' }],
     });
-    await expect(callMcpTool('greet_customer', [], context)).resolves.toMatchObject({
+    expect(callMcpTool('greet_customer', [], context)).resolves.toMatchObject({
       isError: true,
       content: [{ text: 'Tool arguments must be a JSON object' }],
     });
-    await expect(
+    expect(
       callMcpTool('greet_customer', { input: { name: 'Ada' }, timeoutMs: 0 }, context),
     ).resolves.toMatchObject({
       isError: true,
@@ -878,7 +878,7 @@ describe('MCP Streamable HTTP transport', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('cancelled');
-    await expect(engine.list({ type: 'hold-for-cancel' })).resolves.toMatchObject({
+    expect(engine.list({ type: 'hold-for-cancel' })).resolves.toMatchObject({
       total: 0,
       items: [],
     });
@@ -980,7 +980,7 @@ describe('MCP Streamable HTTP transport', () => {
     const payload = parseToolText(response.result) as { workflowId: string; timedOut: boolean };
     expect(payload.timedOut).toBe(true);
     await waitForStatus(engine, payload.workflowId, 'running');
-    await expect(engine.query(payload.workflowId, 'input')).resolves.toEqual({
+    expect(engine.query(payload.workflowId, 'input')).resolves.toEqual({
       timeoutMs: 456,
       label: 'parked',
       wait: true,

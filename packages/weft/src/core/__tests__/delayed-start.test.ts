@@ -112,7 +112,7 @@ describe('delayed workflow start', () => {
     });
     engine.register(delayedWorkflow3);
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAt: 2_000,
         startAfter: '1s',
@@ -130,19 +130,19 @@ describe('delayed workflow start', () => {
     });
     engine.register(delayedWorkflow4);
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAt: -1,
       }),
     ).rejects.toThrow('options.startAt must be a non-negative integer millisecond timestamp');
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAt: Number.POSITIVE_INFINITY,
       }),
     ).rejects.toThrow('options.startAt must be a non-negative integer millisecond timestamp');
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAt: 1_500.5,
       }),
@@ -159,7 +159,7 @@ describe('delayed workflow start', () => {
     });
     engine.register(delayedWorkflow5);
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAfter: -1,
       }),
@@ -208,7 +208,7 @@ describe('delayed workflow start', () => {
     });
     engine.register(delayedWorkflow7);
 
-    await expect(
+    expect(
       engine.start('delayed', null, {
         startAfter: '5s',
         executionTimeout: -1,
@@ -261,7 +261,7 @@ describe('delayed workflow start', () => {
     const recoveredHandle = secondEngine.getHandle('wf-restart');
     await secondEngine.scheduler.tick(now);
 
-    await expect(recoveredHandle.result()).resolves.toBe('done:work');
+    expect(recoveredHandle.result()).resolves.toBe('done:work');
     expect(executions).toBe(1);
 
     secondEngine[Symbol.dispose]();
@@ -324,9 +324,7 @@ describe('delayed workflow start', () => {
     now += 5_000;
     await secondEngine.scheduler.tick(now);
 
-    await expect(secondEngine.getHandle('wf-restart-headers').result()).resolves.toBe(
-      'child-complete',
-    );
+    expect(secondEngine.getHandle('wf-restart-headers').result()).resolves.toBe('child-complete');
     expect(capturedParentHeaders).toHaveLength(1);
     expect(capturedParentHeaders[0]?.get('traceparent')).toBe(
       '00-abcd1234abcd1234abcd1234abcd1234-ef56ef56ef56ef56-01',
@@ -376,7 +374,7 @@ describe('delayed workflow start', () => {
     now += 5_000;
     await secondEngine.scheduler.tick(now);
 
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('done:recover-all');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('done:recover-all');
 
     secondEngine[Symbol.dispose]();
   });
@@ -398,7 +396,7 @@ describe('delayed workflow start', () => {
 
     await handle.cancel();
 
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
     expect(await engine.get(handle.id)).toMatchObject({ status: 'cancelled' });
     expect(await collectDelayedEntries(engine.storage)).toEqual([]);
 
@@ -427,7 +425,7 @@ describe('delayed workflow start', () => {
     );
 
     await handle.cancel();
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
 
     expect(await engine.storage.get(KEYS.review(workflowId, 'review-1'))).toBeNull();
 
@@ -468,7 +466,7 @@ describe('delayed workflow start', () => {
     const resultPromise = handle.result();
     void resultPromise.catch(() => {});
     await engine.advanceTime('1s');
-    await expect(resultPromise).rejects.toThrow('execution timeout');
+    expect(resultPromise).rejects.toThrow('execution timeout');
     expect(await engine.get(handle.id)).toMatchObject({ status: 'timed-out' });
 
     engine[Symbol.dispose]();

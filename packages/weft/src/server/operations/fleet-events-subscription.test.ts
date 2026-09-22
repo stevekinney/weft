@@ -75,7 +75,7 @@ async function collectFirstSequences(
 }
 
 function eventSchemaJson(): Record<string, unknown> {
-  const result: unknown = z.toJSONSchema(fleetEventsSubscriptionOperation.eventSchema!, {
+  const result: unknown = z.toJSONSchema(fleetEventsSubscriptionOperation.eventSchema, {
     unrepresentable: 'any',
   });
   if (typeof result !== 'object' || result === null || Array.isArray(result)) return {};
@@ -107,7 +107,7 @@ describe('weft.events.subscribe operation', () => {
       },
     };
 
-    await expect(
+    expect(
       fleetEventsSubscriptionOperation.invoke({
         input: { fromCursor: 'not-a-cursor' },
         principal: anonymousPrincipal(),
@@ -146,7 +146,39 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectFirstSequences(subscription.iterable, 1)).resolves.toEqual([1001]);
+    expect(collectFirstSequences(subscription.iterable, 1)).resolves.toEqual([1001]);
+    await subscription.close();
+  });
+
+  it('delivers every kind in a requested set', async () => {
+    // A client wanting several kinds previously had to open one subscription
+    // per kind and reconcile their cursors, or take the whole fleet feed and
+    // discard most of it across a socket.
+    const started = fleetEvent(1, { kind: 'workflow:started' });
+    const completed = fleetEvent(2, { kind: 'workflow:completed' });
+    const failed = fleetEvent(3, { kind: 'workflow:failed' });
+    const subscription = await invokeFleetSubscription(
+      { kind: ['workflow:started', 'workflow:failed'] },
+      [started, completed, failed],
+    );
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    expect(collectSequences(subscription.iterable)).resolves.toEqual([1, 3]);
+    await subscription.close();
+  });
+
+  it('still accepts a bare kind, unchanged for existing callers', async () => {
+    const started = fleetEvent(1, { kind: 'workflow:started' });
+    const completed = fleetEvent(2, { kind: 'workflow:completed' });
+    const subscription = await invokeFleetSubscription({ kind: 'workflow:completed' }, [
+      started,
+      completed,
+    ]);
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    expect(collectSequences(subscription.iterable)).resolves.toEqual([2]);
     await subscription.close();
   });
 
@@ -167,7 +199,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([4, 5]);
+    expect(collectSequences(subscription.iterable)).resolves.toEqual([4, 5]);
     await subscription.close();
   });
 
@@ -221,7 +253,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).rejects.toMatchObject({
+    expect(collectSequences(subscription.iterable)).rejects.toMatchObject({
       code: 'InvalidParams',
       message:
         'Fleet event replay window is 1001 matching events; maximum is 1000. Supply a more recent fromCursor.',
@@ -287,6 +319,6 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([22]);
+    expect(collectSequences(subscription.iterable)).resolves.toEqual([22]);
   });
 });

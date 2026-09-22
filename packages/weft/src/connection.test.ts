@@ -345,7 +345,7 @@ describe('writeRunLockfile / removeRunLockfile', () => {
   it('throws when neither Bun nor Node process.getBuiltinModule is available (browser/edge)', async () => {
     setPortableRuntimeTestOverridesForTesting({ process: undefined });
     try {
-      await expect(writeRunLockfile('http://127.0.0.1:8888')).rejects.toThrow(
+      expect(writeRunLockfile('http://127.0.0.1:8888')).rejects.toThrow(
         /requires Bun or Node 22\.5\+ \(process\.getBuiltinModule\)/,
       );
     } finally {

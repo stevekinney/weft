@@ -46,7 +46,7 @@ import {
 } from './events.ts';
 import { InlineExecutionStrategy } from './inline-execution-strategy.ts';
 import type { ActivityInterceptor, WorkflowInterceptor } from './interceptor.ts';
-import { ListFilterValidationError } from './list-filter-validation.ts';
+import { ListFilterValidationError } from './list-filter-validation-error.ts';
 import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,
@@ -377,7 +377,7 @@ describe('Engine', () => {
       const barrier = engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
       await advanceTimersByTime(SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING);
 
-      await expect(barrier).rejects.toThrow(
+      expect(barrier).rejects.toThrow(
         `Timed out after ${SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING}ms waiting for workflow "${workflowId}" to register a sleep resolver`,
       );
     } finally {
@@ -389,7 +389,7 @@ describe('Engine', () => {
   it('fireTimer tolerates a sleep timer that has no registered resolver', async () => {
     const engine = new Engine();
 
-    await expect(
+    expect(
       engine.fireTimer({
         id: 'sleep:missing-resolver',
         workflowId: 'missing-workflow',
@@ -460,7 +460,7 @@ describe('Engine', () => {
 
       releaseCompletionWrite.resolve();
       await fireTimer;
-      await expect(handle.result()).resolves.toBe('done');
+      expect(handle.result()).resolves.toBe('done');
     } finally {
       releaseCompletionWrite.resolve();
       await engine[Symbol.asyncDispose]();
@@ -513,7 +513,7 @@ describe('Engine', () => {
 
       allowRecoveryReplay.resolve();
       await fireTimer;
-      await expect(recoveredHandle!.result()).resolves.toBe('done');
+      expect(recoveredHandle!.result()).resolves.toBe('done');
     } finally {
       allowRecoveryReplay.resolve();
       await recoveredEngine[Symbol.asyncDispose]();
@@ -555,7 +555,7 @@ describe('Engine', () => {
       await recoveredEngine.scheduler.tick(now);
 
       expect(await storage.get(`timer-idx:${timerEntry.id}`)).toBeNull();
-      await expect(recoveredHandle!.result()).resolves.toBe('done');
+      expect(recoveredHandle!.result()).resolves.toBe('done');
     } finally {
       console.error = originalConsoleError;
       await recoveredEngine[Symbol.asyncDispose]();
@@ -603,9 +603,7 @@ describe('Engine', () => {
     });
 
     await recoveredEngine.signal('factory-recover-id', 'suffix', '!');
-    await expect(recoveredEngine.getHandle('factory-recover-id').result()).resolves.toBe(
-      'Hello, Ada!',
-    );
+    expect(recoveredEngine.getHandle('factory-recover-id').result()).resolves.toBe('Hello, Ada!');
     recoveredEngine[Symbol.dispose]();
   });
 
@@ -655,10 +653,10 @@ describe('Engine', () => {
       execute: async () => 'ok',
     });
 
-    await expect(
+    expect(
       Engine.create({ workflows: { expectedWorkflowName: greetWorkflow }, recover: false }),
     ).rejects.toBeInstanceOf(EngineCreateNameMismatchError);
-    await expect(
+    expect(
       Engine.create({ activities: { expectedActivityName: greetActivity }, recover: false }),
     ).rejects.toBeInstanceOf(EngineCreateNameMismatchError);
   });
@@ -684,7 +682,7 @@ describe('Engine', () => {
       const greetWorkflow = workflow({ name: 'disposalWorkflow' }).execute(async function* () {
         return 'ok';
       });
-      await expect(
+      expect(
         Engine.create({ workflows: { wrongKey: greetWorkflow }, recover: false }),
       ).rejects.toBeInstanceOf(EngineCreateNameMismatchError);
 
@@ -708,7 +706,7 @@ describe('Engine', () => {
 
     const engine = new Engine<{}, {}>().register(formatBuilderGreeting).register(builderWelcome);
     const handle = await engine.start('builderWelcome', { name: 'Grace' });
-    await expect(handle.result()).resolves.toBe('Hello, Grace');
+    expect(handle.result()).resolves.toBe('Hello, Grace');
     engine[Symbol.dispose]();
   });
 
@@ -904,7 +902,7 @@ describe('Engine', () => {
     async (badInterval) => {
       // The value drives a live setInterval poll loop, so an invalid interval is
       // rejected at construction rather than silently coerced into a hot loop.
-      await expect(
+      expect(
         Engine.create({ recover: false, schedulerPollIntervalMs: badInterval }),
       ).rejects.toThrow('options.schedulerPollIntervalMs must be a positive safe integer');
     },
@@ -989,9 +987,7 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('missing-activity', undefined);
-    await expect(handle.result()).rejects.toThrow(
-      'No activity registered with name "missingActivity"',
-    );
+    expect(handle.result()).rejects.toThrow('No activity registered with name "missingActivity"');
     engine[Symbol.dispose]();
   });
 
@@ -1080,7 +1076,7 @@ describe('Engine', () => {
     const handle = await engine.start('wait-for-go', null);
     await handle.signal('go', 'ready');
 
-    await expect(handle.result()).resolves.toBe('ready');
+    expect(handle.result()).resolves.toBe('ready');
     engine[Symbol.dispose]();
   });
 
@@ -1096,7 +1092,7 @@ describe('Engine', () => {
     const handle = await engine.start('wait-forever', null);
     await handle.cancel();
 
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -1117,7 +1113,7 @@ describe('Engine', () => {
     expect(resumedHandle.id).toBe(handle.id);
 
     await resumedHandle.signal('go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     expect(runCount).toBe(1);
     engine[Symbol.dispose]();
   });
@@ -1140,7 +1136,7 @@ describe('Engine', () => {
     expect(recoveredHandles.some((recoveredHandle) => recoveredHandle.id === handle.id)).toBe(true);
 
     await handle.signal('go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     expect(runCount).toBe(1);
     engine[Symbol.dispose]();
   });
@@ -1187,7 +1183,7 @@ describe('Engine', () => {
     await flush();
 
     await handle.signal('go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     engine[Symbol.dispose]();
   });
 
@@ -1210,7 +1206,7 @@ describe('Engine', () => {
     expect(runCount).toBe(1);
 
     await resumedHandle.signal('go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     expect(runCount).toBe(2);
     engine[Symbol.dispose]();
   });
@@ -1234,7 +1230,7 @@ describe('Engine', () => {
     expect(runCount).toBe(1);
 
     await handle.signal('go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
     expect(runCount).toBe(2);
     engine[Symbol.dispose]();
   });
@@ -1293,7 +1289,7 @@ describe('Engine', () => {
     const cancelPromise = engine.cancel(workflowId);
     await cancelledStatePersisted.promise;
 
-    await expect(engine.resume(workflowId)).rejects.toThrow(
+    expect(engine.resume(workflowId)).rejects.toThrow(
       `Cannot resume workflow "${workflowId}": status is "cancelled", expected "running"`,
     );
 
@@ -1304,7 +1300,7 @@ describe('Engine', () => {
 
     releaseCancelledStateWrite.resolve();
     await cancelPromise;
-    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(handle.result()).rejects.toThrow('Workflow cancelled');
     expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(0);
     engine[Symbol.dispose]();
   });
@@ -1343,10 +1339,8 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('signal-noop', null);
-    await expect(handle.result()).resolves.toBe('done');
-    await expect(
-      engine.signal(handle.id, 'after-complete', { value: true }),
-    ).resolves.toBeUndefined();
+    expect(handle.result()).resolves.toBe('done');
+    expect(engine.signal(handle.id, 'after-complete', { value: true })).resolves.toBeUndefined();
 
     const persistedSignalKeys: string[] = [];
     for await (const [key] of storage.scan(`sig:${encodeStorageKeyComponent(handle.id)}:`)) {
@@ -1470,7 +1464,7 @@ describe('Engine', () => {
     const resultPromise = handle.result();
     await engine.signal(handle.id, 'finish', null);
 
-    await expect(resultPromise).resolves.toBe('expected-result');
+    expect(resultPromise).resolves.toBe('expected-result');
     await flush();
 
     expect(capturedCompletionErrors).toHaveLength(1);
@@ -1495,7 +1489,7 @@ describe('Engine', () => {
     });
 
     const handle = await engine.start('failing', null);
-    await expect(handle.result()).rejects.toThrow('deliberate failure');
+    expect(handle.result()).rejects.toThrow('deliberate failure');
 
     expect(events).toHaveLength(1);
     expect(events[0]!.error.message).toBe('deliberate failure');
@@ -1563,7 +1557,7 @@ describe('Engine', () => {
     expect(recoveredHandles).toHaveLength(1);
 
     await engine2.signal('dispose-wait-signal', 'go', 'value');
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
 
     engine2[Symbol.dispose]();
   });
@@ -1607,7 +1601,7 @@ describe('Engine', () => {
     expect(recoveredHandles).toHaveLength(1);
 
     await engine2.signal(workflowId, 'go', 'value');
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
 
     // The unrecognized field must not survive onto the resumed/persisted state.
     const resumedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
@@ -1664,7 +1658,7 @@ describe('Engine', () => {
     expect(recoveredHandles).toHaveLength(1);
 
     await engine2.signal(workflowId, 'go', 'value');
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
 
     // The flat key must be lifted into `versionTuple` and dropped from the state.
     const resumedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
@@ -1720,7 +1714,7 @@ describe('Engine', () => {
     // The default 'fail-run' policy isolates the mismatch to this workflow.
     // Opt into fail-fast 'throw' to pin the strict contract for callers that
     // require any detected version drift to reject recovery immediately.
-    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
+    expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
       'Version mismatch',
     );
 
@@ -1760,7 +1754,7 @@ describe('Engine', () => {
     engine2.register(versionedWorkflowV2);
     // Opt into fail-fast 'throw' to pin the strict recovery contract; the
     // default 'fail-run' policy is covered in version-mismatch-recovery.test.ts.
-    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
+    expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
       'Version mismatch',
     );
 
@@ -2132,9 +2126,7 @@ describe('Engine', () => {
   it('list() rejects malformed filters through the shared validation path', async () => {
     const engine = new Engine();
 
-    await expect(engine.list({ idPrefix: 'a:b' })).rejects.toBeInstanceOf(
-      ListFilterValidationError,
-    );
+    expect(engine.list({ idPrefix: 'a:b' })).rejects.toBeInstanceOf(ListFilterValidationError);
     engine[Symbol.dispose]();
   });
 
@@ -2150,7 +2142,7 @@ describe('Engine', () => {
     const handle = await engine.start('attribute-backed-category', null, {
       id: 'wf-attribute-category',
     });
-    await expect(handle.result()).rejects.toThrow('attribute-backed failure');
+    expect(handle.result()).rejects.toThrow('attribute-backed failure');
 
     const stateBytes = await storage.get(KEYS.workflow(handle.id));
     expect(stateBytes).not.toBeNull();
@@ -2190,7 +2182,7 @@ describe('Engine', () => {
     const handle = await engine.start('state-backed-category', null, {
       id: 'wf-state-category',
     });
-    await expect(handle.result()).rejects.toThrow('state failure');
+    expect(handle.result()).rejects.toThrow('state failure');
     await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'application' }));
 
     storage.attributeReadCount = 0;
@@ -2229,7 +2221,7 @@ describe('Engine', () => {
     );
 
     for (const handle of handles) {
-      await expect(handle.result()).rejects.toThrow('attribute-backed failure');
+      expect(handle.result()).rejects.toThrow('attribute-backed failure');
       const stateBytes = await storage.get(KEYS.workflow(handle.id));
       expect(stateBytes).not.toBeNull();
       const stateWithAttributeBackedCategory = decode(stateBytes!) as WorkflowState;
@@ -2351,7 +2343,7 @@ describe('Engine', () => {
     await engine.fireTimer(timerEntry);
     await flush();
 
-    await expect(handle.result()).resolves.toBe('ran:scheduled');
+    expect(handle.result()).resolves.toBe('ran:scheduled');
     expect(executions).toEqual(['scheduled']);
     engine[Symbol.dispose]();
   });
@@ -2440,7 +2432,7 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('malformed-operation-workflow', null);
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'Unsupported operation type: unsupported-operation-type',
     );
     engine[Symbol.dispose]();
@@ -2474,13 +2466,13 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('activity-fail', null);
-    await expect(handle.result()).rejects.toThrow('activity broke');
+    expect(handle.result()).rejects.toThrow('activity broke');
     engine[Symbol.dispose]();
   });
 
   it('throws when starting unregistered workflow type', async () => {
     const engine = new Engine();
-    await expect(engine.start('nonexistent', null)).rejects.toThrow('No workflow registered');
+    expect(engine.start('nonexistent', null)).rejects.toThrow('No workflow registered');
     engine[Symbol.dispose]();
   });
 
@@ -2493,7 +2485,7 @@ describe('Engine', () => {
     );
 
     await engine.start('dup', null, { id: 'same-id' });
-    await expect(engine.start('dup', null, { id: 'same-id' })).rejects.toMatchObject({
+    expect(engine.start('dup', null, { id: 'same-id' })).rejects.toMatchObject({
       message: 'Workflow with id "same-id" already exists',
       name: 'WorkflowAlreadyExistsError',
     });
@@ -2508,7 +2500,7 @@ describe('Engine', () => {
       }),
     );
 
-    await expect(engine.start('empty-id', null, { id: '' })).rejects.toThrow(
+    expect(engine.start('empty-id', null, { id: '' })).rejects.toThrow(
       'options.id must not be an empty string',
     );
     engine[Symbol.dispose]();
@@ -2522,7 +2514,7 @@ describe('Engine', () => {
       }),
     );
 
-    await expect(engine.start('long-id', null, { id: 'a'.repeat(129) })).rejects.toThrow(
+    expect(engine.start('long-id', null, { id: 'a'.repeat(129) })).rejects.toThrow(
       'options.id must be at most 128 characters',
     );
     engine[Symbol.dispose]();
@@ -2537,7 +2529,7 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('separator-id', null, { id: 'wf:ckpt/with spaces' });
-    await expect(handle.result()).resolves.toBe('ok');
+    expect(handle.result()).resolves.toBe('ok');
     expect(await engine.get(handle.id)).toMatchObject({ id: 'wf:ckpt/with spaces' });
     engine[Symbol.dispose]();
   });
@@ -2720,7 +2712,7 @@ describe('Engine', () => {
     }
 
     expect(completedBeforeSubscription).toBe(true);
-    await expect(handle.result()).resolves.toBe('late-result');
+    expect(handle.result()).resolves.toBe('late-result');
     engine[Symbol.dispose]();
   });
 
@@ -2728,7 +2720,7 @@ describe('Engine', () => {
     const engine = new Engine();
 
     const handle = engine.getHandle('nonexistent-id');
-    await expect(handle.result()).rejects.toThrow('not found');
+    expect(handle.result()).rejects.toThrow('not found');
     engine[Symbol.dispose]();
   });
 
@@ -2856,7 +2848,7 @@ describe('Engine', () => {
     await flush();
 
     await engine.signal(handle.id, objectSignal, { signalId: 'payload-value' });
-    await expect(handle.result()).resolves.toBe('payload-value');
+    expect(handle.result()).resolves.toBe('payload-value');
     engine[Symbol.dispose]();
   });
 
@@ -3148,7 +3140,7 @@ describe('Engine', () => {
     await flush();
     await engine.signal(handle.id, 'follow-up', { approved: true });
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       first: 'delivered',
       second: { approved: true },
     });
@@ -3334,7 +3326,7 @@ describe('Engine', () => {
     await flush();
 
     const newHandle = engine.getHandle('fail-test-id');
-    await expect(newHandle.result()).rejects.toThrow('stored failure');
+    expect(newHandle.result()).rejects.toThrow('stored failure');
     engine[Symbol.dispose]();
   });
 
@@ -3968,10 +3960,10 @@ describe('Engine', () => {
 
     const handle = await engine.start('handle-immediate-update', null);
 
-    await expect(handle.update('increment', 41)).resolves.toBe(42);
+    expect(handle.update('increment', 41)).resolves.toBe(42);
 
     await handle.signal('finish', 'complete');
-    await expect(handle.result()).resolves.toBe('complete');
+    expect(handle.result()).resolves.toBe('complete');
     engine[Symbol.dispose]();
   });
 
@@ -4064,7 +4056,7 @@ describe('Engine', () => {
     );
 
     const handle = await engine.start('send-email', undefined);
-    await expect(handle.result()).resolves.toBe('sent to hello@example.com: Welcome');
+    expect(handle.result()).resolves.toBe('sent to hello@example.com: Welcome');
     engine[Symbol.dispose]();
   });
 
@@ -4102,7 +4094,7 @@ describe('Engine', () => {
 
     engine.register(workflow({ name: 'typed-greet' }).execute(handler));
     const handle = await engine.start('typed-greet', { name: 'world' });
-    await expect(handle.result()).resolves.toBe('hello world');
+    expect(handle.result()).resolves.toBe('hello world');
     engine[Symbol.dispose]();
   });
 
@@ -4957,10 +4949,10 @@ describe('Engine', () => {
     );
     const handle = await engine.start(type, null, { id: 'dynamic-attrs-run' });
 
-    await expect(engine.setAttributes(handle.id, { missing: 'x' })).rejects.toThrow(
+    expect(engine.setAttributes(handle.id, { missing: 'x' })).rejects.toThrow(
       'Unknown search attribute "missing". Registered attributes: region',
     );
-    await expect(engine.setAttributes(handle.id, { region: 'us-east' })).resolves.toBeUndefined();
+    expect(engine.setAttributes(handle.id, { region: 'us-east' })).resolves.toBeUndefined();
     const attributesAfterSet = await engine.getAttributes(handle.id);
     expect(attributesAfterSet?.['region']).toBe('us-east');
 
@@ -5041,10 +5033,10 @@ describe('Engine', () => {
     const handleB = await engine.start(type, null, { id: 'multi-rev-attrs-b' });
     await handleB.result();
 
-    await expect(engine.setAttributes(handleA.id, { priority: 5 })).rejects.toThrow(
+    expect(engine.setAttributes(handleA.id, { priority: 5 })).rejects.toThrow(
       'Unknown search attribute "priority". Registered attributes: region',
     );
-    await expect(engine.setAttributes(handleA.id, { region: 'us-east' })).resolves.toBeUndefined();
+    expect(engine.setAttributes(handleA.id, { region: 'us-east' })).resolves.toBeUndefined();
 
     engine[Symbol.dispose]();
   });
@@ -5128,9 +5120,9 @@ describe('Engine', () => {
 
     // A's own schema (region) is accepted — proving the async resolve ran
     // and validated against A, not B, and not "no schema at all".
-    await expect(engine.setAttributes(workflowId, { region: 'us-east' })).resolves.toBeUndefined();
+    expect(engine.setAttributes(workflowId, { region: 'us-east' })).resolves.toBeUndefined();
     // B's schema key is still rejected as unknown under A's own schema.
-    await expect(engine.setAttributes(workflowId, { priority: 5 })).rejects.toThrow(
+    expect(engine.setAttributes(workflowId, { priority: 5 })).rejects.toThrow(
       'Unknown search attribute "priority". Registered attributes: region',
     );
 
@@ -5168,7 +5160,7 @@ describe('Engine', () => {
     };
     await storage.put(KEYS.workflow(workflowId), encode(seededState));
 
-    await expect(engine.setAttributes(workflowId, { anything: 'value' })).rejects.toBeInstanceOf(
+    expect(engine.setAttributes(workflowId, { anything: 'value' })).rejects.toBeInstanceOf(
       WorkflowRevisionUnavailableError,
     );
 
@@ -5198,7 +5190,7 @@ describe('Engine', () => {
     };
     await storage.put(KEYS.workflow(workflowId), encode(seededState));
 
-    await expect(engine.setAttributes(workflowId, { anything: 'value' })).resolves.toBeUndefined();
+    expect(engine.setAttributes(workflowId, { anything: 'value' })).resolves.toBeUndefined();
     expect(await engine.getAttributes(workflowId)).toEqual({ anything: 'value' });
 
     engine[Symbol.dispose]();
@@ -5893,7 +5885,7 @@ describe('Engine', () => {
         await flush();
       }
       expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
-      await expect(engine.query(handle.id, 'phase')).resolves.toBe('waiting');
+      expect(engine.query(handle.id, 'phase')).resolves.toBe('waiting');
 
       // Resume past the first park; the workflow advances then parks again.
       await engine.signal(handle.id, 'go1', null);
@@ -5903,10 +5895,10 @@ describe('Engine', () => {
       }
       expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
       // Querying while parked the second time hits the post-resume context.
-      await expect(engine.query(handle.id, 'phase')).resolves.toBe('resumed');
+      expect(engine.query(handle.id, 'phase')).resolves.toBe('resumed');
 
       await engine.signal(handle.id, 'go2', null);
-      await expect(handle.result()).resolves.toBe('finished');
+      expect(handle.result()).resolves.toBe('finished');
 
       engine[Symbol.dispose]();
     });
@@ -5961,7 +5953,7 @@ describe('Engine', () => {
       expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
 
       await engine.signal(handle.id, 'go', null);
-      await expect(handle.result()).resolves.toBe('finished');
+      expect(handle.result()).resolves.toBe('finished');
       await flush();
 
       // After terminal, querying should return undefined (context cleaned up)
@@ -6535,7 +6527,7 @@ describe('Engine', () => {
       const resultPromise = handle.result();
       await engine.signal(handle.id, 'finish', null);
 
-      await expect(resultPromise).resolves.toBe('done');
+      expect(resultPromise).resolves.toBe('done');
 
       expect(await storage.get(signalKey)).not.toBeNull();
       expect(await storage.get(reviewKey)).not.toBeNull();
@@ -6574,7 +6566,7 @@ describe('Engine', () => {
 
       const resultPromise = handle.result();
       await firstEngine.signal(handle.id, 'finish', null);
-      await expect(resultPromise).resolves.toBe('done');
+      expect(resultPromise).resolves.toBe('done');
 
       expect(await storage.get(signalKey)).not.toBeNull();
       expect(await storage.get(reviewKey)).not.toBeNull();
@@ -6620,7 +6612,7 @@ describe('Engine', () => {
 
       const resultPromise = handle.result();
       await engine.signal(handle.id, 'finish', null);
-      await expect(resultPromise).resolves.toBe('done');
+      expect(resultPromise).resolves.toBe('done');
 
       await engine.scheduler.tick(fractionalNow + 120_000);
 
@@ -6677,7 +6669,7 @@ describe('Engine', () => {
 
       const resultPromise = handle.result();
       await engine.signal(handle.id, 'finish', null);
-      await expect(resultPromise).resolves.toBe('done');
+      expect(resultPromise).resolves.toBe('done');
 
       await engine.scheduler.tick(Date.now() + 120_000);
 
@@ -6714,7 +6706,7 @@ describe('Engine', () => {
 
       const firstResultPromise = firstHandle.result();
       await firstEngine.signal(firstHandle.id, 'finish', null);
-      await expect(firstResultPromise).resolves.toBe('old');
+      expect(firstResultPromise).resolves.toBe('old');
 
       const firstState = await firstEngine.get(workflowId);
       expect(firstState?.status).toBe('completed');
@@ -6747,7 +6739,7 @@ describe('Engine', () => {
 
       const secondResultPromise = secondHandle.result();
       await secondEngine.signal(secondHandle.id, 'finish', null);
-      await expect(secondResultPromise).resolves.toBe('new');
+      expect(secondResultPromise).resolves.toBe('new');
 
       const secondState = await secondEngine.get(workflowId);
       expect(secondState?.status).toBe('completed');
@@ -7173,7 +7165,7 @@ describe('Engine speculative execution', () => {
 
     const handle = await engine.start('speculate-parallel-success', null);
 
-    await expect(handle.result()).resolves.toEqual([10, 6]);
+    expect(handle.result()).resolves.toEqual([10, 6]);
 
     engine[Symbol.dispose]();
   });
@@ -7218,7 +7210,7 @@ describe('Engine speculative execution', () => {
 
     const handle = await engine.start('speculate-race-abort-workflow', null);
 
-    await expect(handle.result()).resolves.toBe('winner');
+    expect(handle.result()).resolves.toBe('winner');
     await flush();
 
     engine[Symbol.dispose]();
@@ -7260,7 +7252,7 @@ describe('Engine speculative execution', () => {
 
     const handle = await engine.start('speculate-compensation-failure', null);
 
-    await expect(handle.result()).resolves.toContain(
+    expect(handle.result()).resolves.toContain(
       'Verification failed for activity "speculative-compensation-failure"',
     );
     expect(events).toEqual(['execute:value', 'compensate:result:value']);
@@ -7409,7 +7401,7 @@ describe('Engine decode and scoped-state guards', () => {
 
     const handle = await engine.start('ctx-conflict-key', null, { id: 'wf-conflict-key' });
 
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       `AtomicState conflict: failed to update "${dataKey}" after 1 attempts`,
     );
     expect(conflictStateKey).toBe(dataKey);

@@ -5,7 +5,7 @@
  * A mailbox is scoped by an opaque `(namespace, resourceId)` pair. Weft never
  * interprets either component: they are application identity, not workflow
  * identity, and nothing here is a remote-worker protocol record. The remote task
- * ledger's transition vocabulary (`server/task-ledger-types.ts`) is deliberately
+ * ledger's transition vocabulary (`core/task-ledger/task-ledger-types.ts`) is deliberately
  * mirrored where it fits — `generation`, attempt fencing, whole-record CAS — but
  * the two record families stay independent so a worker protocol change cannot
  * reshape an application receipt.

@@ -227,7 +227,7 @@ function isEffectRecord(value: unknown): value is EffectRecord {
  * @example Create and use an EffectLog for durable deduplication
  * ```ts
  * import { EffectLog, computeSemanticHash } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
+ * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const log = new EffectLog(storage, 'workflow-abc', 'operation-1');

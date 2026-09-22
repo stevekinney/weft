@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface';
-import { MemoryStorage } from '../storage/memory';
-import { decode, encode } from './codec';
-import { UpdateCoordinator, UpdateTimeoutError } from './updates';
+import { KEYS } from '../storage/interface.ts';
+import { MemoryStorage } from '../storage/memory.ts';
+import { decode, encode } from './codec.ts';
+import { UpdateCoordinator, UpdateTimeoutError } from './updates.ts';
 
 describe('UpdateCoordinator', () => {
   let storage: MemoryStorage;

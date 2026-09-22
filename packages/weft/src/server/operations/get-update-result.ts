@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
@@ -13,22 +13,20 @@ export type GetUpdateResultInput = z.infer<typeof getUpdateResultInput>;
 export type GetUpdateResultOutput =
   { status: 'pending' } | { status: 'completed'; result: unknown; error?: string };
 
-export const getUpdateResultOperation = defineOperation<
-  GetUpdateResultInput,
-  GetUpdateResultOutput
->({
+export const getUpdateResultOperation = defineOperation({
   name: 'weft.updates.result.get',
   mcpExposable: false,
   summary: 'Get the result of an update request',
   destructive: false,
   tags: ['Updates'],
   inputSchema: getUpdateResultInput,
-  outputSchema: getUpdateResultOutput as z.ZodType<GetUpdateResultOutput>,
+  outputSchema: getUpdateResultOutput,
   access: { kind: 'public' },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetUpdateResultOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getUpdateResult']);
+    const e = engine;
     const response = await e.getUpdateResult(input.updateId);
 
     if (response === null) {

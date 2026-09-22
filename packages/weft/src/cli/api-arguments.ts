@@ -25,14 +25,13 @@ export function parseApiArguments(args: string[]): CliCommand {
 
   return {
     command: 'api',
-    ...optionalField('operationName', positionals[0]),
-    ...optionalField('server', values.server),
-    ...optionalField('token', values.token),
-    ...optionalField('profile', values.profile),
-    ...optionalField('input', values.input),
-    ...optionalField('inputFile', values['input-file']),
+    ...(positionals[0] !== undefined ? { operationName: positionals[0] } : {}),
+    ...(values.server !== undefined ? { server: values.server } : {}),
+    ...(values.token !== undefined ? { token: values.token } : {}),
+    ...(values.profile !== undefined ? { profile: values.profile } : {}),
+    ...apiInputFields(values),
     list: values.list ?? false,
-    ...optionalField('describe', values.describe),
+    ...(values.describe !== undefined ? { describe: values.describe } : {}),
     yes: values.yes ?? false,
     help: values.help ?? false,
     json: values.json ?? false,
@@ -46,6 +45,13 @@ type ApiValues = {
   readonly describe?: string;
 };
 
+function apiInputFields(values: ApiValues) {
+  return {
+    ...(values.input !== undefined ? { input: values.input } : {}),
+    ...(values['input-file'] !== undefined ? { inputFile: values['input-file'] } : {}),
+  };
+}
+
 function validateApiArguments(values: ApiValues, positionals: readonly string[]): void {
   if (positionals.length > 1) throw new Error('api: expected at most one operation name');
   if (values.input !== undefined && values['input-file'] !== undefined) {
@@ -57,11 +63,4 @@ function validateApiArguments(values: ApiValues, positionals: readonly string[])
   if (values.list === true && (values.describe !== undefined || positionals.length > 0)) {
     throw new Error('api: --list cannot be combined with --describe or an operation name');
   }
-}
-
-function optionalField<Key extends string, Value>(
-  key: Key,
-  value: Value | undefined,
-): Record<Key, Value> | Record<string, never> {
-  return value === undefined ? {} : ({ [key]: value } as Record<Key, Value>);
 }

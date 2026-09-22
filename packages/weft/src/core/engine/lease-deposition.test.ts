@@ -213,7 +213,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     };
     internals.storage = probe;
 
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         null,
@@ -243,7 +243,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     // the failure is the caller's lost-race error — existing retry semantics — and
     // the engine is NOT deposed.
     const lostRace = new Error('lost the checkpoint race');
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         null,
@@ -356,11 +356,11 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const engine = new Engine({ storage, ownership: 'lease' });
     engine.register(waiterWorkflow);
 
-    await expect(
-      engine.start('deposition-waiter', null, { id: 'too-early' }),
-    ).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    expect(engine.start('deposition-waiter', null, { id: 'too-early' })).rejects.toBeInstanceOf(
+      EngineLeaseNotHeldError,
+    );
     // startOrSignal shares the precondition.
-    await expect(
+    expect(
       engine.startOrSignal('deposition-waiter', null, { name: 'continue' }, { id: 'too-early-2' }),
     ).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
 
@@ -381,8 +381,8 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const engine = new Engine({ storage, ownership: 'lease' });
     engine.register(waiterWorkflow);
 
-    await expect(engine.fork('nonexistent-src')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
-    await expect(engine.resume('nonexistent-id')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    expect(engine.fork('nonexistent-src')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    expect(engine.resume('nonexistent-id')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
     // The misuse must NOT have flipped the engine into the deposed/halting state.
     expect(getInternals(engine).deposed).toBe(false);
 
@@ -444,9 +444,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
       const leaseManagerBefore = internals.leaseManager;
       const tearDownAfterDepositionBefore = internals.tearDownAfterDeposition;
 
-      await expect(mutator.run(engine), mutator.name).rejects.toBeInstanceOf(
-        EngineLeaseNotHeldError,
-      );
+      expect(mutator.run(engine), mutator.name).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
       expect(durableWrites, mutator.name).toEqual([]);
       expect(internals.deposed, mutator.name).toBe(false);
       expect(internals.disposed, mutator.name).toBe(false);
@@ -492,9 +490,9 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     // Simulate the deposed state the commit-path detection reaches.
     getInternals(engine).deposed = true;
 
-    await expect(
-      engine.start('deposition-waiter', null, { id: 'on-deposed' }),
-    ).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    expect(engine.start('deposition-waiter', null, { id: 'on-deposed' })).rejects.toBeInstanceOf(
+      EngineLeaseNotHeldError,
+    );
 
     getInternals(engine).deposed = false;
     await engine[Symbol.asyncDispose]();
@@ -537,7 +535,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const realManager = internals.leaseManager;
     internals.leaseManager = null;
 
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         null,
@@ -593,7 +591,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     };
     internals.storage = probe;
 
-    await expect(
+    expect(
       commitFencedEngineWrite(
         internals,
         null,
@@ -637,7 +635,7 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
 
     // (2) A successor steals the lease → the epoch condition fails → deposition halt.
     await stealLease(storage, 2, 'successor');
-    await expect(
+    expect(
       commitFencedEngineWriteAllowingPreconditionFailure(
         internals,
         null,
@@ -679,7 +677,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // Now a successor steals the lease, then a fresh idempotent start hits the stale
     // epoch → deposition halt, NOT a spurious idempotency resolution.
     await stealLease(storage, 2, 'successor');
-    await expect(
+    expect(
       engine.start('deposition-waiter', null, { idempotencyKey: 'idem-key-2' }),
     ).rejects.toThrow(/deposed/i);
     expect(getInternals(engine).deposed).toBe(true);
@@ -710,7 +708,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // Steal the lease, then suspend: the suspend state-commit is fenced and loses
     // its CAS, so the workflow record is NOT flipped to 'suspended'.
     await stealLease(storage, 2, 'successor');
-    await expect(handle.suspend()).rejects.toThrow();
+    expect(handle.suspend()).rejects.toThrow();
 
     const { decodeWorkflowState } = await import('./validation.ts');
     const raw = await storage.get(KEYS.workflow('suspend-run'));
@@ -749,7 +747,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       await stealLease(storage, 2, 'successor');
       // Trigger deposition (sets the flag, schedules deferred teardown), then run a
       // normal asyncDispose in the same tick before the deferred teardown fires.
-      await expect(
+      expect(
         commitFencedEngineWrite(
           internals,
           null,
@@ -817,7 +815,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
 
     await stealLease(storage, 2, 'successor');
     const now = internals.options.getNow();
-    await expect(
+    expect(
       commitSelfWorkflowStateOperations(
         internals,
         {
@@ -872,7 +870,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     });
 
     const now = internals.options.getNow();
-    await expect(
+    expect(
       commitSelfWorkflowStateOperations(
         internals,
         {

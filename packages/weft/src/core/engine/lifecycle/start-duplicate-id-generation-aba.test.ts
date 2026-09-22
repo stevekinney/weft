@@ -145,7 +145,7 @@ describe('WFT-153: explicit-id start fence pre-CAS ABA (purge between read and c
     // "never used") now loses the CAS.
     stall.release();
 
-    await expect(loserPromise).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    expect(loserPromise).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
 
     // No duplicate run was left behind: the id is free again, exactly as the
     // winner's purge left it.

@@ -86,13 +86,13 @@ async function createFailedWorkflows(engine: Engine): Promise<void> {
   const applicationHandle = await engine.start('application-failure', null, {
     id: 'application-1',
   });
-  await expect(applicationHandle.result()).rejects.toThrow('application failed');
+  expect(applicationHandle.result()).rejects.toThrow('application failed');
 
   const resourceHandle = await engine.start('resource-failure', null, { id: 'resource-1' });
-  await expect(resourceHandle.result()).rejects.toThrow('resource exhausted');
+  expect(resourceHandle.result()).rejects.toThrow('resource exhausted');
 
   const timeoutHandle = await engine.start('timeout-failure', null, { id: 'timeout-1' });
-  await expect(timeoutHandle.result()).rejects.toThrow('timed out');
+  expect(timeoutHandle.result()).rejects.toThrow('timed out');
 }
 
 describe('resolveListCandidateIds', () => {

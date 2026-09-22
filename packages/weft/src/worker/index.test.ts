@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import type { ActivityInterceptor } from '../core/interceptor.ts';
 import {
   restoreRealTimers,
@@ -33,12 +33,13 @@ function createTestServer(options?: {
               ws.send(
                 JSON.stringify({
                   type: 'registerAck',
-                  protocolVersion: 3,
+                  protocolVersion: 6,
                   workerId: parsed.workerId,
                   queue: 'default',
                   concurrency: parsed.concurrency ?? 10,
                   acceptedManifestDigest: 'sha256:test-accepted-digest',
                   serverCapabilities: [],
+                  sessionGeneration: 1,
                 }),
               );
             }
@@ -207,7 +208,7 @@ describe('RemoteWorker', () => {
       registerMessage = messages.find((m) => m.type === 'register');
     }
     expect(registerMessage).toBeDefined();
-    expect(registerMessage.protocolVersion).toBe(3);
+    expect(registerMessage.protocolVersion).toBe(6);
     expect(registerMessage.workerId).toBe('test-worker-1');
     expect(registerMessage.concurrency).toBe(5);
     expect(Object.keys(registerMessage.manifest.workflows['orders'].activities)).toEqual([
@@ -322,7 +323,7 @@ describe('RemoteWorker', () => {
 
     const realManifest = {
       manifestVersion: 1,
-      protocolVersion: 3,
+      protocolVersion: 6,
       sdkVersion: '9.9.9',
       runtime: { name: 'bun', version: '1.3.14' },
       deployment: { name: 'payments', buildId: 'build-real', artifactDigest: 'sha256:real-bytes' },
@@ -370,7 +371,7 @@ describe('RemoteWorker', () => {
           buildId: 'build-1',
           manifest: {
             manifestVersion: 1,
-            protocolVersion: 3,
+            protocolVersion: 6,
             sdkVersion: '1.0.0',
             runtime: { name: 'bun', version: '1.3.14' },
             deployment: { name: 'payments', buildId: 'build-1', artifactDigest: 'sha256:x' },
@@ -391,7 +392,7 @@ describe('RemoteWorker', () => {
           buildId: 'build-1',
           manifest: {
             manifestVersion: 1,
-            protocolVersion: 3,
+            protocolVersion: 6,
             sdkVersion: '1.0.0',
             runtime: { name: 'bun', version: '1.3.14' },
             deployment: { name: 'payments', buildId: 'build-1', artifactDigest: 'sha256:x' },
@@ -444,7 +445,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    await expect(worker.connect()).rejects.toThrow('Unsupported protocol');
+    expect(worker.connect()).rejects.toThrow('Unsupported protocol');
     worker[Symbol.dispose]();
   });
 
@@ -469,7 +470,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    await expect(worker.connect()).rejects.toThrow(
+    expect(worker.connect()).rejects.toThrow(
       'WebSocket closed before worker registration completed',
     );
     worker[Symbol.dispose]();
@@ -507,7 +508,7 @@ describe('RemoteWorker', () => {
       throw new Error('connect() remained pending after worker disposal');
     });
 
-    await expect(Promise.race([connectPromise, pendingTimeout])).rejects.toThrow(
+    expect(Promise.race([connectPromise, pendingTimeout])).rejects.toThrow(
       'Worker disposed before worker registration completed',
     );
   });
@@ -562,12 +563,13 @@ describe('RemoteWorker', () => {
       serverSocket.send(
         JSON.stringify({
           type: 'registerAck',
-          protocolVersion: 3,
+          protocolVersion: 6,
           workerId: 'ack-gated-heartbeat-worker',
           queue: 'default',
           concurrency: 10,
           acceptedManifestDigest: 'sha256:test-accepted-digest',
           serverCapabilities: [],
+          sessionGeneration: 1,
         }),
       );
       await connectPromise;
@@ -593,7 +595,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    await expect(worker.connect()).rejects.toThrow();
+    expect(worker.connect()).rejects.toThrow();
     worker[Symbol.dispose]();
   });
 
@@ -1451,9 +1453,7 @@ describe('RemoteWorker', () => {
 
     // Disposal is terminal: a disposed worker cannot be revived. Reconnection
     // is supported only via disconnect() + connect(), not after dispose.
-    await expect(worker.connect()).rejects.toThrow(
-      'RemoteWorker has been disposed and cannot reconnect',
-    );
+    expect(worker.connect()).rejects.toThrow('RemoteWorker has been disposed and cannot reconnect');
     expect(worker.connected).toBe(false);
   });
 
@@ -1743,7 +1743,13 @@ describe('RemoteWorker', () => {
 
           // After a brief delay, send a cancel message
           setTimeout(() => {
-            ws.send(JSON.stringify({ type: 'cancel', operationId: 'op-cancel-1' }));
+            ws.send(
+              JSON.stringify({
+                type: 'cancel',
+                operationId: 'op-cancel-1',
+                attemptToken: 'attempt-token',
+              }),
+            );
           }, 100);
         }
       },
@@ -1795,7 +1801,13 @@ describe('RemoteWorker', () => {
 
         if (parsed.type === 'register') {
           // Send a cancel for a non-existent operationId
-          ws.send(JSON.stringify({ type: 'cancel', operationId: 'non-existent-op' }));
+          ws.send(
+            JSON.stringify({
+              type: 'cancel',
+              operationId: 'non-existent-op',
+              attemptToken: 'attempt-token',
+            }),
+          );
         }
       },
     });
@@ -1818,6 +1830,126 @@ describe('RemoteWorker', () => {
     expect(worker.inFlight).toBe(0);
     const taskResults = messages.filter((m) => m.type === 'taskResult');
     expect(taskResults.length).toBe(0);
+
+    await worker.disconnect();
+  });
+
+  it('ignores a cancel naming a stale attemptToken instead of aborting the current attempt (COR-230)', async () => {
+    const messages: any[] = [];
+    let taskStarted = false;
+    let abortObserved = false;
+    let releaseCancellableActivity!: () => void;
+    const cancellableActivityGate = new Promise<void>((resolve) => {
+      releaseCancellableActivity = resolve;
+    });
+
+    server = createTestServer({
+      onMessage(ws, message) {
+        const parsed = JSON.parse(message);
+        messages.push(parsed);
+
+        if (parsed.type === 'register') {
+          // A DETERMINISTIC ordering proof, not a timing race: `task`, the
+          // stale `cancel`, and a throwaway `barrier` task are sent back to
+          // back, synchronously, in one burst. WebSocket delivers frames on
+          // one connection in send order, and a single-threaded client can
+          // never interleave user code between them — so `#handleMessage`'s
+          // synchronous prefix for `op-stale-cancel` (which registers its
+          // AbortController before its first `await`) is guaranteed to run
+          // to completion before the `cancel` message is even dispatched,
+          // and the `cancel` message's own (synchronous, non-awaiting)
+          // handling is guaranteed to complete before `op-barrier` is
+          // dispatched. Observing `op-barrier`'s `taskResult` therefore
+          // PROVES the stale cancel already ran — no sleep, no margin.
+          ws.send(
+            JSON.stringify({
+              type: 'task',
+              operationId: 'op-stale-cancel',
+              attemptToken: 'current-attempt-token',
+              activityName: 'orders.cancellableActivity',
+              input: null,
+            }),
+          );
+          ws.send(
+            JSON.stringify({
+              type: 'cancel',
+              operationId: 'op-stale-cancel',
+              attemptToken: 'stale-attempt-token',
+            }),
+          );
+          ws.send(
+            JSON.stringify({
+              type: 'task',
+              operationId: 'op-barrier',
+              attemptToken: 'barrier-attempt-token',
+              activityName: 'orders.processOrder',
+              input: 'barrier',
+            }),
+          );
+        }
+      },
+    });
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workerId: 'stale-cancel-test-worker',
+      workflows: workflowsOf({
+        cancellableActivity: async (_input: unknown, context) => {
+          taskStarted = true;
+          context?.signal.addEventListener('abort', () => {
+            abortObserved = true;
+          });
+          // Held open by the test, not a timer — released only once the
+          // barrier task's result proves the stale cancel already ran.
+          await cancellableActivityGate;
+          if (abortObserved) {
+            throw new Error('Aborted (regression: stale attemptToken incorrectly matched)');
+          }
+          return 'completed-despite-stale-cancel';
+        },
+        processOrder: async (input: unknown) => input,
+      }),
+    });
+
+    await worker.connect();
+
+    await waitForCondition(() => taskStarted, {
+      timeoutMs: 1_000,
+      label: 'cancellable activity started',
+    });
+
+    // The barrier task's result is the explicit barrier: by the time it
+    // exists, the stale cancel sent before it has already been fully
+    // processed by the client (see the ordering proof above).
+    await waitForCondition(
+      () =>
+        messages.some(
+          (message) => message.type === 'taskResult' && message.operationId === 'op-barrier',
+        ),
+      { timeoutMs: 1_000, label: 'barrier task result observed' },
+    );
+
+    expect(abortObserved).toBe(false);
+
+    releaseCancellableActivity();
+
+    await waitForCondition(
+      () =>
+        messages.some(
+          (message) => message.type === 'taskResult' && message.operationId === 'op-stale-cancel',
+        ),
+      { timeoutMs: 1_000, label: 'task result after stale cancel' },
+    );
+
+    const taskResult = messages.find(
+      (m) => m.type === 'taskResult' && m.operationId === 'op-stale-cancel',
+    );
+    expect(taskResult).toBeDefined();
+    expect(taskResult.status).toBe('completed');
+    expect(taskResult.value).toBe('completed-despite-stale-cancel');
+    expect(abortObserved).toBe(false);
 
     await worker.disconnect();
   });
@@ -1912,12 +2044,13 @@ describe('RemoteWorker — connect URL resolution', () => {
               ws.send(
                 JSON.stringify({
                   type: 'registerAck',
-                  protocolVersion: 3,
+                  protocolVersion: 6,
                   workerId: parsed.workerId,
                   queue: 'default',
                   concurrency: parsed.concurrency ?? 10,
                   acceptedManifestDigest: 'sha256:test-accepted-digest',
                   serverCapabilities: [],
+                  sessionGeneration: 1,
                 }),
               );
             }
@@ -2079,12 +2212,13 @@ function createTrackingServer(options?: {
           ws.send(
             JSON.stringify({
               type: 'registerAck',
-              protocolVersion: 3,
+              protocolVersion: 6,
               workerId: parsed.workerId,
               queue: 'default',
               concurrency: parsed.concurrency ?? 10,
               acceptedManifestDigest: 'sha256:test-accepted-digest',
               serverCapabilities: [],
+              sessionGeneration: 1,
             }),
           );
         }
@@ -2106,7 +2240,18 @@ function createTrackingServer(options?: {
  * so reconnect tests never have to stop/restart the listener (which races on
  * port reuse). Frames other than `register` are recorded per registration index.
  */
-function createReconnectServer(onRegister?: (ws: any, index: number) => void): {
+function createReconnectServer(
+  onRegister?: (ws: any, index: number) => void,
+  options?: {
+    /**
+     * Reply to every `taskResult` with a matching `taskResultAck` (COR-240),
+     * so tests exercising the ack-driven outbox can assert a duplicate-free
+     * reconnect the way a real server would produce one. Defaults to `false`
+     * to keep every other call site's frame counts unchanged.
+     */
+    ackTaskResults?: boolean;
+  },
+): {
   server: ReturnType<typeof Bun.serve>;
   /** Frames received on the Nth registration (always an array, even if empty). */
   framesFor: (index: number) => any[];
@@ -2137,12 +2282,13 @@ function createReconnectServer(onRegister?: (ws: any, index: number) => void): {
           ws.send(
             JSON.stringify({
               type: 'registerAck',
-              protocolVersion: 3,
+              protocolVersion: 6,
               workerId: parsed.workerId,
               queue: 'default',
               concurrency: 10,
               acceptedManifestDigest: 'sha256:test-accepted-digest',
               serverCapabilities: [],
+              sessionGeneration: 1,
             }),
           );
           onRegister?.(ws, idx);
@@ -2150,6 +2296,16 @@ function createReconnectServer(onRegister?: (ws: any, index: number) => void): {
           const idx = (ws as any).__index as number;
           messagesByRegistration[idx] = messagesByRegistration[idx] ?? [];
           messagesByRegistration[idx].push(parsed);
+          if (options?.ackTaskResults === true && parsed.type === 'taskResult') {
+            ws.send(
+              JSON.stringify({
+                type: 'taskResultAck',
+                operationId: parsed.operationId,
+                attemptToken: parsed.attemptToken,
+                disposition: 'applied',
+              }),
+            );
+          }
         }
       },
       close(_ws) {},
@@ -2211,9 +2367,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     const firstHang = sleepForTesting(250).then(() => {
       throw new Error('first connect() remained pending after supersession');
     });
-    await expect(Promise.race([first, firstHang])).rejects.toThrow(
-      'Superseded by a new connect() call',
-    );
+    expect(Promise.race([first, firstHang])).rejects.toThrow('Superseded by a new connect() call');
 
     await waitForCondition(() => registerCount === 2 && ackSocket !== undefined, {
       timeoutMs: 1_000,
@@ -2222,16 +2376,17 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     ackSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 3,
+        protocolVersion: 6,
         workerId: 'reentrancy-worker',
         queue: 'default',
         concurrency: 10,
         acceptedManifestDigest: 'sha256:test-accepted-digest',
         serverCapabilities: [],
+        sessionGeneration: 1,
       }),
     );
 
-    await expect(second).resolves.toBeUndefined();
+    expect(second).resolves.toBeUndefined();
     expect(worker.connected).toBe(true);
 
     await worker.disconnect();
@@ -2249,12 +2404,13 @@ describe('RemoteWorker — connect() re-entrancy', () => {
             ws.send(
               JSON.stringify({
                 type: 'registerAck',
-                protocolVersion: 3,
+                protocolVersion: 6,
                 workerId: parsed.workerId,
                 queue: 'default',
                 concurrency: 10,
                 acceptedManifestDigest: 'sha256:test-accepted-digest',
                 serverCapabilities: [],
+                sessionGeneration: 1,
               }),
             );
           }
@@ -2306,7 +2462,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     expect(tracking.sockets.length).toBe(1);
 
     // Redundant connect() must not open a second socket or close the live one.
-    await expect(worker.connect()).resolves.toBeUndefined();
+    expect(worker.connect()).resolves.toBeUndefined();
     // Give any stray socket activity a chance to surface.
     await sleepForTesting(50);
     expect(tracking.sockets.length).toBe(1);
@@ -2365,12 +2521,13 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     firstSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 3,
+        protocolVersion: 6,
         workerId: 'late',
         queue: 'default',
         concurrency: 10,
         acceptedManifestDigest: 'sha256:test-accepted-digest',
         serverCapabilities: [],
+        sessionGeneration: 1,
       }),
     );
     await sleepForTesting(50);
@@ -2380,15 +2537,16 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     secondSocket.send(
       JSON.stringify({
         type: 'registerAck',
-        protocolVersion: 3,
+        protocolVersion: 6,
         workerId: 'current',
         queue: 'default',
         concurrency: 10,
         acceptedManifestDigest: 'sha256:test-accepted-digest',
         serverCapabilities: [],
+        sessionGeneration: 1,
       }),
     );
-    await expect(second).resolves.toBeUndefined();
+    expect(second).resolves.toBeUndefined();
     expect(worker.connected).toBe(true);
 
     await worker.disconnect();
@@ -2477,17 +2635,80 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await worker.disconnect();
   });
 
-  it('sends a result immediately when connected and registered (no later duplicate)', async () => {
+  it('sends a result immediately when connected and registered (no later duplicate once acknowledged)', async () => {
+    // COR-240: WebSocket.send() returning is no longer what removes an
+    // outbox entry — only a matching taskResultAck does. Without an ack this
+    // result would legitimately resend on every reconnect (see the dedicated
+    // "resends an unacknowledged result" test below); this test instead
+    // proves the other half — once the ack lands, a later reconnect does NOT
+    // duplicate it.
     const allFrames: any[] = [];
     // Deliver the task only on the first registration so a later reconnect
     // cannot re-deliver it; any second taskResult would have to come from the
-    // outbox re-flushing an already-sent result.
+    // outbox re-flushing an already-acknowledged result.
+    const harness = createReconnectServer(
+      (ws, idx) => {
+        if (idx === 0) {
+          ws.send(
+            JSON.stringify({
+              type: 'task',
+              operationId: 'op-immediate',
+              attemptToken: 'attempt-token',
+              activityName: 'orders.echo',
+              input: 'hi',
+            }),
+          );
+        }
+      },
+      { ackTaskResults: true },
+    );
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'immediate result',
+    });
+    allFrames.push(...harness.allFrames());
+    const count = allFrames.filter((m) => m.type === 'taskResult').length;
+    expect(count).toBe(1);
+
+    // Wait for the worker to actually process the server's taskResultAck
+    // before disconnecting, so the outbox entry is gone by the time the
+    // reconnect below would otherwise re-flush it.
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: 1_000,
+      label: 'result acknowledged',
+    });
+
+    // A subsequent reconnect must not re-flush an already-acknowledged result.
+    await worker.disconnect();
+    await worker.connect();
+    await sleepForTesting(50);
+    const total = harness.allFrames().filter((m) => m.type === 'taskResult').length;
+    expect(total).toBe(1);
+
+    await worker.disconnect();
+  });
+
+  it('resends an unacknowledged result on every reconnect until a taskResultAck arrives', async () => {
+    // COR-240 acceptance: sending does not delete the outbox entry — only a
+    // matching taskResultAck does. A server that never acknowledges (or an
+    // ack that never arrives) means the worker keeps resending the exact
+    // same result on every subsequent reconnect.
     const harness = createReconnectServer((ws, idx) => {
       if (idx === 0) {
         ws.send(
           JSON.stringify({
             type: 'task',
-            operationId: 'op-immediate',
+            operationId: 'op-never-acked',
             attemptToken: 'attempt-token',
             activityName: 'orders.echo',
             input: 'hi',
@@ -2507,18 +2728,192 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
       timeoutMs: 1_000,
-      label: 'immediate result',
+      label: 'first send',
     });
-    allFrames.push(...harness.allFrames());
-    const count = allFrames.filter((m) => m.type === 'taskResult').length;
-    expect(count).toBe(1);
+    expect(worker.unacknowledgedResultCount).toBe(1);
 
-    // A subsequent reconnect must not re-flush an already-sent result.
     await worker.disconnect();
     await worker.connect();
-    await sleepForTesting(50);
-    const total = harness.allFrames().filter((m) => m.type === 'taskResult').length;
-    expect(total).toBe(1);
+    await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'resend on reconnect',
+    });
+    expect(worker.unacknowledgedResultCount).toBe(1);
+    const resent = harness.framesFor(1).find((m) => m.type === 'taskResult');
+    expect(resent.operationId).toBe('op-never-acked');
+    expect(resent.value).toBe('hi');
+
+    await worker.disconnect();
+  });
+
+  it('disconnect() reports how many results are still unacknowledged (COR-240 criterion 13)', async () => {
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-disconnect-report',
+            attemptToken: 'attempt-token',
+            activityName: 'orders.echo',
+            input: 'hi',
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'result sent, never acked',
+    });
+
+    const report = await worker.disconnect();
+    expect(report).toEqual({ unacknowledgedResults: 1 });
+  });
+
+  it('disconnect() reports zero once every result has been acknowledged', async () => {
+    const harness = createReconnectServer(
+      (ws, idx) => {
+        if (idx === 0) {
+          ws.send(
+            JSON.stringify({
+              type: 'task',
+              operationId: 'op-disconnect-clean',
+              attemptToken: 'attempt-token',
+              activityName: 'orders.echo',
+              input: 'hi',
+            }),
+          );
+        }
+      },
+      { ackTaskResults: true },
+    );
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    await worker.connect();
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: 1_000,
+      label: 'result acknowledged',
+    });
+
+    const report = await worker.disconnect();
+    expect(report).toEqual({ unacknowledgedResults: 0 });
+  });
+
+  it('a server-initiated graceful shutdown warns when unacknowledged results remain (COR-240 criterion 13)', async () => {
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-shutdown-warns',
+            attemptToken: 'attempt-token',
+            activityName: 'orders.echo',
+            input: 'hi',
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'result sent, never acked',
+    });
+
+    // Server-initiated shutdown has no caller to hand the count back to
+    // (unlike disconnect()), so it warns instead.
+    harness.socketFor(0).send(JSON.stringify({ type: 'shutdown' }));
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'worker disconnected',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('RemoteWorker shut down with 1 result(s) still unacknowledged'),
+    );
+  });
+
+  it('warns but still drops the outbox entry when a taskResultAck is dead-lettered', async () => {
+    // A `dead-lettered` disposition means the server's durable ledger could
+    // not resolve the result as completed/failed and recorded a dead letter
+    // instead — the activity's outcome is lost from the workflow's point of
+    // view. The ack still removes the outbox entry (resending cannot help),
+    // so the only signal an operator gets is this warning; without it the
+    // drop is indistinguishable from a clean `applied` ack.
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-dead-lettered',
+            attemptToken: 'attempt-token',
+            activityName: 'orders.echo',
+            input: 'hi',
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'result sent, awaiting ack',
+    });
+    expect(worker.unacknowledgedResultCount).toBe(1);
+
+    harness.socketFor(0).send(
+      JSON.stringify({
+        type: 'taskResultAck',
+        operationId: 'op-dead-lettered',
+        attemptToken: 'attempt-token',
+        disposition: 'dead-lettered',
+      }),
+    );
+
+    // Existing behavior, unchanged: a dead-lettered ack drains the entry.
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: 1_000,
+      label: 'dead-lettered result acknowledged',
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('op-dead-lettered'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('dead-lettered'));
 
     await worker.disconnect();
   });
@@ -2633,11 +3028,57 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await sleepForTesting(50);
 
     // Post-dispose connect() rejects (terminal contract); nothing flushes.
+    expect(worker.connect()).rejects.toThrow('RemoteWorker has been disposed and cannot reconnect');
+    await sleepForTesting(50);
+    expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
+  });
+
+  it('forced disposal discards an already-buffered unacknowledged result rather than leaking it', async () => {
+    // COR-240 fixture: forced disposal ([Symbol.dispose]) is a different exit
+    // from graceful disconnect() — it never reports the unacknowledged count
+    // (there is no caller left to hand it to) and it never resends on a later
+    // connect(), because a disposed worker cannot reconnect at all. The
+    // buffered-but-unacknowledged entry is discarded cleanly, not leaked or
+    // retried forever against a socket that no longer exists.
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-forced-disposal',
+            attemptToken: 'attempt-token',
+            activityName: 'orders.echo',
+            input: 'hi',
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: workflowsOf({ echo: async (input) => input }),
+    });
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'result sent before ack ever arrives',
+    });
+    // The server harness never acks, so the result is still buffered.
+    expect(worker.unacknowledgedResultCount).toBe(1);
+
+    expect(() => worker[Symbol.dispose]()).not.toThrow();
+    expect(worker.unacknowledgedResultCount).toBe(0);
+
+    // A disposed worker cannot reconnect, so the discarded entry can never
+    // resend — this is the intentional difference from disconnect()/
+    // #gracefulShutdown(), which preserve the outbox for the next connect().
     await expect(worker.connect()).rejects.toThrow(
       'RemoteWorker has been disposed and cannot reconnect',
     );
-    await sleepForTesting(50);
-    expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
   });
 });
 
@@ -2782,7 +3223,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     // Registration 1: ack arrives, but the flush send throws → connect() rejects.
     armThrow();
-    await expect(worker.connect()).rejects.toThrow(
+    expect(worker.connect()).rejects.toThrow(
       'reconnect required: result flush failed during registration',
     );
     expect(worker.connected).toBe(false);
@@ -2830,12 +3271,13 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
               ws.send(
                 JSON.stringify({
                   type: 'registerAck',
-                  protocolVersion: 3,
+                  protocolVersion: 6,
                   workerId: parsed.workerId,
                   queue: 'default',
                   concurrency: 10,
                   acceptedManifestDigest: 'sha256:test-accepted-digest',
                   serverCapabilities: [],
+                  sessionGeneration: 1,
                 }),
               );
               ws.send(
@@ -2852,12 +3294,13 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
                 ws.send(
                   JSON.stringify({
                     type: 'registerAck',
-                    protocolVersion: 3,
+                    protocolVersion: 6,
                     workerId: parsed.workerId,
                     queue: 'default',
                     concurrency: 10,
                     acceptedManifestDigest: 'sha256:test-accepted-digest',
                     serverCapabilities: [],
+                    sessionGeneration: 1,
                   }),
                 );
             }

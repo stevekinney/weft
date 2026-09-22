@@ -18,12 +18,12 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { createCatalogSnapshot } from '../cli/operation-catalog-snapshot.ts';
 import { MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
 import { generateMcpDiscovery } from './mcp-discovery.ts';
 import { emitBindings, generateOpenApiDocument } from './openapi.ts';
 import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
 import { generateOpenRpcDocument } from './openrpc.ts';
+import { createCatalogSnapshot } from './operation-catalog-snapshot.ts';
 import { createOperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';

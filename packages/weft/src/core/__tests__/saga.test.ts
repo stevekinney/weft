@@ -71,7 +71,7 @@ describe('ctx.saga()', () => {
     engine.register(sagaReverseWorkflow);
 
     const handle = await engine.start('saga-reverse', null);
-    await expect(handle.result()).rejects.toThrow('step-three failed');
+    expect(handle.result()).rejects.toThrow('step-three failed');
 
     // Compensators run in reverse order: step 2 first, then step 1.
     // step 3 (the failing step) must never be compensated.
@@ -115,7 +115,7 @@ describe('ctx.saga()', () => {
     engine.register(noCompensateFailingStepWorkflow);
 
     const handle = await engine.start('no-compensate-failing-step', null);
-    await expect(handle.result()).rejects.toThrow('expected failure');
+    expect(handle.result()).rejects.toThrow('expected failure');
 
     expect(failingStepCompensatorCalls).toBe(0);
 
@@ -224,7 +224,7 @@ describe('ctx.saga()', () => {
     registerWorkflow(engine1);
 
     const handle1 = await engine1.start('three-step-saga', null, { id: 'saga-restart-wf' });
-    await expect(handle1.result()).rejects.toThrow('activity-three failed');
+    expect(handle1.result()).rejects.toThrow('activity-three failed');
 
     // Compensators for steps 1 and 2 ran exactly once on the first engine.
     expect(step1CompensatorCalls).toBe(1);
@@ -291,7 +291,7 @@ describe('ctx.saga()', () => {
     engine.register(argCheckSagaWorkflow);
 
     const handle = await engine.start('arg-check-saga', null);
-    await expect(handle.result()).rejects.toThrow('forced failure');
+    expect(handle.result()).rejects.toThrow('forced failure');
 
     // Compensators run in reverse (beta first, then alpha).
     expect(compensatorArgs).toHaveLength(2);
@@ -339,7 +339,7 @@ describe('ctx.saga()', () => {
 
     const handle = await engine.start('compensator-failure-saga', null);
     // The original error — not the compensator error — must surface to the caller.
-    await expect(handle.result()).rejects.toThrow('original saga error');
+    expect(handle.result()).rejects.toThrow('original saga error');
 
     engine[Symbol.dispose]();
   });
@@ -487,7 +487,7 @@ describe('ctx.saga()', () => {
     engine.register(interceptedSagaWorkflow);
 
     const handle = await engine.start('intercepted-saga', null);
-    await expect(handle.result()).resolves.toBe('processed:orders');
+    expect(handle.result()).resolves.toBe('processed:orders');
     expect(observedInputs).toEqual([{ queue: 'orders' }]);
 
     engine[Symbol.dispose]();

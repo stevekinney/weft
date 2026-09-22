@@ -13,6 +13,7 @@ import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { signJWT } from './authentication.ts';
 import { serve, type WeftServer } from './index.ts';
+import { jsonRecord, propertyRecord, record } from './protocol.test-support.ts';
 import { createLiveOperationRegistry, REST_BINDINGS } from './rest-bindings.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
@@ -102,7 +103,7 @@ describe('operation catalog — live operation registry matches REST_BINDINGS', 
         headers: { Authorization: `Bearer ${token}` },
       });
       expect(restGet.status).toBe(200);
-      const restGetBody = (await restGet.json()) as { id?: string };
+      const restGetBody = record(await restGet.json(), 'REST workflow response');
 
       const jsonRpcGet = await postJsonRpc(
         server,
@@ -111,14 +112,12 @@ describe('operation catalog — live operation registry matches REST_BINDINGS', 
         token,
       );
       expect(jsonRpcGet.status).toBe(200);
-      const jsonRpcGetBody = (await jsonRpcGet.json()) as {
-        result?: { id?: string };
-        error?: unknown;
-      };
+      const jsonRpcGetBody = record(await jsonRpcGet.json(), 'JSON-RPC workflow response');
+      const jsonRpcGetResult = propertyRecord(jsonRpcGetBody, 'result');
 
-      expect(jsonRpcGetBody.error).toBeUndefined();
-      expect(restGetBody.id).toBe(getHandle.id);
-      expect(jsonRpcGetBody.result?.id).toBe(getHandle.id);
+      expect(jsonRpcGetBody['error']).toBeUndefined();
+      expect(restGetBody['id']).toBe(getHandle.id);
+      expect(jsonRpcGetResult?.['id']).toBe(getHandle.id);
 
       const restSignal = await fetch(
         `${server.url}/v1/workflows/${restSignalHandle.id}/signal/release`,
@@ -151,8 +150,8 @@ describe('operation catalog — live operation registry matches REST_BINDINGS', 
         result: { ok: true },
       });
 
-      await expect(restSignalHandle.result()).resolves.toBe('rest-release');
-      await expect(jsonRpcSignalHandle.result()).resolves.toBe('jsonrpc-release');
+      expect(restSignalHandle.result()).resolves.toBe('rest-release');
+      expect(jsonRpcSignalHandle.result()).resolves.toBe('jsonrpc-release');
     } finally {
       await server.stop();
       engine[Symbol.dispose]();
@@ -192,8 +191,8 @@ describe('operation catalog — end-to-end serve() to REST pipeline', () => {
     const response = await fetch(`${server.url}/v1/workflows/${handle.id}`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as { id?: string };
-    expect(body.id).toBe(handle.id);
+    const body = record(await response.json(), 'workflow response');
+    expect(body['id']).toBe(handle.id);
   });
 
   it('GET /openapi.json returns a valid OpenAPI 3.1 document that includes the route', async () => {
@@ -202,8 +201,8 @@ describe('operation catalog — end-to-end serve() to REST pipeline', () => {
 
     const response = await fetch(`${server.url}/openapi.json`);
     expect(response.status).toBe(200);
-    const doc = (await response.json()) as { openapi?: string; paths?: Record<string, unknown> };
-    expect(doc.openapi).toMatch(/^3\.1/);
-    expect(doc.paths?.['/api/v1/workflows/{id}']).toBeDefined();
+    const doc = jsonRecord(await response.text(), 'OpenAPI document');
+    expect(doc['openapi']).toMatch(/^3\.1/);
+    expect(record(doc['paths'], 'OpenAPI paths')['/api/v1/workflows/{id}']).toBeDefined();
   });
 });

@@ -1,0 +1,127 @@
+import { resolveConnection, type ConnectionOptions } from '../connection.ts';
+
+/**
+ * The `error` member of a JSON-RPC failure envelope, exactly as the server
+ * sent it: the numeric `code`, a human-readable `message`, and whatever
+ * optional `data` the operation attached.
+ *
+ * Codes below `-32000` are JSON-RPC's own reserved range — `-32601` is the one
+ * worth recognising, since it means the server has never heard of the
+ * operation and is therefore older than the client. {@link CatalogClientError}
+ * wraps one of these and exposes that particular case as `isUnknownOperation`,
+ * which is usually what you want rather than comparing codes yourself.
+ *
+ * @example
+ * ```ts
+ * import { CatalogClientError, type JsonRpcErrorObject } from '@lostgradient/weft';
+ *
+ * const wireError: JsonRpcErrorObject = {
+ *   code: -32601,
+ *   message: 'Method not found',
+ * };
+ *
+ * const error = new CatalogClientError('weft.alerts.list', wireError);
+ * console.log(error.isUnknownOperation); // true
+ * ```
+ */
+export type JsonRpcErrorObject = {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: unknown;
+};
+
+/**
+ * The outcome of one JSON-RPC call, as a discriminated union rather than a
+ * thrown error: `ok: true` carries the operation's result, `ok: false` carries
+ * the server's {@link JsonRpcErrorObject}.
+ *
+ * Narrow on `ok` before reading either side — the compiler will not let you
+ * reach `result` on a failure. Note that `result` is `undefined` for an
+ * operation that returns nothing, because a server-side `JSON.stringify` drops
+ * an undefined result key altogether; `ok: true` with no result is a success,
+ * not a malformed response.
+ *
+ * @example
+ * ```ts
+ * import type { JsonRpcCallResult } from '@lostgradient/weft';
+ *
+ * declare const outcome: JsonRpcCallResult;
+ *
+ * if (outcome.ok) {
+ *   console.log('result', outcome.result);
+ * } else {
+ *   console.log('failed', outcome.error.code, outcome.error.message);
+ * }
+ * ```
+ */
+export type JsonRpcCallResult =
+  | { readonly ok: true; readonly result: unknown }
+  | { readonly ok: false; readonly error: JsonRpcErrorObject };
+
+export async function sendJsonRpcRequest(
+  connectionOptions: ConnectionOptions,
+  method: string,
+  params: unknown,
+  id: string,
+): Promise<JsonRpcCallResult> {
+  const connection = resolveConnection(connectionOptions);
+  const response = await fetch(jsonRpcEndpoint(connection.server), {
+    method: 'POST',
+    headers: requestHeaders(connection.token),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method,
+      params,
+      id,
+    }),
+  });
+  const body = (await response.json()) as unknown;
+  if (isJsonRpcError(body)) return { ok: false, error: body.error };
+  // A success envelope carries `jsonrpc`/`id` but `result` may be absent when
+  // the operation returns void — `JSON.stringify` drops an `undefined` result
+  // key server-side. Treat any non-error envelope as a success.
+  if (isJsonRpcSuccess(body)) {
+    return { ok: true, result: 'result' in body ? body.result : undefined };
+  }
+  throw new Error(`Invalid JSON-RPC response from ${connection.server.toString()}`);
+}
+
+export function jsonRpcEndpoint(server: URL): URL {
+  const endpoint = new URL(server.toString());
+  const basePath = endpoint.pathname.endsWith('/') ? endpoint.pathname : `${endpoint.pathname}/`;
+  endpoint.pathname = `${basePath}jsonrpc`.replaceAll(/\/+/g, '/');
+  endpoint.search = '';
+  endpoint.hash = '';
+  return endpoint;
+}
+
+function requestHeaders(token: string | undefined): Headers {
+  const headers = new Headers({ 'content-type': 'application/json' });
+  if (token !== undefined && token !== '') headers.set('authorization', `Bearer ${token}`);
+  return headers;
+}
+
+function isJsonRpcError(value: unknown): value is { readonly error: JsonRpcErrorObject } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'error' in value &&
+    typeof value.error === 'object' &&
+    value.error !== null &&
+    'code' in value.error &&
+    typeof value.error.code === 'number' &&
+    'message' in value.error &&
+    typeof value.error.message === 'string'
+  );
+}
+
+function isJsonRpcSuccess(value: unknown): value is { readonly result?: unknown } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'jsonrpc' in value &&
+    (value as Record<string, unknown>)['jsonrpc'] === '2.0' &&
+    'id' in value &&
+    !('error' in value)
+  );
+}

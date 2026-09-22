@@ -1,5 +1,4 @@
-import * as fileSystem from 'node:fs';
-import { isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
+import type * as fileSystem from 'node:fs';
 
 import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
 
@@ -31,11 +30,11 @@ type DashboardAssetFileSystem = {
  *
  * @example
  * ```ts
- * import type { DashboardAssets } from '@lostgradient/weft/server';
+ * import type { DashboardAssets } from '@lostgradient/weft';
  *
  * const dashboardAssets: DashboardAssets = {
  *   prefix: '/assets',
- *   directory: './dist/assets',
+ *   directory: './build/assets',
  * };
  * ```
  */
@@ -132,7 +131,9 @@ export function resolveDashboardAssets(
 
   validateAssetPrefix(prefix, pageRoutes);
 
-  const resolvedDirectory = resolvePath(directory);
+  const fileSystem = process.getBuiltinModule('node:fs');
+  const paths = process.getBuiltinModule('node:path');
+  const resolvedDirectory = paths.resolve(directory);
   let directoryStats: ReturnType<typeof fileSystem.statSync>;
   try {
     directoryStats = fileSystem.statSync(resolvedDirectory);
@@ -147,12 +148,13 @@ export function resolveDashboardAssets(
 }
 
 function isWithinDirectory(directory: string, path: string): boolean {
-  const pathRelativeToDirectory = relative(directory, path);
+  const paths = process.getBuiltinModule('node:path');
+  const pathRelativeToDirectory = paths.relative(directory, path);
   return (
     pathRelativeToDirectory.length > 0 &&
     pathRelativeToDirectory !== '..' &&
-    !pathRelativeToDirectory.startsWith(`..${sep}`) &&
-    !isAbsolute(pathRelativeToDirectory)
+    !pathRelativeToDirectory.startsWith(`..${paths.sep}`) &&
+    !paths.isAbsolute(pathRelativeToDirectory)
   );
 }
 
@@ -183,7 +185,8 @@ function resolveAssetPath(directory: string, prefix: string, request: Request): 
     return undefined;
   }
 
-  const assetPath = resolvePath(join(directory, ...pathSegments));
+  const paths = process.getBuiltinModule('node:path');
+  const assetPath = paths.resolve(paths.join(directory, ...pathSegments));
   if (!isWithinDirectory(directory, assetPath)) {
     return undefined;
   }
@@ -310,10 +313,12 @@ function readAssetDescriptor(
   position: number | null,
 ): Promise<number> {
   return new Promise((_resolve, reject) => {
-    fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-      if (error) reject(error);
-      else _resolve(bytesRead);
-    });
+    process
+      .getBuiltinModule('node:fs')
+      .read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
+        if (error) reject(error);
+        else _resolve(bytesRead);
+      });
   });
 }
 
@@ -392,7 +397,7 @@ export function createDashboardAssetRoute(
   assetFileSystem?: DashboardAssetFileSystem,
 ): Partial<Record<'GET' | 'HEAD', (request: Request) => Response>> {
   const fileSystemForAsset = assetFileSystem ?? {
-    ...fileSystem,
+    ...process.getBuiltinModule('node:fs'),
     read: readAssetDescriptor,
   };
   const handler = (request: Request): Response =>

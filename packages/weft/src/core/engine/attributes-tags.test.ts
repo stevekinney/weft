@@ -70,7 +70,7 @@ describe('attribute and tag helpers', () => {
     await cleanupAttributeIndex(internals, workflowId);
     expect(await storage.get(KEYS.attribute(workflowId))).toBeNull();
 
-    await expect(cleanupAttributeIndex(internals, 'missing-attributes')).resolves.toBeUndefined();
+    expect(cleanupAttributeIndex(internals, 'missing-attributes')).resolves.toBeUndefined();
   });
 
   it('returns false when tag mutation receives no runtime tags and removes the final tag on delete', async () => {
@@ -83,10 +83,10 @@ describe('attribute and tag helpers', () => {
 
     const internals = createInternals(storage);
 
-    await expect(
-      mutateWorkflowTags(internals, workflowId, undefined as never, 'add'),
-    ).resolves.toBe(false);
-    await expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
+    expect(mutateWorkflowTags(internals, workflowId, undefined as never, 'add')).resolves.toBe(
+      false,
+    );
+    expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
 
     const updatedState = await readWorkflowState(storage, workflowId);
     expect(updatedState?.tags).toBeUndefined();
@@ -100,11 +100,11 @@ describe('attribute and tag helpers', () => {
       await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
     }
 
-    await expect(
+    expect(
       bulkMutateWorkflowTags(internals, { status: 'completed', limit: 0 }, ['bulk'], 'add'),
     ).resolves.toEqual({ modified: 0 });
 
-    await expect(
+    expect(
       bulkMutateWorkflowTags(
         internals,
         { status: 'completed', offset: 1, limit: 1 },
@@ -129,7 +129,7 @@ describe('attribute and tag helpers', () => {
       await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
     }
 
-    await expect(
+    expect(
       bulkMutateWorkflowTags(internals, { status: 'completed', limit: 1 }, ['bulk'], 'add'),
     ).resolves.toEqual({ modified: 1 });
     const bulkLimitAState = await readWorkflowState(storage, 'bulk-limit-a');
@@ -147,7 +147,7 @@ describe('attribute and tag helpers', () => {
       throw new Error('unexpected read failure');
     };
 
-    await expect(
+    expect(
       bulkMutateWorkflowTags(explodingInternals, { status: 'completed' }, ['bulk'], 'add', [
         'bulk-explode',
       ]),
@@ -169,7 +169,7 @@ describe('attribute and tag helpers', () => {
       pendingAtomicWorkflowCommitSideEffects: new Map(),
     });
 
-    await expect(
+    expect(
       updateWorkflowState(internals, workflowId, { status: 'cancelled' }, 'external-terminal'),
     ).resolves.not.toBeNull();
     expect(decodeEpoch((await storage.get(KEYS.workflowOwnerEpoch(workflowId)))!)).toBe(1);
@@ -178,7 +178,7 @@ describe('attribute and tag helpers', () => {
       KEYS.workflow(workflowId),
       encode(createWorkflowState(workflowId, { status: 'running' })),
     );
-    await expect(
+    expect(
       updateWorkflowState(internals, workflowId, { status: 'failed' }, 'self'),
     ).rejects.toMatchObject({ code: 'EngineDeposedError' });
   });
@@ -197,7 +197,7 @@ describe('attribute and tag helpers', () => {
       options: { getNow: () => 2_000, ownershipMode: 'workflow-lease' },
     });
 
-    await expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
+    expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
 
     expect(await storage.get(KEYS.workflowOwnerEpoch(workflowId))).toEqual(seededEpochBytes);
   });

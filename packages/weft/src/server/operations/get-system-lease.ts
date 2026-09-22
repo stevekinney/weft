@@ -11,9 +11,10 @@
 
 import { z } from 'zod';
 
-import { type Engine, type EngineLeaseHealth } from '../../core/engine.ts';
+import type { EngineLeaseHealth } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const getSystemLeaseInput = z.object({});
 
@@ -34,7 +35,7 @@ const getSystemLeaseOutput = z
 export type GetSystemLeaseInput = z.infer<typeof getSystemLeaseInput>;
 export type GetSystemLeaseOutput = EngineLeaseHealth;
 
-export const getSystemLeaseOperation = defineOperation<GetSystemLeaseInput, GetSystemLeaseOutput>({
+export const getSystemLeaseOperation = defineOperation({
   name: 'weft.system.lease',
   mcpExposable: false,
   summary: 'Get ownership-lease health for this engine process',
@@ -44,7 +45,7 @@ export const getSystemLeaseOperation = defineOperation<GetSystemLeaseInput, GetS
   destructive: false,
   tags: ['System'],
   inputSchema: getSystemLeaseInput,
-  outputSchema: getSystemLeaseOutput as z.ZodType<GetSystemLeaseOutput>,
+  outputSchema: getSystemLeaseOutput,
   access: {
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['system:read'] },
@@ -54,7 +55,8 @@ export const getSystemLeaseOperation = defineOperation<GetSystemLeaseInput, GetS
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine }): Promise<GetSystemLeaseOutput> => {
-    return (engine as Engine).getLeaseHealth();
+    assertOperationEngineMethods(engine, ['getLeaseHealth']);
+    return engine.getLeaseHealth();
   },
 });
 

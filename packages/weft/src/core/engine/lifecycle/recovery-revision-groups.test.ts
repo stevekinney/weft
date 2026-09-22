@@ -217,9 +217,9 @@ describe('createRecoveryScopedRevisionCallbacks', () => {
 
     const scoped = createRecoveryScopedRevisionCallbacks(callbacks, classifications);
 
-    await expect(
-      scoped.resolveExecutableRegistrationForRevision('dynamic-type', 'rev-a'),
-    ).rejects.toBe(error);
+    expect(scoped.resolveExecutableRegistrationForRevision('dynamic-type', 'rev-a')).rejects.toBe(
+      error,
+    );
     expect(realCalls).toBe(0);
   });
 

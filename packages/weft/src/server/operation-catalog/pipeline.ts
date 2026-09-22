@@ -1,10 +1,8 @@
 import {
   dispatchFailure,
   lookupOperation,
-  prepareAuthorizedInput,
   validateOutputAgainstSchema,
 } from './dispatch-preparation.ts';
-import { classifyEngineError } from './pipeline-helpers.ts';
 import { tracePipeline } from './pipeline-stages.ts';
 import { type DispatchContext, type DispatchResult } from './types.ts';
 
@@ -13,11 +11,11 @@ import { type DispatchContext, type DispatchResult } from './types.ts';
  * call goes through the same transport, access, input validation,
  * authorization, invocation, and output-validation stages.
  */
-export async function executeOperation<Output>(
+export async function executeOperation(
   operationName: string,
   rawInput: unknown,
   context: DispatchContext,
-): Promise<DispatchResult<Output>> {
+): Promise<DispatchResult<unknown>> {
   const lookup = lookupOperation(operationName, context);
   if (!lookup.ok) return lookup;
   const operation = lookup.value;
@@ -35,23 +33,11 @@ export async function executeOperation<Output>(
     });
   }
 
-  const prepared = await prepareAuthorizedInput(operation, rawInput, context);
-  if (!prepared.ok) return prepared;
+  const dispatched = await operation.dispatch(rawInput, context);
+  if (!dispatched.ok) return dispatched;
+  const output = dispatched.value;
 
-  let output: unknown;
-  try {
-    output = await operation.invoke({
-      input: prepared.value.input,
-      principal: context.principal,
-      engine: context.engine,
-      transport: context.transport,
-    });
-  } catch (error) {
-    return dispatchFailure(classifyEngineError(error, operation));
-  }
-  tracePipeline(context.pipelineTrace, 'invoked');
-
-  const outputResult = validateOutputAgainstSchema<Output>(operation.outputSchema, output);
+  const outputResult = validateOutputAgainstSchema(operation.outputSchema, output);
   if (outputResult.ok) tracePipeline(context.pipelineTrace, 'output-validated');
   return outputResult;
 }

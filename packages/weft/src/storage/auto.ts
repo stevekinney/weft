@@ -1,7 +1,12 @@
+import { BunSQLiteStorage } from './bun-sql.ts';
+import { resolveStorageEnvironment } from './environment-configuration.ts';
+import { IndexedDBStorage } from './indexeddb.ts';
+import { NodeSQLiteStorage } from './node-sqlite.ts';
+import { WebExtensionStorage } from './web-extension.ts';
 /**
  * Runtime-detected default storage backend.
  *
- * Imported via `@lostgradient/weft/storage/auto`. Resolves a persistent
+ * Imported via `@lostgradient/weft`. Resolves a persistent
  * storage adapter appropriate for the current runtime:
  *
  *   1. Bun -> `BunSQLiteStorage`
@@ -21,7 +26,7 @@
  * deployments should pick an explicit adapter and pass it to
  * `new Engine({ storage })`.
  *
- * @module @lostgradient/weft/storage/auto
+ * @module @lostgradient/weft
  */
 
 import type { Storage as WeftStorage } from './interface.ts';
@@ -58,23 +63,21 @@ function detectGlobals(runtimeGlobals: RuntimeGlobalsLike): DetectionGlobals {
   };
 }
 
-async function projectStorageHash(runtimeGlobals: RuntimeGlobalsLike): Promise<string> {
-  const { createHash } = await import('node:crypto');
+function projectStorageHash(runtimeGlobals: RuntimeGlobalsLike): string {
+  const { createHash } = process.getBuiltinModule('node:crypto');
   const cwd = runtimeGlobals.process?.cwd?.() ?? 'weft-default';
   return createHash('sha256').update(cwd).digest('hex').slice(0, 16);
 }
 
-async function defaultSqlitePath(runtimeGlobals: RuntimeGlobalsLike): Promise<string> {
-  const [{ mkdirSync }, { tmpdir }, pathModule] = await Promise.all([
-    import('node:fs'),
-    import('node:os'),
-    import('node:path'),
-  ]);
-  const override = runtimeGlobals.process?.env?.['WEFT_DEFAULT_STORAGE_PATH'];
+function defaultSqlitePath(runtimeGlobals: RuntimeGlobalsLike): string {
+  const { mkdirSync } = process.getBuiltinModule('node:fs');
+  const { tmpdir } = process.getBuiltinModule('node:os');
+  const pathModule = process.getBuiltinModule('node:path');
+  const override = resolveStorageEnvironment().weftDefaultStoragePath;
   const storagePath =
     override !== undefined && override.length > 0
       ? override
-      : pathModule.join(tmpdir(), 'weft-default', `${await projectStorageHash(runtimeGlobals)}.db`);
+      : pathModule.join(tmpdir(), 'weft-default', `${projectStorageHash(runtimeGlobals)}.db`);
   mkdirSync(pathModule.dirname(storagePath), { recursive: true });
   return storagePath;
 }
@@ -90,14 +93,6 @@ function describeGlobal(
     return typeof (runtimeGlobals.browser?.storage ?? runtimeGlobals.chrome?.storage);
   }
   return typeof runtimeGlobals.process;
-}
-
-function storageModuleSpecifier(sourceSpecifier: string, buildSpecifier: string): string {
-  return import.meta.url.endsWith('.ts') ? sourceSpecifier : buildSpecifier;
-}
-
-async function importStorageModule<Module>(specifier: string): Promise<Module> {
-  return (await import(specifier)) as Module;
 }
 
 function resolveWebExtensionNamespace(runtimeGlobals: RuntimeGlobalsLike): {
@@ -137,14 +132,6 @@ function describeIndexedDbSupport(runtimeGlobals: RuntimeGlobalsLike): string {
   return `typeof indexedDB=${indexedDbType}, typeof IDBKeyRange=${keyRangeType}`;
 }
 
-const BUN_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./bun-sql.ts', './bun-sql.js');
-const NODE_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./node-sqlite.ts', './node-sqlite.js');
-const INDEXEDDB_STORAGE_MODULE = storageModuleSpecifier('./indexeddb.ts', './indexeddb.js');
-const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
-  './web-extension.ts',
-  './web-extension.js',
-);
-
 /**
  * Resolve a runtime-appropriate persistent storage adapter.
  *
@@ -155,7 +142,7 @@ const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
  * @example
  * ```ts
  * import { Engine } from '@lostgradient/weft';
- * import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
+ * import { resolveDefaultStorage } from '@lostgradient/weft';
  *
  * await using storage = await resolveDefaultStorage();
  * await using engine = new Engine({ storage });
@@ -168,28 +155,18 @@ export async function resolveDefaultStorage(
   const detected = detectGlobals(runtimeGlobals);
 
   if (detected.hasBun) {
-    const { BunSQLiteStorage } =
-      await importStorageModule<typeof import('./bun-sql.ts')>(BUN_SQLITE_STORAGE_MODULE);
-    return new BunSQLiteStorage(await defaultSqlitePath(runtimeGlobals));
+    return new BunSQLiteStorage(defaultSqlitePath(runtimeGlobals));
   }
 
   if (detected.hasNode) {
-    const { NodeSQLiteStorage } = await importStorageModule<typeof import('./node-sqlite.ts')>(
-      NODE_SQLITE_STORAGE_MODULE,
-    );
-    return new NodeSQLiteStorage(await defaultSqlitePath(runtimeGlobals));
+    return new NodeSQLiteStorage(defaultSqlitePath(runtimeGlobals));
   }
 
   if (detected.hasWebExtensionStorage) {
-    const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
-      WEB_EXTENSION_STORAGE_MODULE,
-    );
     return new WebExtensionStorage({}, resolveWebExtensionNamespace(runtimeGlobals));
   }
 
   if (detected.hasIndexedDB) {
-    const { IndexedDBStorage } =
-      await importStorageModule<typeof import('./indexeddb.ts')>(INDEXEDDB_STORAGE_MODULE);
     return new IndexedDBStorage('weft', resolveIndexedDbRuntime(runtimeGlobals));
   }
 

@@ -8,11 +8,11 @@
  * @module service-worker/scheduler
  */
 
-import { decode } from '../core/codec';
-import { buildTimerBatchOperations } from '../core/scheduler';
-import type { TimerEntry } from '../core/types';
-import type { Storage } from '../storage/interface';
-import { KEYS, resolvePrefixRangeEnd } from '../storage/interface';
+import { decode } from '../core/codec.ts';
+import { buildTimerBatchOperations } from '../core/scheduler.ts';
+import type { TimerEntry } from '../core/types.ts';
+import type { Storage } from '../storage/interface.ts';
+import { KEYS, resolvePrefixRangeEnd } from '../storage/interface.ts';
 
 // ---------------------------------------------------------------------------
 // Periodic sync type (not in default lib but used at runtime in browsers)
@@ -35,7 +35,7 @@ interface RegistrationWithPeriodicSync extends ServiceWorkerRegistration {
  *
  * @example
  * ```ts
- * import { ServiceWorkerScheduler, type ServiceWorkerSchedulerOptions } from '@lostgradient/weft/service-worker';
+ * import { ServiceWorkerScheduler, type ServiceWorkerSchedulerOptions } from '@lostgradient/weft';
  * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
@@ -76,7 +76,7 @@ const DEFAULT_PERIODIC_SYNC_MIN_INTERVAL = 60_000;
  *
  * @example
  * ```ts
- * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
+ * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft';
  * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();

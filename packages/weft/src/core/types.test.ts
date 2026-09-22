@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { OperationOutcome, WorkflowStatus } from './types';
+import type { OperationOutcome, WorkflowStatus } from './types.ts';
 import {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_RETRY_POLICY,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
-} from './types';
+} from './types.ts';
 
 describe('DEFAULT_RETRY_POLICY', () => {
   it('has maxAttempts of 3', () => {

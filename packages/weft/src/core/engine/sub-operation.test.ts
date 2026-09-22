@@ -167,7 +167,7 @@ describe('engine sub-operations', () => {
       workflowNestingDepths: new Map(),
     };
 
-    await expect(
+    expect(
       executeSubOperation(
         internals as never,
         'workflow-sub-operation',
@@ -184,7 +184,7 @@ describe('engine sub-operations', () => {
       ),
     ).resolves.toEqual(['first', 'second']);
 
-    await expect(
+    expect(
       executeSubOperation(
         internals as never,
         'workflow-sub-operation',
@@ -254,11 +254,11 @@ describe('engine sub-operations', () => {
     outerController.abort('outer stopped');
     finishActivity('finished');
 
-    await expect(racePromise).resolves.toBe('finished');
+    expect(racePromise).resolves.toBe('finished');
   });
 
   it('rejects unsupported sub-operation types', async () => {
-    await expect(
+    expect(
       executeSubOperation(
         { options: { maxNestingDepth: 10 }, workflowNestingDepths: new Map() } as never,
         'workflow-sub-operation',

@@ -2,7 +2,7 @@
  * Real-browser `HttpClient` construction smoke test — regression coverage for
  * #713.
  *
- * `@lostgradient/weft/client` is documented and positioned as the browser
+ * `@lostgradient/weft` is documented and positioned as the browser
  * client for `weft-ui`-style SPAs, but `new HttpClient({ baseUrl, token })`
  * used to throw unconditionally in any real browser: the constructor
  * synchronously called through to `resolveConnection`, which read
@@ -32,9 +32,20 @@
  *
  * ## Running
  *
- * Gate: `WEFT_BROWSER_SMOKE=1` must be set (the shared flag for all real-browser
- * smokes; see `bun run test:browser-smoke`). Otherwise all tests skip. This
- * file does NOT run in the default `bun test` pass.
+ * Gate: WEFT_BROWSER_SMOKE=1 must be set (the shared flag for all real-browser
+ * smokes, via `browserSmokeEnabled`). Otherwise all tests skip. This test does
+ * NOT run in the default `bun test` pass. Run it with
+ * `bun run --filter=@lostgradient/weft test:browser`.
+ *
+ * It used to run in the default pass, deliberately, because it is regression
+ * coverage for a crash that shipped (#713). That is a real reason and it is
+ * why this file was left alone when the other three were gated. What changed
+ * the answer is the cost of the `beforeAll`: it shells out to `bun build` and
+ * then launches Chromium, with no explicit budget, so it sits on bun's 5,000 ms
+ * default. Under a loaded machine that is a coin flip, and a regression test
+ * that fails for reasons unrelated to the regression stops being coverage and
+ * starts being noise. The coverage is preserved by `test:browser` rather than
+ * discarded.
  *
  * Browser provisioning: `bunx playwright install chromium` (run once).
  */
@@ -48,12 +59,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { Browser, BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
 
-const shouldRun = Bun.env['WEFT_BROWSER_SMOKE'] === '1';
+import { browserSmokeEnabled } from '../testing/browser-smoke-gate.test-support.ts';
+
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 /**
- * Build the real `@lostgradient/weft/client` entry point as a browser-target
- * IIFE and return its source so it can be served as a static asset. Writes a
+ * Build the real `@lostgradient/weft` entry point as a browser-target
+ * ES module and return its source so it can be served as a static asset. Writes a
  * temporary build entry (re-exporting `HttpClient` onto `globalThis`) and
  * bundles it with the `bun build` CLI — see the module docstring for why this
  * shells out instead of calling `Bun.build()` in-process.
@@ -73,12 +85,12 @@ async function buildClientScript(): Promise<string> {
 
   try {
     const proc = Bun.spawn(
-      ['bun', 'build', entryPath, '--target=browser', '--format=iife', `--outfile=${outfilePath}`],
+      ['bun', 'build', entryPath, '--target=browser', '--format=esm', `--outfile=${outfilePath}`],
       { cwd: repositoryRoot, stdout: 'pipe', stderr: 'pipe' },
     );
     const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
     if (exitCode !== 0) {
-      throw new Error(`Failed to build @lostgradient/weft/client for browser: ${stderr}`);
+      throw new Error(`Failed to build @lostgradient/weft for browser: ${stderr}`);
     }
     return await Bun.file(outfilePath).text();
   } finally {
@@ -91,7 +103,7 @@ function buildTestPageHtml(clientScriptUrl: string): string {
 <html>
 <head><title>HttpClient Browser Smoke</title></head>
 <body>
-<script src="${clientScriptUrl}"></script>
+<script type="module" src="${clientScriptUrl}"></script>
 </body>
 </html>`;
 }
@@ -102,7 +114,7 @@ let server: ReturnType<typeof Bun.serve>;
 let clientScriptSource: string;
 let baseUrl: string;
 
-(shouldRun ? describe : describe.skip)('HttpClient — real Chromium construction', () => {
+describe.skipIf(!browserSmokeEnabled)('HttpClient — real Chromium construction', () => {
   beforeAll(async () => {
     clientScriptSource = await buildClientScript();
 
@@ -141,8 +153,11 @@ let baseUrl: string;
 
   it('new HttpClient({ baseUrl, token }) does not throw with no Bun global and no Node built-ins', async () => {
     const page = await context.newPage();
+    const pageErrors: Error[] = [];
+    page.on('pageerror', (error) => pageErrors.push(error));
     try {
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      expect(pageErrors).toEqual([]);
       await page.waitForFunction(
         () => typeof (globalThis as Record<string, unknown>)['HttpClient'] === 'function',
       );

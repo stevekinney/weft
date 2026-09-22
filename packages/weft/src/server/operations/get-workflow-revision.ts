@@ -9,10 +9,10 @@
 import { z } from 'zod';
 
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   validateWorkflowNameField,
   validateWorkflowRevisionField,
@@ -30,10 +30,7 @@ const getWorkflowRevisionOutput = z.unknown();
 export type GetWorkflowRevisionInput = z.infer<typeof getWorkflowRevisionInput>;
 export type GetWorkflowRevisionOutput = WorkflowRevisionRecord;
 
-export const getWorkflowRevisionOperation = defineOperation<
-  GetWorkflowRevisionInput,
-  GetWorkflowRevisionOutput
->({
+export const getWorkflowRevisionOperation = defineOperation({
   name: 'weft.workflows.revisions.get',
   mcpExposable: false,
   summary: 'Get one installed workflow revision',
@@ -43,14 +40,15 @@ export const getWorkflowRevisionOperation = defineOperation<
   destructive: false,
   tags: ['Workflow Catalog'],
   inputSchema: getWorkflowRevisionInput,
-  outputSchema: getWorkflowRevisionOutput as z.ZodType<GetWorkflowRevisionOutput>,
+  outputSchema: getWorkflowRevisionOutput,
   access: workflowsReadAccess,
   producibleFaults: ['NotFound', 'InvalidParams'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetWorkflowRevisionOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['getRevision']);
+    const e = engine;
     const name = validateWorkflowNameField(input.name);
     const revision = validateWorkflowRevisionField(input.revision);
     const record = await e.workflows.getRevision(name, revision);

@@ -56,7 +56,7 @@ describe('withChaos', () => {
     const scenario: ChaosScenario = { faultRate: 1, faults: ['error'] };
     const wrapped = withChaos(base, scenario);
 
-    await expect(wrapped(5)).rejects.toThrow();
+    expect(wrapped(5)).rejects.toThrow();
   });
 
   it('injects faults probabilistically', async () => {

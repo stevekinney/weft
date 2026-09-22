@@ -1,11 +1,16 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { createServerWebSocketHandlers } from './authentication-bridge.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 
+import type { RemoteTaskLeased } from '../../core/task-ledger/task-ledger-types.ts';
+import {
+  decodeRemoteTaskRecord,
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
+} from '../../core/task-ledger/task-ledger.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import type { RemoteTaskLeased } from '../task-ledger-types.ts';
-import { decodeRemoteTaskRecord, encodeRemoteTaskRecord, taskLedgerKey } from '../task-ledger.ts';
 
 type FakeWorkerSocket = {
   data: WebSocketData;
@@ -86,10 +91,20 @@ describe('createServerWebSocketHandlers', () => {
     handlers.close(socket as never);
 
     // The reassignment runs in a fire-and-forget async task per in-flight
-    // task; flush microtasks so the durable requeue commits before asserting.
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    // task, now several awaits deep (COR-205's attempt-record disposition
+    // update reads the prior attempt's record before writing its update,
+    // atomically alongside the ledger requeue) — poll for the durable
+    // effect rather than hardcoding a microtask-flush count that would
+    // silently under-wait again the next time this chain grows by one hop.
+    await waitForCondition(
+      async () => {
+        const record = decodeRemoteTaskRecord(
+          await options.engine.storage.get(taskLedgerKey('op-disconnect')),
+        );
+        return record?.state === 'queued';
+      },
+      { label: 'worker-disconnect requeue committed' },
+    );
 
     const record = decodeRemoteTaskRecord(
       await options.engine.storage.get(taskLedgerKey('op-disconnect')),

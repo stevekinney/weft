@@ -40,7 +40,7 @@ import type {
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
  * import type { MailboxEventSink } from '@lostgradient/weft';
- * import { createFleetEventFeed } from '@lostgradient/weft/server/handler';
+ * import { createFleetEventFeed } from '@lostgradient/weft';
  *
  * const events: MailboxEventSink = createFleetEventFeed(new MemoryStorage());
  * void events;

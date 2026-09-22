@@ -9,7 +9,7 @@
  * @module core/source/validate
  */
 
-import { isRecord } from '../../worker/manifest/is-record.ts';
+import { isPlainRecord } from '../../worker/manifest/is-plain-record.ts';
 import type { ActivityRegistry } from '../activity-registry.ts';
 import {
   DEFAULT_WORKFLOW_COMPATIBILITY_POLICY,
@@ -70,7 +70,7 @@ function hasModuleNamespaceShape(value: object): boolean {
 }
 
 function isSourceModule(value: unknown): value is Readonly<Record<string, unknown>> {
-  if (isRecord(value)) return true;
+  if (isPlainRecord(value)) return true;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
   // Bun namespaces have an interop prototype instead of the standard null

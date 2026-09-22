@@ -1,30 +1,30 @@
 import { describe, expect, it } from 'bun:test';
 
-import { Engine } from '../core/engine';
+import { Engine } from '../core/engine.ts';
 import {
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
   WorkflowTimedOutEvent,
-} from '../core/events';
+} from '../core/events.ts';
 import type {
   ActivityInterception,
   ChildWorkflowInterception,
   SignalInterception,
   SleepInterception,
-} from '../core/interceptor';
-import type { WorkflowContext } from '../core/types';
+} from '../core/interceptor.ts';
+import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { MemoryStorage } from '../storage/memory';
-import { flush } from '../testing/storage-backends.test-support';
-import { createObservabilityInterceptors } from './index';
-import { MetricsCollector } from './metrics';
+import { MemoryStorage } from '../storage/memory.ts';
+import { flush } from '../testing/storage-backends.test-support.ts';
+import { createObservabilityInterceptors } from './index.ts';
+import { MetricsCollector } from './metrics.ts';
 import type {
   OpenTelemetryApi,
   OpenTelemetrySpan,
   OpenTelemetryTracer,
   SpanLink,
-} from './no-op-telemetry';
+} from './no-op-telemetry.ts';
 
 // ---------------------------------------------------------------------------
 // Recording tracer: captures all span operations for assertions

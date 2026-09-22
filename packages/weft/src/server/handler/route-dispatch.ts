@@ -4,6 +4,7 @@ import {
   createMetricsCollectorExporter,
   type PrometheusExporter,
 } from '../../observability/metrics.ts';
+import { resolveServerEnvironment } from '../../runtime/environment-configuration.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
 import { generateApiCatalog, originFromRequest, warnIfPublicOriginUnset } from '../api-catalog.ts';
 import { generateAsyncApiDocument } from '../asyncapi.ts';
@@ -53,7 +54,7 @@ import {
  *
  * @example
  * ```ts
- * import { type HandlerOptions } from '@lostgradient/weft/server/handler';
+ * import { type HandlerOptions } from '@lostgradient/weft';
  *
  * const options: HandlerOptions = {
  *   authContext: { method: 'public' },
@@ -183,8 +184,9 @@ function resolveDiscoveryOrigin(options: DiscoveryOriginOptions): DiscoveryOrigi
     return { origin: requestOrigin };
   }
 
-  const isDevelopment = Bun.env['NODE_ENV'] === 'development';
-  const operatorOverride = Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'] === '1';
+  const environment = resolveServerEnvironment();
+  const isDevelopment = environment.nodeEnv === 'development';
+  const operatorOverride = environment.weftAllowUntrustedApiCatalogOrigin;
   if (!isDevelopment && !operatorOverride) {
     return {
       response: errorResponse(
@@ -399,7 +401,7 @@ function readFaultProperties(
  *
  * @example Catch an unknown error and surface as a fault when it qualifies
  * ```ts
- * import { isOperationFaultLike } from '@lostgradient/weft/server/handler';
+ * import { isOperationFaultLike } from '@lostgradient/weft';
  *
  * try {
  *   // operation handler runs here

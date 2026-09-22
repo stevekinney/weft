@@ -21,6 +21,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { getScheduleOperation, getScheduleRestBinding } from './get-schedule.ts';
@@ -29,6 +30,7 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 
@@ -73,7 +75,7 @@ describe('weft.schedules.get', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as { id?: string; workflowType?: string };
+    const body = await response.json();
     expect(body.id).toBe('schedule-alpha');
     expect(body.workflowType).toBe('echo');
   });
@@ -113,8 +115,7 @@ describe('weft.schedules.get', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected success');
-    const schedule = result.value as { id?: string };
-    expect(schedule.id).toBe('apikey-schedule');
+    expect(result.value).toMatchObject({ id: 'apikey-schedule' });
   });
 
   it('rejects an unauthenticated principal with Unauthorized', async () => {
@@ -141,7 +142,7 @@ describe('weft.schedules.get', () => {
   it('maps EngineFailure faults to 500 with "Internal server error"', async () => {
     engine = createEngine();
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getScheduleOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -151,7 +152,7 @@ describe('weft.schedules.get', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules/some-schedule', { method: 'GET' }),
@@ -170,7 +171,7 @@ describe('weft.schedules.get', () => {
   it('shapes Unauthorized faults as 401', async () => {
     engine = createEngine();
 
-    const unauthorizedOperation = {
+    const unauthorizedOperation = defineOperation({
       ...getScheduleOperation,
       invoke: async () => {
         throw {
@@ -179,7 +180,7 @@ describe('weft.schedules.get', () => {
           data: { reason: 'missing credentials' },
         } satisfies OperationFault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules/some-schedule', { method: 'GET' }),
@@ -198,7 +199,7 @@ describe('weft.schedules.get', () => {
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
     engine = createEngine();
 
-    const conflictOperation = {
+    const conflictOperation = defineOperation({
       ...getScheduleOperation,
       invoke: async () => {
         throw {
@@ -207,7 +208,7 @@ describe('weft.schedules.get', () => {
           data: { reason: 'schedule conflict' },
         } satisfies OperationFault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules/some-schedule', { method: 'GET' }),

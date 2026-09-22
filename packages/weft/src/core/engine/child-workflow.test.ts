@@ -77,7 +77,7 @@ describe('engine child workflow helpers', () => {
     const internals = createInternals();
     const collision = new WorkflowAlreadyExistsError('child-id');
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -111,7 +111,7 @@ describe('engine child workflow helpers', () => {
     seedChildResult(internals, 'child-id', 'cached-child-result');
     const childHandle = { id: 'child-id', result: mock(async () => 'cached-child-result') };
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -147,7 +147,7 @@ describe('engine child workflow helpers', () => {
   it('rejects an existing child workflow whose stored state differs', async () => {
     const internals = createInternals();
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -180,7 +180,7 @@ describe('engine child workflow helpers', () => {
     const internals = createInternals();
     const failure = new Error('start failed');
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -208,7 +208,7 @@ describe('engine child workflow helpers', () => {
     const internals = createInternals();
     seedChildResult(internals, 'child-id', 'child-result');
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -255,7 +255,7 @@ describe('engine child workflow helpers', () => {
       onTerminalConflict: 'start-new',
     } satisfies ChildWorkflowOptions & { onTerminalConflict: 'start-new' };
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -295,7 +295,7 @@ describe('engine child workflow helpers', () => {
     const admissionError = new StartWorkflowValidationError('options.id must not be "." or ".."');
     let startCallCount = 0;
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -342,7 +342,7 @@ describe('engine child workflow helpers', () => {
       throw admissionError;
     });
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -377,7 +377,7 @@ describe('engine child workflow helpers', () => {
       throw admissionError;
     });
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -415,7 +415,7 @@ describe('engine child workflow helpers', () => {
     const retryFailure = new Error('storage unavailable during reattach retry');
     let startCallCount = 0;
 
-    await expect(
+    expect(
       executeChildWorkflow(
         internals as never,
         'parent',
@@ -527,7 +527,7 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     expect(result).toBe('historical-child-result');
     // No duplicate/replacement run was created under "." — the seeded record
     // is untouched.
-    await expect(engine.get('.')).resolves.toMatchObject({
+    expect(engine.get('.')).resolves.toMatchObject({
       status: 'completed',
       result: 'historical-child-result',
     });
@@ -624,11 +624,11 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     // The fence rejects the retry with the same strict-admission error a
     // genuinely fresh `ctx.startChild({ id: '.' })` would get — a clean
     // rejection, not a silently created fresh run under the reserved id.
-    await expect(executePromise).rejects.toThrow('options.id must not be "." or ".."');
+    expect(executePromise).rejects.toThrow('options.id must not be "." or ".."');
 
     // No replacement run was created under "." — the race left it absent,
     // and it must STAY absent rather than get backfilled by a bypassed create.
-    await expect(engine.get('.')).resolves.toBeNull();
+    expect(engine.get('.')).resolves.toBeNull();
     // `pendingStarts`/`inFlightRevision` bookkeeping unwound via `finally`.
     expect(getInternals(engine).pendingStarts.has('.')).toBe(false);
 
@@ -702,10 +702,10 @@ describe('WFT-79: cross-engine parent/child completion (ownership: "workflow-lea
     // Complete the child on its OWNING engine (B) only — A's `resultResolvers`
     // map is never touched by B's termination commit.
     await engineB.getHandle('wft-79-child-1').signal('go');
-    await expect(engineB.getHandle('wft-79-child-1').result()).resolves.toBe('child-done');
+    expect(engineB.getHandle('wft-79-child-1').result()).resolves.toBe('child-done');
 
     // The parent — owned by A, which never claimed the child — must still
     // observe completion instead of hanging forever.
-    await expect(parentHandle.result()).resolves.toBe('child-done');
+    expect(parentHandle.result()).resolves.toBe('child-done');
   });
 });

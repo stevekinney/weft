@@ -163,7 +163,7 @@ describe('WorkflowEventFeed — replay', () => {
     }
     const feed = createWorkflowEventFeed(backend);
 
-    await expect(
+    expect(
       (async () => {
         for await (const _envelope of feed.replay({
           workflowId: 'wf-1',
@@ -183,7 +183,7 @@ describe('WorkflowEventFeed — replay', () => {
     }
     const feed = createWorkflowEventFeed(backend);
 
-    await expect(
+    expect(
       (async () => {
         for await (const _envelope of feed.replay({
           workflowId: 'wf-1',
@@ -570,8 +570,8 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
       }
     };
 
-    await expect(consume()).rejects.toThrow(ReplayWindowExceededError);
-    await expect(consume()).rejects.toMatchObject({
+    expect(consume()).rejects.toThrow(ReplayWindowExceededError);
+    expect(consume()).rejects.toMatchObject({
       name: 'ReplayWindowExceededError',
       count: 2,
       limit: 1,

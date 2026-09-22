@@ -370,7 +370,7 @@ describe('weft.workflows.events.sse', () => {
     const authorize = workflowEventsSseOperation.authorize;
     if (authorize === undefined) throw new Error('Expected workflow SSE authorizer');
 
-    await expect(
+    expect(
       authorize({
         input: { workflowId: 'wf-sse', selector: 'events' },
         principal: anonymousPrincipal(),
@@ -402,7 +402,7 @@ describe('weft.workflows.events.sse', () => {
   });
 
   it('throws UnsupportedTransport when invoked without an object context', async () => {
-    await expect(
+    expect(
       workflowEventsSseOperation.invoke({
         input: { workflowId: 'wf-sse', selector: 'events' },
         principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),

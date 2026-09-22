@@ -17,12 +17,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Engine } from '../core/engine.ts';
-import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
 import {
   decodeRemoteTaskRecord,
   isRemoteTaskTerminalResolved,
   taskLedgerKey,
-} from '../server/task-ledger.ts';
+} from '../core/task-ledger/task-ledger.ts';
+import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 import {
@@ -457,17 +457,62 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
   });
 });
 
-describe('RemoteWorker durability — transient reconnect continuity', () => {
-  it('honors a reconnect within the grace period and suppresses requeue', async () => {
-    // Grace period 1000ms (well above CI handshake jitter) and a 1200ms
-    // expectNoServerMessage window: enough margin that hardClose + connect +
-    // register reliably completes inside the grace window, and the grace
-    // timer reliably fires inside our wait so we are testing
-    // cancel-on-reregister rather than result-arrived-before-timer-fired.
+/**
+ * Read the raw ledger record for `operationId` in whatever state it
+ * currently holds — unlike {@link readResolvedRecord}, this does not filter
+ * to terminal-resolved records, since the fixtures below need to inspect a
+ * still-`leased` record's exact lease fields.
+ */
+async function readLedgerRecord(engine: Engine, operationId: string) {
+  return decodeRemoteTaskRecord(await engine.storage.get(taskLedgerKey(operationId)));
+}
+
+/**
+ * Reconnect `workerId` with a fresh `register`, optionally echoing
+ * `resumeSessionGeneration` (protocol v6, COR-220) to prove a resume of a
+ * still-pending disconnected session. Returns both the socket and the
+ * `registerAck` it received, so callers can assert on `sessionGeneration`
+ * without a second round trip.
+ */
+async function reconnectWorker(
+  setup: Setup,
+  workerId: string,
+  options: { resumeSessionGeneration?: number } = {},
+): Promise<{ worker: FaultInjectingWorker; sessionGeneration: number }> {
+  const worker = await connectFaultInjectingWorker({ url: setup.workerUrl, workerId });
+  sockets.push(worker);
+  worker.send({
+    type: 'register',
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    workerId,
+    manifest: manifestForActivities(['echo']),
+    concurrency: 1,
+    ...(options.resumeSessionGeneration !== undefined
+      ? { resumeSessionGeneration: options.resumeSessionGeneration }
+      : {}),
+  });
+  const ack = await worker.nextServerMessage((m) => m.type === 'registerAck', { timeoutMs: 3_000 });
+  if (ack.type !== 'registerAck') throw new Error('expected registerAck');
+  return { worker, sessionGeneration: ack.sessionGeneration };
+}
+
+describe('RemoteWorker durability — transient reconnect continuity (COR-220)', () => {
+  it('a PROVEN resume (matching resumeSessionGeneration) keeps sessionGeneration, the attempt token, and the exact lease deadlines unchanged', async () => {
+    // A moderate grace period — large enough that the deferred-requeue timer
+    // cannot fire during this test's near-instantaneous steps (every step
+    // below is gated on a real event: registerAck, task, taskResultAck —
+    // never on elapsed wall-clock time), but small enough that a socket this
+    // test closes in `afterEach` without an explicit reconnect (`workerAPrime`,
+    // still connected when the test body ends) cannot arm a grace timer that
+    // outlives the test itself. `MAX_WORKER_RECONNECT_GRACE_PERIOD_MS` is
+    // 5_000 (`serve-internals.ts`) — using a value anywhere near that ceiling
+    // here would race Bun's own 5_000ms per-test default budget for no
+    // reason, since nothing in this test needs more than a few milliseconds
+    // of headroom.
     const setup = createSetup({ workerReconnectGracePeriodMs: 1_000 });
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
 
-    const operationId = 'scenario-3-op';
+    const operationId = 'proven-resume-op';
     void setup.server.dispatchTask({
       operationId,
       activityName: 'test.echo',
@@ -480,13 +525,28 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
     if (!isTask(dispatch)) throw new Error('expected task');
     expect(dispatch.operationId).toBe(operationId);
 
+    const beforeDisconnect = await readLedgerRecord(setup.engine, operationId);
+    if (beforeDisconnect?.state !== 'leased') throw new Error('expected a leased record');
+    expect(beforeDisconnect.attemptToken).toBe(dispatch.attemptToken);
+
     await workerA.hardClose();
 
-    const workerAPrime = await connectAndRegisterWorker(setup, 'worker-a');
+    // The very first registration of a fresh workerId is always generation
+    // 1 — echo it back to prove this reconnect resumes that exact session.
+    const { worker: workerAPrime, sessionGeneration } = await reconnectWorker(setup, 'worker-a', {
+      resumeSessionGeneration: 1,
+    });
+    expect(sessionGeneration).toBe(1);
 
-    // Wait past the grace period: prove that no `task` frame arrived during
-    // the deferred-requeue window — only `registerAck` shows up.
-    await workerAPrime.expectNoServerMessage(isTask, { timeoutMs: 1_200 });
+    // Proven: the attempt is untouched — same token, byte-identical lease
+    // fields — read immediately once the ack confirms the resume, no wait.
+    const afterReconnect = await readLedgerRecord(setup.engine, operationId);
+    if (afterReconnect?.state !== 'leased')
+      throw new Error('expected the record to still be leased');
+    expect(afterReconnect.attemptToken).toBe(beforeDisconnect.attemptToken);
+    expect(afterReconnect.leaseDeadline).toBe(beforeDisconnect.leaseDeadline);
+    expect(afterReconnect.attemptDeadline).toBe(beforeDisconnect.attemptDeadline);
+    expect(afterReconnect.generation).toBe(beforeDisconnect.generation);
 
     workerAPrime.send({
       type: 'taskResult',
@@ -495,16 +555,205 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
       value: 'v',
       attemptToken: dispatch.attemptToken,
     });
+    await workerAPrime.nextServerMessage((m) => m.type === 'taskResultAck', { timeoutMs: 2_000 });
+
+    const resolved = await readResolvedRecord(setup.engine, operationId);
+    expect(resolved).not.toBeUndefined();
+    expect(resolved).not.toBeNull();
+    await waitForInflightCleared(setup.engine, operationId);
+  });
+
+  it('an UNPROVEN reconnect (no resumeSessionGeneration echo) forfeits the attempt before acknowledging — the old token is rejected even though routing reselects the same workerId (COR-220, criterion 3)', async () => {
+    // Single worker: once its own in-flight work is forfeited and requeued,
+    // it is the only eligible target, so routing MUST reselect it for the
+    // redispatch — the sharp case the issue asks to prove explicitly. See
+    // the PROVEN test above for why this grace value is moderate, not near
+    // `MAX_WORKER_RECONNECT_GRACE_PERIOD_MS`.
+    const setup = createSetup({ workerReconnectGracePeriodMs: 1_000 });
+    const workerA = await connectAndRegisterWorker(setup, 'worker-a');
+
+    const operationId = 'unproven-reconnect-op';
+    void setup.server.dispatchTask({
+      operationId,
+      activityName: 'test.echo',
+      workflowType: 'test',
+      input: { value: 'v' },
+      visibilityTimeout: 30_000,
+    });
+
+    const dispatch = await workerA.nextServerMessage(isTask, { timeoutMs: 2_000 });
+    if (!isTask(dispatch)) throw new Error('expected task');
+    const staleAttemptToken = dispatch.attemptToken;
+
+    await workerA.hardClose();
+
+    // No resumeSessionGeneration echo — this reconnect proves nothing.
+    const { worker: workerAPrime, sessionGeneration } = await reconnectWorker(setup, 'worker-a');
+    // The forfeit fully unregisters the old session (exactly like a natural
+    // grace-lapse requeue would), so the next registration starts a BRAND
+    // NEW session back at generation 1 — generation is a discriminator among
+    // sessions the server currently remembers, not a lifetime counter (see
+    // `registerAck.sessionGeneration`'s doc comment in
+    // `remote-worker-protocol.md`). What actually proves this is a NEW
+    // session, distinct from the one that held the stale attempt, is that
+    // the forfeit ran and rotated the attempt away — asserted below by
+    // reading the ledger and by the stale token's rejection, not by the raw
+    // generation number.
+    expect(sessionGeneration).toBe(1);
+
+    // The registerAck is only sent once the forfeit's durable requeue has
+    // been awaited to completion (see `registerWorker`'s doc comment) — by
+    // construction, the record can no longer be `leased` under the stale
+    // token the instant the ack arrives. No polling, no timer.
+    const afterReconnect = await readLedgerRecord(setup.engine, operationId);
+    const stillHoldsStaleAttempt =
+      afterReconnect?.state === 'leased' && afterReconnect.attemptToken === staleAttemptToken;
+    expect(stillHoldsStaleAttempt).toBe(false);
+
+    // The late frame: worker-a' echoes the FORFEITED attempt's token. Same
+    // workerId, brand new session — the old attempt is still stale.
+    const staleRejection = workerAPrime.nextServerMessage((m) => m.type === 'protocolError', {
+      timeoutMs: 2_000,
+    });
+    workerAPrime.send({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value: 'stale',
+      attemptToken: staleAttemptToken,
+    });
+    const rejected = await staleRejection;
+    if (rejected.type !== 'protocolError') throw new Error('expected protocolError');
+    expect(rejected.code).toBe('invalid_message');
+    expect(rejected.message).toContain(operationId);
+
+    // Routing reselects worker-a — it is the only worker — for the
+    // redispatch, with a rotated attempt token.
+    const redispatch = await workerAPrime.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    if (!isTask(redispatch)) throw new Error('expected redispatch');
+    expect(redispatch.operationId).toBe(operationId);
+    expect(redispatch.attemptToken).not.toBe(staleAttemptToken);
+
+    workerAPrime.send({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value: 'fresh',
+      attemptToken: redispatch.attemptToken,
+    });
 
     let resolved: unknown;
-    const scenario3Deadline = Date.now() + 2_000;
-    while (Date.now() < scenario3Deadline) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
       resolved = await readResolvedRecord(setup.engine, operationId);
       if (resolved !== undefined && resolved !== null) break;
       await sleepForTesting(10);
     }
     expect(resolved !== undefined && resolved !== null).toBe(true);
+    const resolvedRecord = resolved as { resultDigest?: string };
+    expect(resolvedRecord.resultDigest).toBe(
+      await sha256Hex(JSON.stringify({ status: 'completed', value: 'fresh', error: null })),
+    );
     await waitForInflightCleared(setup.engine, operationId);
+  });
+});
+
+describe('RemoteWorker durability — stale-session exclusion from routing during the grace window (COR-220, criterion 4)', () => {
+  it('a fresh dispatch during the grace window is never sent to the disconnected socket — it falls through to the long-poll fallback path instead', async () => {
+    // Single worker: any dispatch routed to it at all during the grace
+    // window would have to go to the dead socket, since no peer exists.
+    // `excludeWorkerIds` must make `findWorker` see zero eligible workers,
+    // forcing the dispatch through the long-poll fallback path instead of
+    // failing outright or writing to the closed connection. The fallback
+    // path parks the task for an actual long-poll claim — a WebSocket
+    // reconnect alone does not pull it back out (`redispatchAvailableQueuedRecord`
+    // skips any operation `TaskQueue` still tracks as a long-poll waiter
+    // match, by design, to avoid double-dispatching) — so this proves
+    // exclusion by claiming it exactly the way a real long-poll worker would.
+    // `workerShutdownTimeoutMs` is small deliberately: this test leaves
+    // worker-a's FIRST task (never completed — the worker was disconnected
+    // mid-attempt on purpose) in flight, so `afterEach`'s `server.stop()`
+    // would otherwise block for the default 30s waiting for that worker to
+    // drain or disconnect, which it never will (its socket is already dead).
+    const setup = createSetup({
+      workerReconnectGracePeriodMs: 1_000,
+      workerShutdownTimeoutMs: 50,
+    });
+    const workerA = await connectAndRegisterWorker(setup, 'worker-a');
+
+    const firstOperationId = 'grace-exclusion-first-op';
+    void setup.server.dispatchTask({
+      operationId: firstOperationId,
+      activityName: 'test.echo',
+      workflowType: 'test',
+      input: { value: 'first' },
+      visibilityTimeout: 30_000,
+    });
+    const firstDispatch = await workerA.nextServerMessage(isTask, { timeoutMs: 2_000 });
+    if (!isTask(firstDispatch)) throw new Error('expected first task');
+
+    await workerA.hardClose();
+
+    // Dispatched while worker-a's socket is closed but its grace window has
+    // not lapsed — worker-a is still in the registry (excluded from routing,
+    // not yet forfeited).
+    const excludedOperationId = 'grace-exclusion-second-op';
+    const dispatched = await setup.server.dispatchTask({
+      operationId: excludedOperationId,
+      activityName: 'test.echo',
+      workflowType: 'test',
+      input: { value: 'excluded' },
+      visibilityTimeout: 30_000,
+    });
+    expect(dispatched).toBe(true);
+
+    // Never claimed by anyone — the record must still be `queued`, proving
+    // no attempt was ever leased against the excluded (dead) socket.
+    const recordWhileExcluded = await readLedgerRecord(setup.engine, excludedOperationId);
+    expect(recordWhileExcluded?.state).toBe('queued');
+    // `queued` alone is also the state after a failed claim releases its
+    // reservation, so it does not by itself prove no attempt was ever
+    // reserved against worker-a. This is the direct "never reserved" signal:
+    // `findWorker` excluded worker-a and returned `false` before
+    // `selectAndReserveWorker` ever called `registry.assignTask()`.
+    expect(setup.server.registry.isAssigned(excludedOperationId)).toBe(false);
+
+    // A real long-poll claim, exactly the fallback path a `LongPollWorker`
+    // would use, proves the task is genuinely available — not lost, not
+    // wedged waiting on the dead WebSocket connection.
+    // `Connection: close` on both requests — otherwise Bun's fetch keeps the
+    // underlying socket pooled and alive, which can leave `server.stop()` in
+    // `afterEach` waiting on it (an unrelated Bun HTTP keep-alive quirk, not
+    // anything about this test's own assertions).
+    const pollResponse = await fetch(
+      `${setup.server.url}/v1/tasks/default?activity=${encodeURIComponent('test.echo')}&timeout=2000`,
+      { headers: { connection: 'close' } },
+    );
+    expect(pollResponse.status).toBe(200);
+    const claimed = (await pollResponse.json()) as {
+      operationId: string;
+      workerId: string;
+      attemptToken: string;
+    };
+    expect(claimed.operationId).toBe(excludedOperationId);
+
+    const resultResponse = await fetch(`${setup.server.url}/v1/tasks/default/result`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', connection: 'close' },
+      body: JSON.stringify({
+        operationId: excludedOperationId,
+        workerId: claimed.workerId,
+        attemptToken: claimed.attemptToken,
+        status: 'completed',
+        value: 'excluded',
+      }),
+    });
+    expect(resultResponse.status).toBe(200);
+
+    const resolved = await readResolvedRecord(setup.engine, excludedOperationId);
+    expect(resolved).not.toBeUndefined();
+    expect(resolved).not.toBeNull();
+    await waitForInflightCleared(setup.engine, excludedOperationId);
   });
 });
 
@@ -649,7 +898,7 @@ describe('RemoteWorker durability — server restart while task is in flight', (
     const indexUrl = new URL('src/index.ts', repoRoot).href;
     const serverUrl = new URL('src/server/index.ts', repoRoot).href;
     const sqliteUrl = new URL('src/storage/bun-sql.ts', repoRoot).href;
-    const taskLedgerUrl = new URL('src/server/task-ledger.ts', repoRoot).href;
+    const taskLedgerUrl = new URL('src/core/task-ledger/task-ledger.ts', repoRoot).href;
     return `
 import { Engine, activity } from ${JSON.stringify(indexUrl)};
 import { serve } from ${JSON.stringify(serverUrl)};

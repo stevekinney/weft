@@ -105,7 +105,7 @@ describe('crash recovery', () => {
     expect(checkpointBefore).not.toBeNull();
     expect(stateBefore).not.toBeNull();
 
-    await expect(recoveredEngine.recoverAll()).rejects.toBeInstanceOf(
+    expect(recoveredEngine.recoverAll()).rejects.toBeInstanceOf(
       WorkflowTypeNotRegisteredForRecoveryError,
     );
     expect(resumedEvents).toHaveLength(0);
@@ -166,7 +166,7 @@ describe('crash recovery', () => {
     });
 
     await recoveredEngine.signal('acknowledged-known-id', 'go', 'done');
-    await expect(handles[0]!.result()).resolves.toBe('known:done');
+    expect(handles[0]!.result()).resolves.toBe('known:done');
 
     recoveredEngine[Symbol.dispose]();
   });
@@ -248,9 +248,7 @@ describe('crash recovery', () => {
     expect(skippedEvents.map((event) => event.workflowId)).toEqual(['matrix-missing-running-id']);
 
     await recoveredEngine.signal('matrix-running-id', 'go', 'done');
-    await expect(recoveredEngine.getHandle('matrix-running-id').result()).resolves.toBe(
-      'matrix:done',
-    );
+    expect(recoveredEngine.getHandle('matrix-running-id').result()).resolves.toBe('matrix:done');
 
     recoveredEngine[Symbol.dispose]();
   });
@@ -394,7 +392,7 @@ describe('crash recovery', () => {
       }),
     );
 
-    await expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toBeInstanceOf(
+    expect(engine2.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toBeInstanceOf(
       VersionMismatchError,
     );
 
@@ -1019,7 +1017,7 @@ describe('crash recovery', () => {
     );
 
     const handle = await engine1.start('failing', null);
-    await expect(handle.result()).rejects.toThrow('boom');
+    expect(handle.result()).rejects.toThrow('boom');
     engine1[Symbol.dispose]();
 
     // Recover — no running workflows
@@ -1173,7 +1171,7 @@ describe('crash recovery', () => {
 
     await recoveredEngine.signal('wf-accum', 'go', 'resumed');
     await flush();
-    await expect(recoveredEngine.getHandle('wf-accum').result()).resolves.toEqual({
+    expect(recoveredEngine.getHandle('wf-accum').result()).resolves.toEqual({
       results: Array.from({ length: activityCount }, (_, index) => `value-${index}`),
       signal: 'resumed',
     });
@@ -1254,7 +1252,7 @@ describe('crash recovery', () => {
 
     await recoveredEngine.signal('wf-old-accum', 'go', 'resumed');
     await flush();
-    await expect(recoveredEngine.getHandle('wf-old-accum').result()).resolves.toEqual({
+    expect(recoveredEngine.getHandle('wf-old-accum').result()).resolves.toEqual({
       result: 'old-result',
       signal: 'resumed',
     });
@@ -1317,7 +1315,7 @@ describe('crash recovery', () => {
 
     await recoveredEngine.signal('wf-compacted-accum', 'go', 'resumed');
     await flush();
-    await expect(recoveredEngine.getHandle('wf-compacted-accum').result()).resolves.toEqual({
+    expect(recoveredEngine.getHandle('wf-compacted-accum').result()).resolves.toEqual({
       results: Array.from({ length: activityCount }, (_, index) => `compacted-${index}`),
       signal: 'resumed',
     });
@@ -1519,7 +1517,7 @@ describe('crash recovery', () => {
 
     // No `recover` field: recovery runs by default and the unregistered stored
     // type makes the boot fail loudly rather than silently abandoning it.
-    await expect(Engine.create({ storage })).rejects.toBeInstanceOf(
+    expect(Engine.create({ storage })).rejects.toBeInstanceOf(
       WorkflowTypeNotRegisteredForRecoveryError,
     );
 

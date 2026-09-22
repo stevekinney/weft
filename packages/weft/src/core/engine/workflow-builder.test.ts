@@ -168,7 +168,7 @@ describe('engine + workflow-builder integration', () => {
     // carries the bounded {workflowType, activityName} context. Direct
     // construction in another test pins the structured fields on the class
     // itself.
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'No activity registered with name "unknownActivity" for workflow type "broken"',
     );
   });

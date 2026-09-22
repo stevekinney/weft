@@ -124,7 +124,7 @@ describe('worker execution signal suspension', () => {
       { label: 'second' },
       { id: 'worker-second' },
     );
-    await expect(withTimeout(secondHandle.result(), 1000, 'second workflow')).resolves.toEqual({
+    expect(withTimeout(secondHandle.result(), 1000, 'second workflow')).resolves.toEqual({
       input: { label: 'second' },
       computed: 42,
     });
@@ -133,7 +133,7 @@ describe('worker execution signal suspension', () => {
 
     await workerEngine.signal('worker-parked', 'resume', { status: 'ready' });
 
-    await expect(withTimeout(parkedResult, 1000, 'parked workflow')).resolves.toEqual({
+    expect(withTimeout(parkedResult, 1000, 'parked workflow')).resolves.toEqual({
       input: { signalName: 'resume', label: 'first' },
       payload: { status: 'ready' },
       workflowId: 'worker-parked',
@@ -160,7 +160,7 @@ describe('worker execution signal suspension', () => {
     await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
       label: 'cancelled worker-mode signal waiter cleanup',
     });
-    await expect(result).rejects.toThrow('Workflow cancelled');
+    expect(result).rejects.toThrow('Workflow cancelled');
 
     await workerEngine.signal('worker-cancelled', 'resume', { status: 'late' });
     expect(await countStoredSignals(storage, 'worker-cancelled', 'resume')).toBe(0);
@@ -191,7 +191,7 @@ describe('worker execution signal suspension', () => {
       id: 'worker-infinite-loop',
     });
 
-    await expect(
+    expect(
       withTimeout(
         loopingHandle.result(),
         LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
@@ -204,7 +204,7 @@ describe('worker execution signal suspension', () => {
       { label: 'after-loop' },
       { id: 'worker-after-loop' },
     );
-    await expect(simpleHandle.result()).resolves.toEqual({
+    expect(simpleHandle.result()).resolves.toEqual({
       input: { label: 'after-loop' },
       computed: 42,
     });
@@ -294,7 +294,7 @@ describe('worker execution signal suspension', () => {
 
     await recoveredEngine.signal('worker-failed-activity-replay', 'continue', { status: 'ready' });
 
-    await expect(
+    expect(
       withTimeout(recoveredHandles[0]!.result(), 1000, 'recovered worker failed activity replay'),
     ).resolves.toEqual({
       caughtError: 'planned activity failure',
@@ -370,7 +370,7 @@ describe('worker execution isolation boundary', () => {
       label: 'boundary signal waiter',
     });
     await workerEngine.signal('boundary-resume', 'resume', { status: 'ready' });
-    await expect(withTimeout(parkedResult, 1000, 'boundary resume workflow')).resolves.toEqual({
+    expect(withTimeout(parkedResult, 1000, 'boundary resume workflow')).resolves.toEqual({
       input: { signalName: 'resume', label: 'boundary' },
       payload: { status: 'ready' },
       workflowId: 'boundary-resume',
@@ -384,9 +384,10 @@ describe('worker execution isolation boundary', () => {
       { label: 'boundary' },
       { id: 'boundary-simple' },
     );
-    await expect(
-      withTimeout(simpleHandle.result(), 1000, 'boundary simple workflow'),
-    ).resolves.toEqual({ input: { label: 'boundary' }, computed: 42 });
+    expect(withTimeout(simpleHandle.result(), 1000, 'boundary simple workflow')).resolves.toEqual({
+      input: { label: 'boundary' },
+      computed: 42,
+    });
 
     // start -> cancel: cancellation must reach the engine's terminal cancelled
     // state (not "completed"), again without stepping the workflow generator in
@@ -407,7 +408,7 @@ describe('worker execution isolation boundary', () => {
     await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
       label: 'boundary cancel waiter cleanup',
     });
-    await expect(cancelResult).rejects.toThrow('Workflow cancelled');
+    expect(cancelResult).rejects.toThrow('Workflow cancelled');
 
     // The invariant: across start, resume, and cancel, neither engine-side
     // handler ever stepped in the engine isolate.

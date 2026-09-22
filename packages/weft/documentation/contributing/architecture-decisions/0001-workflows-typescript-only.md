@@ -1,59 +1,40 @@
-# 0001 — Workflows Are TypeScript-Only by Design
+# TypeScript workflows and polyglot activities
 
-**Status**: Accepted
+Status: accepted. This is architecture decision 0001.
 
 ## Context
 
-Weft is a durable execution engine. Its defining design choice is **checkpoint-not-replay**: workflows are `AsyncGenerator` functions, and at each `yield*` boundary the engine captures the workflow's user-visible state — the values currently bound to local variables — and persists it. On recovery, the engine restarts the generator function from the top, but each `yield*` consults the checkpoint store and short-circuits to the previously-recorded value instead of re-executing. The author writes what looks like ordinary control flow; the engine threads checkpointed values through it.
+Weft runs workflows as TypeScript async generators. A workflow yields durable operations, and the engine records their results together with its step counter, durable context state, and recovery metadata. After a restart, the engine creates a fresh generator and reuses recorded operation results while advancing to unfinished work.
 
-That mechanism has one strict prerequisite: the values the workflow holds at a yield boundary must be serializable. Weft uses a MessagePack codec with `structuredClone`-compatible semantics, so workflow locals must be plain data — primitives, plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, `ArrayBuffer`, `TypedArray`. They cannot include functions, class instances with methods, sockets, or other live runtime objects.
+The checkpoint is not a serialized JavaScript stack. It does not automatically preserve arbitrary local variables, closures, sockets, or class instances. Workflow code between durable operations runs again, so the order and shape of those operations must remain compatible with persisted work. Side effects belong in activities; values that must remain stable across recovery belong behind a durable boundary such as `ctx.memo()`.
 
-JavaScript `AsyncGenerator` is the language feature that makes this ergonomic. The generator's `next()` protocol gives the engine a re-entry point at each `yield*`, and TypeScript's type system lets `yield*` thread typed return values back into the workflow without the author having to model the suspension explicitly. The workflow code reads like normal `await`-style control flow.
-
-No other mainstream language pairs an async-iterable suspension primitive with a `structuredClone`-shaped serialization story in its standard library. Python `async def` coroutines have no public frame-serialization API and no equivalent of `yield*`'s typed return-value plumbing. Go goroutines, Java continuations, .NET async state machines — each has its own internal representation, and none of those representations are designed to be persisted to disk and revived in a different process. The closest commercial analog is Temporal's replay model, which sidesteps the problem entirely by re-running history rather than capturing live state.
-
-## The constraint
-
-If we want polyglot workflows, we have three theoretical paths:
-
-**Path A — TypeScript-only workflows, polyglot activities.** Workflows run on the engine in TypeScript. Activities (the side-effecting work) can run in any language, communicating with the engine via the [`RemoteWorker` wire protocol](../../reference/remote-worker-protocol.md).
-
-**Path B — Replay-determinism for non-TS workflows.** Abandon checkpoint-not-replay for workflows in other languages, falling back to Temporal's model. Each non-TS SDK would need to enforce determinism in that language, with all the restrictions that implies (no system time, no random IDs, no parallel goroutines without explicit deterministic scheduling, etc.).
-
-**Path C — A separate state store for non-TS workflows.** Treat the workflow as a state machine driven by external messages and persist the state explicitly. The engine becomes a coordinator rather than an execution host.
+Persisted values must satisfy the engine’s [serialization contract](../../../src/core/codec.ts). A live host capability belongs in per-run `services`, which the host re-provides during recovery, rather than in serialized workflow data. The [Weft overview](../../../README.md#how-it-works) explains the execution contract and activity crash window.
 
 ## Decision
 
-**We choose Path A.** Workflows are TypeScript-only by design. Activities can run in any language via the `RemoteWorker` protocol. The split is intentional and load-bearing — the checkpoint model requires single-process generator state, so workflow code is TypeScript-only.
+Keep workflow authoring in TypeScript and allow activities in other languages through the [remote-worker protocol](../../reference/remote-worker-protocol.md).
 
-## Why not B or C
+This is a scope and implementation decision, not a claim that other languages cannot support durable execution. The engine, types, context operations, recovery checks, and testing tools all target one generator runtime. Supporting another workflow language would require defining and maintaining its execution and recovery semantics, not merely translating JSON messages.
 
-**Path B was rejected** because it abandons the defining design choice. Temporal already does Path B and does it well; Weft's reason to exist is to do something different. Layering replay-determinism back into a system whose core design assumes the absence of replay would create two execution models in one engine, with all the testing, debugging, and onboarding cost of supporting both. If a team needs polyglot workflow code, Temporal is the right answer.
+Remote activities already provide the useful cross-language boundary: the engine dispatches a named operation with serializable input, and the worker returns a result or failure. A Python model server or another language’s integration library can perform that work without becoming a second workflow runtime.
 
-**Path C was rejected** because it collapses back to Path B in practice. A "state machine driven by external messages" with persistent state and re-driven from messages on recovery is replay with extra steps. It also abandons the ergonomic win of writing workflows as ordinary control flow with `await` and loops — the thing that makes the TypeScript SDK pleasant to use.
+## Alternatives considered
+
+A second workflow runtime would need its own authoring SDK, operation ordering, cancellation, recovery validation, and compatibility rules. That would expand every execution boundary the repository has to test and operate.
+
+An external state-machine protocol could also coordinate non-TypeScript workflows. It would require callers to represent and persist their own transitions, changing the authoring model and introducing another public contract. This decision keeps that work outside the current engine’s scope.
 
 ## Consequences
 
-- **Workflow definitions** must be authored in TypeScript and run on Bun, Node, or browser JavaScript runtimes.
-- **Activities** can be authored in any language. The `RemoteWorker` protocol is the contract; any language with a WebSocket and JSON library can implement it.
-- **Tooling assumes TypeScript.** Lint rules, type-aware checks, schema generation, codegen targets, and the public API snapshot all assume TS workflow code. Cross-language polyglot work expresses itself as activities behind `RemoteWorker`.
-- **Documentation positions Weft as a TypeScript engine.** The README says so. The `docs/architecture/` pages cross-link to this ADR. The "is Weft right for me?" decision becomes: do you want workflows in TypeScript, or do you need workflows in multiple languages? If the latter, Temporal is the right answer.
-- **The protocol contract for activities is durable.** The `RemoteWorker` protocol is documented separately ([reference](../../reference/remote-worker-protocol.md)) so SDK authors in other languages can implement compatible workers without reverse-engineering source.
+- Workflow definitions use the TypeScript API and run in a supported JavaScript host. The Bun server and browser hosts have different platform capabilities.
+- Activities can use any language that implements the versioned worker transport, registration, execution identity, cancellation, and result-fencing rules.
+- The engine persists operation data, not arbitrary process state. Recovery compatibility and activity idempotency remain application responsibilities.
+- New workflow features must work within the existing generator and checkpoint contracts. Cross-language integrations should first be expressed as remote activities.
 
-## Forces
+## Verification
 
-- The checkpoint model's read latency, write throughput, and recovery time make Weft attractive for high-throughput durable execution. We don't want to give those up to satisfy a "but does it run Python?" checkbox.
-- The team's primary language is TypeScript. Polyglot workflow runtimes multiply the surface area for non-determinism bugs across languages we don't routinely write — that's a real cost, not a hypothetical one.
-- Activities cover the cross-language need in practice. Most "we have a Python ML model" stories are activity-shaped: stateless, called with input, returning output. The rare workflow-shaped problem in another language is better served by Temporal.
+The [worker protocol reference](../../reference/remote-worker-protocol.md) is checked against the exported message-schema catalog. Protocol v6 requires `register.protocolVersion: 6`; missing or unsupported versions receive `registerError`.
 
-## Polyglot activity contract
+From the repository root, run `bun packages/weft/src/cli-main.ts conformance --help` for the worker conformance command. The [remote-worker guide](../../guides/remote-workers.md) covers transport setup, and the [recovery guide](../../guides/remote-task-recovery.md) covers durable result ownership and adoption.
 
-- **`RemoteWorker` conformance.** Cross-language SDKs can run `weft conformance -- <worker-command>` to verify the worker protocol behavior against a local Weft server.
-- **Protocol drift prevention.** The RemoteWorker protocol document is checked against the exported schema catalog so message names stay aligned with the TypeScript contract.
-- **Protocol versioning.** The worker WebSocket protocol is versioned. v3 requires `register.protocolVersion: 3` and rejects missing or unsupported versions with `registerError`.
-
-## See also
-
-- [Checkpoint versus Replay](../../architecture/checkpoint-versus-replay.md) — the foundational design choice this constraint flows from.
-- [RemoteWorker wire protocol](../../reference/remote-worker-protocol.md) — the contract polyglot SDKs implement against.
-- [Architecture Decisions overview](../architecture-decisions.md) — the inline-summary index.
+The execution explanation is backed by [suspend/resume regressions](../../../src/core/engine/suspend-resume.test.ts), [checkpoint replay reconstruction](../../../src/core/engine/checkpoint-replay.ts), and [worker replay validation](../../../src/workers/worker-replay-state.ts).

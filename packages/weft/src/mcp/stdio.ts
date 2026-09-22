@@ -9,7 +9,7 @@ import { McpSession, McpSessionManager, type McpSessionManagerOptions } from './
  *
  * @example
  * ```ts
- * import { type McpStdioAdmission } from '@lostgradient/weft/mcp';
+ * import { type McpStdioAdmission } from '@lostgradient/weft';
  *
  * const admission: McpStdioAdmission = {
  *   kind: 'startup-token',
@@ -28,7 +28,7 @@ export type McpStdioAdmission =
  *
  * @example
  * ```ts
- * import { type McpStdioSessionOptions } from '@lostgradient/weft/mcp';
+ * import { type McpStdioSessionOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
@@ -63,7 +63,7 @@ export type McpStdioSessionOptions = {
  *
  * @example
  * ```ts
- * import { type McpStdioSessionResult } from '@lostgradient/weft/mcp';
+ * import { type McpStdioSessionResult } from '@lostgradient/weft';
  *
  * const result: McpStdioSessionResult = { exitCode: 0 };
  * process.exitCode = result.exitCode;
@@ -81,7 +81,7 @@ const DEFAULT_MAX_FRAME_BYTES = 1_048_576;
  *
  * @example
  * ```ts
- * import { runMcpStdioSession } from '@lostgradient/weft/mcp';
+ * import { runMcpStdioSession } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();

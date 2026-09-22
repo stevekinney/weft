@@ -7,8 +7,8 @@
  * @module service-worker
  */
 
-import type { RegistryAgnosticEngine } from '../core/engine';
-import { handleRequest } from '../server/handler';
+import type { RegistryAgnosticEngine } from '../core/engine.ts';
+import { handleRequest } from '../server/handler.ts';
 import type { ServiceWorkerScheduler } from './scheduler.ts';
 import type { ServiceWorkerHandlerOptions } from './setup.ts';
 import type {
@@ -41,7 +41,7 @@ export type {
  *
  * @example
  * ```ts
- * import { createFetchHandler, type ServiceWorkerOptions } from '@lostgradient/weft/service-worker';
+ * import { createFetchHandler, type ServiceWorkerOptions } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
@@ -90,7 +90,7 @@ export interface ServiceWorkerOptions {
  * @example
  * ```ts
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
- * import { createFetchHandler } from '@lostgradient/weft/service-worker';
+ * import { createFetchHandler } from '@lostgradient/weft';
  *
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const handler = createFetchHandler({ engine, pathPrefix: '/weft/' });
@@ -128,7 +128,7 @@ export function createFetchHandler(
  *
  * @example
  * ```ts
- * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
+ * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft';
  * import { MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
@@ -174,7 +174,7 @@ export function createPeriodicSyncHandler(
  *
  * @example
  * ```ts
- * import { createLifecycleHandlers } from '@lostgradient/weft/service-worker';
+ * import { createLifecycleHandlers } from '@lostgradient/weft';
  *
  * const { install, activate } = createLifecycleHandlers();
  *

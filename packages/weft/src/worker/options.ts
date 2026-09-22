@@ -233,10 +233,18 @@ function buildManifest(options: RemoteWorkerOptions): WorkerManifest {
  * Build the `register` frame from the worker's resolved options. `workerId`
  * and `concurrency` are resolved to defaults by the constructor before this
  * runs; `manifest` carries every identity claim protocol v3 validates.
+ *
+ * `resumeSessionGeneration` (protocol v6, COR-220) is the caller's cached
+ * `RemoteWorker.#lastSessionGeneration` — the `sessionGeneration` from the
+ * most recent `registerAck` — echoed back so the server can recognize this
+ * as a PROVEN resume of that exact session when a grace-period requeue for
+ * this `workerId` is still pending. Omitted on a worker's very first
+ * connection, since there is no prior session to prove continuity with.
  */
 export function buildRegisterMessage(
   workerId: string,
   options: RemoteWorkerOptions,
+  resumeSessionGeneration?: number,
 ): RegisterMessage {
   return {
     type: 'register',
@@ -245,5 +253,6 @@ export function buildRegisterMessage(
     manifest: buildManifest(options),
     ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
     ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+    ...(resumeSessionGeneration !== undefined ? { resumeSessionGeneration } : {}),
   };
 }

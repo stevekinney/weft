@@ -246,7 +246,7 @@ describe('activity operation helpers', () => {
   });
 
   it('throws when worker activity execution is requested without a dispatcher', async () => {
-    await expect(
+    expect(
       invokeWorkerActivity(
         createInternals() as never,
         'op-1',
@@ -271,7 +271,7 @@ describe('activity operation helpers', () => {
       },
     });
 
-    await expect(
+    expect(
       invokeWorkerActivity(
         internals as never,
         'op-validation',
@@ -369,7 +369,7 @@ describe('activity operation helpers', () => {
     let finallyRan = false;
     let caughtInGenerator: unknown;
 
-    await expect(
+    expect(
       executeActivity(
         createInternals() as never,
         'workflow-id',
@@ -421,7 +421,7 @@ describe('activity operation helpers', () => {
 
     expect(result).toBe('verified-result');
     expect(verificationPromises).toHaveLength(1);
-    await expect(verificationPromises[0]).resolves.toBeUndefined();
+    expect(verificationPromises[0]).resolves.toBeUndefined();
     expect(verify).toHaveBeenCalledWith(
       'verified-result',
       expect.objectContaining({ phase: 'post-execution-validation' }),
@@ -433,7 +433,7 @@ describe('activity operation helpers', () => {
     const activityFunction = Object.assign(() => 'verified-inline', { verify });
     const operation = createActivityOperation({ fn: activityFunction });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals() as never,
         'workflow-id',
@@ -453,7 +453,7 @@ describe('activity operation helpers', () => {
     const activityFunction = Object.assign(() => 'attempted-result', { verify });
     const operation = createActivityOperation({ attempt: 3, fn: activityFunction });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals() as never,
         'workflow-id',
@@ -472,7 +472,7 @@ describe('activity operation helpers', () => {
     const verify = mock(async () => 'not-completed');
     const activityFunction = Object.assign(() => 'result', { verify });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals() as never,
         'workflow-id',
@@ -490,7 +490,7 @@ describe('activity operation helpers', () => {
     });
     const internals = createInternals({ storage });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         internals as never,
         'workflow:id',
@@ -520,7 +520,7 @@ describe('activity operation helpers', () => {
       operationId: 'replayed-operation',
       options: { idempotencyKey: 'order:123' },
     });
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow:id',
@@ -538,7 +538,7 @@ describe('activity operation helpers', () => {
     });
     const internals = createInternals({ storage });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         internals as never,
         'workflow:id',
@@ -576,7 +576,7 @@ describe('activity operation helpers', () => {
       storage,
     });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         internals as never,
         'workflow:id',
@@ -609,7 +609,7 @@ describe('activity operation helpers', () => {
     });
     await seedStartedRecord(storage, 'workflow-id', operation, 'order-456');
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -645,7 +645,7 @@ describe('activity operation helpers', () => {
       );
       const activityFunction = Object.assign(operation.fn!, { verify });
 
-      await expect(
+      expect(
         executeActivityOperationResult(
           createInternals({ storage }) as never,
           'workflow-id',
@@ -672,7 +672,7 @@ describe('activity operation helpers', () => {
       await seedStartedRecord(storage, 'workflow-id', operation, state);
       const activityFunction = Object.assign(operation.fn!, { verify: mock(async () => state) });
 
-      await expect(
+      expect(
         executeActivityOperationResult(
           createInternals({ storage }) as never,
           'workflow-id',
@@ -693,7 +693,7 @@ describe('activity operation helpers', () => {
     });
     const firstInternals = createInternals({ storage });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         firstInternals as never,
         'workflow-id',
@@ -720,7 +720,7 @@ describe('activity operation helpers', () => {
       options: { idempotencyKey: 'crash-window' },
     });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -745,7 +745,7 @@ describe('activity operation helpers', () => {
     });
     const firstInternals = createInternals({ storage });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         firstInternals as never,
         'workflow-id',
@@ -769,7 +769,7 @@ describe('activity operation helpers', () => {
       options: { idempotencyKey: 'crash-redo' },
     });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -810,7 +810,7 @@ describe('activity operation helpers', () => {
       await seedStartedRecord(storage, 'workflow-id', operation, testCase.idempotencyKey);
       const activityFunction = Object.assign(operation.fn!, { verify: testCase.verifier });
 
-      await expect(
+      expect(
         executeActivityOperationResult(
           createInternals({ storage }) as never,
           'workflow-id',
@@ -839,7 +839,7 @@ describe('activity operation helpers', () => {
       const key = await seedStartedRecord(storage, 'workflow-id', operation, idempotencyKey);
       await storage.put(key, encode(record));
 
-      await expect(
+      expect(
         executeActivityOperationResult(
           createInternals({ storage }) as never,
           'workflow-id',
@@ -862,7 +862,7 @@ describe('activity operation helpers', () => {
     const verify = mock(async () => 'not-completed');
     const activityFunction = Object.assign(operation.fn!, { verify });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -889,7 +889,7 @@ describe('activity operation helpers', () => {
     }));
     const activityFunction = Object.assign(operation.fn!, { verify });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -908,7 +908,7 @@ describe('activity operation helpers', () => {
       options: { idempotencyKey: 'requires-cas' },
     });
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage: new NoConditionalBatchStorage() }) as never,
         'workflow-id',
@@ -934,7 +934,7 @@ describe('activity operation helpers', () => {
       }),
     );
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -956,7 +956,7 @@ describe('activity operation helpers', () => {
     });
     const verificationPromises: Promise<void>[] = [];
 
-    await expect(
+    expect(
       executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
@@ -973,7 +973,7 @@ describe('activity operation helpers', () => {
     ).rejects.toThrow('Verification failed for activity "test-activity"');
 
     expect(verificationPromises).toHaveLength(1);
-    await expect(verificationPromises[0]).rejects.toThrow(
+    expect(verificationPromises[0]).rejects.toThrow(
       'Verification failed for activity "test-activity"',
     );
 

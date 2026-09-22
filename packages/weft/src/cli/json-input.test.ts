@@ -16,17 +16,15 @@ describe('JSON input loading', () => {
     await Bun.write(filePath, '{"source":"file"}');
 
     try {
-      await expect(loadJsonInput(undefined, filePath)).resolves.toEqual({
+      expect(loadJsonInput(undefined, filePath)).resolves.toEqual({
         ok: true,
         value: { source: 'file' },
       });
-      await expect(
-        loadJsonInput(undefined, '-', async () => '{"source":"stdin"}'),
-      ).resolves.toEqual({
+      expect(loadJsonInput(undefined, '-', async () => '{"source":"stdin"}')).resolves.toEqual({
         ok: true,
         value: { source: 'stdin' },
       });
-      await expect(loadJsonInput(undefined, `${filePath}.missing`)).resolves.toMatchObject({
+      expect(loadJsonInput(undefined, `${filePath}.missing`)).resolves.toMatchObject({
         ok: false,
         error: { kind: 'missing-file' },
       });

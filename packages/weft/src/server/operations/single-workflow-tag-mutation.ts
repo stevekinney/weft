@@ -6,12 +6,16 @@ import {
   coerceStartWorkflowTags,
   StartWorkflowValidationError,
 } from '../../core/start-workflow-validation.ts';
-import type { OperationDefinition } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { defineOperation, type SchemaOperationDefinition } from '../operation-registry.ts';
 import type { RestBinding } from '../rest-binding.ts';
 import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
+import {
+  assertOperationEngineMethods,
+  isOperationFault,
+  shapeRestFault,
+  type OperationEngineMethodName,
+} from './operation-helpers.ts';
 
 const singleWorkflowTagMutationInput = z.object({
   workflowId: z.string().min(1),
@@ -30,8 +34,9 @@ type SingleWorkflowTagMutationOperationConfiguration = {
   readonly summary: string;
   /** Whether this tag mutation irreversibly mutates state. Required. */
   readonly destructive: boolean;
+  readonly requiredEngineMethods: readonly OperationEngineMethodName[];
   readonly mutateTags: (
-    engine: Engine,
+    engine: Pick<Engine, OperationEngineMethodName>,
     workflowId: string,
     tags: readonly string[],
   ) => Promise<void>;
@@ -44,8 +49,11 @@ type SingleWorkflowTagMutationRestBindingConfiguration = {
 
 export function createSingleWorkflowTagMutationOperation(
   configuration: SingleWorkflowTagMutationOperationConfiguration,
-): OperationDefinition<SingleWorkflowTagMutationInput, SingleWorkflowTagMutationOutput> {
-  return defineOperation<SingleWorkflowTagMutationInput, SingleWorkflowTagMutationOutput>({
+): SchemaOperationDefinition<
+  typeof singleWorkflowTagMutationInput,
+  typeof singleWorkflowTagMutationOutput
+> {
+  return defineOperation({
     name: configuration.name,
     mcpExposable: false,
     summary: configuration.summary,
@@ -66,8 +74,8 @@ export function createSingleWorkflowTagMutationOperation(
       }
 
       try {
-        // OperationContext keeps the engine erased because the registry is transport-generic.
-        await configuration.mutateTags(engine as Engine, input.workflowId, tags);
+        assertOperationEngineMethods(engine, configuration.requiredEngineMethods);
+        await configuration.mutateTags(engine, input.workflowId, tags);
         return { ok: true };
       } catch (error) {
         throw mapTagMutationErrorToFault(error, input.workflowId);

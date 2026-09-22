@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { CheckpointSummary } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -14,17 +14,14 @@ const listCheckpointsOutput = z.unknown();
 export type ListCheckpointsInput = z.infer<typeof listCheckpointsInput>;
 export type ListCheckpointsOutput = CheckpointSummary[];
 
-export const listCheckpointsOperation = defineOperation<
-  ListCheckpointsInput,
-  ListCheckpointsOutput
->({
+export const listCheckpointsOperation = defineOperation({
   name: 'weft.workflows.checkpoints.list',
   mcpExposable: false,
   summary: 'List checkpoint history for a workflow',
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: listCheckpointsInput,
-  outputSchema: listCheckpointsOutput as z.ZodType<ListCheckpointsOutput>,
+  outputSchema: listCheckpointsOutput,
   access: { kind: 'public' },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -35,7 +32,8 @@ export const listCheckpointsOperation = defineOperation<
   // top of it — that representation choice is HTTP-specific and
   // does not belong on the operation's `Output` type.
   invoke: async ({ input, engine }): Promise<ListCheckpointsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['listCheckpoints']);
+    const e = engine;
     return e.listCheckpoints(input.workflowId);
   },
 });

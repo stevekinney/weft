@@ -6,7 +6,7 @@ describe('waitForParityCondition', () => {
   it('keeps polling after predicate errors until the condition becomes true', async () => {
     let attempt = 0;
 
-    await expect(
+    expect(
       waitForParityCondition(
         async () => {
           attempt += 1;
@@ -21,7 +21,7 @@ describe('waitForParityCondition', () => {
   });
 
   it('includes the last predicate error in timeout failures', async () => {
-    await expect(
+    expect(
       waitForParityCondition(
         () => {
           throw new Error('still failing');
@@ -32,7 +32,7 @@ describe('waitForParityCondition', () => {
   });
 
   it('times out with the label when the predicate never succeeds', async () => {
-    await expect(
+    expect(
       waitForParityCondition(() => false, { intervalMs: 1, label: 'idle parity', timeoutMs: 50 }),
     ).rejects.toThrow('Timed out after 50ms waiting for idle parity');
   });

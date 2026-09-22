@@ -41,16 +41,16 @@ describe('buildWorkflowRevisionManifest', () => {
 
   it('rejects an empty supplied revision', async () => {
     const contract = buildWorkflowContract({ name: 'checkout' });
-    await expect(buildWorkflowRevisionManifest(contract, { revision: '' })).rejects.toThrow(
+    expect(buildWorkflowRevisionManifest(contract, { revision: '' })).rejects.toThrow(
       /must not be an empty string/,
     );
   });
 
   it('rejects an oversized supplied revision', async () => {
     const contract = buildWorkflowContract({ name: 'checkout' });
-    await expect(
-      buildWorkflowRevisionManifest(contract, { revision: 'x'.repeat(600) }),
-    ).rejects.toThrow(/exceeding the maximum identifier size/);
+    expect(buildWorkflowRevisionManifest(contract, { revision: 'x'.repeat(600) })).rejects.toThrow(
+      /exceeding the maximum identifier size/,
+    );
   });
 
   it('revision changes when description changes, even though contractHash does not', async () => {
@@ -93,7 +93,7 @@ describe('buildWorkflowRevisionManifest', () => {
         activities,
       };
 
-      await expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/too-many-entries/);
+      expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/too-many-entries/);
     });
 
     it('rejects, at build time, tags large enough to overflow MAX_NORMALIZED_CONTRACT_BYTES — the same bound parseWorkflowRevisionManifest enforces', async () => {
@@ -103,7 +103,7 @@ describe('buildWorkflowRevisionManifest', () => {
         tags: ['x'.repeat(MAX_NORMALIZED_CONTRACT_BYTES + 1)],
       };
 
-      await expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/manifest-too-large/);
+      expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/manifest-too-large/);
     });
   });
 });

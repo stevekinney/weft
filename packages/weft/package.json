@@ -208,11 +208,6 @@
     "weft": "dist/cli-main.js",
     "weft-mcp": "dist/mcp/cli.js"
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
     "build": "bun run scripts/build.ts",
     "build:binary": "bun run scripts/build-binary-main.ts",
@@ -220,16 +215,18 @@
     "dev": "bun --watch run src/index.ts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "prepack": "bun run build && bun run verify:exports && bun run verify:portability && bun run validate:package-consumers",
+    "prepack": "bun run scripts/run-gates.ts prepack",
     "pr:title": "bun run scripts/pr-title.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
     "validate:package-consumers": "bun run scripts/validate-package-consumers.ts",
     "verify:exports": "bun run scripts/verify-tree-shaking.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
-    "verify:release-version": "bun run scripts/verify-release-version.ts"
+    "verify:release-version": "bun run scripts/verify-release-version.ts",
+    "prepublishOnly": "bun run validate"
   },
   "dependencies": {
+    "@lostgradient/environmentalist": "0.1.0",
     "@msgpack/msgpack": "^3.1.3",
     "zod": "^4.3.6"
   },
@@ -290,5 +287,10 @@
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
 }

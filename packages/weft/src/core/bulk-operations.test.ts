@@ -601,7 +601,7 @@ describe('bulk workflow operations', () => {
     await storage.put(KEYS.deadline(state.executionDeadline, workflowId), new Uint8Array([1]));
     await storage.put(`timer-idx:deadline:${workflowId}`, new Uint8Array([1]));
 
-    await expect(engine.deleteAll({ status: 'completed' })).resolves.toEqual({
+    expect(engine.deleteAll({ status: 'completed' })).resolves.toEqual({
       deleted: 1,
     });
 
@@ -622,7 +622,7 @@ describe('bulk workflow operations', () => {
       await createCompletedWorkflow(engine, 'bulk-delete-failure', ['bulk-delete-partial']);
       storage.failedWorkflowId = 'bulk-delete-failure';
 
-      await expect(
+      expect(
         engine.deleteAll({ tags: ['bulk-delete-partial'] }, { bulkConcurrency: 2 }),
       ).rejects.toThrow('Bulk delete failed for 1 workflow(s) after deleting 1 workflow(s)');
 
@@ -805,13 +805,13 @@ describe('bulk workflow operations', () => {
       const result = await engine.signalAll({ tags: ['bulk-signal'] }, 'continue', 'released');
 
       expect(result).toEqual({ signalled: 2, failed: 0 });
-      await expect(firstHandle.result()).resolves.toBe('first:released');
-      await expect(secondHandle.result()).resolves.toBe('second:released');
+      expect(firstHandle.result()).resolves.toBe('first:released');
+      expect(secondHandle.result()).resolves.toBe('second:released');
       const untouchedState = await engine.get(untouchedHandle.id);
       expect(untouchedState?.status).toBe('running');
 
       await engine.signal(untouchedHandle.id, 'continue', 'cleanup');
-      await expect(untouchedHandle.result()).resolves.toBe('other:cleanup');
+      expect(untouchedHandle.result()).resolves.toBe('other:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -843,7 +843,7 @@ describe('bulk workflow operations', () => {
       );
 
       expect(result).toEqual({ signalled: 1, failed: 0 });
-      await expect(handle.result()).resolves.toEqual(payload);
+      expect(handle.result()).resolves.toEqual(payload);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -886,14 +886,14 @@ describe('bulk workflow operations', () => {
       );
 
       expect(result).toEqual({ signalled: 2, failed: 1 });
-      await expect(firstHandle.result()).resolves.toBe('first:released');
-      await expect(thirdHandle.result()).resolves.toBe('third:released');
+      expect(firstHandle.result()).resolves.toBe('first:released');
+      expect(thirdHandle.result()).resolves.toBe('third:released');
       const failedState = await engine.get(failedHandle.id);
       expect(failedState?.status).toBe('running');
 
       storage.workflowIdToFail = null;
       await engine.signal(failedHandle.id, 'continue', 'cleanup');
-      await expect(failedHandle.result()).resolves.toBe('second:cleanup');
+      expect(failedHandle.result()).resolves.toBe('second:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -994,8 +994,8 @@ describe('bulk workflow operations', () => {
       await waitForWorkflowStatus(engine, runningHandle.id, 'running');
 
       const deletePromise = engine.deleteAll({ tags: ['bulk-delete'] });
-      await expect(deletePromise).rejects.toBeInstanceOf(BulkDeleteRequiresTerminalWorkflowsError);
-      await expect(deletePromise).rejects.toThrow('Bulk delete matches non-terminal workflows');
+      expect(deletePromise).rejects.toBeInstanceOf(BulkDeleteRequiresTerminalWorkflowsError);
+      expect(deletePromise).rejects.toThrow('Bulk delete matches non-terminal workflows');
 
       expect(await engine.get('bulk-delete-completed')).not.toBeNull();
       expect(await engine.get('bulk-delete-failed')).not.toBeNull();
@@ -1030,7 +1030,7 @@ describe('bulk workflow operations', () => {
       storage.workflowStateGetCount = 0;
       storage.shouldFailWorkflowStateGet = true;
 
-      await expect(engine.deleteAll({ status: 'completed' }, { dryRun: true })).resolves.toEqual(
+      expect(engine.deleteAll({ status: 'completed' }, { dryRun: true })).resolves.toEqual(
         expect.objectContaining({
           action: 'delete',
           dryRun: true,
@@ -1054,7 +1054,7 @@ describe('bulk workflow operations', () => {
       await createCompletedWorkflow(engine, 'bulk-delete-reload-race', ['bulk-delete-reload-race']);
       storage.workflowIdToFlip = 'bulk-delete-reload-race';
 
-      await expect(engine.deleteAll({ tags: ['bulk-delete-reload-race'] })).rejects.toBeInstanceOf(
+      expect(engine.deleteAll({ tags: ['bulk-delete-reload-race'] })).rejects.toBeInstanceOf(
         BulkDeleteRequiresTerminalWorkflowsError,
       );
       expect(await engine.get('bulk-delete-reload-race')).not.toBeNull();
@@ -1071,16 +1071,16 @@ describe('bulk workflow operations', () => {
     try {
       await createCompletedWorkflow(engine, 'bulk-invalid-pagination', ['bulk-invalid-pagination']);
 
-      await expect(
-        engine.cancelAll({ tags: ['bulk-invalid-pagination'], limit: -1 }),
-      ).rejects.toThrow('filter.limit must be a non-negative number when provided');
-      await expect(
+      expect(engine.cancelAll({ tags: ['bulk-invalid-pagination'], limit: -1 })).rejects.toThrow(
+        'filter.limit must be a non-negative number when provided',
+      );
+      expect(
         engine.signalAll({ tags: ['bulk-invalid-pagination'], offset: Number.NaN }, 'continue'),
       ).rejects.toThrow('filter.offset must be a non-negative number when provided');
-      await expect(
+      expect(
         engine.deleteAll({ tags: ['bulk-invalid-pagination'], limit: Number.POSITIVE_INFINITY }),
       ).rejects.toThrow('filter.limit must be a non-negative number when provided');
-      await expect(
+      expect(
         engine.tagAll({ tags: ['bulk-invalid-pagination'], offset: -1 }, ['bulk']),
       ).rejects.toThrow('filter.offset must be a non-negative number when provided');
 
@@ -1094,17 +1094,15 @@ describe('bulk workflow operations', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
 
     try {
-      await expect(engine.cancelAll({})).rejects.toThrow(BULK_WORKFLOW_FILTER_ERROR_MESSAGE);
-      await expect(engine.cancelAll({ tags: [] })).rejects.toThrow(
+      expect(engine.cancelAll({})).rejects.toThrow(BULK_WORKFLOW_FILTER_ERROR_MESSAGE);
+      expect(engine.cancelAll({ tags: [] })).rejects.toThrow(BULK_WORKFLOW_FILTER_ERROR_MESSAGE);
+      expect(engine.cancelAll({ tags: ['   '] })).rejects.toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
-      await expect(engine.cancelAll({ tags: ['   '] })).rejects.toThrow(
+      expect(engine.cancelAll({ attributes: [] })).rejects.toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
-      await expect(engine.cancelAll({ attributes: [] })).rejects.toThrow(
-        BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
-      );
-      await expect(engine.cancelAll({ attributes: [{ key: '   ' }] })).rejects.toThrow(
+      expect(engine.cancelAll({ attributes: [{ key: '   ' }] })).rejects.toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
     } finally {
@@ -1314,8 +1312,8 @@ describe('bulk workflow operations', () => {
         const result = await engine.signalAll({ status: 'running' }, 'continue', 'released');
 
         expect(result).toEqual({ signalled: 1_001, failed: 0 });
-        await expect(handles[0]?.result()).resolves.toBe('bulk-signal-input-0:released');
-        await expect(handles[1_000]?.result()).resolves.toBe('bulk-signal-input-1000:released');
+        expect(handles[0]?.result()).resolves.toBe('bulk-signal-input-0:released');
+        expect(handles[1_000]?.result()).resolves.toBe('bulk-signal-input-1000:released');
         const lastWorkflow = await engine.get('bulk-signal-scan-1000');
         expect(lastWorkflow?.status).toBe('completed');
       } finally {
@@ -1528,7 +1526,7 @@ describe('bulk workflow operations', () => {
         startAt: now + 60_000,
       });
 
-      await expect(
+      expect(
         engine.cancelAll(
           { tags: ['stale-token'] },
           { confirmationToken: preview.confirmationToken },
@@ -1572,7 +1570,7 @@ describe('bulk workflow operations', () => {
         } satisfies WorkflowState),
       );
 
-      await expect(
+      expect(
         engine.cancelAll(
           { tags: ['stable-token'] },
           { confirmationToken: preview.confirmationToken },
@@ -1613,7 +1611,7 @@ describe('bulk workflow operations', () => {
         { dryRun: true },
       );
 
-      await expect(
+      expect(
         engine.signalAll({ tags: ['stale-signal-token'] }, 'continue', 'changed', {
           confirmationToken: preview.confirmationToken,
         }),
@@ -1622,7 +1620,7 @@ describe('bulk workflow operations', () => {
       expect(workflowState?.status).toBe('running');
 
       await engine.signal(handle.id, 'continue', 'cleanup');
-      await expect(handle.result()).resolves.toBe('first:cleanup');
+      expect(handle.result()).resolves.toBe('first:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1638,12 +1636,12 @@ describe('bulk workflow operations', () => {
 
       const preview = await engine.tagAll({ tags: ['selected'] }, ['archived'], { dryRun: true });
 
-      await expect(
+      expect(
         engine.tagAll({ tags: ['selected'] }, ['different'], {
           confirmationToken: preview.confirmationToken,
         }),
       ).rejects.toThrow('Bulk confirmation token does not match the current dry-run scope');
-      await expect(
+      expect(
         engine.untagAll({ tags: ['selected'] }, ['archived'], {
           confirmationToken: preview.confirmationToken,
         }),

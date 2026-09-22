@@ -1,4 +1,4 @@
-import { TestEngine } from '@lostgradient/weft/testing';
+import { TestEngine } from '@lostgradient/weft';
 import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,7 +36,7 @@ describe('checkout example', () => {
     await expect(handle.result()).resolves.toEqual(expectedCheckoutResult(sampleCheckoutInput));
   });
 
-  it('runs through the packaged SQLite consumer path', async () => {
+  it('runs through the root source API with SQLite storage', async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), 'weft-checkout-'));
     const databasePath = join(temporaryDirectory, 'checkout.sqlite');
     const input = createCheckoutInput('checkout-smoke');

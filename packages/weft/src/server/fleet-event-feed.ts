@@ -44,7 +44,7 @@ export type {
  * @example
  * ```ts
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
- * import { createFleetEventFeed, type FleetEventFeed } from '@lostgradient/weft/server/handler';
+ * import { createFleetEventFeed, type FleetEventFeed } from '@lostgradient/weft';
  *
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const fleetEventFeed: FleetEventFeed = createFleetEventFeed(engine.storage);
@@ -54,7 +54,19 @@ export type {
 export type FleetEventFeed = {
   append(event: FleetEventInput, options?: FleetEventAppendOptions): Promise<FleetEventEnvelope>;
   appendWorkflowEventIfPresent(event: FleetWorkflowEventInput): Promise<FleetEventEnvelope | null>;
-  replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<FleetEventEnvelope>;
+  /**
+   * Replay retained fleet events. Pass `workflowId` to serve only that
+   * workflow's retained events from the `fleet-event-by-workflow:` secondary
+   * index instead of scanning the entire retained fleet log — see
+   * `replayForWorkflow` for the indexed algorithm. Omitting `workflowId`
+   * replays the full fleet feed exactly as before. Both forms share the same
+   * cursor, `limit`, and retention-gap (`fleet:gap`) semantics.
+   */
+  replay(options?: {
+    workflowId?: string;
+    fromCursor?: Cursor;
+    limit?: number;
+  }): AsyncIterable<FleetEventEnvelope>;
   subscribe(
     options?: ReplayLiveSubscribeOptions<FleetEventEnvelope>,
   ): AsyncIterable<FleetEventEnvelope>;
@@ -73,7 +85,7 @@ const REPLAY_PAGE_SIZE = 128;
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { createFleetEventFeed } from '@lostgradient/weft/server/handler';
+ * import { createFleetEventFeed } from '@lostgradient/weft';
  * const feed = createFleetEventFeed(new MemoryStorage());
  * ```
  */
@@ -186,6 +198,72 @@ export function createFleetEventFeed(
     }
   }
 
+  async function* replayPersistedFleetEventsForWorkflow(options: {
+    workflowId: string;
+    afterSequence: number;
+    requestedCursor?: Cursor;
+  }): AsyncIterable<FleetEventEnvelope> {
+    let deliveredSequence = options.afterSequence;
+    let gapCursor =
+      options.requestedCursor ??
+      (options.afterSequence < 0 ? '-1' : encodeCursor(options.afterSequence));
+    while (true) {
+      const page = await loadConsistentWorkflowReplayPage(
+        storage,
+        options.workflowId,
+        deliveredSequence,
+      );
+      if (deliveredSequence < page.floor - 1) {
+        deliveredSequence = page.floor - 1;
+        yield createGapEnvelope(deliveredSequence, gapCursor, page.floor);
+        gapCursor = encodeCursor(deliveredSequence);
+        continue;
+      }
+      for (const envelope of page.envelopes) {
+        deliveredSequence = envelope.sequence;
+        yield envelope;
+      }
+      // Pagination completeness is judged by how many index entries the scan
+      // actually found, not by how many survived the legitimate-deletion
+      // filter in `loadConsistentWorkflowReplayPage` — a page where every
+      // candidate was concurrently purged is still a full page and must not
+      // be mistaken for the end of the index.
+      if (page.scannedIndexEntries < REPLAY_PAGE_SIZE) return;
+    }
+  }
+
+  /**
+   * Owner-indexed counterpart to `replayPersistedFleetEvents`: instead of
+   * scanning every retained fleet event (`fleet-event:`), it scans only the
+   * `fleet-event-by-workflow:<workflowId>:` secondary index that `append()`
+   * and `retain()` already maintain, then reads each matching envelope by its
+   * exact `fleet-event:` key. Cost is proportional to that workflow's own
+   * retained events, not the whole retained log. It mirrors
+   * `ReplayLiveFeed.replay()`'s cursor-decode-then-limit wrapping so a
+   * workflow-scoped replay carries the identical cursor, `limit`, and
+   * retention-gap semantics as the unfiltered replay.
+   */
+  async function* replayForWorkflow(
+    workflowId: string,
+    args?: { fromCursor?: Cursor; limit?: number },
+  ): AsyncIterable<FleetEventEnvelope> {
+    if (workflowId.length === 0) {
+      throw new RangeError('Fleet event replay workflowId must not be empty.');
+    }
+    const afterSequence =
+      args?.fromCursor !== undefined ? decodeCursorOrThrow(args.fromCursor) : -1;
+    let yielded = 0;
+    for await (const envelope of replayPersistedFleetEventsForWorkflow({
+      workflowId,
+      afterSequence,
+      ...(args?.fromCursor === undefined ? {} : { requestedCursor: args.fromCursor }),
+    })) {
+      if (args?.limit !== undefined && yielded >= args.limit) return;
+      yield envelope;
+      yielded += 1;
+    }
+  }
+
   async function snapshotTailSequence(): Promise<number> {
     const storedTail = await storage.get(KEYS.fleetEventTail());
     const decodedTail =
@@ -280,7 +358,10 @@ export function createFleetEventFeed(
   return {
     append,
     appendWorkflowEventIfPresent,
-    replay: (options) => replayLiveFeed.replay(options),
+    replay: (options) =>
+      options?.workflowId === undefined
+        ? replayLiveFeed.replay(options)
+        : replayForWorkflow(options.workflowId, options),
     subscribe: (options) =>
       createDurableSubscription(
         backend,
@@ -341,6 +422,111 @@ async function loadConsistentReplayPage(
     if (bytesEqual(refreshedFloorValue, floorValue)) return { floor, envelopes };
   }
   throw new Error('Fleet event replay could not obtain a stable retention snapshot.');
+}
+
+/**
+ * Owner-indexed sibling of `loadConsistentReplayPage`: scans the
+ * `fleet-event-by-workflow:<workflowId>:` index instead of the full
+ * `fleet-event:` keyspace, then reads each matching sequence's envelope
+ * directly by key via `readWorkflowFleetEvent`. Unlike `loadConsistentReplayPage`
+ * — which reads a key and its value from the same `storage.scan()` snapshot —
+ * the event value here comes from a separate `storage.get()` issued after the
+ * index scan, so a legitimate concurrent deletion (by `retain()` or
+ * `Engine.purge()`) can land in that window; see `readWorkflowFleetEvent` for
+ * how that is told apart from genuine corruption.
+ *
+ * The floor/watermark stability retry below is unrelated to that: it exists
+ * so the `floor` value returned is consistent with what was actually scanned,
+ * which only `retain()` affects (`Engine.purge()` never writes
+ * `fleetEventWatermark`), keeping this function's gap-detection contract
+ * identical to `loadConsistentReplayPage`'s.
+ */
+async function loadConsistentWorkflowReplayPage(
+  storage: Storage,
+  workflowId: string,
+  afterSequence: number,
+): Promise<{ floor: number; envelopes: FleetEventEnvelope[]; scannedIndexEntries: number }> {
+  for (let attempt = 1; attempt <= 25; attempt += 1) {
+    const floorValue = await storage.get(KEYS.fleetEventWatermark());
+    const floor = decodeRetentionFloorOrThrow(floorValue);
+    const candidateSequences: number[] = [];
+    const scanOptions = {
+      ...(afterSequence >= 0 ? { gt: KEYS.fleetEventByWorkflow(workflowId, afterSequence) } : {}),
+      limit: REPLAY_PAGE_SIZE,
+    };
+    for await (const [key] of storage.scan(
+      KEYS.fleetEventByWorkflowPrefix(workflowId),
+      scanOptions,
+    )) {
+      const sequence = parseFleetEventByWorkflowSequenceFromKey(workflowId, key);
+      if (sequence === null) throw new PersistedDataCorruptError(key);
+      if (sequence <= afterSequence) continue;
+      candidateSequences.push(sequence);
+    }
+    const envelopes: FleetEventEnvelope[] = [];
+    for (const sequence of candidateSequences) {
+      const envelope = await readWorkflowFleetEvent(storage, workflowId, sequence);
+      // A `null` here already went through readWorkflowFleetEvent's own
+      // legitimacy check — it is a confirmed benign concurrent deletion, not
+      // a signal that this page needs retrying, so it is just left out.
+      if (envelope !== null) envelopes.push(envelope);
+    }
+    const refreshedFloorValue = await storage.get(KEYS.fleetEventWatermark());
+    if (bytesEqual(refreshedFloorValue, floorValue)) {
+      return { floor, envelopes, scannedIndexEntries: candidateSequences.length };
+    }
+  }
+  throw new Error('Fleet event replay could not obtain a stable retention snapshot.');
+}
+
+/**
+ * Read one workflow-indexed fleet event by sequence, tolerating a benign
+ * concurrent deletion. `retain()` and `Engine.purge()`
+ * (`addWorkflowLinkedFleetEventDeleteKeys` in `core/engine/bulk-operations-purge.ts`)
+ * are each the sole writer of their own atomic batch that deletes a
+ * `fleet-event:<sequence>` record together with its
+ * `fleet-event-by-workflow:` index entry for the same sequence — `retain()`
+ * via `storageConditionalBatch`, purge via `commitFencedEngineWrite`, both
+ * documented as committing their operations atomically. So if the event
+ * record is missing, the index entry for that exact sequence is either also
+ * already gone (an ordinary concurrent deletion by either of them — those
+ * two are the only callers that ever delete these keys, so nothing else
+ * could explain it) or it is still present, meaning the pair was torn apart
+ * by something that is not one of those atomic batches: genuine corruption.
+ * This check does not depend on `fleetEventWatermark`, since purge never
+ * writes it — only `retain()` does.
+ */
+async function readWorkflowFleetEvent(
+  storage: Storage,
+  workflowId: string,
+  sequence: number,
+): Promise<FleetEventEnvelope | null> {
+  const eventKey = KEYS.fleetEvent(sequence);
+  const value = await storage.get(eventKey);
+  if (value === null) {
+    const indexValue = await storage.get(KEYS.fleetEventByWorkflow(workflowId, sequence));
+    if (indexValue === null) return null;
+    throw new PersistedDataCorruptError(eventKey);
+  }
+  const decoded = decodeStorageValue(value, eventKey);
+  if (
+    !isFleetEventEnvelope(decoded) ||
+    decoded.sequence !== sequence ||
+    decoded.workflowId !== workflowId
+  ) {
+    // Immutable data disagreeing with its own index entry can never be a
+    // benign concurrent deletion — sequences are append-only and a
+    // committed envelope's `workflowId` never changes — so this is always
+    // genuine corruption, unlike a missing record.
+    throw new PersistedDataCorruptError(eventKey);
+  }
+  return decoded;
+}
+
+function decodeCursorOrThrow(cursor: Cursor): number {
+  const sequence = decodeCursor(cursor);
+  if (sequence === null) throw new Error('Invalid cursor');
+  return sequence;
 }
 
 function createGapEnvelope(
@@ -464,6 +650,15 @@ async function highestFleetEventSequence(storage: Storage): Promise<number> {
 function parseFleetEventSequenceFromKey(key: string): number | null {
   if (!key.startsWith(KEYS.fleetEventPrefix())) return null;
   const rawSequence = key.slice(KEYS.fleetEventPrefix().length);
+  if (!/^\d+$/.test(rawSequence)) return null;
+  const sequence = Number(rawSequence);
+  return Number.isSafeInteger(sequence) ? sequence : null;
+}
+
+function parseFleetEventByWorkflowSequenceFromKey(workflowId: string, key: string): number | null {
+  const prefix = KEYS.fleetEventByWorkflowPrefix(workflowId);
+  if (!key.startsWith(prefix)) return null;
+  const rawSequence = key.slice(prefix.length);
   if (!/^\d+$/.test(rawSequence)) return null;
   const sequence = Number(rawSequence);
   return Number.isSafeInteger(sequence) ? sequence : null;

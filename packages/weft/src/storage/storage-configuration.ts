@@ -1,29 +1,32 @@
 /**
  * Declarative storage configuration types and the `ResolvedStorage` mapping.
  * Split out from `resolve.ts` so that module stays focused on the runtime
- * resolver/validator logic; the public `@lostgradient/weft/storage/resolve`
- * subpath re-exports everything here, so these types keep their documented
- * import path.
+ * resolver/validator logic. The public `@lostgradient/weft` entry point exposes
+ * these storage configuration types.
  *
  * @module storage/storage-configuration
  */
 
+import type { BunSQLiteStorage } from './bun-sql.ts';
 import type { HTTPStorage } from './http.ts';
 import type { IndexedDBStorage } from './indexeddb.ts';
 import type { Storage } from './interface.ts';
 import type { LMDBStorage } from './lmdb.ts';
 import type { MemoryStorage } from './memory.ts';
 import type { NeonStorage } from './neon.ts';
-import type { SQLiteStorageInstance } from './sqlite.ts';
+import type { NodeSQLiteStorage } from './node-sqlite.ts';
+
 import type { TursoStorage } from './turso.ts';
 import type { WebExtensionStorage } from './web-extension.ts';
+
+export type SQLiteStorageInstance = BunSQLiteStorage | NodeSQLiteStorage;
 
 /**
  * Runtime configuration for in-memory storage.
  *
  * @example
  * ```ts
- * import { resolveStorage, type MemoryStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type MemoryStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: MemoryStorageConfiguration = { type: 'memory' };
  * const storage = await resolveStorage(configuration);
@@ -39,7 +42,7 @@ export type MemoryStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type SQLiteStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type SQLiteStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: SQLiteStorageConfiguration = { type: 'sqlite', path: './weft.db' };
  * const storage = await resolveStorage(configuration);
@@ -56,7 +59,7 @@ export type SQLiteStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type LMDBStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type LMDBStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: LMDBStorageConfiguration = { type: 'lmdb', path: './weft-data' };
  * const storage = await resolveStorage(configuration);
@@ -79,7 +82,7 @@ export type LMDBStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type TursoStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type TursoStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: TursoStorageConfiguration = { type: 'turso', url: 'file:weft.db' };
  * const storage = await resolveStorage(configuration);
@@ -97,7 +100,7 @@ export type TursoStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type NeonStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type NeonStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: NeonStorageConfiguration = {
  *   type: 'neon',
@@ -117,7 +120,7 @@ export type NeonStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type IndexedDBStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type IndexedDBStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: IndexedDBStorageConfiguration = { type: 'indexeddb', databaseName: 'weft' };
  * const storage = await resolveStorage(configuration);
@@ -134,7 +137,7 @@ export type IndexedDBStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type WebExtensionStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type WebExtensionStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: WebExtensionStorageConfiguration = { type: 'web-extension', area: 'local' };
  * const storage = await resolveStorage(configuration);
@@ -151,7 +154,7 @@ export type WebExtensionStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type HTTPStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type HTTPStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: HTTPStorageConfiguration = { type: 'http', baseUrl: 'https://weft.example.com' };
  * const storage = await resolveStorage(configuration);
@@ -169,7 +172,7 @@ export type HTTPStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type AutoStorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type AutoStorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: AutoStorageConfiguration = { type: 'auto' };
  * const storage = await resolveStorage(configuration);
@@ -185,7 +188,7 @@ export type AutoStorageConfiguration = {
  *
  * @example
  * ```ts
- * import { resolveStorage, type StorageConfiguration } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type StorageConfiguration } from '@lostgradient/weft';
  *
  * const configuration: StorageConfiguration = { type: 'memory' };
  * const storage = await resolveStorage(configuration);
@@ -210,7 +213,7 @@ export type StorageConfiguration =
  *
  * @example
  * ```ts
- * import { resolveStorage, type StorageConfigurationType } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage, type StorageConfigurationType } from '@lostgradient/weft';
  *
  * const kind: StorageConfigurationType = 'memory';
  * const storage = await resolveStorage({ type: kind });
@@ -227,7 +230,7 @@ export type StorageConfigurationType = StorageConfiguration['type'];
  *
  * @example
  * ```ts
- * import type { HTTPStorageConfiguration, ResolvedStorage } from '@lostgradient/weft/storage/resolve';
+ * import type { HTTPStorageConfiguration, ResolvedStorage } from '@lostgradient/weft';
  *
  * type RemoteStorage = ResolvedStorage<HTTPStorageConfiguration>;
  * declare const storage: RemoteStorage;

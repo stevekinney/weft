@@ -1,3 +1,5 @@
+import { resolveEngineEnvironment } from '../../runtime/environment-configuration.ts';
+
 /**
  * Test-only state and helpers for the engine cleanup-interval finalizer
  * leak-warning system. Kept in a sibling module so `index.ts` does not
@@ -62,7 +64,8 @@ export function shouldEmitEngineLeakWarning(): boolean {
     return engineLeakWarningOverrideForTesting;
   }
 
-  return Bun.env['WEFT_DEV_WARNINGS'] === '1' || Bun.env['NODE_ENV'] === 'development';
+  const environment = resolveEngineEnvironment();
+  return environment.weftDevWarnings || environment.nodeEnv === 'development';
 }
 
 /** Test-only override for the engine leak-warning environment gate. */

@@ -313,7 +313,7 @@ describe('CloudflareDurableObjectSQLiteStorage', () => {
       key: `k:${index}`,
       value: encode('v'),
     }));
-    await expect(storage.batch(operations)).rejects.toThrow(/exceeds MAX_BATCH_OPERATIONS/);
+    expect(storage.batch(operations)).rejects.toThrow(/exceeds MAX_BATCH_OPERATIONS/);
   });
 
   it('conditionalBatch commits when the precondition holds', async () => {
@@ -349,7 +349,7 @@ describe('CloudflareDurableObjectSQLiteStorage', () => {
       key: `k:${index}`,
       expectedValue: null,
     }));
-    await expect(storage.conditionalBatch(conditions, [])).rejects.toThrow(
+    expect(storage.conditionalBatch(conditions, [])).rejects.toThrow(
       /exceeds MAX_BATCH_OPERATIONS/,
     );
   });
@@ -422,7 +422,7 @@ describe('CloudflareDurableObjectSQLiteStorage', () => {
     await flush();
     await engine.runMaintenance(Date.now() + 60_000);
 
-    await expect(handle.result()).resolves.toBe('awake');
+    expect(handle.result()).resolves.toBe('awake');
   });
 });
 
@@ -504,7 +504,7 @@ describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
     await base64Storage.put('shared-key', encode('value'));
 
     const blobStorage = new CloudflareDurableObjectSQLiteStorage({ sql, valueEncoding: 'blob' });
-    await expect(blobStorage.get('shared-key')).rejects.toThrow(
+    expect(blobStorage.get('shared-key')).rejects.toThrow(
       /valueEncoding: 'blob'.*per-table storage-format decision.*different valueEncoding.*same valueEncoding.*different table name/s,
     );
   });
@@ -515,7 +515,7 @@ describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
     await blobStorage.put('shared-key', encode('value'));
 
     const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
-    await expect(base64Storage.get('shared-key')).rejects.toThrow(
+    expect(base64Storage.get('shared-key')).rejects.toThrow(
       /valueEncoding: 'base64'.*per-table storage-format decision.*different valueEncoding.*same valueEncoding.*different table name/s,
     );
   });
@@ -526,6 +526,6 @@ describe('CloudflareDurableObjectSQLiteStorage valueEncoding', () => {
     await blobStorage.put('scan:mismatch', encode('value'));
 
     const base64Storage = new CloudflareDurableObjectSQLiteStorage({ sql });
-    await expect(collect(base64Storage.scan('scan:'))).rejects.toThrow(/different valueEncoding/);
+    expect(collect(base64Storage.scan('scan:'))).rejects.toThrow(/different valueEncoding/);
   });
 });

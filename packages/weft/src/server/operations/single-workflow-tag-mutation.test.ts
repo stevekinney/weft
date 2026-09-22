@@ -25,6 +25,7 @@ describe('single-workflow tag mutation helper', () => {
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
       destructive: false,
+      requiredEngineMethods: [],
       mutateTags: async (_engine, workflowId, tags) => {
         calls.push({ workflowId, tags: [...tags] });
       },
@@ -54,6 +55,7 @@ describe('single-workflow tag mutation helper', () => {
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
       destructive: false,
+      requiredEngineMethods: [],
       mutateTags: async () => {},
     });
     const binding = createSingleWorkflowTagMutationRestBinding({
@@ -80,6 +82,7 @@ describe('single-workflow tag mutation helper', () => {
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
       destructive: false,
+      requiredEngineMethods: [],
       mutateTags: async () => {
         throw new Error('workflow not found');
       },
@@ -111,6 +114,7 @@ describe('single-workflow tag mutation helper', () => {
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
       destructive: false,
+      requiredEngineMethods: [],
       mutateTags: async () => {
         throw new Error('boom');
       },
@@ -139,6 +143,7 @@ describe('single-workflow tag mutation helper', () => {
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
       destructive: false,
+      requiredEngineMethods: [],
       mutateTags: async () => {},
     });
     const binding = createSingleWorkflowTagMutationRestBinding({

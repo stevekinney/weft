@@ -2,7 +2,7 @@
  * JSON Schema declarations for the RemoteWorker WebSocket protocol contract.
  *
  * These schemas are the canonical wire-shape description for every protocol
- * message. They are re-exported from `@lostgradient/weft/worker-protocol` so the public
+ * message. They are re-exported from `@lostgradient/weft` so the public
  * surface remains a single import path. The runtime parser guards in
  * `protocol.ts` mirror these schemas field-by-field; any drift here must be
  * reflected there as well.
@@ -39,7 +39,7 @@ const protocolVersionSchema: JsonSchemaObject = {
  *
  * @example
  * ```ts
- * import { REMOTE_WORKER_MESSAGE_SCHEMAS } from '@lostgradient/weft/worker-protocol';
+ * import { REMOTE_WORKER_MESSAGE_SCHEMAS } from '@lostgradient/weft';
  *
  * const registerSchema = REMOTE_WORKER_MESSAGE_SCHEMAS.register;
  * ```
@@ -58,6 +58,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       manifest: { type: 'object' },
       concurrency: { type: 'number', minimum: 1, maximum: 1000 },
       startedAt: { type: 'number' },
+      resumeSessionGeneration: { type: 'number', minimum: 1 },
     },
   },
   heartbeat: {
@@ -67,6 +68,17 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
     properties: {
       type: { const: 'heartbeat' },
       workerId: { type: 'string', minLength: 1 },
+    },
+  },
+  activityHeartbeat: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['type', 'workerId', 'operationId', 'attemptToken'],
+    properties: {
+      type: { const: 'activityHeartbeat' },
+      workerId: { type: 'string', minLength: 1 },
+      operationId: { type: 'string', minLength: 1 },
+      attemptToken: { type: 'string', minLength: 1 },
     },
   },
   taskResult: {
@@ -132,10 +144,11 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
   cancel: {
     type: 'object',
     additionalProperties: false,
-    required: ['type', 'operationId'],
+    required: ['type', 'operationId', 'attemptToken'],
     properties: {
       type: { const: 'cancel' },
       operationId: { type: 'string', minLength: 1 },
+      attemptToken: { type: 'string', minLength: 1 },
     },
   },
   shutdown: {
@@ -157,6 +170,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       'concurrency',
       'acceptedManifestDigest',
       'serverCapabilities',
+      'sessionGeneration',
     ],
     properties: {
       type: { const: 'registerAck' },
@@ -169,6 +183,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
         type: 'array',
         items: { type: 'string', minLength: 1 },
       },
+      sessionGeneration: { type: 'number', minimum: 1 },
     },
   },
   registerError: {
@@ -207,6 +222,17 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       message: { type: 'string' },
     },
   },
+  taskResultAck: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['type', 'operationId', 'attemptToken', 'disposition'],
+    properties: {
+      type: { const: 'taskResultAck' },
+      operationId: { type: 'string', minLength: 1 },
+      attemptToken: { type: 'string', minLength: 1 },
+      disposition: { enum: ['applied', 'duplicate', 'dead-lettered'] },
+    },
+  },
 } as const satisfies Record<string, JsonSchemaObject>;
 
 /**
@@ -214,7 +240,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
  *
  * @example
  * ```ts
- * import { REMOTE_WORKER_PROTOCOL_JSON_SCHEMA } from '@lostgradient/weft/worker-protocol';
+ * import { REMOTE_WORKER_PROTOCOL_JSON_SCHEMA } from '@lostgradient/weft';
  *
  * const schemaId = REMOTE_WORKER_PROTOCOL_JSON_SCHEMA.$id;
  * ```

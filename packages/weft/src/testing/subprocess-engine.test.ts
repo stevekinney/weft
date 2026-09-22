@@ -196,7 +196,7 @@ describe('subprocess server harness', () => {
       "console.error('startup exploded'); process.exit(42);",
     );
 
-    await expect(
+    expect(
       spawnServerSubprocess({
         entrypoint,
         databasePath: join(createFixturePath('startup-crash-db'), 'weft.db'),
@@ -223,7 +223,7 @@ setTimeout(() => process.exit(17), 1_000);
     handles.push(handle);
 
     await handle.process.exited;
-    await expect(killAndReboot(handle)).rejects.toThrow(/already exited/);
+    expect(killAndReboot(handle)).rejects.toThrow(/already exited/);
   });
 
   it('rejects a subprocess that exits immediately after printing readiness', async () => {
@@ -236,7 +236,7 @@ process.exit(0);
 `,
     );
 
-    await expect(
+    expect(
       spawnServerSubprocess({
         entrypoint,
         databasePath: join(createFixturePath('ready-then-exit-db'), 'weft.db'),
@@ -253,7 +253,7 @@ setInterval(() => {}, 1000);
 `,
     );
 
-    await expect(
+    expect(
       spawnServerSubprocess({
         entrypoint,
         databasePath: join(createFixturePath('ready-without-port-db'), 'weft.db'),
@@ -281,7 +281,7 @@ setInterval(() => {}, 1000);
       // bind error rather than tripping the readiness-timeout path. Keeping the
       // assertion to these two messages preserves the test's intent: it must not
       // pass merely because some unrelated startup delay timed out.
-      await expect(
+      expect(
         startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5000 }),
       ).rejects.toThrow(/before readiness|EADDRINUSE/);
     } finally {
@@ -336,7 +336,7 @@ setInterval(() => {}, 1000);
     });
     handles.push(handle);
 
-    await expect(killAndReboot(handle, 'SIGTERM')).rejects.toThrow(/Expected subprocess/);
+    expect(killAndReboot(handle, 'SIGTERM')).rejects.toThrow(/Expected subprocess/);
   });
 
   it('recovers a parked workflow after SIGKILL without re-running a completed activity', async () => {
@@ -362,7 +362,7 @@ setInterval(() => {}, 1000);
     expect(handle.command).toContain('0');
     await rebootedClient.signal(workflow.id, 'finish', 'done');
 
-    await expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
+    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
       activityCount: 1,
       signalPayload: 'done',
     });
@@ -384,7 +384,7 @@ setInterval(() => {}, 1000);
     await waitForFileText(join(directory, 'activity-started.txt'), '2', 'second activity dispatch');
     await Bun.write(join(directory, 'activity-release.txt'), 'go');
 
-    await expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({ attempt: 2 });
+    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({ attempt: 2 });
   });
 
   it('accepts a signal over the wire after reboot and completes the recovered workflow', async () => {
@@ -407,7 +407,7 @@ setInterval(() => {}, 1000);
     const rebootedClient = new HttpClient({ baseUrl: handle.url });
     await rebootedClient.signal(workflow.id, 'finish', { ok: true });
 
-    await expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
+    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
       signalPayload: { ok: true },
     });
   });

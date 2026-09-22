@@ -8,8 +8,8 @@
  * @module testing/time-control
  */
 
-import { parseDuration } from '../core/scheduler';
-import type { Duration } from '../core/types';
+import { parseDuration } from '../core/scheduler.ts';
+import type { Duration } from '../core/types.ts';
 
 interface ScheduledTimer {
   fireAt: number;
@@ -29,7 +29,7 @@ interface ScheduledTimer {
  *
  * @example
  * ```ts
- * import { TimeControl } from '@lostgradient/weft/testing';
+ * import { TimeControl } from '@lostgradient/weft';
  *
  * const clock = new TimeControl(0);
  * let fired = false;

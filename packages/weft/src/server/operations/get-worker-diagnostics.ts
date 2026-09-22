@@ -50,6 +50,13 @@ const workerInstanceIdentitySchema = z
     startedAt: z.number(),
     lastHeartbeatAt: z.number(),
     heartbeatAgeMs: z.number(),
+    // Session state (COR-220): how many attempts this connection currently
+    // holds, and which session generation it registered as — see
+    // `WorkerSessionIdentity`'s doc comment (`worker/registry/types.ts`) for
+    // what "generation" means and why a reconnect can either preserve or
+    // bump it.
+    inFlight: z.number(),
+    sessionGeneration: z.number(),
   })
   .strict();
 
@@ -123,6 +130,8 @@ function projectWorkerDiagnostics(
       startedAt: worker.startedAt,
       lastHeartbeatAt: worker.lastHeartbeat,
       heartbeatAgeMs: summary.heartbeatAgeMs,
+      inFlight: worker.inFlight,
+      sessionGeneration: worker.sessionGeneration,
     },
     deploymentVersion: {
       deploymentName: worker.manifest.deployment.name,
@@ -148,7 +157,7 @@ function projectWorkerDiagnostics(
 export function createGetWorkerDiagnosticsOperation(options: GetWorkerDiagnosticsOptions = {}) {
   const registry = options.workerRegistry;
   const clock = options.clock ?? Date.now;
-  return defineOperation<GetWorkerDiagnosticsInput, GetWorkerDiagnosticsOutput>({
+  return defineOperation({
     name: 'weft.workers.diagnostics',
     mcpExposable: false,
     summary: 'Get bounded instance and deployment-version diagnostics for one connected worker',

@@ -275,7 +275,7 @@ describe('termination helpers', () => {
       reject,
     });
 
-    await expect(
+    expect(
       failWorkflow(
         internals,
         handle.id,
@@ -372,7 +372,7 @@ describe('termination helpers', () => {
       reject,
     });
 
-    await expect(
+    expect(
       cancelWorkflow(
         internals,
         handle.id,

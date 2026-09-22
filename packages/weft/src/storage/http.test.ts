@@ -386,7 +386,7 @@ describe('HTTPStorage', () => {
     try {
       const storage = new HTTPStorage({ baseUrl: 'http://localhost' });
 
-      await expect(storage.get('wf:key')).rejects.toThrow('returned 403');
+      expect(storage.get('wf:key')).rejects.toThrow('returned 403');
     } finally {
       restoreFetch();
     }

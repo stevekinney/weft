@@ -6,6 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { getUpdateResultOperation, getUpdateResultRestBinding } from './get-update-result.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -106,7 +107,7 @@ describe('weft.updates.result.get', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getUpdateResultOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -116,7 +117,7 @@ describe('weft.updates.result.get', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/updates/any-update-id', { method: 'GET' }),

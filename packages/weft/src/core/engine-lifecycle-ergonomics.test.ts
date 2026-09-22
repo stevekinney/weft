@@ -130,7 +130,7 @@ describe('Engine lifecycle ergonomics', () => {
       workflows: { resumable },
     });
     await recovered.signal('recoverable-workflow', 'release', 'ok');
-    await expect(recovered.getHandle('recoverable-workflow').result()).resolves.toBe('done:ok');
+    expect(recovered.getHandle('recoverable-workflow').result()).resolves.toBe('done:ok');
     recovered[Symbol.dispose]();
   });
 
@@ -163,7 +163,7 @@ describe('Engine lifecycle ergonomics', () => {
 
       await engine.runMaintenance(Date.now() + 60_000);
 
-      await expect(handle.result()).resolves.toBe('awake');
+      expect(handle.result()).resolves.toBe('awake');
     } finally {
       disposeEngine?.();
       globalThis.setInterval = originalSetInterval;
@@ -177,9 +177,9 @@ describe('Engine lifecycle ergonomics', () => {
     expect(() => new Engine({ backgroundTasks: 'manual', ownership: 'lease' })).toThrow(
       'ownership cannot be "lease" when backgroundTasks is "manual"',
     );
-    await expect(
-      Engine.create({ backgroundTasks: 'manual', startScheduler: true }),
-    ).rejects.toThrow('startScheduler cannot be true when backgroundTasks is "manual"');
+    expect(Engine.create({ backgroundTasks: 'manual', startScheduler: true })).rejects.toThrow(
+      'startScheduler cannot be true when backgroundTasks is "manual"',
+    );
     expect(() => new Engine({ backgroundTasks: 'invalid' } as never)).toThrow(
       'options.backgroundTasks must be "automatic" or "manual" when provided',
     );
@@ -223,7 +223,7 @@ describe('Engine lifecycle ergonomics', () => {
 
     try {
       const handle = await engine.start('completes', undefined, { id: 'retained-workflow' });
-      await expect(handle.result()).resolves.toBe('done');
+      expect(handle.result()).resolves.toBe('done');
       await storage.put(
         'upr:expired-update',
         encode({
@@ -258,7 +258,7 @@ describe('Engine lifecycle ergonomics', () => {
     engine.register(greet).register(welcome);
 
     const handle = await engine.start('welcome', { name: 'Ada' });
-    await expect(handle.result()).resolves.toBe('Hello, Ada');
+    expect(handle.result()).resolves.toBe('Hello, Ada');
     engine[Symbol.dispose]();
   });
 });

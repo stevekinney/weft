@@ -457,7 +457,7 @@ describe('Worker replay operation signatures', () => {
   });
 
   it('rejects unknown operation shapes and oversized signature inputs', async () => {
-    await expect(
+    expect(
       createWorkerReplayOperationSignature(
         {
           type: 'unknown-operation',
@@ -467,7 +467,7 @@ describe('Worker replay operation signatures', () => {
       ),
     ).rejects.toThrow(WorkerProtocolError);
 
-    await expect(
+    expect(
       createWorkerReplayOperationSignature(
         {
           type: 'state-commit',

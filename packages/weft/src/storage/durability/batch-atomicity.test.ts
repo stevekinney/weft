@@ -92,7 +92,7 @@ for (const spec of availableAdapterSpecs()) {
 
         // Build a 5-entry batch that fails at index 2.
         const operations = writer.makeFailingBatch(2, 5);
-        await expect(writer.storage.batch(operations)).rejects.toBeInstanceOf(Error);
+        expect(writer.storage.batch(operations)).rejects.toBeInstanceOf(Error);
 
         // The transaction must have rolled back: no `mid:` entries at all,
         // including the ones that came before the failing index.

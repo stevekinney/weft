@@ -53,7 +53,7 @@ async function startSplitFailureCategoryWorkflow(
   id: string,
 ): Promise<void> {
   const handle = await engine.start('crash', null, { id });
-  await expect(handle.result()).rejects.toThrow('workflow failure');
+  expect(handle.result()).rejects.toThrow('workflow failure');
 
   const stateBytes = await storage.get(KEYS.workflow(id));
   expect(stateBytes).not.toBeNull();

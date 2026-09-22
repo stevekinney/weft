@@ -309,7 +309,7 @@ describe('workflow tags', () => {
       });
       await sleepForTesting(10);
 
-      await expect(handle.addTags('overflow-a', 'overflow-b')).rejects.toThrow(
+      expect(handle.addTags('overflow-a', 'overflow-b')).rejects.toThrow(
         `Workflow tags must contain at most ${MAX_WORKFLOW_TAGS} tags`,
       );
 
@@ -336,7 +336,7 @@ describe('workflow tags', () => {
       });
       await sleepForTesting(10);
 
-      await expect(handle.addTags('')).rejects.toThrow('Workflow tags must not contain empty tags');
+      expect(handle.addTags('')).rejects.toThrow('Workflow tags must not contain empty tags');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -363,7 +363,7 @@ describe('workflow tags', () => {
       const signalPromise = handle.signal('continue', 'done');
 
       await Promise.all([addTagsPromise, signalPromise]);
-      await expect(handle.result()).resolves.toBe('payload:done');
+      expect(handle.result()).resolves.toBe('payload:done');
 
       const state = await engine.get(workflowId);
       expect(state?.status).toBe('completed');

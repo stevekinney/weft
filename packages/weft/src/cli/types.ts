@@ -1,4 +1,4 @@
-import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../core/types.ts';
+import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../index.ts';
 
 /** Supported storage backend identifiers for the `--storage` flag. */
 export type StorageBackend = 'sqlite' | 'lmdb' | 'memory';
@@ -14,7 +14,6 @@ export type CliCommand =
       database: string;
       storage: StorageBackend;
       help: boolean;
-      console: boolean;
       workflows?: string;
     }
   | { command: 'version' }

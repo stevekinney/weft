@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { flushPortableMicrotasks, yieldToPortableEventLoop } from './event-loop';
-import * as testingBarrel from './index';
+import { flushPortableMicrotasks, yieldToPortableEventLoop } from './event-loop.ts';
+import * as testingBarrel from './index.ts';
 
 describe('flushPortableMicrotasks', () => {
   it('lets queued microtasks settle before resolving', async () => {
@@ -12,7 +12,7 @@ describe('flushPortableMicrotasks', () => {
   });
 
   it('accepts a custom number of turns', async () => {
-    await expect(flushPortableMicrotasks(1)).resolves.toBeUndefined();
+    expect(flushPortableMicrotasks(1)).resolves.toBeUndefined();
   });
 });
 
@@ -47,7 +47,7 @@ describe('yieldToPortableEventLoop', () => {
       return;
     }
     try {
-      await expect(yieldToPortableEventLoop()).resolves.toBeUndefined();
+      expect(yieldToPortableEventLoop()).resolves.toBeUndefined();
     } finally {
       if (hadMessageChannel) {
         globalThis.MessageChannel = original;
@@ -59,7 +59,7 @@ describe('yieldToPortableEventLoop', () => {
   });
 });
 
-describe('@lostgradient/weft/testing barrel re-exports', () => {
+describe('@lostgradient/weft barrel re-exports', () => {
   // These helpers were defined and used internally but never reachable from the
   // public testing barrel. A consumer could not write
   // `afterEach(yieldToPortableEventLoop)` to drain a deferred inline launch

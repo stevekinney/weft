@@ -37,7 +37,7 @@ describe('EngineOptions.onLog host sink', () => {
     );
 
     const handle = await engine.start('sink-wf', null, { id: 'sink-1' });
-    await expect(handle.result()).resolves.toBe('ok');
+    expect(handle.result()).resolves.toBe('ok');
 
     const marker = sunk.find((r) => r.message === 'marker:hello');
     expect(marker).toBeDefined();
@@ -65,7 +65,7 @@ describe('EngineOptions.onLog host sink', () => {
     );
 
     const handle = await engine.start('host-owned-log-wf', null, { id: 'host-owned-log-1' });
-    await expect(handle.result()).resolves.toBe('ok');
+    expect(handle.result()).resolves.toBe('ok');
 
     expect(sunk.some((record) => record.message === 'marker:host-owned')).toBe(true);
     const events = await engine.getEvents(handle.id);
@@ -83,7 +83,7 @@ describe('EngineOptions.onLog host sink', () => {
     );
 
     const handle = await engine.start('console-wf', null, { id: 'console-1' });
-    await expect(handle.result()).resolves.toBe('ok');
+    expect(handle.result()).resolves.toBe('ok');
 
     expect(captured.records.some((r) => r.message === 'marker:console')).toBe(true);
   });
@@ -108,7 +108,7 @@ describe('EngineOptions.onLog host sink', () => {
 
     const handle = await engine.start('throwing-sink-wf', null, { id: 'throwing-1' });
     // The throw from the sink does NOT surface as a workflow application failure.
-    await expect(handle.result()).resolves.toBe('ok');
+    expect(handle.result()).resolves.toBe('ok');
 
     expect(sinkCalls).toBeGreaterThanOrEqual(1);
     // The record was not lost: it fell back to the console.
@@ -129,7 +129,7 @@ describe('EngineOptions.onLog host sink', () => {
     );
 
     const handle = await engine.start('speculate-sink-wf', null, { id: 'speculate-1' });
-    await expect(handle.result()).resolves.toBe(42);
+    expect(handle.result()).resolves.toBe(42);
 
     const marker = sunk.find((r) => r.message === 'marker:speculated');
     expect(marker).toBeDefined();
@@ -165,7 +165,7 @@ describe('EngineOptions.onLog host sink', () => {
     const handle = await engine.start('speculate-throwing-wf', null, {
       id: 'speculate-throwing-1',
     });
-    await expect(handle.result()).resolves.toBe(7);
+    expect(handle.result()).resolves.toBe(7);
 
     // The sink was reached from inside the branch (fix 2), threw, and the throw was
     // swallowed (fix 1) — the record fell back to console and the run completed.
@@ -233,7 +233,7 @@ describe('EngineOptions.onLog host sink', () => {
     const [consoleHandle] = await consoleRecovered.recoverAll();
     await sleepForTesting(10);
     await consoleRecovered.signal('spec-recover-id', 'go', 'go');
-    await expect(consoleHandle!.result()).resolves.toBe(1);
+    expect(consoleHandle!.result()).resolves.toBe(1);
     const consoleMarkers = markersOf(captured.records);
 
     // With-sink run: count the sink markers across the identical cycle.
@@ -255,7 +255,7 @@ describe('EngineOptions.onLog host sink', () => {
     const [sinkHandle] = await sinkRecovered.recoverAll();
     await sleepForTesting(10);
     await sinkRecovered.signal('spec-recover-id', 'go', 'go');
-    await expect(sinkHandle!.result()).resolves.toBe(1);
+    expect(sinkHandle!.result()).resolves.toBe(1);
     const sinkMarkers = markersOf(sink);
 
     // Parity (sink-count == console-count), anchored with the concrete marker so it

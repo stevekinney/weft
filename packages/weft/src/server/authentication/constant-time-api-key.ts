@@ -1,4 +1,10 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { tryLoadNodeBuiltin } from '../../runtime/portable.ts';
+
+function cryptography() {
+  const module = tryLoadNodeBuiltin('node:crypto');
+  if (module === undefined) throw new Error('API key authentication requires Bun or Node.js.');
+  return module;
+}
 
 export type ConstantTimeApiKeyEntry<T> = {
   readonly digest: Uint8Array;
@@ -11,7 +17,7 @@ export type ConstantTimeApiKeyMatcher<T> = {
 };
 
 function digestApiKey(key: string): Uint8Array {
-  return createHash('sha256').update(key, 'utf8').digest();
+  return cryptography().createHash('sha256').update(key, 'utf8').digest();
 }
 
 export function createConstantTimeApiKeyEntry<T>(
@@ -54,7 +60,7 @@ export function findConstantTimeApiKeyMatch<T>(
   // Hashing both sides first gives timingSafeEqual equal-length inputs for every
   // comparison. Always scan every stored digest; never return on the first match.
   for (let index = 0; index < entries.length; index += 1) {
-    if (timingSafeEqual(presentedDigest, entries[index]!.digest)) {
+    if (cryptography().timingSafeEqual(presentedDigest, entries[index]!.digest)) {
       matchedIndex = index;
     }
   }

@@ -34,3 +34,23 @@ export async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', copyBytesToArrayBuffer(utf8Encode(input)));
   return `${CONTENT_DIGEST_ALGORITHM}:${bytesToHex(new Uint8Array(digest))}`;
 }
+
+/**
+ * Synchronous counterpart to {@link sha256Hex}, same algorithm and output
+ * format (`sha256:<hex>`) — via `node:crypto`'s `createHash`, not
+ * `crypto.subtle.digest`. `subtle.digest` completes through a real
+ * event-loop turn (a native async completion, not a plain microtask chain),
+ * which is fine for work a caller genuinely `await`s but is a structural
+ * hazard for a value computed inside a fire-and-forget commit path — of
+ * which the durable task ledger's runtime (`core/task-ledger/task-attempt-runtime.ts`)
+ * has several by design (a WebSocket message handler, or a worker-disconnect
+ * handler, must return immediately rather than block on a durable write).
+ * Reaches the identical SHA-256 digest with no async gap at all, so it never
+ * races a caller (production or test) that does not itself await the
+ * eventual write settling.
+ */
+export function sha256HexSync(input: string): string {
+  const { createHash } = process.getBuiltinModule('node:crypto');
+  const digest = createHash('sha256').update(utf8Encode(input)).digest('hex');
+  return `${CONTENT_DIGEST_ALGORITHM}:${digest}`;
+}

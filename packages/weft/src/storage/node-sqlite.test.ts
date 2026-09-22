@@ -1,28 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 
+import { resolveCliEnvironment } from '../runtime/environment-configuration.ts';
 import { loadBetterSqlite3ForTest } from './node-sqlite-loader.ts';
 import { NodeSQLiteStorage } from './node-sqlite.ts';
 
+// The loader distinguishes the three ways a better-sqlite3 load can fail, because
+// their remedies differ and a single catch-all sentence hid an unbuilt binding
+// behind "the dependency is missing" for three investigations (COR-1278).
 const MISSING_BETTER_SQLITE_ERROR =
   'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).';
+const UNBUILT_BETTER_SQLITE_BINDING_ERROR =
+  'NodeSQLiteStorage found "better-sqlite3" installed, but its native binding was never compiled';
+const REFUSED_BETTER_SQLITE_BINDING_ERROR =
+  'NodeSQLiteStorage could not load the "better-sqlite3" native binding in this runtime.';
 
 // better-sqlite3 uses native bindings that aren't supported in Bun.
-// These tests are designed to run under Node.js. When running under Bun,
-// they verify only that the class exists and the capability check error
-// message is correct.
+// Bun launches the native integration cases in a Node subprocess and checks
+// their terminal result alongside the injected-constructor tests below.
 const IS_BUN = typeof globalThis.Bun !== 'undefined';
-
-function canLoadBetterSqlite3(): boolean {
-  try {
-    new NodeSQLiteStorage(':memory:')[Symbol.dispose]();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const AVAILABLE = !IS_BUN && canLoadBetterSqlite3();
-const describeIfAvailable = AVAILABLE ? describe : describe.skip;
 
 type FakeRow = { key: string; value: Uint8Array };
 
@@ -170,10 +168,10 @@ describe('NodeSQLiteStorage', () => {
     ).toThrow(MISSING_BETTER_SQLITE_ERROR);
   });
 
-  it('throws a clear runtime error when the better-sqlite3 native binding fails to load', () => {
+  it('reports a refused native binding as a runtime problem, not a missing package', () => {
     // Simulate better-sqlite3's native binding failing to dlopen under Bun: the
-    // require itself rejects with ERR_DLOPEN_FAILED. The loader recognizes this as
-    // a load failure and reshapes it into the actionable peer-dependency error.
+    // require itself rejects with ERR_DLOPEN_FAILED. The compiled addon is present,
+    // so telling the caller to install the package would be wrong advice.
     expect(() =>
       loadBetterSqlite3ForTest(() => {
         const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
@@ -182,241 +180,39 @@ describe('NodeSQLiteStorage', () => {
         error.code = 'ERR_DLOPEN_FAILED';
         throw error;
       }),
-    ).toThrow(MISSING_BETTER_SQLITE_ERROR);
+    ).toThrow(REFUSED_BETTER_SQLITE_BINDING_ERROR);
   });
 
-  it('throws a clear runtime error when the better-sqlite3 native binding is absent', () => {
+  it('reports an uncompiled native binding as an install-script problem', () => {
+    // The package is on disk and requirable; only `build/better_sqlite3.node` is
+    // absent, which is what an install with lifecycle scripts suppressed leaves
+    // behind. The remedy is a rebuild, not an install.
     expect(() =>
       loadBetterSqlite3ForTest(() => {
         throw new Error(
           'Could not locate the bindings file. Tried: /node_modules/better-sqlite3/build/better_sqlite3.node',
         );
       }),
-    ).toThrow(MISSING_BETTER_SQLITE_ERROR);
+    ).toThrow(UNBUILT_BETTER_SQLITE_BINDING_ERROR);
+  });
+
+  it('names the underlying failure rather than only the guidance', () => {
+    // The whole point of the change: the real error is in the message, not buried
+    // on `cause` where no assertion or test reporter prints it.
+    expect(() =>
+      loadBetterSqlite3ForTest(() => {
+        throw new Error(
+          'Could not locate the bindings file. Tried: /node_modules/better-sqlite3/build/better_sqlite3.node',
+        );
+      }),
+    ).toThrow('Underlying error: Could not locate the bindings file.');
   });
 
   if (IS_BUN) {
     it('throws a clear runtime error when better-sqlite3 is unavailable', () => {
-      expect(() => new NodeSQLiteStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
+      expect(() => new NodeSQLiteStorage(':memory:')).toThrow(REFUSED_BETTER_SQLITE_BINDING_ERROR);
     });
   }
-});
-
-describeIfAvailable('NodeSQLiteStorage (integration)', () => {
-  let storage: NodeSQLiteStorage;
-
-  beforeEach(() => {
-    storage = new NodeSQLiteStorage(':memory:');
-  });
-
-  afterEach(() => {
-    storage[Symbol.dispose]();
-  });
-
-  describe('get / put / delete', () => {
-    it('returns null for a missing key', async () => {
-      expect(await storage.get('missing')).toBeNull();
-    });
-
-    it('stores and retrieves a value', async () => {
-      const value = new Uint8Array([1, 2, 3]);
-      await storage.put('key1', value);
-      const result = await storage.get('key1');
-      expect(result).toEqual(value);
-    });
-
-    it('overwrites an existing key', async () => {
-      await storage.put('key1', new Uint8Array([1]));
-      await storage.put('key1', new Uint8Array([2]));
-      const result = await storage.get('key1');
-      expect(result).toEqual(new Uint8Array([2]));
-    });
-
-    it('deletes a key', async () => {
-      await storage.put('key1', new Uint8Array([1]));
-      await storage.delete('key1');
-      expect(await storage.get('key1')).toBeNull();
-    });
-
-    it('delete on missing key is a no-op', async () => {
-      // Should not throw.
-      await storage.delete('nonexistent');
-    });
-  });
-
-  describe('scan', () => {
-    beforeEach(async () => {
-      await storage.put('a:1', new Uint8Array([1]));
-      await storage.put('a:2', new Uint8Array([2]));
-      await storage.put('a:3', new Uint8Array([3]));
-      await storage.put('b:1', new Uint8Array([4]));
-    });
-
-    it('scans all keys with a matching prefix', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:')) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(3);
-      expect(results[0]![0]).toBe('a:1');
-      expect(results[1]![0]).toBe('a:2');
-      expect(results[2]![0]).toBe('a:3');
-    });
-
-    it('respects limit', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { limit: 2 })) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(2);
-    });
-
-    it('supports reverse ordering', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { reverse: true })) {
-        results.push(entry);
-      }
-      expect(results[0]![0]).toBe('a:3');
-      expect(results[2]![0]).toBe('a:1');
-    });
-
-    it('supports gt option', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { gt: 'a:1' })) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(2);
-      expect(results[0]![0]).toBe('a:2');
-    });
-
-    it('supports lt option', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { lt: 'a:3' })) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(2);
-      expect(results[1]![0]).toBe('a:2');
-    });
-
-    it('supports gte option', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { gte: 'a:2' })) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(2);
-      expect(results[0]![0]).toBe('a:2');
-    });
-
-    it('supports lte option', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { lte: 'a:2' })) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(2);
-      expect(results[1]![0]).toBe('a:2');
-    });
-
-    it('returns empty for non-matching prefix', async () => {
-      const results: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('z:')) {
-        results.push(entry);
-      }
-      expect(results).toHaveLength(0);
-    });
-
-    it('caches scan statements', async () => {
-      // Run two scans with the same shape but different parameters.
-      const results1: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { limit: 1 })) {
-        results1.push(entry);
-      }
-      const results2: [string, Uint8Array][] = [];
-      for await (const entry of storage.scan('a:', { limit: 2 })) {
-        results2.push(entry);
-      }
-
-      // Same SQL shape → single cache entry.
-      expect(storage.scanStatementCacheSize).toBe(1);
-      expect(results1).toHaveLength(1);
-      expect(results2).toHaveLength(2);
-    });
-  });
-
-  describe('batch', () => {
-    it('applies multiple operations atomically', async () => {
-      await storage.batch([
-        { type: 'put', key: 'k1', value: new Uint8Array([10]) },
-        { type: 'put', key: 'k2', value: new Uint8Array([20]) },
-        { type: 'put', key: 'k3', value: new Uint8Array([30]) },
-      ]);
-
-      expect(await storage.get('k1')).toEqual(new Uint8Array([10]));
-      expect(await storage.get('k2')).toEqual(new Uint8Array([20]));
-      expect(await storage.get('k3')).toEqual(new Uint8Array([30]));
-    });
-
-    it('handles mixed put and delete operations', async () => {
-      await storage.put('existing', new Uint8Array([1]));
-      await storage.batch([
-        { type: 'put', key: 'new', value: new Uint8Array([2]) },
-        { type: 'delete', key: 'existing' },
-      ]);
-
-      expect(await storage.get('new')).toEqual(new Uint8Array([2]));
-      expect(await storage.get('existing')).toBeNull();
-    });
-
-    it('handles empty batch', async () => {
-      // Should not throw.
-      await storage.batch([]);
-    });
-  });
-
-  describe('conditionalBatch', () => {
-    it('commits operations when every condition matches', async () => {
-      await storage.put('expected', new Uint8Array([1]));
-
-      const committed = await storage.conditionalBatch(
-        [{ key: 'expected', expectedValue: new Uint8Array([1]) }],
-        [{ type: 'put', key: 'written', value: new Uint8Array([2]) }],
-      );
-
-      expect(committed).toBe(true);
-      expect(await storage.get('written')).toEqual(new Uint8Array([2]));
-    });
-
-    it('returns false and skips writes when a condition does not match', async () => {
-      await storage.put('expected', new Uint8Array([1]));
-
-      const committed = await storage.conditionalBatch(
-        [{ key: 'expected', expectedValue: new Uint8Array([9]) }],
-        [{ type: 'put', key: 'skipped', value: new Uint8Array([2]) }],
-      );
-
-      expect(committed).toBe(false);
-      expect(await storage.get('skipped')).toBeNull();
-    });
-
-    it('supports delete operations inside a committed conditional batch', async () => {
-      await storage.put('delete-me', new Uint8Array([1]));
-
-      const committed = await storage.conditionalBatch(
-        [{ key: 'missing', expectedValue: null }],
-        [{ type: 'delete', key: 'delete-me' }],
-      );
-
-      expect(committed).toBe(true);
-      expect(await storage.get('delete-me')).toBeNull();
-    });
-  });
-
-  describe('dispose', () => {
-    it('closes the database cleanly', () => {
-      const instance = new NodeSQLiteStorage(':memory:');
-      // Should not throw.
-      instance[Symbol.dispose]();
-    });
-  });
 });
 
 it('supports the adapter behavior under Bun when a database constructor is injected', async () => {
@@ -499,4 +295,101 @@ it('supports the adapter behavior under Bun when a database constructor is injec
     'wal_autocheckpoint = 10000',
   ]);
   expect([...fake.preparedSql]).toContain('SELECT value FROM kv WHERE key = ?');
+});
+
+function resolveNativeNode(searchPath: string): string {
+  for (const directory of searchPath.split(delimiter).filter(existsSync)) {
+    const candidate = Bun.which('node', { PATH: directory });
+    if (candidate === null) continue;
+    const identity = Bun.spawnSync([
+      candidate,
+      '--eval',
+      'process.stdout.write(process.versions.bun ? "bun" : process.release.name)',
+    ]);
+    if (identity.exitCode === 0 && identity.stdout.toString() === 'node') return candidate;
+  }
+  throw new Error('Native SQLite integration requires Node.js.');
+}
+
+it('resolves native Node when a filesystem Bun shim shadows PATH', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-node-runtime-'));
+  try {
+    symlinkSync(process.execPath, join(directory, 'node'));
+    const runtime = resolveNativeNode(
+      [directory, resolveCliEnvironment().path ?? ''].join(delimiter),
+    );
+    const identity = Bun.spawnSync([runtime, '-p', 'typeof process.versions.bun']);
+    expect(identity.exitCode).toBe(0);
+    expect(identity.stdout.toString().trim()).toBe('undefined');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it('rejects a PATH containing only a filesystem Bun shim', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-node-runtime-'));
+  try {
+    symlinkSync(process.execPath, join(directory, 'node'));
+    expect(() => resolveNativeNode(directory)).toThrow(
+      'Native SQLite integration requires Node.js.',
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Summarize a failed integration child for the assertion message.
+ *
+ * The raw TAP of 21 identically-failing cases buries the one line that matters
+ * under repetition, and the distinct `error:` values are what identify the
+ * cause. Surfacing them — deduplicated, with the child's stderr, which carries
+ * anything that failed before TAP started — is what turns "0 pass 21 fail" into
+ * a diagnosis without a second run (COR-1278).
+ */
+function describeChildFailure(stdout: string, stderr: string): string {
+  const errors = [
+    ...new Set(
+      stdout
+        .split('\n')
+        .filter((line) => line.trimStart().startsWith('error:'))
+        .map((line) => line.trim()),
+    ),
+  ];
+  const sections = [
+    errors.length > 0 ? `distinct child errors:\n${errors.join('\n')}` : '',
+    stderr.trim() ? `child stderr:\n${stderr.trim()}` : '',
+    `full TAP:\n${stdout}`,
+  ];
+  return sections.filter((section) => section.length > 0).join('\n\n');
+}
+
+it('runs all native SQLite integration cases under Node', async () => {
+  // Bun's run.bun setting can inject both virtual and filesystem Node shims.
+  // Verify runtime identity while preserving the inherited runtime managers.
+  const environment = {
+    ...process.env,
+    PATH: (resolveCliEnvironment().path ?? '').split(delimiter).filter(existsSync).join(delimiter),
+  };
+  const runtime = resolveNativeNode(environment.PATH);
+  const child = Bun.spawn({
+    cmd: [
+      runtime,
+      '--test',
+      '--test-reporter=tap',
+      new URL('./node-sqlite-native.integration.ts', import.meta.url).pathname,
+    ],
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: environment,
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  expect(exitCode, describeChildFailure(stdout, stderr)).toBe(0);
+  expect(stdout).toContain('# tests 21');
+  expect(stdout).toContain('# pass 21');
+  expect(stdout).toContain('# skipped 0');
 });

@@ -1,9 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { serve } from '../server/index.ts';
+import { Engine, serve, workflow, type WorkflowContext } from '../index.ts';
 import { executeTail, streamWorkflowEvents } from './tail.ts';
 
 const encoder = new TextEncoder();
@@ -22,6 +19,8 @@ function sseResponse(frames: string[]): Response {
 }
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (_ctx: WorkflowContext) {
+  yield* [];
+  yield* [];
   return null;
 });
 
@@ -209,11 +208,13 @@ describe('weft tail', () => {
 
   it('suppresses streamed stdout under --quiet', async () => {
     const writeSpy = mock(() => true);
-    const fetchImpl = async () =>
-      sseResponse(['id: 1\nevent: token\ndata: hidden\n\n', 'event: done\ndata: \n\n']);
+    const fetchImpl = Object.assign(
+      async () => sseResponse(['id: 1\nevent: token\ndata: hidden\n\n', 'event: done\ndata: \n\n']),
+      { preconnect: globalThis.fetch.preconnect },
+    );
     const previousFetch = globalThis.fetch;
     const previousWrite = process.stdout.write;
-    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    globalThis.fetch = fetchImpl;
     process.stdout.write = writeSpy;
 
     try {

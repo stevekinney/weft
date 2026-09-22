@@ -9,9 +9,9 @@
 import { z } from 'zod';
 
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   validateWorkflowNameField,
   workflowsReadAccess,
@@ -25,10 +25,7 @@ const listWorkflowRevisionsOutput = z.unknown();
 export type ListWorkflowRevisionsInput = z.infer<typeof listWorkflowRevisionsInput>;
 export type ListWorkflowRevisionsOutput = readonly WorkflowRevisionRecord[];
 
-export const listWorkflowRevisionsOperation = defineOperation<
-  ListWorkflowRevisionsInput,
-  ListWorkflowRevisionsOutput
->({
+export const listWorkflowRevisionsOperation = defineOperation({
   name: 'weft.workflows.revisions.list',
   mcpExposable: false,
   summary: 'List every installed revision of a workflow',
@@ -39,14 +36,15 @@ export const listWorkflowRevisionsOperation = defineOperation<
   destructive: false,
   tags: ['Workflow Catalog'],
   inputSchema: listWorkflowRevisionsInput,
-  outputSchema: listWorkflowRevisionsOutput as z.ZodType<ListWorkflowRevisionsOutput>,
+  outputSchema: listWorkflowRevisionsOutput,
   access: workflowsReadAccess,
   producibleFaults: ['InvalidParams'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListWorkflowRevisionsOutput> => {
-    const e = engine as Engine;
+    assertOperationWorkflowMethods(engine, ['listRevisions']);
+    const e = engine;
     const name = validateWorkflowNameField(input.name);
     return e.workflows.listRevisions(name);
   },

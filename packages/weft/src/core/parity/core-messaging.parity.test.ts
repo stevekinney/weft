@@ -57,7 +57,7 @@ describe('core execution and messaging parity', () => {
 
     const handle = await engine.start('parity-greeting', { name: 'Ada' });
 
-    await expect(handle.result()).resolves.toBe('Hello, Ada');
+    expect(handle.result()).resolves.toBe('Hello, Ada');
     expect(formatGreetingMock.callCount).toBe(1);
     expect(formatGreetingMock.lastCall?.input).toEqual({ name: 'Ada' });
   });
@@ -77,7 +77,7 @@ describe('core execution and messaging parity', () => {
 
     await handle.signal('approval', { approved: true });
 
-    await expect(handle.result()).resolves.toEqual({ approved: true });
+    expect(handle.result()).resolves.toEqual({ approved: true });
   });
 
   it('buffers signals sent before the workflow reaches the wait point and delivers them in order', async () => {
@@ -99,7 +99,7 @@ describe('core execution and messaging parity', () => {
     await handle.signal('item', 'second');
     await handle.signal('release', null);
 
-    await expect(handle.result()).resolves.toEqual(['first', 'second']);
+    expect(handle.result()).resolves.toEqual(['first', 'second']);
   });
 
   it('preserves buffered signal order across engine recovery', async () => {
@@ -135,7 +135,7 @@ describe('core execution and messaging parity', () => {
     await recoveredHandle.signal('item', 'second');
     await recoveredHandle.signal('release', null);
 
-    await expect(recoveredHandle.result()).resolves.toEqual(['first', 'second']);
+    expect(recoveredHandle.result()).resolves.toEqual(['first', 'second']);
   });
 
   it('queries running workflow state without mutating it', async () => {
@@ -166,7 +166,7 @@ describe('core execution and messaging parity', () => {
     expect(await waitForQuery(handle, counterQuery)).toEqual({ counter: 7 });
 
     await handle.signal('finish', null);
-    await expect(handle.result()).resolves.toBe(7);
+    expect(handle.result()).resolves.toBe(7);
   });
 
   it('returns a typed update response synchronously to the caller', async () => {
@@ -188,11 +188,11 @@ describe('core execution and messaging parity', () => {
     const handle = await engine.start('parity-update-round-trip', null);
     await flushWorkflowTurn();
 
-    await expect(handle.update(approveUpdate, { amount: 42 })).resolves.toEqual({
+    expect(handle.update(approveUpdate, { amount: 42 })).resolves.toEqual({
       approved: true,
       amount: 42,
     });
-    await expect(handle.result()).resolves.toBe('approved:42');
+    expect(handle.result()).resolves.toBe('approved:42');
   });
 
   it('resumes a review workflow with an approved decision', async () => {
@@ -231,11 +231,11 @@ describe('core execution and messaging parity', () => {
       workflowId: handle.id,
     });
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       approved: true,
       reviewer: 'alice',
     });
-    await expect(engine.listReviews()).resolves.toHaveLength(0);
+    expect(engine.listReviews()).resolves.toHaveLength(0);
   });
 
   it('resumes a review workflow with a rejected decision', async () => {
@@ -275,10 +275,10 @@ describe('core execution and messaging parity', () => {
       workflowId: handle.id,
     });
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       decision: 'rejected',
       feedback: 'Amount exceeds the approval policy.',
     });
-    await expect(engine.listReviews()).resolves.toHaveLength(0);
+    expect(engine.listReviews()).resolves.toHaveLength(0);
   });
 });

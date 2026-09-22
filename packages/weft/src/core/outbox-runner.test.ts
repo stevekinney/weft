@@ -423,7 +423,7 @@ describe('runner: second review round', () => {
     expect(reads).toBeLessThan(12);
     // The settlement that follows the abort meets the same outage and surfaces
     // it to the caller; the lease stays `attempting` for maintenance.
-    await expect(pending).rejects.toThrow('storage down');
+    expect(pending).rejects.toThrow('storage down');
     failing = false;
     outbox.dispose();
   });
@@ -913,7 +913,7 @@ describe('runner: sixth review round', () => {
     storage.beforeGet = (key) => {
       if (key.includes('appdlv:')) throw new Error('storage offline');
     };
-    await expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow('storage offline');
+    expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow('storage offline');
     expect(adapter.requests).toHaveLength(0);
     outbox.dispose();
   });
@@ -949,7 +949,7 @@ describe('runner: sixth review round', () => {
     worker.dispose();
     clock.advance(100);
     const { outbox } = createOutboxFixture({ storage, clock, adapter: undefined });
-    await expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
+    expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
     expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('claimed');
     outbox.dispose();
   });
@@ -1245,7 +1245,7 @@ describe('runner: eighth review round', () => {
     storage.beforeGet = (key) => {
       if (key.includes('appobx:')) outbox.dispose();
     };
-    await expect(outbox.requestCancellation({ deliveryId: id })).rejects.toThrow(
+    expect(outbox.requestCancellation({ deliveryId: id })).rejects.toThrow(
       ApplicationDeliveryValidationError,
     );
     const observer = createOutboxFixture({ storage: remoteView(storage) }).outbox;

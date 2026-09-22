@@ -2,11 +2,11 @@
 
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { listWorkflowSources } from '../../core/engine/source-listing.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationEngineObject } from './operation-helpers.ts';
 
 const listCatalogSourcesInput = z
   .object({
@@ -32,10 +32,7 @@ const listCatalogSourcesOutput = z
 export type ListCatalogSourcesInput = z.infer<typeof listCatalogSourcesInput>;
 export type ListCatalogSourcesOutput = z.infer<typeof listCatalogSourcesOutput>;
 
-export const listCatalogSourcesOperation = defineOperation<
-  ListCatalogSourcesInput,
-  ListCatalogSourcesOutput
->({
+export const listCatalogSourcesOperation = defineOperation({
   name: 'weft.catalog.sources.list',
   mcpExposable: false,
   summary: 'List registered dynamic workflow sources',
@@ -56,7 +53,8 @@ export const listCatalogSourcesOperation = defineOperation<
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine, input }): Promise<ListCatalogSourcesOutput> => {
-    const entries = listWorkflowSources(engine as Engine);
+    assertOperationEngineObject(engine);
+    const entries = listWorkflowSources(engine);
     const limit = input.limit ?? 100;
     const offset = input.offset ?? 0;
     const page = entries.slice(offset, offset + limit);

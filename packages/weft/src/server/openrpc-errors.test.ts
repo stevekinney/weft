@@ -24,6 +24,9 @@ import {
 } from './operation-fault.ts';
 
 type OperationFaultWithCode<Code extends FaultCode> = Extract<OperationFault, { code: Code }>;
+function isFaultCode(value: string): value is FaultCode {
+  return Object.hasOwn(FAULT_CODE_TO_JSON_RPC_CODE, value);
+}
 // Bidirectional assertion: each fault's data type and the corresponding Zod
 // schema's inferred type must be mutually assignable. Catches drift in BOTH
 // directions — a schema narrower than the fault (would reject valid data) AND
@@ -117,7 +120,8 @@ describe('OpenRPC components.errors', () => {
     const faultCodes = Object.keys(FAULT_CODE_TO_JSON_RPC_CODE).toSorted();
 
     expect(Object.keys(errors).toSorted()).toEqual(faultCodes);
-    for (const faultCode of faultCodes as FaultCode[]) {
+    for (const faultCode of faultCodes) {
+      if (!isFaultCode(faultCode)) throw new Error(`unexpected fault code: ${faultCode}`);
       expect(errors[faultCode]).toMatchObject({
         code: FAULT_CODE_TO_JSON_RPC_CODE[faultCode],
         message: faultCode,

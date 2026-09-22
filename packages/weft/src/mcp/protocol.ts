@@ -9,7 +9,7 @@ import {
  *
  * @example
  * ```ts
- * import { MCP_PROTOCOL_VERSION } from '@lostgradient/weft/mcp';
+ * import { MCP_PROTOCOL_VERSION } from '@lostgradient/weft';
  *
  * const headers = new Headers({
  *   'Mcp-Protocol-Version': MCP_PROTOCOL_VERSION,
@@ -36,7 +36,7 @@ export const MCP_RESOURCE_TEMPLATES_LIST_METHOD = 'resources/templates/list';
  *
  * @example
  * ```ts
- * import { DEFAULT_MCP_MAX_BODY_BYTES } from '@lostgradient/weft/mcp';
+ * import { DEFAULT_MCP_MAX_BODY_BYTES } from '@lostgradient/weft';
  *
  * const maxBodyBytes = DEFAULT_MCP_MAX_BODY_BYTES;
  * void maxBodyBytes;

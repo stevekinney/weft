@@ -87,8 +87,22 @@ type AsyncActivityResolutionCallbacks = {
  */
 export class AsyncActivityDeferral extends Error {
   readonly token: string;
+  /**
+   * Optional side effect run by `parkDeferredAsyncActivity` immediately
+   * AFTER the pending token is durably registered, and only on that fresh
+   * registration path (never on the "a resolution already arrived" fast
+   * path). Remote activity dispatch (COR-152) uses this to enqueue the
+   * durable task ledger record strictly after the pending token exists —
+   * never before — so a result that arrives implausibly fast (e.g. an
+   * immediate same-process dispatch to an already-connected worker) can
+   * never race ahead of `engine.completeAsyncActivity`'s token lookup. If
+   * this throws, the throw propagates out of `parkDeferredAsyncActivity`
+   * instead of parking — the activity attempt fails visibly rather than
+   * leaving a registered token with no corresponding task.
+   */
+  readonly afterRegister: (() => Promise<void>) | undefined;
 
-  constructor(token: string) {
+  constructor(token: string, afterRegister?: () => Promise<void>) {
     super(
       `Activity deferred to out-of-band completion (token "${token}"). ` +
         'Complete it via engine.completeAsyncActivity(token, result) or ' +
@@ -96,6 +110,7 @@ export class AsyncActivityDeferral extends Error {
     );
     this.name = 'AsyncActivityDeferral';
     this.token = token;
+    this.afterRegister = afterRegister;
   }
 }
 
@@ -161,6 +176,11 @@ export async function parkDeferredAsyncActivity(
     createdAt: internals.options.getNow(),
     ...details,
   });
+  // Strictly after registration — see `AsyncActivityDeferral.afterRegister`'s
+  // doc comment for why the ordering matters. A throw here propagates instead
+  // of parking, so the caller observes a failed attempt rather than a
+  // registered token nothing will ever resolve.
+  await deferral.afterRegister?.();
   return new Promise<never>(() => {});
 }
 

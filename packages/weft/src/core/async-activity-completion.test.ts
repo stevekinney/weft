@@ -126,7 +126,7 @@ describe('async activity completion', () => {
 
     expect(await engine.listPendingAsyncActivities(handle.id)).toEqual({ items: [] });
 
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       approval: { decision: 'approved' },
     });
 
@@ -152,7 +152,7 @@ describe('async activity completion', () => {
 
     await client.activity.complete(token, 'callback-result');
 
-    await expect(handle.result()).resolves.toBe('callback-result');
+    expect(handle.result()).resolves.toBe('callback-result');
 
     engine[Symbol.dispose]();
   });
@@ -181,7 +181,7 @@ describe('async activity completion', () => {
 
     await client.activity.completeExceptionally(token, new Error('callback rejected'));
 
-    await expect(handle.result()).resolves.toBe('caught:callback rejected');
+    expect(handle.result()).resolves.toBe('caught:callback rejected');
 
     engine[Symbol.dispose]();
   });
@@ -190,9 +190,9 @@ describe('async activity completion', () => {
     await using storage = new MemoryStorage();
     const engine = new Engine({ storage });
 
-    await expect(
-      engine.completeAsyncActivity('async-act:v1:nope:0:1', 'value'),
-    ).rejects.toBeInstanceOf(AsyncActivityTokenNotFoundError);
+    expect(engine.completeAsyncActivity('async-act:v1:nope:0:1', 'value')).rejects.toBeInstanceOf(
+      AsyncActivityTokenNotFoundError,
+    );
 
     const wf = workflow({ name: 'once' })
       .activities({ awaitCallback })
@@ -209,7 +209,7 @@ describe('async activity completion', () => {
     await handle.result();
 
     // A consumed token is single-use and cannot be completed again.
-    await expect(engine.completeAsyncActivity(token, 'second')).rejects.toBeInstanceOf(
+    expect(engine.completeAsyncActivity(token, 'second')).rejects.toBeInstanceOf(
       AsyncActivityTokenNotFoundError,
     );
 
@@ -234,7 +234,7 @@ describe('async activity completion', () => {
 
     await engine.completeAsyncActivity(token, 'batched');
 
-    await expect(handle.result()).resolves.toBe('batched');
+    expect(handle.result()).resolves.toBe('batched');
     expect(await storage.get(KEYS.asyncActivity(handle.id, token))).toBeNull();
 
     engine[Symbol.dispose]();
@@ -293,7 +293,7 @@ describe('async activity completion', () => {
     await recoveredEngine.completeAsyncActivity(firstToken, { decision: 'approved-late' });
 
     const handle = recoveredEngine.getHandle(workflowId);
-    await expect(handle.result()).resolves.toEqual({
+    expect(handle.result()).resolves.toEqual({
       approval: { decision: 'approved-late' },
     });
 
@@ -368,15 +368,15 @@ describe('async activity completion', () => {
   it('rejects cursors that were not issued by the pending-activity query', async () => {
     await using engine = new Engine({ storage: new MemoryStorage() });
 
-    await expect(
+    expect(
       engine.listPendingAsyncActivities('pending-invalid-cursor', { cursor: 'not-a-cursor' }),
     ).rejects.toThrow('Invalid pending async activity cursor');
-    await expect(
+    expect(
       engine.listPendingAsyncActivities('pending-invalid-cursor', {
         cursor: 'pending-async:v1:%',
       }),
     ).rejects.toThrow('Invalid pending async activity cursor');
-    await expect(
+    expect(
       engine.listPendingAsyncActivities('pending-invalid-cursor', { limit: 0 }),
     ).rejects.toThrow('Pending async activity limit must be an integer between 1 and 200');
   });
@@ -410,7 +410,7 @@ describe('async activity completion', () => {
       encode(record('valid-token', 2)),
     );
 
-    await expect(engine.listPendingAsyncActivities(workflowId)).resolves.toEqual({
+    expect(engine.listPendingAsyncActivities(workflowId)).resolves.toEqual({
       items: [
         {
           token: 'valid-token',
@@ -501,7 +501,7 @@ describe('async activity completion acknowledgement durability', () => {
 
     // Once acknowledged, the single-use consumption is durable.
     expect(await storage.get(KEYS.asyncActivity(handle.id, token))).toBeNull();
-    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
+    expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
 
     engine[Symbol.dispose]();
   });
@@ -521,13 +521,13 @@ describe('async activity completion acknowledgement durability', () => {
     parked.reject(new Error('simulated storage failure'));
 
     // The caller must learn the completion did NOT stick, so it can retry.
-    await expect(ack).rejects.toThrow();
+    expect(ack).rejects.toThrow();
     const pendingAfterFailure = await engine.listPendingAsyncActivities(handle.id);
     expect(pendingAfterFailure.items[0]?.token).toBe(token);
 
     // The token must remain completable: the failed acknowledgement consumed nothing.
     await engine.completeAsyncActivity(token, { decision: 'second' });
-    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'second' } });
+    expect(handle.result()).resolves.toEqual({ approval: { decision: 'second' } });
 
     engine[Symbol.dispose]();
   });
@@ -545,7 +545,7 @@ describe('async activity completion acknowledgement durability', () => {
 
       storage.conditionalBatch = async () => false;
 
-      await expect(engine.completeAsyncActivity(token, { decision: 'approved' })).rejects.toThrow(
+      expect(engine.completeAsyncActivity(token, { decision: 'approved' })).rejects.toThrow(
         `Async activity acknowledgement for token "${token}" lost its precondition.`,
       );
 
@@ -585,7 +585,7 @@ describe('async activity completion acknowledgement durability', () => {
     // must not re-park the workflow waiting on a delivery that already happened.
     expect(await storage.get(KEYS.asyncActivity(workflowId, token))).toBeNull();
     const handle = recovered.getHandle(workflowId);
-    await expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
+    expect(handle.result()).resolves.toEqual({ approval: { decision: 'approved' } });
 
     recovered[Symbol.dispose]();
     storage[Symbol.dispose]();
@@ -617,7 +617,7 @@ describe('async activity completion acknowledgement durability', () => {
 
     expect(await storage.get(KEYS.asyncActivity(workflowId, token))).toBeNull();
     const handle = recovered.getHandle(workflowId);
-    await expect(handle.result()).resolves.toBe('caught:callback rejected');
+    expect(handle.result()).resolves.toBe('caught:callback rejected');
 
     recovered[Symbol.dispose]();
     storage[Symbol.dispose]();

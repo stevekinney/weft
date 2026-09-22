@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { Engine } from '../core/engine.ts';
-import { serve } from '../server/index.ts';
+import { Engine, serve } from '../index.ts';
 import { executeServer } from './server-commands.ts';
 import type { ServerCommand } from './types.ts';
 

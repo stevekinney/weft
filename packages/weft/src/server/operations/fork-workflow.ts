@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import type { Engine } from '../../core/engine.ts';
 import { ForkSourceReplacedError } from '../../core/engine/errors.ts';
 import type { ForkOptions } from '../../core/types.ts';
 import { VersionMismatchError } from '../../core/versioning.ts';
@@ -8,7 +7,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { readRestTextBody } from '../rest-body.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
 import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
 
 // `fromStep` is intentionally `unknown` at the schema boundary. The exact
@@ -157,7 +156,7 @@ export function resolveForkAccess(error: unknown): never {
   throw fault;
 }
 
-export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWorkflowOutput>({
+export const forkWorkflowOperation = defineOperation({
   name: 'weft.workflows.fork',
   mcpExposable: false,
   summary: 'Fork a workflow from a checkpoint',
@@ -170,7 +169,8 @@ export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWork
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ForkWorkflowOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['fork']);
+    const typedEngine = engine;
     const options = validateForkInput(input);
 
     try {

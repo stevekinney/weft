@@ -114,7 +114,7 @@ describe('timeline and replay', () => {
     engine.register(retryWorkflow);
 
     const handle = await engine.start('timeline-retry', null, { id: 'wf-timeline-retry' });
-    await expect(handle.result()).resolves.toBe('completed');
+    expect(handle.result()).resolves.toBe('completed');
 
     const initialTimeline = await engine.getTimeline(handle.id);
     expect(
@@ -251,7 +251,7 @@ describe('timeline and replay', () => {
     const handle = await engine.start('timeline-coordinator-failures', null, {
       id: 'wf-timeline-coordinator-failures',
     });
-    await expect(handle.result()).resolves.toBe('caught');
+    expect(handle.result()).resolves.toBe('caught');
     const timeline = await engine.getTimeline(handle.id);
 
     expect(timeline[0]?.branches).toEqual([

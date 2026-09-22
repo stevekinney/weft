@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { conformanceManifest } from './conformance-manifest.ts';
+import { resolveFixtureEnvironment } from './environment-configuration.ts';
 
 export type ConformanceWorkerFixture = 'conforming';
 
@@ -18,17 +19,14 @@ type InFlightTask = {
   workflowRevision?: string;
 };
 
-const serverUrl = Bun.env['WEFT_WORKER_URL'];
-const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '3');
-const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
-  .split(',')
-  .map((activity) => activity.trim())
-  .filter((activity) => activity.length > 0);
-const heartbeatIntervalMs = Number(Bun.env['WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS'] ?? '10000');
+const serverUrl = resolveFixtureEnvironment().workerUrl;
+const protocolVersion = resolveFixtureEnvironment().protocolVersion;
+const activities = resolveFixtureEnvironment().activities;
+const heartbeatIntervalMs = resolveFixtureEnvironment().heartbeatIntervalMs;
 const workerId = `conformance-worker-${crypto.randomUUID()}`;
 
 if (serverUrl === undefined) {
-  console.error('WEFT_WORKER_URL is required');
+  process.stderr.write(`WEFT_WORKER_URL is required\n`);
   process.exit(2);
 }
 
@@ -40,6 +38,12 @@ function send(message: Record<string, unknown>): void {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(message));
   }
+}
+
+function parseMessage(data: unknown): Record<string, unknown> | undefined {
+  const parsed: unknown = JSON.parse(String(data));
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  return Object.fromEntries(Object.entries(parsed));
 }
 
 function startHeartbeats(): void {
@@ -166,7 +170,8 @@ socket.addEventListener('open', () => {
 });
 
 socket.addEventListener('message', (event) => {
-  const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+  const parsed = parseMessage(event.data);
+  if (parsed === undefined) return;
   if (parsed['type'] === 'registerAck') {
     startHeartbeats();
   } else if (parsed['type'] === 'task') {
@@ -178,7 +183,7 @@ socket.addEventListener('message', (event) => {
     if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer);
     socket.close();
   } else if (parsed['type'] === 'registerError' || parsed['type'] === 'protocolError') {
-    console.error(JSON.stringify(parsed));
+    process.stderr.write(`${JSON.stringify(parsed)}\n`);
     socket.close();
   }
 });

@@ -8,14 +8,6 @@
  * @module client/local
  */
 
-import {
-  CLIENT_OPERATION_NAMES,
-  CLIENT_REST_OPERATION_BINDINGS,
-  type ClientOperationName,
-  type ClientOperationTypes,
-  type ClientOperations,
-} from '../cli/generated/operation-client.generated.ts';
-import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { Engine } from '../core/engine.ts';
 import {
   runtimeWorkflowEngine,
@@ -66,6 +58,13 @@ import type {
 import { messageName } from '../core/types.ts';
 import { createLocalClientStorage, type WeftClientStorage } from './client-storage.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
+import {
+  CLIENT_OPERATION_NAMES,
+  CLIENT_REST_OPERATION_BINDINGS,
+  type ClientOperationName,
+  type ClientOperationTypes,
+  type ClientOperations,
+} from './generated/operation-client.generated.ts';
 import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
@@ -76,6 +75,7 @@ import type {
 } from './interface.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 import { LocalHandle, LocalScheduleHandle } from './local-handles.ts';
+import { createCatalogWeftClient } from './operation-client-runtime.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 // ---------------------------------------------------------------------------

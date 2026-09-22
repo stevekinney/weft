@@ -387,7 +387,7 @@ describe('weft.events.sse', () => {
   });
 
   it('throws UnsupportedTransport when invoked without an object context', async () => {
-    await expect(
+    expect(
       fleetEventsSseOperation.invoke({
         input: {},
         principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),

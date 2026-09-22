@@ -15,15 +15,15 @@ import {
   type AuthorizationDecision,
   type DispatchContext,
   type DispatchResult,
-  type ErasedOperation,
+  type OperationMetadata,
   type PipelineTrace,
   type PipelineTraceMarker,
   type UnknownKeyDisposition,
   type UnknownKeyPolicy,
 } from './types.ts';
 
-export type PipelineParseOutcome =
-  { kind: 'ok'; input: unknown } | { kind: 'failure'; fault: OperationFault };
+export type PipelineParseOutcome<Input = unknown> =
+  { kind: 'ok'; input: Input } | { kind: 'failure'; fault: OperationFault };
 
 type PreParseOutcome =
   | {
@@ -34,8 +34,8 @@ type PreParseOutcome =
   | { kind: 'failure'; fault: OperationFault };
 
 /** Verify that an operation is available on the current transport. */
-export function checkTransport(
-  operation: ErasedOperation,
+export function checkTransport<Input, SchemaOutput>(
+  operation: OperationMetadata<Input, SchemaOutput>,
   context: DispatchContext,
 ): DispatchResult<never> | null {
   if (operation.transports[transportToAvailabilityKey(context.transport)]) return null;
@@ -51,8 +51,8 @@ export function checkTransport(
 }
 
 /** Verify the operation's static access policy against the caller principal. */
-export function checkAccess(
-  operation: ErasedOperation,
+export function checkAccess<Input, SchemaOutput>(
+  operation: OperationMetadata<Input, SchemaOutput>,
   context: DispatchContext,
 ): DispatchResult<never> | null {
   const access = evaluateAccess(operation.access, context.principal);
@@ -73,9 +73,9 @@ export function checkAccess(
 }
 
 /** Run the optional parameter-aware authorization hook. */
-export async function checkAuthorization(
-  operation: ErasedOperation,
-  input: unknown,
+export async function checkAuthorization<Input, SchemaOutput>(
+  operation: OperationMetadata<Input, SchemaOutput>,
+  input: Input,
   context: DispatchContext,
 ): Promise<DispatchResult<never> | null> {
   if (operation.authorize === undefined) return null;
@@ -116,12 +116,12 @@ export async function checkAuthorization(
  * run the schema's `safeParse`, and re-attach passthrough extras onto a
  * prototype-safe null-prototype object.
  */
-export function parseAndApplyUnknownKeyPolicy(
-  operation: ErasedOperation,
+export function parseAndApplyUnknownKeyPolicy<Input>(
+  operation: OperationMetadata<Input>,
   rawInput: unknown,
   policyKey: keyof UnknownKeyPolicy,
   pipelineTrace?: PipelineTrace,
-): PipelineParseOutcome {
+): PipelineParseOutcome<Input> {
   const policy = operation.unknownKeyPolicy[policyKey];
   const knownKeys = readKnownTopLevelKeys(operation);
   if (knownKeys.kind === 'failure') return knownKeys;
@@ -133,7 +133,7 @@ export function parseAndApplyUnknownKeyPolicy(
   if (parseResult.kind === 'failure') return parseResult;
   tracePipeline(pipelineTrace, 'parsed');
 
-  const parsed = parseResult.input as Record<string, unknown>;
+  const parsed = parseResult.input;
   if (policy !== 'passthrough') {
     tracePipeline(pipelineTrace, 'unknown-key-policy-applied');
     return { kind: 'ok', input: parsed };
@@ -153,8 +153,8 @@ export function tracePipeline(
   pipelineTrace(marker);
 }
 
-function readKnownTopLevelKeys(
-  operation: ErasedOperation,
+function readKnownTopLevelKeys<Input, SchemaOutput>(
+  operation: OperationMetadata<Input, SchemaOutput>,
 ): { kind: 'ok'; keys: ReadonlySet<string> } | { kind: 'failure'; fault: OperationFault } {
   try {
     return { kind: 'ok', keys: extractTopLevelObjectKeys(operation.inputSchema) };
@@ -218,23 +218,29 @@ function collectPassthroughExtras(
     .map((key) => [key, rawInput[key]] as const);
 }
 
-function buildPassthroughOutput(
-  parsed: Record<string, unknown>,
+function buildPassthroughOutput<Input>(
+  parsed: Input,
   passthroughExtras: ReadonlyArray<readonly [string, unknown]>,
-): Record<string, unknown> {
-  const merged: Record<string, unknown> = Object.create(null);
-  for (const [key, value] of Object.entries(parsed)) {
-    if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
-    merged[key] = value;
-  }
+): Input {
+  if (!isPlainObject(parsed)) return parsed;
+  Object.setPrototypeOf(parsed, null);
   for (const [key, value] of passthroughExtras) {
-    if (key in merged) continue;
-    merged[key] = value;
+    if (key in parsed) continue;
+    if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
+    Object.defineProperty(parsed, key, {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
   }
-  return merged;
+  return parsed;
 }
 
-function safeParseInput(inputSchema: z.ZodType, input: unknown): PipelineParseOutcome {
+function safeParseInput<Input>(
+  inputSchema: z.ZodType<Input>,
+  input: unknown,
+): PipelineParseOutcome<Input> {
   let parseResult: ReturnType<typeof inputSchema.safeParse>;
   try {
     parseResult = inputSchema.safeParse(input);
@@ -275,7 +281,7 @@ function readObjectProperty(
   property: PropertyKey,
 ): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
   try {
-    return { ok: true, value: (value as Record<PropertyKey, unknown>)[property] };
+    return { ok: true, value: Reflect.get(value, property) };
   } catch {
     return { ok: false };
   }

@@ -11,12 +11,9 @@
  * @module client/http-operations
  */
 
-import type {
-  CatalogTransport,
-  ClientRestOperationBinding,
-} from '../cli/operation-client-runtime.ts';
 import { isFaultCode } from '../core/fault-code.ts';
 import { HttpClientError, request } from './http-request.ts';
+import type { CatalogTransport, ClientRestOperationBinding } from './operation-client-runtime.ts';
 
 type JsonRpcSuccess = { readonly result: unknown };
 type JsonRpcFailure = {

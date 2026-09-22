@@ -194,7 +194,7 @@ describe('engine lifecycle coverage helpers', () => {
       createEngineLifecycleCallbacks(engine),
     );
 
-    await expect(handle.result()).resolves.toBe('started');
+    expect(handle.result()).resolves.toBe('started');
 
     engine[Symbol.dispose]();
   });
@@ -214,7 +214,7 @@ describe('engine lifecycle coverage helpers', () => {
       serializeCheckpoint(createCheckpoint('workflow-side-record')),
     );
 
-    await expect(
+    expect(
       recoverAll(
         { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
         createLifecycleCallbacks({
@@ -327,7 +327,7 @@ describe('engine lifecycle coverage helpers', () => {
   it('fork rejects missing source workflows, missing registrations, and missing checkpoints', async () => {
     const storage = new MemoryStorage();
 
-    await expect(
+    expect(
       fork(
         { storage } as never,
         'workflow-missing-source',
@@ -340,7 +340,7 @@ describe('engine lifecycle coverage helpers', () => {
       KEYS.workflow('workflow-missing-registration'),
       encode(createWorkflowState('workflow-missing-registration')),
     );
-    await expect(
+    expect(
       fork(
         { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
         'workflow-missing-registration',
@@ -363,7 +363,7 @@ describe('engine lifecycle coverage helpers', () => {
       ],
     ]);
 
-    await expect(
+    expect(
       fork(
         { registrations, storage } as never,
         'workflow-missing-registration',
@@ -374,7 +374,7 @@ describe('engine lifecycle coverage helpers', () => {
       'Checkpoint not found at step 3 for workflow "workflow-missing-registration"',
     );
 
-    await expect(
+    expect(
       fork(
         { registrations, storage } as never,
         'workflow-missing-registration',
@@ -427,7 +427,7 @@ describe('engine lifecycle coverage helpers', () => {
       workflowVersionTuples: new Map(),
     };
 
-    await expect(
+    expect(
       fork(
         internals as never,
         sourceWorkflowId,
@@ -487,7 +487,7 @@ describe('engine lifecycle coverage helpers', () => {
         },
       ],
     ]);
-    await expect(
+    expect(
       startWorkflow(
         {
           options: { getNow: () => 1_000, payloadSizePolicy: { maxBytes: null } },
@@ -1191,7 +1191,7 @@ describe('engine lifecycle coverage helpers', () => {
       encode(createWorkflowState(workflowId, { status: 'completed' })),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         {
           registrations: new Map(),
@@ -1226,7 +1226,7 @@ describe('engine lifecycle coverage helpers', () => {
       }),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         {
           registrations: new Map(),
@@ -1254,7 +1254,7 @@ describe('engine lifecycle coverage helpers', () => {
       serializeCheckpoint(createCheckpoint(workflowId)),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         {
           registrations: new Map(),
@@ -1276,7 +1276,7 @@ describe('engine lifecycle coverage helpers', () => {
 
     await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         {
           registrations: new Map(),
@@ -1321,7 +1321,7 @@ describe('engine lifecycle coverage helpers', () => {
       serializeCheckpoint(createCheckpoint(workflowId)),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         createResumeWorkflowFromStorageInternals({
           storage,
@@ -1349,7 +1349,7 @@ describe('engine lifecycle coverage helpers', () => {
       serializeCheckpoint(createCheckpoint(workflowId)),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         createResumeWorkflowFromStorageInternals({
           storage,
@@ -1397,7 +1397,7 @@ describe('engine lifecycle coverage helpers', () => {
       serializeCheckpoint(createCheckpoint(workflowId)),
     );
 
-    await expect(
+    expect(
       resumeWorkflowFromStorage(
         createResumeWorkflowFromStorageInternals({
           storage,

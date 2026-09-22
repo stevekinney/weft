@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import type { AccessPolicy } from './authorization.ts';
 import { isDiscoverable } from './discovery-filter.ts';
-import type { ErasedOperation } from './operation-catalog.ts';
+import { makeOperation } from './json-rpc-operation.test-support.ts';
 
-function operation(overrides: Partial<ErasedOperation>): ErasedOperation {
-  // Test-only cast: invoke parameter variance is intentionally relaxed in test fixtures.
-  return {
+type DiscoveryOverrides = {
+  readonly access?: AccessPolicy;
+  readonly discoverable?: boolean;
+};
+
+function operation(overrides: DiscoveryOverrides) {
+  return makeOperation({
     name: 'weft.test.discovery',
     summary: 'test operation',
     tags: [],
@@ -17,7 +22,7 @@ function operation(overrides: Partial<ErasedOperation>): ErasedOperation {
     unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
     invoke: async () => ({}),
     ...overrides,
-  } as ErasedOperation;
+  });
 }
 
 describe('isDiscoverable', () => {

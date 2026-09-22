@@ -1,7 +1,8 @@
-import { Database, Statement, type SQLQueryBindings } from 'bun:sqlite';
+import type { Database, SQLQueryBindings, Statement } from 'bun:sqlite';
+import { tryLoadNodeBuiltin } from '../runtime/portable.ts';
 
-import { runConditionalBatchBody } from './conditional-batch-body';
-import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
+import { runConditionalBatchBody } from './conditional-batch-body.ts';
+import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
   type BatchOperation,
@@ -9,9 +10,9 @@ import {
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface';
-import { assertReadOnlyQuery } from './read-only-query';
-import { scopedStorage } from './scoped-storage';
+} from './interface.ts';
+import { assertReadOnlyQuery } from './read-only-query.ts';
+import { scopedStorage } from './scoped-storage.ts';
 import {
   SQLITE_COUNT_KEYS_BY_PREFIX,
   SQLITE_CREATE_KEY_VALUE_TABLE,
@@ -24,15 +25,22 @@ import {
   buildSqliteKeyRangeSelect,
   buildSqliteKeyValueRangeSelect,
   buildSqlitePrefixRangeParameters,
-} from './sqlite-key-value-queries';
+} from './sqlite-key-value-queries.ts';
 
 type BunSQLiteStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
 
 /**
- * Runtime-neutral alias for the Bun SQLite adapter. Consumers that import
- * from `@lostgradient/weft/storage/sqlite` get this class under Bun.
+ * Runtime-neutral alias for the Bun SQLite adapter. Consumers importing
+ * `@lostgradient/weft/storage/sqlite` resolve here under Bun, and `storage/sqlite.ts` is a
+ * declaration-only `types` entry, so this alias is the only thing that exists at runtime.
+ * Without it the subpath type-checks for a consumer and throws on import.
  */
 export { BunSQLiteStorage as SQLiteStorage };
+
+/**
+ * Runtime-neutral alias for the Bun SQLite adapter. Consumers that import
+ * from `@lostgradient/weft` get this class under Bun.
+ */
 
 /**
  * SQLite-backed {@link Storage} using Bun's built-in `bun:sqlite` module.
@@ -48,7 +56,7 @@ export { BunSQLiteStorage as SQLiteStorage };
  *
  * @example
  * ```ts
- * import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
+ * import { BunSQLiteStorage } from '@lostgradient/weft';
  * import { workflow, Engine, type WorkflowContext } from '@lostgradient/weft';
  *
  * // Durable on-disk storage
@@ -106,7 +114,9 @@ export class BunSQLiteStorage implements Storage {
 
   constructor(path: string = ':memory:') {
     this.#persistence = path === ':memory:' ? 'ephemeral' : 'local';
-    this.#database = new Database(path);
+    const sqlite = tryLoadNodeBuiltin('bun:sqlite');
+    if (sqlite === undefined) throw new Error('BunSQLiteStorage requires the Bun runtime.');
+    this.#database = new sqlite.Database(path);
 
     this.#database.exec('PRAGMA journal_mode = WAL');
     this.#database.exec('PRAGMA synchronous = NORMAL');

@@ -196,3 +196,97 @@ export class TaskResultDeadLetteredEvent extends Event {
     this.errorMessage = errorMessage;
   }
 }
+
+/**
+ * Fired on the {@link Engine} when `ctx.run()` durably enqueues a remote
+ * activity task (COR-152) — the engine has just written the task's `queued`
+ * ledger record on its own storage and is asking whichever transport is
+ * currently attached (a `serve()`d server, or nothing at all) to dispatch it.
+ * A `serve()` call listens for this event to attempt an immediate dispatch to
+ * a connected worker; there is no requirement that anything is listening —
+ * an engine with no server attached still leaves the task durably queued, and
+ * the periodic reconciliation scan picks it up once a server does attach.
+ *
+ * This is purely a low-latency hint. Nothing about correctness depends on a
+ * listener reacting to it: `RemoteActivityQueuedEvent` fires at most once per
+ * fresh enqueue (never on an idempotent replay of an already-queued token),
+ * and a listener that fails or is absent never blocks or fails the enqueue
+ * itself.
+ *
+ * @example
+ * ```ts
+ * import { RemoteActivityQueuedEvent } from '@lostgradient/weft';
+ *
+ * const engineEvents = new EventTarget();
+ *
+ * engineEvents.addEventListener(RemoteActivityQueuedEvent.type, (event) => {
+ *   const queued = event as RemoteActivityQueuedEvent;
+ *   console.log('try dispatching', queued.operationId, 'on', queued.queue);
+ * });
+ *
+ * engineEvents.dispatchEvent(new RemoteActivityQueuedEvent('order-4417', 'wf-1', 'default'));
+ * ```
+ */
+export class RemoteActivityQueuedEvent extends Event {
+  static readonly type = 'activity:remote-queued' as const;
+  readonly operationId: string;
+  readonly workflowId: string;
+  readonly queue: string;
+
+  constructor(operationId: string, workflowId: string, queue: string) {
+    super(RemoteActivityQueuedEvent.type);
+    this.operationId = operationId;
+    this.workflowId = workflowId;
+    this.queue = queue;
+  }
+}
+
+/**
+ * Fired on the {@link Engine} when a pending async-activity token (whether
+ * from `activityExecution: { mode: 'remote' }` or an application's own
+ * `ctx.completeAsync()`) is discarded by terminal cleanup — the workflow it
+ * belonged to reached ANY terminal state (completed, failed, cancelled,
+ * timed out) while the token was still outstanding (acceptance criterion
+ * 10). A `serve()`d server listens for this to best-effort request
+ * cancellation of the matching durable task via the same `WeftServer.cancelTask`
+ * path an operator-initiated cancellation uses — `cancelTask` itself is a
+ * safe no-op for an `operationId` with no ledger record (an ordinary,
+ * non-remote `ctx.completeAsync()` token), so this fires unconditionally
+ * rather than needing to first determine the token's origin.
+ *
+ * Purely a best-effort hint, same posture as `RemoteActivityQueuedEvent`:
+ * the workflow's own result waiter is already settled by terminal
+ * transition machinery independent of whether anything reacts to this
+ * event, and an in-flight remote attempt nothing cancels still resolves
+ * eventually through the ledger's ordinary visibility-timeout/retry path.
+ *
+ * @example
+ * ```ts
+ * import { RemoteActivityCancellationRequestedEvent } from '@lostgradient/weft';
+ *
+ * const engineEvents = new EventTarget();
+ *
+ * engineEvents.addEventListener(
+ *   RemoteActivityCancellationRequestedEvent.type,
+ *   (event) => {
+ *     const abandoned = event as RemoteActivityCancellationRequestedEvent;
+ *     console.log('workflow', abandoned.workflowId, 'left', abandoned.operationId, 'outstanding');
+ *   },
+ * );
+ *
+ * engineEvents.dispatchEvent(
+ *   new RemoteActivityCancellationRequestedEvent('order-4417', 'wf-1'),
+ * );
+ * ```
+ */
+export class RemoteActivityCancellationRequestedEvent extends Event {
+  static readonly type = 'activity:remote-cancellation-requested' as const;
+  readonly operationId: string;
+  readonly workflowId: string;
+
+  constructor(operationId: string, workflowId: string) {
+    super(RemoteActivityCancellationRequestedEvent.type);
+    this.operationId = operationId;
+    this.workflowId = workflowId;
+  }
+}

@@ -117,7 +117,7 @@ describe('bootstrapOwnershipGates', () => {
       [Symbol.dispose]: () => base[Symbol.dispose](),
     };
 
-    await expect(
+    expect(
       bootstrapOwnershipGates({ storage: noCasStorage, ownershipMode: 'none', getNow: () => 0 }),
     ).resolves.toBeUndefined();
   });
@@ -181,7 +181,7 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
       encodeOwnershipModeMarker({ mode: 'workflow-lease', establishedAt: 10 }),
     );
 
-    await expect(
+    expect(
       assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
     ).resolves.toBeUndefined();
 
@@ -219,7 +219,7 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     const concurrentBytes = encodeOwnershipModeMarker({ mode: 'workflow-lease', establishedAt: 7 });
     const storage = createCasLossStorage({ concurrentWriteBytes: concurrentBytes });
 
-    await expect(
+    expect(
       assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
     ).resolves.toBeUndefined();
   });
@@ -253,7 +253,7 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
       vanishBeforeReread: true,
     });
 
-    await expect(
+    expect(
       assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
     ).rejects.toThrow(/absent again/);
   });
@@ -263,7 +263,7 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     // Bypass the typed encoder to write bytes that don't decode as a valid record.
     await storage.put(markerKey, new TextEncoder().encode(JSON.stringify({ mode: 'bogus-mode' })));
 
-    await expect(
+    expect(
       assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
     ).rejects.toThrow(/does not decode as a valid/);
 
@@ -278,7 +278,7 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     const corruptBytes = new TextEncoder().encode(JSON.stringify({ mode: 'bogus-mode' }));
     const storage = createCasLossStorage({ concurrentWriteBytes: corruptBytes });
 
-    await expect(
+    expect(
       assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
     ).rejects.toThrow(/does not decode as a valid/);
   });

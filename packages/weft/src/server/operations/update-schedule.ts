@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
@@ -48,7 +48,7 @@ const updateScheduleInput = z.object({
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleInput>;
 
-export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null>({
+export const updateScheduleOperation = defineOperation({
   name: 'weft.schedules.update',
   mcpExposable: false,
   summary: 'Update a recurring schedule',
@@ -67,7 +67,8 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<null> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['updateSchedule']);
+    const typedEngine = engine;
 
     // Validate the cadence here so REST and JSON-RPC share one error path.
     const spec = validateScheduleInputCadence(input);

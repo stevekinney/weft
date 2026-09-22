@@ -20,6 +20,7 @@ import { Engine } from '../../core/engine.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
@@ -53,14 +54,12 @@ describe('weft.schedules.list', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
-    const body = (await response.json()) as {
-      items?: Array<{ id: string }>;
-      total?: number;
-      limit?: number;
-      offset?: number;
-    };
+    const body = await response.json();
     expect(Array.isArray(body.items)).toBe(true);
-    expect(body.items?.map((s) => s.id).toSorted()).toEqual(['sched-a', 'sched-b']);
+    expect(body.items?.map((schedule: { id: string }) => schedule.id).toSorted()).toEqual([
+      'sched-a',
+      'sched-b',
+    ]);
     expect(typeof body.total).toBe('number');
     expect(typeof body.limit).toBe('number');
     expect(typeof body.offset).toBe('number');
@@ -71,7 +70,7 @@ describe('weft.schedules.list', () => {
 
     const handle = await engine.start('echo', { ok: true });
 
-    await expect(handle.result()).resolves.toEqual({ ok: true });
+    expect(handle.result()).resolves.toEqual({ ok: true });
   });
 
   it('returns 400 when the status query param is not valid', async () => {
@@ -88,7 +87,7 @@ describe('weft.schedules.list', () => {
     );
 
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
+    const body = await response.json();
     expect(body.error).toContain('status');
   });
 
@@ -142,7 +141,7 @@ describe('weft.schedules.list', () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { limit?: number };
+    const body = await response.json();
     expect(typeof body.limit).toBe('number');
   });
 
@@ -201,7 +200,7 @@ describe('weft.schedules.list', () => {
   it('maps EngineFailure faults to 500 with "Internal server error"', async () => {
     engine = createListSchedulesTestEngine();
 
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...listSchedulesOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -211,7 +210,7 @@ describe('weft.schedules.list', () => {
         };
         throw fault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules', { method: 'GET' }),
@@ -230,7 +229,7 @@ describe('weft.schedules.list', () => {
   it('shapes Unauthorized faults as 401', async () => {
     engine = createListSchedulesTestEngine();
 
-    const unauthorizedOperation = {
+    const unauthorizedOperation = defineOperation({
       ...listSchedulesOperation,
       invoke: async () => {
         throw {
@@ -239,7 +238,7 @@ describe('weft.schedules.list', () => {
           data: { reason: 'missing credentials' },
         } satisfies OperationFault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules', { method: 'GET' }),
@@ -258,7 +257,7 @@ describe('weft.schedules.list', () => {
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
     engine = createListSchedulesTestEngine();
 
-    const conflictOperation = {
+    const conflictOperation = defineOperation({
       ...listSchedulesOperation,
       invoke: async () => {
         throw {
@@ -267,7 +266,7 @@ describe('weft.schedules.list', () => {
           data: { reason: 'schedule conflict' },
         } satisfies OperationFault;
       },
-    };
+    });
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules', { method: 'GET' }),

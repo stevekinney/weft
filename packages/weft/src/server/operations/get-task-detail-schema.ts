@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 
-import { MAX_TASK_IDENTIFIER_BYTES, utf8ByteLength } from '../task-ledger.ts';
+import { MAX_TASK_IDENTIFIER_BYTES, utf8ByteLength } from '../../core/task-ledger/task-ledger.ts';
 
 export const getTaskDetailInput = z.object({
   // Bounded to the ledger's own MAX_TASK_IDENTIFIER_BYTES: the ledger can
@@ -47,7 +47,74 @@ export const executionRequirementSchema = z
   })
   .strict();
 
+/**
+ * Mirrors `WorkerExecutionIdentity` (`worker/manifest/types.ts`) field for
+ * field (COR-205, acceptance criterion 14 — one provenance type across
+ * server operations, generated clients, and this diagnostics surface). Not a
+ * secret: identifies the WORKER a past attempt ran on, not the fencing token
+ * that authorized it.
+ */
+export const executionIdentitySchema = z
+  .object({
+    workerId: z.string(),
+    manifestDigest: z.string(),
+    sdkVersion: z.string(),
+    runtimeName: z.string(),
+    runtimeVersion: z.string(),
+    deploymentName: z.string(),
+    buildId: z.string(),
+    artifactDigest: z.string(),
+    workflowType: z.string(),
+    workflowRevision: z.string(),
+    activityName: z.string(),
+    activityContractHash: z.string(),
+    protocolVersion: z.number(),
+  })
+  .strict();
+
+/**
+ * One durable `TaskAttemptRecord` (COR-205), projected for `weft.tasks.get`.
+ *
+ * Deliberately excludes the raw `attemptToken` (acceptance criteria 8 and
+ * 10) — `attemptTokenDigest` is the only fencing-adjacent field exposed,
+ * exactly as `task-attempt-types.ts` documents it never carrying the token
+ * itself. This is the one addition to `get-task-detail.ts`'s otherwise
+ * unchanged "excluded fields" list (`attemptToken`/`workerSessionId`/
+ * `executionIdentity` never projected from the CURRENT record): attempt
+ * HISTORY is exactly what criterion 9 ("a retry across builds displays both
+ * attempt identities") requires showing, so `executionIdentity` is
+ * projected here even though the live record's own copy stays excluded.
+ * `workerSessionId` stays excluded even here — it identifies a connection,
+ * not a build, and criterion 9 only asks for build/identity visibility.
+ */
+export const taskAttemptSchema = z
+  .object({
+    attempt: z.number().int().nonnegative(),
+    attemptTokenDigest: z.string(),
+    sessionGeneration: z.number().optional(),
+    executionIdentity: executionIdentitySchema.optional(),
+    executionRequirement: executionRequirementSchema.optional(),
+    claimedAt: z.number(),
+    disposition: z.enum([
+      'leased',
+      'requeued',
+      'retryExhausted',
+      'resolved',
+      'cancelled',
+      'deadLettered',
+    ]),
+    dispositionAt: z.number(),
+    dispositionReason: z.string().optional(),
+    lastHeartbeatAt: z.number().optional(),
+  })
+  .strict();
+
 const taskDetailBaseFields = {
+  // Acceptance criterion 9/13: every state — including terminal and
+  // dead-lettered — carries the full attempt history, oldest first. An
+  // empty array means the operation's ledger record predates COR-205 (no
+  // attempt record was ever written for it), not that it was never claimed.
+  attempts: z.array(taskAttemptSchema),
   operationId: z.string(),
   workflowId: z.string().optional(),
   // Not a secret — an external write fence, same as activity/finalizer
@@ -89,6 +156,12 @@ const attemptSchemaFields = {
 
 const leaseHolderSchemaFields = {
   leaseDeadline: z.number(),
+  // Absolute, heartbeat-immune deadline (COR-230's `RemoteTaskLeased.attemptDeadline`,
+  // widened onto the diagnostics surface by COR-220 "Operations/diagnostics
+  // surface for session and attempt state"). Optional for the same reason
+  // the underlying ledger field is: a hand-built or pre-COR-230 record may
+  // not carry one — absence means "no recorded cap", not "already expired".
+  attemptDeadline: z.number().optional(),
   firstQueuedAt: z.number(),
   lastQueuedAt: z.number(),
   startedAt: z.number(),

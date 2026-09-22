@@ -89,10 +89,10 @@ describe('Outbox waitForDue', () => {
 
   it('validates the wait budget', async () => {
     const { outbox } = createOutboxFixture();
-    await expect(outbox.waitForDue({ timeoutMs: -1 })).rejects.toThrow(
+    expect(outbox.waitForDue({ timeoutMs: -1 })).rejects.toThrow(
       ApplicationDeliveryValidationError,
     );
-    await expect(outbox.waitForDue({ pollIntervalMs: 0 })).rejects.toThrow(
+    expect(outbox.waitForDue({ pollIntervalMs: 0 })).rejects.toThrow(
       ApplicationDeliveryValidationError,
     );
     outbox.dispose();
@@ -169,7 +169,7 @@ describe('Outbox awaitCleanup', () => {
     const aborted = outbox.awaitCleanup({ deliveryId, timeoutMs: 1000, signal: controller.signal });
     await flush();
     controller.abort(new Error('caller gave up'));
-    await expect(aborted).rejects.toThrow('caller gave up');
+    expect(aborted).rejects.toThrow('caller gave up');
 
     // A first read that never returns within the budget has nothing to report.
     const stalled = createOutboxFixture({
@@ -183,7 +183,7 @@ describe('Outbox awaitCleanup', () => {
     const spent = stalled.awaitCleanup({ deliveryId, timeoutMs: 10 });
     await flush();
     await advanceTimersByTime(10);
-    await expect(spent).rejects.toThrow(WaitBudgetElapsedError);
+    expect(spent).rejects.toThrow(WaitBudgetElapsedError);
     stalled.dispose();
     outbox.dispose();
   });

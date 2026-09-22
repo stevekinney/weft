@@ -184,13 +184,13 @@ describe('resolveDefaultStorage', () => {
   });
 
   it('describes missing runtime globals when no default adapter is available', async () => {
-    await expect(resolveDefaultStorage({})).rejects.toThrow(
+    expect(resolveDefaultStorage({})).rejects.toThrow(
       'resolveDefaultStorage: requires Bun, Node, WebExtension storage, or IndexedDB.',
     );
   });
 
   it('rejects incomplete injected IndexedDB runtime globals', async () => {
-    await expect(
+    expect(
       resolveDefaultStorage({
         indexedDB: {
           open: () => {

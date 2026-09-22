@@ -11,7 +11,7 @@
  * @module core/contract/manifest-parse
  */
 
-import { isRecord } from '../../worker/manifest/is-record.ts';
+import { isPlainRecord } from '../../worker/manifest/is-plain-record.ts';
 import { utf8ByteLength } from '../../worker/manifest/utf8.ts';
 import {
   workflowRevisionManifestFailure,
@@ -268,7 +268,7 @@ function parseContractCollections(
 }
 
 function parseContract(value: unknown, path: string): Outcome<WorkflowContract> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return workflowRevisionManifestFailure('invalid-field', 'must be a JSON object', path);
   }
 
@@ -394,7 +394,7 @@ async function finalizeManifest(
 export async function parseWorkflowRevisionManifest(
   value: unknown,
 ): Promise<WorkflowRevisionManifestParseResult> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return workflowRevisionManifestFailure('not-an-object', 'manifest must be a JSON object');
   }
 

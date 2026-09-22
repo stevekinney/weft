@@ -365,12 +365,75 @@ describe('interval schedules', () => {
       return 'done';
     });
 
-    await expect(
-      engine.schedule('interval-invalid', null, { every: 'not-a-duration' }),
-    ).rejects.toThrow('Invalid schedule interval "every"');
+    expect(engine.schedule('interval-invalid', null, { every: 'not-a-duration' })).rejects.toThrow(
+      'Invalid schedule interval "every"',
+    );
 
-    await expect(engine.schedule('interval-invalid', null, { every: 0 })).rejects.toThrow(
+    expect(engine.schedule('interval-invalid', null, { every: 0 })).rejects.toThrow(
       'Schedule interval "every" must resolve to a positive number of milliseconds',
     );
+  });
+});
+
+// COR-79 pins an existing invariant rather than fixing a bug: a prior report
+// (against a different, published build of this package) claimed
+// `Engine.runMaintenance(now)` never fires a recurring-interval schedule
+// under a manual clock. Investigating against CURRENT source found the
+// mechanism already wired: `runMaintenance()` calls
+// `internals.scheduler.tick(now)`, and the scheduler's tick already scans the
+// `schedule-due:` keyspace and dispatches kind-`'schedule'` entries to
+// `handleScheduleTimer` exactly like `wf-deadline:`/`wf-delayed:` durable
+// timers (see `core/scheduler/scheduler-class.ts`'s `#scanExpiredTimers` and
+// `operations-time.ts`'s `handleTimerFired`). This test is the enforced
+// guard for that property: nothing else in this suite currently exercises
+// `runMaintenance()` against a recurring schedule, so without this test a
+// future refactor that split schedule evaluation out of the maintenance path
+// could silently reintroduce the reported symptom. `backgroundTasks:
+// 'manual'` guarantees no real interval is running, so a fire can only be
+// caused by the explicit `runMaintenance` call.
+describe('runMaintenance() deterministically drives the recurring-interval poller (COR-79)', () => {
+  it('fires exactly once per runMaintenance(now) call after a manual clock advances past a one-second interval, with no real timer running', async () => {
+    const clock = { now: START };
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage, getNow: () => clock.now, backgroundTasks: 'manual' });
+    const fired: number[] = [];
+    try {
+      registerWorkflow(engine, 'cor-79-interval', async function* () {
+        fired.push(clock.now);
+        return 'done';
+      });
+
+      const handle = await engine.schedule(
+        'cor-79-interval',
+        null,
+        { every: '1s' },
+        { id: 'cor-79-interval' },
+      );
+      const created = await handle.describe();
+      expect(created.nextFireAt).toBe(START + 1000);
+
+      // Advance the manual clock past the interval boundary, exactly as the
+      // filed reproduction describes, then drive the engine the ONLY
+      // documented deterministic way: `runMaintenance(now)`. No real timer
+      // exists under `backgroundTasks: 'manual'`, so a fire can only come
+      // from this call.
+      clock.now = START + 1000;
+      await engine.runMaintenance(clock.now);
+      await drainEngine();
+
+      expect(fired).toHaveLength(1);
+      const afterFirstFire = await handle.describe();
+      expect(afterFirstFire?.nextFireAt).toBe(START + 2000);
+
+      // A second advance-and-drive proves this is the ongoing recurring
+      // drive, not a one-off side effect of the first call.
+      clock.now = START + 2000;
+      await engine.runMaintenance(clock.now);
+      await drainEngine();
+
+      expect(fired).toHaveLength(2);
+    } finally {
+      engine[Symbol.dispose]();
+    }
   });
 });

@@ -35,7 +35,7 @@ import type {
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
  * import type { OutboxEventSink } from '@lostgradient/weft';
- * import { createFleetEventFeed } from '@lostgradient/weft/server/handler';
+ * import { createFleetEventFeed } from '@lostgradient/weft';
  *
  * const events: OutboxEventSink = createFleetEventFeed(new MemoryStorage());
  * void events;

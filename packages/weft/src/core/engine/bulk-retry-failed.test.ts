@@ -237,7 +237,7 @@ describe('bulk failed-workflow retry', () => {
 
     // No replacement run was created under "." — the race left it absent,
     // and it must STAY absent rather than get backfilled by a bypassed create.
-    await expect(engine.get('.')).resolves.toBeNull();
+    expect(engine.get('.')).resolves.toBeNull();
   });
 
   it('only retries failed workflows that match the supplied filter', async () => {

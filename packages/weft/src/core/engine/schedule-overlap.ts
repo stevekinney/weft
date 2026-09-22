@@ -1,3 +1,4 @@
+import { ScheduleSkippedEvent } from '../events.ts';
 import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import type { ScheduledRunStartOptions } from './schedule-run.ts';
@@ -46,7 +47,32 @@ export async function applyBlockedScheduleOccurrence(
     };
   }
 
-  return state;
+  // WFT-136/COR-105: the blocked fallthrough. `'allow'` returns before
+  // `applyBlockedScheduleOccurrence` is ever reached and the two branches above
+  // consume `'queue'` and `'cancel-running'`, so in practice this is
+  // `overlap: 'skip'` dropping the occurrence — the policy travels on the event
+  // rather than being asserted here, so a future blocked policy stays truthful.
+  const skippedAt = internals.options.getNow();
+  internals.engine.dispatchEvent(
+    new ScheduleSkippedEvent(
+      state.id,
+      skippedAt,
+      state.overlap,
+      occurrence,
+      state.currentWorkflowId,
+    ),
+  );
+  // COR-1224 — the durable half. The event above is a live signal and is gone
+  // the moment nobody is listening; a dropped occurrence creates no run, so
+  // without this nothing records that the tick happened at all. A counter and
+  // a timestamp rather than a durable row per tick: a schedule whose fires
+  // outlast its cadence collides forever, and per-tick rows would grow without
+  // bound to say "nothing happened".
+  return {
+    ...state,
+    skippedCount: state.skippedCount + 1,
+    lastSkippedAt: skippedAt,
+  };
 }
 
 async function startScheduleRunInOccupiedSlot(

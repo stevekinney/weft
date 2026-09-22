@@ -201,7 +201,7 @@ describe('Engine · owner-side signal poll for LIVE in-memory waiters', () => {
     const pass = await getInternals(engineA).workflowClaimRenewalTask!.runOnce();
     expect(pass.signalPoll?.status).toBe('completed');
 
-    await expect(engineA.getHandle(id).result()).resolves.toBe('live:from-b');
+    expect(engineA.getHandle(id).result()).resolves.toBe('live:from-b');
     expect(countFor(id, 'after')).toBe(1);
 
     await engineA[Symbol.asyncDispose]();

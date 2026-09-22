@@ -275,7 +275,7 @@ describe('WFT-21: retainedRecoveryRecords release via purge', () => {
         // Complete the run — its `WorkflowState` remains present
         // (unpurged), still pinned to v1.
         await engineA.signal(handle.id, 'go', 'done');
-        await expect(handle.result()).resolves.toBe('done:done');
+        expect(handle.result()).resolves.toBe('done:done');
         engineA[Symbol.dispose]();
         const terminalState = await engine.get(handle.id);
         expect(terminalState?.status).toBe('completed');

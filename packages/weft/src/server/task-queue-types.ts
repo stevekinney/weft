@@ -32,7 +32,8 @@ export interface PendingTask extends TaskLifecycleFields {
 /** Result reported by a long-poll worker after executing a task. */
 export interface TaskResult {
   operationId: string;
-  status: 'completed' | 'failed';
+  /** `'cancelled'` (COR-230) is a worker's cooperative response to a heartbeat-piggybacked cancellation signal. */
+  status: 'completed' | 'failed' | 'cancelled';
   value?: unknown;
   error?: string | undefined;
 }

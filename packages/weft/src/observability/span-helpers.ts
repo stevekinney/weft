@@ -1,6 +1,6 @@
-import type { OpenTelemetrySpan } from './no-op-telemetry';
-import { injectTraceParent } from './propagation';
-import type { InterceptionContext, ObservabilityState } from './types';
+import type { OpenTelemetrySpan } from './no-op-telemetry.ts';
+import { injectTraceParent } from './propagation.ts';
+import type { InterceptionContext, ObservabilityState } from './types.ts';
 
 export const DEFAULT_MAX_PAYLOAD_SIZE = 1024;
 

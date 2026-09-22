@@ -15,15 +15,15 @@ import { isAuthenticated, type Principal } from './principal.ts';
 
 /** Non-empty tuple of authorization scopes. Prevents `anyOf([])` / `allOf([])` at the type level. */
 export type ScopeRequirement =
-  | { kind: 'anyOf'; scopes: [AuthorizationScope, ...AuthorizationScope[]] }
-  | { kind: 'allOf'; scopes: [AuthorizationScope, ...AuthorizationScope[]] };
+  | { kind: 'anyOf'; scopes: readonly [AuthorizationScope, ...AuthorizationScope[]] }
+  | { kind: 'allOf'; scopes: readonly [AuthorizationScope, ...AuthorizationScope[]] };
 
 /** The only representable access policies for an operation. Invalid combinations are unrepresentable. */
 export type AccessPolicy =
   | { kind: 'public' }
   | { kind: 'authenticated' }
   | { kind: 'scoped'; scopes: ScopeRequirement }
-  | { kind: 'scopedAlternatives'; alternatives: [ScopeRequirement, ...ScopeRequirement[]] }
+  | { kind: 'scopedAlternatives'; alternatives: readonly [ScopeRequirement, ...ScopeRequirement[]] }
   | { kind: 'optionalAuth'; authenticatedScopes: ScopeRequirement };
 
 /**

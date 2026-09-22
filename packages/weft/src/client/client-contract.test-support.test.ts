@@ -22,9 +22,7 @@ describe('client contract test support', () => {
       },
     };
 
-    await expect(
-      waitForQueryReadyForTesting(client as never, 'workflow-ready'),
-    ).resolves.toBeUndefined();
+    expect(waitForQueryReadyForTesting(client as never, 'workflow-ready')).resolves.toBeUndefined();
     expect(attempts).toBe(3);
   });
 
@@ -33,7 +31,7 @@ describe('client contract test support', () => {
       query: async () => false,
     };
 
-    await expect(waitForQueryReadyForTesting(client as never, 'workflow-stuck')).rejects.toThrow(
+    expect(waitForQueryReadyForTesting(client as never, 'workflow-stuck')).rejects.toThrow(
       'Workflow workflow-stuck did not expose query handlers',
     );
   });
@@ -43,7 +41,7 @@ describe('client contract test support', () => {
       addEventListener: () => {},
     };
 
-    await expect(waitForHandleEventForTesting(handle, 'workflow:completed', 1)).rejects.toThrow(
+    expect(waitForHandleEventForTesting(handle, 'workflow:completed', 1)).rejects.toThrow(
       'workflow event "workflow:completed" did not arrive within 1ms',
     );
   });
@@ -59,7 +57,7 @@ describe('client contract test support', () => {
     const eventPromise = waitForHandleEventForTesting(handle, 'workflow:completed', 50);
     listener?.(new Event('workflow:completed'));
 
-    await expect(eventPromise).resolves.toBeInstanceOf(Event);
+    expect(eventPromise).resolves.toBeInstanceOf(Event);
   });
 
   it('round-trips the echo workflow result', async () => {
@@ -69,7 +67,7 @@ describe('client contract test support', () => {
 
       const handle = await engine.start('client-contract-echo', { hello: 'world' });
 
-      await expect(handle.result()).resolves.toEqual({ hello: 'world' });
+      expect(handle.result()).resolves.toEqual({ hello: 'world' });
     } finally {
       engine[Symbol.dispose]();
     }
@@ -86,15 +84,15 @@ describe('client contract test support', () => {
       const handle = await engine.start('client-contract-waiting', 'payload');
       await waitForQueryReadyForTesting(queryReadyClient, handle.id);
 
-      await expect(handle.query('echoInput', { detail: true })).resolves.toEqual({ detail: true });
-      await expect(handle.update('rename', { next: 'value' })).resolves.toEqual({
+      expect(handle.query('echoInput', { detail: true })).resolves.toEqual({ detail: true });
+      expect(handle.update('rename', { next: 'value' })).resolves.toEqual({
         accepted: true,
         input: 'payload',
         payload: { next: 'value' },
       });
 
       await handle.signal('continue', 'done');
-      await expect(handle.result()).resolves.toBe('payload:done');
+      expect(handle.result()).resolves.toBe('payload:done');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -112,9 +110,9 @@ describe('client contract test support', () => {
       await waitForQueryReadyForTesting(queryReadyClient, handle.id);
 
       await handle.signal('continue');
-      await expect(engine.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+      expect(engine.get(handle.id)).resolves.toMatchObject({ status: 'running' });
       await handle.signal('continue');
-      await expect(handle.result()).resolves.toBe('twice:done');
+      expect(handle.result()).resolves.toBe('twice:done');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -132,7 +130,7 @@ describe('client contract test support', () => {
       await waitForQueryReadyForTesting(queryReadyClient, handle.id);
 
       await handle.signal('object-signal', { signalId: 'abc123' });
-      await expect(handle.result()).resolves.toBe('object:abc123');
+      expect(handle.result()).resolves.toBe('object:abc123');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -148,7 +146,7 @@ describe('client contract test support', () => {
       const token = await tokenPromise;
 
       await engine.completeAsyncActivity(token, { approved: true });
-      await expect(handle.result()).resolves.toEqual({
+      expect(handle.result()).resolves.toEqual({
         input: 'async-input',
         resolved: { approved: true },
       });

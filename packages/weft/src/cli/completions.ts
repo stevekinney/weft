@@ -13,10 +13,11 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { resolveCliEnvironment } from '../runtime/environment-configuration.ts';
 import type { CommandOutput, CompletionShell, CompletionsCommand } from './types.ts';
 
 function homeDirectory(): string {
-  return Bun.env['HOME'] ?? homedir();
+  return resolveCliEnvironment().home ?? homedir();
 }
 
 /** Top-level commands offered for completion. */

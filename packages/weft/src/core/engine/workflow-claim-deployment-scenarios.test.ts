@@ -314,8 +314,8 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
 
       // Negative control: an explicit resume() this early loses the CAS —
       // proves the workflow is genuinely stranded, not just idle.
-      await expect(engineB.resume(id)).rejects.toBeInstanceOf(WorkflowClaimUnavailableError);
-      await expect(engineB.resume(id)).rejects.toMatchObject({
+      expect(engineB.resume(id)).rejects.toBeInstanceOf(WorkflowClaimUnavailableError);
+      expect(engineB.resume(id)).rejects.toMatchObject({
         workflowId: id,
         heldBy: holderBeforeCrash?.engineId,
       });
@@ -585,7 +585,7 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
 
       // The successor completes it normally, consuming the durably-buffered signal.
       const handle = await engineB.resume(id);
-      await expect(handle.result()).resolves.toBe('ran');
+      expect(handle.result()).resolves.toBe('ran');
       expect(runCountFor(id, 'before')).toBe(1);
       expect(runCountFor(id, 'after')).toBe(1);
 
@@ -601,7 +601,7 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       const engineA = await createDeploymentEngine(storage, () => now);
       expect(await storage.get(KEYS.ownershipModeMarker())).not.toBeNull();
 
-      await expect(Engine.create({ storage, workflows, ownership: 'lease' })).rejects.toThrow(
+      expect(Engine.create({ storage, workflows, ownership: 'lease' })).rejects.toThrow(
         OwnershipModeMismatchError,
       );
 

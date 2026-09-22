@@ -7,6 +7,7 @@ import {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
+import { resolveServerEnvironment } from '../../runtime/environment-configuration.ts';
 import type { FlattenedZodIssue, OperationFault, TransportKind } from '../operation-fault.ts';
 import type { TransportAvailability, UnknownKeyPolicy } from './types.ts';
 
@@ -209,7 +210,8 @@ function enforceProducibleFaults(
   const declared = operation.producibleFaults;
   if (declared !== undefined && declared.includes(code)) return;
 
-  const isStrict = Bun.env['WEFT_STRICT_FAULTS'] === '1' || Bun.env['NODE_ENV'] !== 'production';
+  const environment = resolveServerEnvironment();
+  const isStrict = environment.weftStrictFaults || environment.nodeEnv !== 'production';
   if (isStrict) {
     // Strict mode: throw a hard error so the regression is observable
     // through the test framework's normal failure path. The dispatcher

@@ -1,14 +1,13 @@
 #!/usr/bin/env bun
 
 export { removeRunLockfile, writeRunLockfile } from '../connection.ts';
+export { createWeftClient } from '../index.ts';
+export type { CatalogOperationName, WeftClient } from '../index.ts';
 export { executeApi } from './api.ts';
 export { executeCodegen } from './codegen.ts';
 export { executeCompletions } from './completions.ts';
 export { executeConformance } from './conformance.ts';
-export { loadConsoleMount } from './console.ts';
 export { executeDoctor } from './doctor.ts';
-export { createWeftClient } from './generated/operation-client.generated.ts';
-export type { CatalogOperationName, WeftClient } from './generated/operation-client.generated.ts';
 export {
   API_HELP_TEXT,
   CODEGEN_HELP_TEXT,

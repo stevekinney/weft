@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { ReviewRequest } from '../../core/review/index.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -15,7 +15,7 @@ const getReviewOutput = z.unknown();
 export type GetReviewInput = z.infer<typeof getReviewInput>;
 export type GetReviewOutput = ReviewRequest;
 
-export const getReviewOperation = defineOperation<GetReviewInput, GetReviewOutput>({
+export const getReviewOperation = defineOperation({
   name: 'weft.reviews.get',
   mcpExposable: false,
   summary: 'Get a specific review for a workflow',
@@ -26,13 +26,14 @@ export const getReviewOperation = defineOperation<GetReviewInput, GetReviewOutpu
   destructive: false,
   tags: ['Reviews'],
   inputSchema: getReviewInput,
-  outputSchema: getReviewOutput as z.ZodType<GetReviewOutput>,
+  outputSchema: getReviewOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<GetReviewOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['getReview']);
+    const e = engine;
     const review = await e.getReview(input.workflowId, input.reviewId);
     if (review === null) {
       const fault: OperationFault = {

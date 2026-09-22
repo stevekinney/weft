@@ -13,6 +13,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { getWorkflowResultOperation, getWorkflowResultRestBinding } from './get-workflow-result.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -20,12 +21,14 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
   input: unknown,
 ) {
+  yield* [];
   return input;
 });
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (ctx: WorkflowContext) {
   return yield* ctx.waitForSignal<string>('release');
 });
 const failingWorkflow = workflow({ name: 'failing' }).execute(async function* () {
+  yield* [];
   throw new Error('workflow failed');
 });
 
@@ -215,7 +218,7 @@ describe('weft.workflows.result.get', () => {
     // "Internal server error" 500 so internal detail never reaches the
     // wire. The real message is still carried on the fault for JSON-RPC.
     const { engine } = createEngineWithStorage();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...getWorkflowResultOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -225,7 +228,7 @@ describe('weft.workflows.result.get', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(
@@ -271,56 +274,10 @@ describe('weft.workflows.result.get', () => {
       return wrapped;
     };
 
-    // Capture the real implementations BEFORE spying so the mock bodies below call
-    // through without recursing into the spy.
-    const realSetTimeout = globalThis.setTimeout;
-    const realClearTimeout = globalThis.clearTimeout;
-
-    // Bun assigns small recycled integer timer ids, so asserting `clearTimeout` was
-    // called with the race timer's *id value* gives a false positive: an unrelated
-    // handler timer can be cleared under a coincidentally-equal recycled id. Instead,
-    // return a unique tagged sentinel object for the 30_000-delay race timer and assert
-    // `clearTimeout` received that exact object by identity. Object identity cannot
-    // collide with recycled integers, so the assertion fails reliably without the fix.
-    const raceTimerTag = Symbol('workflow result race timer');
-    type TimerSentinel = {
-      readonly tag: typeof raceTimerTag;
-      // The wrapped real id is only ever handed back to `realClearTimeout`, whose
-      // parameter is `unknown`-compatible, so the concrete timer type is irrelevant.
-      readonly realTimerId: unknown;
-    };
-    const isTimerSentinel = (value: unknown): value is TimerSentinel =>
-      typeof value === 'object' &&
-      value !== null &&
-      (value as { tag?: unknown }).tag === raceTimerTag;
-
-    let raceTimerSentinel: TimerSentinel | undefined;
-
-    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      const realTimerId = realSetTimeout(handler, timeout, ...args);
-      if (timeout === 30_000) {
-        // The race timer's "id" is a sentinel the production code holds only to pass
-        // back to `clearTimeout` (mocked below to unwrap it); the cast is contained to
-        // this round-trip.
-        const sentinel: TimerSentinel = { tag: raceTimerTag, realTimerId };
-        raceTimerSentinel = sentinel;
-        return sentinel;
-      }
-      return realTimerId;
-    }) as typeof globalThis.setTimeout);
-
-    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(((
-      timerId?: ReturnType<typeof globalThis.setTimeout>,
-    ) => {
-      if (isTimerSentinel(timerId)) {
-        return realClearTimeout(timerId.realTimerId as Parameters<typeof realClearTimeout>[0]);
-      }
-      return realClearTimeout(timerId);
-    }) as typeof globalThis.clearTimeout);
+    // Bun's spy wrapper forwards the native timer calls and records return values,
+    // allowing the exact race handle to be compared with the clear call.
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout');
 
     try {
       const response = await handleRequest(
@@ -333,12 +290,17 @@ describe('weft.workflows.result.get', () => {
       );
 
       expect(response.status).toBe(200);
-      // The race timer must have been scheduled, and `clearTimeout` must have been
-      // called with that exact sentinel — proving the finally cleared the race timer.
-      expect(raceTimerSentinel).toBeDefined();
-      expect(clearTimeoutSpy.mock.calls.some(([timerId]) => timerId === raceTimerSentinel)).toBe(
-        true,
-      );
+      // The race timer must have been scheduled, and the real handle must be cleared.
+      const raceTimerCall = setTimeoutSpy.mock.calls.find(([, timeout]) => timeout === 30_000);
+      expect(raceTimerCall).toBeDefined();
+      if (raceTimerCall === undefined) throw new Error('expected race timer call');
+      const raceTimerIndex = setTimeoutSpy.mock.calls.indexOf(raceTimerCall);
+      const raceTimerResult = setTimeoutSpy.mock.results[raceTimerIndex];
+      if (raceTimerResult?.type !== 'return' || raceTimerResult.value === undefined) {
+        throw new Error('expected native race timer handle');
+      }
+      const raceTimerId = raceTimerResult.value;
+      expect(clearTimeoutSpy.mock.calls.some(([timerId]) => timerId === raceTimerId)).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();

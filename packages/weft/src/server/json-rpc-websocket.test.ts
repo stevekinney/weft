@@ -18,15 +18,12 @@ import { z } from 'zod';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed } from './fleet-event-feed.ts';
 import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
+import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
 } from './json-rpc-websocket.ts';
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationDefinition,
-} from './operation-catalog.ts';
+import { createOperationRegistry } from './operation-catalog.ts';
 import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subscription.ts';
 import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
@@ -55,25 +52,6 @@ function createWebSocketOperationRegistry() {
     workflowEventsSubscriptionOperation,
     fleetEventsSubscriptionOperation,
   ]);
-}
-
-function makeOp<I, O>(
-  overrides: Partial<OperationDefinition<I, O>> & {
-    name: string;
-    inputSchema: z.ZodType<I>;
-    outputSchema: z.ZodType<O>;
-    invoke: OperationDefinition<I, O>['invoke'];
-  },
-): ErasedOperation {
-  return {
-    summary: 'test op',
-    tags: [],
-    destructive: false,
-    access: { kind: 'public' },
-    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
-    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-    ...overrides,
-  } as unknown as ErasedOperation;
 }
 
 function makeEmitter(): JsonRpcWebSocketEmitter & {

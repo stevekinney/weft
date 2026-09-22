@@ -495,3 +495,46 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     // No-op for now; handles are lightweight
   }
 }
+
+/**
+ * Returned by `engine.prepare()` (COR-75): a two-phase alternative to
+ * `engine.start()` for a consumer whose own contract requires the durable
+ * workflow record to exist — readable via `engine.get(handle.id)` or
+ * `engine.list()` — before its own start hook returns, without paying that
+ * hook's latency inside the durable commit.
+ *
+ * The initial record is already committed by the time `prepare()` resolves;
+ * no execution has begun. Call `launch()` to begin execution — same
+ * ownership and lease semantics as `engine.start()`, since the claim was
+ * already acquired when `prepare()` committed — or `abandon()` to discard
+ * the prepared run without ever launching it, which records a terminal
+ * `'cancelled'` transition (tagged `PREPARED_WORKFLOW_ABANDONED_REASON`)
+ * instead of leaving an orphaned `'pending'` record.
+ *
+ * Deliberately narrower than {@link WorkflowHandle}: nothing is running yet,
+ * so there is no `result()`/`signal()`/`cancel()` to call. Read state via
+ * `engine.get(handle.id)` and act on the run itself (`.cancel()`,
+ * `.result()`, ...) through the handle `launch()` resolves to.
+ *
+ * @example
+ * ```ts
+ * import { Engine, workflow, type PreparedWorkflowHandle } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.register(workflow({ name: 'onboarding' }).execute(async function* () {
+ *   return 'done';
+ * }));
+ *
+ * const prepared: PreparedWorkflowHandle = await engine.prepare('onboarding', null);
+ * const record = await engine.get(prepared.id);
+ * console.log(record?.status); // 'pending' — committed, not yet executing
+ *
+ * const handle = await prepared.launch();
+ * console.log(await handle.result()); // 'done'
+ * ```
+ */
+export interface PreparedWorkflowHandle<TResult = unknown> {
+  readonly id: string;
+  launch(): Promise<WorkflowHandle<TResult>>;
+  abandon(): Promise<void>;
+}

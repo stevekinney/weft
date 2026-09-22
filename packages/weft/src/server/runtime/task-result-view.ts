@@ -28,23 +28,23 @@
  * @module server/runtime/task-result-view
  */
 
-import type { Storage } from '../../storage/interface.ts';
-import { sha256Hex } from '../../worker/manifest/content-digest.ts';
-import { markWorkflowResultAdopted } from '../task-ledger-transitions.ts';
+import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-runtime.ts';
+import { markWorkflowResultAdopted } from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskDeadLettered,
   type RemoteTaskTerminal,
-} from '../task-ledger.ts';
-import { commitTaskLedgerTransition } from './task-ledger-runtime.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import type { Storage } from '../../storage/interface.ts';
+import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 
 /**
  * Public, storage-agnostic view of a single task-ledger record.
  *
  * @example
  * ```ts
- * import { serve, type TaskResultView } from '@lostgradient/weft/server';
+ * import { serve, type TaskResultView } from '@lostgradient/weft';
  * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });

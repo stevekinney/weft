@@ -14,7 +14,7 @@
  */
 
 import type { Storage } from '../../storage/interface.ts';
-import { decodeScheduleState } from './validation/schedule.ts';
+import { decodeScheduleState } from './validation/schedule-decode.ts';
 
 /**
  * Scan `storage` for schedules whose `workflowType` and `pinnedRevision`

@@ -919,7 +919,7 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
       ),
     );
 
-    await expect(engine.resume('standalone-resume-ghost-1')).rejects.toThrow(
+    expect(engine.resume('standalone-resume-ghost-1')).rejects.toThrow(
       WorkflowRevisionUnavailableError,
     );
 

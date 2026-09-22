@@ -9,6 +9,7 @@ import type { Engine } from '../core/engine.ts';
 import { getEnginePayloadSizeMaxBytes } from '../core/engine/payload-size-policy.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
+import { resolveServerEnvironment } from '../runtime/environment-configuration.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import {
   buildTLSOptions,
@@ -35,6 +36,7 @@ import {
   registerWorkflowEventLifecycle,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
+import { installRemoteActivityEventBridges } from './runtime/remote-activity-event-bridges.ts';
 import { shutdownAllWorkers } from './runtime/shutdown.ts';
 import { runTaskLedgerRecovery } from './runtime/task-ledger-recovery.ts';
 import {
@@ -54,6 +56,17 @@ const RECONCILIATION_MULTIPLIER = 12;
 
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
+/**
+ * Default and maximum cancellation grace period (COR-230, acceptance
+ * criterion 15) — how long `cancelTask` waits for a worker's cooperative
+ * `taskResult(status: 'cancelled')` before the reconciliation scanner
+ * force-settles the attempt as cancelled with `uncertain: true`. Bounded the
+ * same way `workerReconnectGracePeriodMs` is, for the same reason: an
+ * unbounded value would let a single stuck cancellation hold a `cancelling`
+ * record open indefinitely.
+ */
+const DEFAULT_CANCELLATION_GRACE_PERIOD_MS = 30_000;
+const MAX_CANCELLATION_GRACE_PERIOD_MS = 300_000;
 
 /**
  * Hard ceiling on the raw WebSocket frame size for every connection (worker
@@ -108,6 +121,22 @@ export function clampWorkerReconnectGracePeriod(value: number | undefined): numb
   return Math.floor(value);
 }
 
+/**
+ * Clamp a user-supplied `cancellationGracePeriodMs` into `[0, 300_000]`.
+ * Returns the 30 000ms default when undefined or non-finite. `0` forces
+ * every leased-origin cancellation to be immediately eligible for
+ * non-cooperative, uncertain settlement on the very next reconciliation
+ * scan — intended only for tests proving that path.
+ */
+export function clampCancellationGracePeriod(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_CANCELLATION_GRACE_PERIOD_MS;
+  }
+  if (value < 0) return 0;
+  if (value > MAX_CANCELLATION_GRACE_PERIOD_MS) return MAX_CANCELLATION_GRACE_PERIOD_MS;
+  return Math.floor(value);
+}
+
 function authenticationRequiredByEnvironment(rawValue: string | undefined): boolean {
   if (rawValue === undefined) return false;
   const normalizedValue = rawValue.trim().toLowerCase();
@@ -121,7 +150,7 @@ function authenticationRequiredByEnvironment(rawValue: string | undefined): bool
 
 export function assertAuthenticationPosture(
   options: ServeOptions,
-  environmentRequirement = Bun.env[AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE],
+  environmentRequirement = resolveServerEnvironment().weftServerAuthenticationRequired,
 ): void {
   if (options.auth) return;
   const environmentRequiresAuthentication =
@@ -273,6 +302,7 @@ export function buildServerContext(
       workerRegistry,
       taskQueue,
       metricsCollector: serverMetricsCollector,
+      ...(options.operations === undefined ? {} : { additionalOperations: options.operations }),
     }),
     liveRestBindings: createLiveRestBindings(),
     supportedAuthenticationSchemes: deriveSupportedOpenApiSecuritySchemes(options.auth),
@@ -294,6 +324,7 @@ export function buildServerContext(
     workerReconnectGracePeriodMs: clampWorkerReconnectGracePeriod(
       options.workerReconnectGracePeriodMs,
     ),
+    cancellationGracePeriodMs: clampCancellationGracePeriod(options.cancellationGracePeriodMs),
     payloadSizeMaxBytes: getEnginePayloadSizeMaxBytes(engine),
     pendingWorkerRequeues: new Map(),
     scanRunning: false,
@@ -411,7 +442,7 @@ export function registerStackDisposers(
   // default `Engine` `registerWorkflowEventLifecycle` expects — see the
   // field's JSDoc / #708.
   stack.defer(
-    registerWorkflowEventLifecycle(options.engine as Engine, context, broadcastingHandle),
+    registerWorkflowEventLifecycle(options.engine as Engine, context, broadcastingHandle, options),
   );
   stack.defer(() =>
     shutdownAllWorkers(
@@ -421,6 +452,11 @@ export function registerStackDisposers(
         : { timeoutMs: options.workerShutdownTimeoutMs, stopWaitingWhenIdle: true },
     ),
   );
+
+  // COR-152: low-latency hint for a remote activity task the engine enqueued
+  // directly (bypassing `dispatchTask`) — see that module's doc comment for
+  // why correctness never depends on this listener.
+  stack.defer(installRemoteActivityEventBridges(context, options));
 
   const schedulesTaskReconciliation = !consumeManual(options, context, onOperationCleanup);
   const visibilityPollHandle = schedulesTaskReconciliation

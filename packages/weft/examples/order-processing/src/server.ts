@@ -1,15 +1,15 @@
-import { Engine } from '@lostgradient/weft';
-import { serve } from '@lostgradient/weft/server';
-import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+import { BunSQLiteStorage, Engine, serve } from '@lostgradient/weft';
+import { resolveExampleEnvironment } from '../../environment-configuration.ts';
 
 import { createOrderProcessingEngine, orderProcessingSchedule } from './registry';
 
-const port = Number(Bun.env['PORT'] ?? 7321);
-const hostname = Bun.env['HOST'] ?? '127.0.0.1';
-const databasePath = Bun.env['WEFT_DATABASE_PATH'] ?? './order-processing.sqlite';
+const environment = resolveExampleEnvironment();
+const port = environment.port;
+const hostname = environment.host ?? '127.0.0.1';
+const databasePath = environment.weftDatabasePath ?? './order-processing.sqlite';
 
 if (import.meta.main) {
-  using storage = new SQLiteStorage(databasePath);
+  using storage = new BunSQLiteStorage(databasePath);
   await using engine = createOrderProcessingEngine(new Engine({ storage }));
   await engine.recoverAll({ acknowledgeUnknownWorkflowTypes: true });
   try {
@@ -27,7 +27,7 @@ if (import.meta.main) {
     publicOrigin: `http://localhost:${port}`,
   });
 
-  console.log(`Order processing example listening at ${server.url}`);
+  process.stdout.write(`Order processing example listening at ${server.url}\n`);
 
   await new Promise(() => {});
 }

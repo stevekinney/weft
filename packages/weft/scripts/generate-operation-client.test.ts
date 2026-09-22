@@ -2,411 +2,42 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { z } from 'zod';
+import {
+  createOperationClientSources,
+  OPERATION_CLIENT_DIRECTORY,
+} from './generate-operation-client.ts';
 
-import type {
-  CatalogOperationTypes,
-  ClientOperationTypes,
-} from '../src/cli/generated/operation-client.generated.ts';
 import {
   createCatalogSnapshot,
   stringifyCatalogSnapshot,
-} from '../src/cli/operation-catalog-snapshot.ts';
-import type { AccessPolicy } from '../src/server/authorization.ts';
-import { defineOperation } from '../src/server/operation-registry.ts';
+} from '../src/server/operation-catalog-snapshot.ts';
+import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
+import { assignAliasNames } from './operation-client-aliases.ts';
+import { canonicalKey, schemaToNode } from './operation-client-schema.ts';
+
 import {
-  MAX_BATCH_OPERATIONS,
-  MAX_SCAN_LIMIT,
-  type StorageCapabilities,
-} from '../src/storage/interface.ts';
-import {
-  aliasNameFor,
-  assignAliasNames,
-  canonicalKey,
-  createOperationClientSource,
-  isHoistWorthy,
-  OPERATION_CLIENT_PATH,
-  renderNode,
-  schemaToNode,
-  selectAliases,
-  type TypeNode,
-} from './generate-operation-client.ts';
-
-const NO_ALIASES = new Map<string, string>();
-
-function snapshotTestOperation(name: string, access: AccessPolicy) {
-  return defineOperation({
-    name,
-    mcpExposable: false,
-    summary: 'Snapshot access test operation',
-    destructive: false,
-    inputSchema: z.object({}),
-    outputSchema: z.null(),
-    access,
-    transports: {
-      http: true,
-      jsonRpcHttp: true,
-      jsonRpcStdio: true,
-      jsonRpcWebSocket: true,
-    },
-    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-    invoke: async () => null,
-  });
+  generatedSourcesText,
+  snapshotOperation,
+  snapshotTestOperation,
+} from './operation-client-test-support.ts';
+function compareAliasEntries(first: [string, string], second: [string, string]): number {
+  return first[0] < second[0] ? -1 : 1;
 }
 
-function snapshotOperation(name: string) {
-  const operation = createCatalogSnapshot().operations.find((candidate) => candidate.name === name);
-  if (operation === undefined) {
-    throw new Error(`Missing operation snapshot ${name}`);
-  }
-  return operation;
-}
-
-/** Render a JSON Schema with no alias substitution — the pre-hoist baseline. */
-function renderInline(schema: Record<string, unknown>): string {
-  return renderNode(schemaToNode(schema), NO_ALIASES);
-}
-
-describe('schemaToNode + renderNode — emitted text contract', () => {
-  // These assertions pin the exact TypeScript text the generator emits for each
-  // supported schema feature. Snapshot schemas arrive key-sorted, so on the real
-  // catalog this matches the pre-refactor `Object.entries` order byte-for-byte;
-  // the explicit field sort here is the intentional, enforced invariant.
-  it('renders primitives', () => {
-    expect(renderInline({ type: 'string' })).toBe('string');
-    expect(renderInline({ type: 'number' })).toBe('number');
-    expect(renderInline({ type: 'integer' })).toBe('number');
-    expect(renderInline({ type: 'boolean' })).toBe('boolean');
-    expect(renderInline({ type: 'null' })).toBe('null');
-  });
-
-  it('renders arrays as ReadonlyArray', () => {
-    expect(renderInline({ type: 'array', items: { type: 'string' } })).toBe(
-      'ReadonlyArray<string>',
-    );
-    expect(renderInline({ type: 'array' })).toBe('ReadonlyArray<unknown>');
-  });
-
-  it('renders type-array unions preserving member order', () => {
-    expect(renderInline({ type: ['string', 'number', 'null'] })).toBe('string | number | null');
-  });
-
-  it('renders primitive const literals and anyOf unions', () => {
-    expect(renderInline({ const: 'delayed', type: 'string' })).toBe('"delayed"');
-    expect(renderInline({ const: false, type: 'boolean' })).toBe('false');
-    expect(
-      renderInline({
-        anyOf: [
-          {
-            type: 'object',
-            properties: { kind: { const: 'delayed', type: 'string' } },
-            required: ['kind'],
-          },
-          { type: 'null' },
-        ],
-      }),
-    ).toBe('{ readonly "kind": "delayed"; } | null');
-  });
-
-  it('falls back to unknown for unsupported type-array members', () => {
-    expect(renderInline({ type: ['string', 123] })).toBe('string | unknown');
-    expect(renderInline({ anyOf: [{ type: 'string' }, 123] })).toBe('unknown');
-  });
-
-  // WFT-93: `z.discriminatedUnion()` compiles to `oneOf` with a `const`
-  // discriminant on each branch. These pin the emitted union so consumers can
-  // narrow on the discriminant rather than receiving `unknown`.
-  it('renders oneOf branches as a union preserving const discriminants', () => {
-    expect(
-      renderInline({
-        oneOf: [
-          {
-            type: 'object',
-            properties: { state: { const: 'queued', type: 'string' }, queue: { type: 'string' } },
-            required: ['state', 'queue'],
-          },
-          {
-            type: 'object',
-            properties: { state: { const: 'terminal', type: 'string' } },
-            required: ['state'],
-          },
-        ],
-      }),
-    ).toBe(
-      '{ readonly "queue": string; readonly "state": "queued"; } | { readonly "state": "terminal"; }',
-    );
-  });
-
-  it('flattens a oneOf branch that is itself a oneOf', () => {
-    expect(
-      renderInline({
-        oneOf: [
-          {
-            type: 'object',
-            properties: { state: { const: 'queued', type: 'string' } },
-            required: ['state'],
-          },
-          {
-            oneOf: [
-              {
-                type: 'object',
-                properties: {
-                  disposition: { const: 'resolved', type: 'string' },
-                  state: { const: 'terminal', type: 'string' },
-                },
-                required: ['state', 'disposition'],
-              },
-              {
-                type: 'object',
-                properties: {
-                  disposition: { const: 'cancelled', type: 'string' },
-                  state: { const: 'terminal', type: 'string' },
-                },
-                required: ['state', 'disposition'],
-              },
-            ],
-          },
-        ],
-      }),
-    ).toBe(
-      '{ readonly "state": "queued"; } | ' +
-        '{ readonly "disposition": "resolved"; readonly "state": "terminal"; } | ' +
-        '{ readonly "disposition": "cancelled"; readonly "state": "terminal"; }',
-    );
-  });
-
-  it('renders a nullable oneOf nested under anyOf', () => {
-    expect(
-      renderInline({
-        anyOf: [
-          {
-            oneOf: [
-              {
-                type: 'object',
-                properties: { status: { const: 'pending', type: 'string' } },
-                required: ['status'],
-              },
-              {
-                type: 'object',
-                properties: { status: { const: 'failed', type: 'string' } },
-                required: ['status'],
-              },
-            ],
-          },
-          { type: 'null' },
-        ],
-      }),
-    ).toBe('{ readonly "status": "pending"; } | { readonly "status": "failed"; } | null');
-  });
-
-  it('falls back to unknown for unsupported oneOf members', () => {
-    expect(renderInline({ oneOf: [{ type: 'string' }, 123] })).toBe('unknown');
-    expect(renderInline({ oneOf: [] })).toBe('unknown');
-  });
-
-  // JSON Schema applies sibling combinators conjunctively. Composing them is a
-  // non-goal here, so degrade rather than silently honoring one and dropping
-  // the other — the same posture `src/cli/codegen-emit.ts` takes. `allOf` is an
-  // intersection this emitter never interprets, so it degrades even alone, and
-  // even when sibling `type`/`properties` keywords would otherwise have matched.
-  it('falls back to unknown for allOf and for co-occurring combinators', () => {
-    expect(renderInline({ allOf: [{ type: 'string' }] })).toBe('unknown');
-    expect(
-      renderInline({
-        allOf: [{ type: 'object', properties: { a: { type: 'string' } } }],
-        type: 'object',
-        properties: { b: { type: 'string' } },
-      }),
-    ).toBe('unknown');
-    expect(renderInline({ anyOf: [{ type: 'string' }], oneOf: [{ type: 'number' }] })).toBe(
-      'unknown',
-    );
-    expect(renderInline({ anyOf: [{ type: 'string' }], allOf: [{ type: 'number' }] })).toBe(
-      'unknown',
-    );
-    expect(renderInline({ anyOf: [] })).toBe('unknown');
-  });
-
-  it('renders objects with sorted fields and required handling', () => {
-    expect(
-      renderInline({
-        type: 'object',
-        properties: { b: { type: 'string' }, a: { type: 'number' } },
-        required: ['a'],
-      }),
-    ).toBe('{ readonly "a": number; readonly "b"?: string; }');
-  });
-
-  it('renders a no-properties object as Record<string, unknown>', () => {
-    expect(renderInline({ type: 'object' })).toBe('Record<string, unknown>');
-  });
-
-  it('renders nested objects', () => {
-    expect(
-      renderInline({
-        type: 'object',
-        properties: { range: { type: 'object', properties: { gt: { type: 'number' } } } },
-      }),
-    ).toBe('{ readonly "range"?: { readonly "gt"?: number; }; }');
-  });
-
-  it('renders a string enum as a literal union preserving member order', () => {
-    expect(renderInline({ type: 'string', enum: ['started', 'signalled'] })).toBe(
-      '"started" | "signalled"',
-    );
-    // A bare string enum (no explicit `type`) is still a literal union.
-    expect(renderInline({ enum: ['a', 'b'] })).toBe('"a" | "b"');
-  });
-
-  it('escapes string-enum members with literal-sensitive characters', () => {
-    // Raw interpolation would emit invalid or wrong TypeScript for these; the
-    // generator must produce a properly escaped string literal per member.
-    expect(renderInline({ enum: ["can't"] })).toBe('"can\'t"');
-    expect(renderInline({ enum: ['a\\b'] })).toBe('"a\\\\b"');
-    expect(renderInline({ enum: ['line\nbreak'] })).toBe('"line\\nbreak"');
-    expect(renderInline({ enum: ['quote"d'] })).toBe('"quote\\"d"');
-  });
-
-  it('collapses unsupported schema features to unknown', () => {
-    // Non-string and mixed enums fall through rather than guessing a literal.
-    expect(renderInline({ enum: [1, 2] })).toBe('unknown');
-    expect(renderInline({ enum: ['a', 2] })).toBe('unknown');
-    expect(renderInline({ enum: [] })).toBe('unknown');
-    expect(renderInline({ const: { unsupported: true } })).toBe('unknown');
-    expect(renderInline({})).toBe('unknown');
-  });
-});
-
-describe('schedule update operation generation', () => {
-  it('emits every mutable schedule option in the generated input type', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
-    const updateScheduleEntry = source.match(
-      /'weft\.schedules\.update': \{[\s\S]*?readonly output: null;/,
-    )?.[0];
-
-    expect(updateScheduleEntry).toContain('readonly backfill?: unknown;');
-    expect(updateScheduleEntry).toContain('readonly description?: unknown;');
-    expect(updateScheduleEntry).toContain('readonly jitter?: unknown;');
-    expect(updateScheduleEntry).toContain('readonly overlap?: unknown;');
-    expect(snapshotOperation('weft.schedules.update').producibleFaults).toContain('InvalidParams');
-  });
-});
-
-describe('generated catalog — string enums tighten to literal unions (#466)', () => {
-  // Pin the regression: the generated client must surface the startOrSignal
-  // discriminant as a literal union, not a widened `string`. Imported from the
-  // generated module so a generator regression is caught here, not re-derived.
-  it('types startorsignal output.outcome as the literal union', () => {
-    type Outcome = CatalogOperationTypes['weft.workflows.startorsignal']['output']['outcome'];
-    const started: Outcome = 'started';
-    const signalled: Outcome = 'signalled';
-    expect([started, signalled]).toEqual(['started', 'signalled']);
-    // @ts-expect-error 'string' is too wide; the generated type is the literal union.
-    const widened: Outcome = 'not-an-outcome' as string;
-    void widened;
-  });
-});
-
-describe('generated catalog — storage capabilities', () => {
-  it('keeps the generated output structurally compatible with StorageCapabilities', () => {
-    const profile = {
-      persistence: 'remote',
-      readAfterWrite: 'eventual',
-      scanConsistency: 'best-effort',
-      atomicBatch: false,
-      conditionalBatch: false,
-      boundedRangeDelete: false,
-    } satisfies StorageCapabilities;
-    const generated: CatalogOperationTypes['weft.storage.capabilities']['output'] = profile;
-    const roundTrip: StorageCapabilities = generated;
-
-    expect(roundTrip).toEqual(profile);
-  });
-});
-
-describe('generated client transport coverage', () => {
-  it('includes ordinary REST-only unary operations without pretending JSON-RPC supports them', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
-
-    expect(source).toContain('export const CLIENT_OPERATION_NAMES = [');
-    expect(source).toMatch(
-      /CLIENT_OPERATION_NAMES = \[[\s\S]*'weft\.tasks\.diagnostics\.deadletters\.clear'/,
-    );
-    const catalogNames = source.slice(
-      source.indexOf('export const CATALOG_OPERATION_NAMES'),
-      source.indexOf('export type CatalogOperationName'),
-    );
-    expect(catalogNames).not.toContain('weft.tasks.diagnostics.deadletters.clear');
-    expect(source).toContain("'weft.tasks.diagnostics.deadletters.clear': {");
-    expect(source).toContain("path: '/tasks/diagnostics/dead-letter/:operationId'");
-  });
-
-  it('keeps byte and streaming storage operations on the dedicated storage facade', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
-    const clientNames = source.slice(
-      source.indexOf('export const CLIENT_OPERATION_NAMES'),
-      source.indexOf('export type ClientOperationName'),
-    );
-
-    expect(clientNames).not.toContain('weft.storage.get');
-    expect(clientNames).not.toContain('weft.storage.put');
-    expect(clientNames).not.toContain('weft.storage.delete');
-    expect(clientNames).not.toContain('weft.storage.scan');
-    expect(clientNames).not.toContain('weft.storage.batch');
-    expect(clientNames).not.toContain('weft.storage.conditionalbatch');
-  });
-
-  it('types the REST-only dead-letter clear operation for client call sites', () => {
-    type Input = ClientOperationTypes['weft.tasks.diagnostics.deadletters.clear']['input'];
-    type Output = ClientOperationTypes['weft.tasks.diagnostics.deadletters.clear']['output'];
-    const input: Input = { operationId: 'op-1' };
-    const output: Output = { ok: true };
-    expect({ input, output }).toEqual({ input: { operationId: 'op-1' }, output: { ok: true } });
-  });
-
-  it('types delayed and unadopted-terminal diagnostics without unknown output', () => {
-    type Item = ClientOperationTypes['weft.tasks.diagnostics']['output']['items'][number];
-    const delayed: Item = {
-      kind: 'delayed',
-      state: 'queued',
-      operationId: 'op-delayed',
-      queue: 'payments',
-      retryCount: 1,
-      requeueCount: 1,
-      availableAt: 30_000,
-      evidence: ['delayed'],
-    };
-    const unadopted: Item = {
-      kind: 'unadopted-terminal',
-      state: 'resolved',
-      operationId: 'op-terminal',
-      queue: 'payments',
-      terminalAt: 1_000,
-      adopted: false,
-      evidence: ['unadopted'],
-    };
-    expect([delayed.kind, unadopted.kind]).toEqual(['delayed', 'unadopted-terminal']);
-    // @ts-expect-error terminal diagnostics deliberately expose no attempt-count history.
-    unadopted.retryCount;
-  });
-});
-
-describe('createOperationClientSource — generated output', () => {
+describe('createOperationClientSources — generated output', () => {
   it('carries raw storage operation caps in the catalog schemas', () => {
-    const scanProperties = snapshotOperation('weft.storage.scan').inputSchema[
-      'properties'
-    ] as Record<string, Record<string, unknown>>;
-    expect(scanProperties['limit']['maximum']).toBe(MAX_SCAN_LIMIT);
-
-    const batchProperties = snapshotOperation('weft.storage.batch').inputSchema[
-      'properties'
-    ] as Record<string, Record<string, unknown>>;
-    expect(batchProperties['operations']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
-
-    const conditionalBatchProperties = snapshotOperation('weft.storage.conditionalbatch')
-      .inputSchema['properties'] as Record<string, Record<string, unknown>>;
-    expect(conditionalBatchProperties['conditions']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
-    expect(conditionalBatchProperties['operations']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+    expect(snapshotOperation('weft.storage.scan').inputSchema).toMatchObject({
+      properties: { limit: { maximum: MAX_SCAN_LIMIT } },
+    });
+    expect(snapshotOperation('weft.storage.batch').inputSchema).toMatchObject({
+      properties: { operations: { maxItems: MAX_BATCH_OPERATIONS } },
+    });
+    expect(snapshotOperation('weft.storage.conditionalbatch').inputSchema).toMatchObject({
+      properties: { conditions: { maxItems: MAX_BATCH_OPERATIONS } },
+    });
+    expect(snapshotOperation('weft.storage.conditionalbatch').inputSchema).toMatchObject({
+      properties: { operations: { maxItems: MAX_BATCH_OPERATIONS } },
+    });
   });
 
   it('stringifies catalog snapshots with a trailing newline', () => {
@@ -470,9 +101,9 @@ describe('createOperationClientSource — generated output', () => {
 
   it('is deterministic across runs', async () => {
     const snapshot = createCatalogSnapshot();
-    const first = await createOperationClientSource(snapshot);
-    const second = await createOperationClientSource(snapshot);
-    expect(first).toBe(second);
+    const first = await createOperationClientSources(snapshot);
+    const second = await createOperationClientSources(snapshot);
+    expect([...first]).toEqual([...second]);
   });
 
   it('canonical keys are independent of property insertion order', () => {
@@ -510,13 +141,14 @@ describe('createOperationClientSource — generated output', () => {
         [canonicalKey(left), left],
       ]),
     );
-    const byKey = (first: [string, string], second: [string, string]) =>
-      first[0] < second[0] ? -1 : 1;
-    expect([...forward.entries()].toSorted(byKey)).toEqual([...reverse.entries()].toSorted(byKey));
+
+    expect([...forward.entries()].toSorted(compareAliasEntries)).toEqual(
+      [...reverse.entries()].toSorted(compareAliasEntries),
+    );
   });
 
   it('hoists the date-range shape into exactly one alias', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
+    const source = await generatedSourcesText(createCatalogSnapshot());
     const rangeDeclarations = [
       ...source.matchAll(
         /type (Shared\w+) = \{\s*readonly gt\?: number;\s*readonly gte\?: number;\s*readonly lt\?: number;\s*readonly lte\?: number;\s*\};/g,
@@ -526,7 +158,7 @@ describe('createOperationClientSource — generated output', () => {
   });
 
   it('routes bulk.cancel, bulk.delete, and bulk.retryfailed inputs through the same alias', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
+    const source = await generatedSourcesText(createCatalogSnapshot());
     const cancel = source.match(
       /'weft\.workflows\.bulk\.cancel': \{\s*readonly input: (Shared\w+);/,
     );
@@ -544,7 +176,7 @@ describe('createOperationClientSource — generated output', () => {
   });
 
   it('leaves bulk.signal input inline but substitutes its nested aliases', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
+    const source = await generatedSourcesText(createCatalogSnapshot());
     // bulk.signal carries extra `name`/`payload` fields, so its whole input is a
     // distinct shape from cancel/delete and is intentionally NOT routed through
     // the shared filter alias. Its nested date-range/attribute shapes still
@@ -560,32 +192,34 @@ describe('createOperationClientSource — generated output', () => {
   });
 
   it('never emits a self-referential alias', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
+    const source = await generatedSourcesText(createCatalogSnapshot());
     for (const [, name] of source.matchAll(/type (Shared\w+) = /g)) {
       expect(source).not.toContain(`type ${name} = ${name};`);
     }
   });
 
   it('references every alias at least twice (no single-use aliases)', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
+    const source = await generatedSourcesText(createCatalogSnapshot());
     const names = [...source.matchAll(/type (Shared\w+) = /g)].map((match) => match[1]);
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) {
-      const occurrences = source.match(new RegExp(`\\b${name}\\b`, 'g')) ?? [];
+      const declarationsAndUses = source.replace(/import type \{[^}]+\} from '[^']+';/g, '');
+      const occurrences = declarationsAndUses.match(new RegExp(`\\b${name}\\b`, 'g')) ?? [];
       // declaration + at least two non-declaration references
       expect(occurrences.length).toBeGreaterThanOrEqual(3);
     }
   });
 
-  it('regenerates the checked-in client from the CLI entrypoint', async () => {
-    const expectedSource = await createOperationClientSource(createCatalogSnapshot());
+  it('generates the complete checked-in client through the CLI into an isolated directory', async () => {
+    const sources = await createOperationClientSources(createCatalogSnapshot());
     const directory = await mkdtemp(join(tmpdir(), 'weft-operation-client-'));
     try {
-      const snapshotPath = join(directory, 'operation-client.generated.ts.before');
-      await Bun.write(snapshotPath, await Bun.file(OPERATION_CLIENT_PATH).text());
-
+      // Check drift without rewriting the source checkout as part of a test.
+      for (const [fileName, source] of sources) {
+        expect(await Bun.file(join(OPERATION_CLIENT_DIRECTORY, fileName)).text()).toBe(source);
+      }
       const result = Bun.spawn({
-        cmd: ['bun', 'scripts/generate-operation-client.ts'],
+        cmd: ['bun', 'scripts/generate-operation-client.ts', '--output-directory', directory],
         cwd: process.cwd(),
         stdout: 'pipe',
         stderr: 'pipe',
@@ -593,238 +227,22 @@ describe('createOperationClientSource — generated output', () => {
       const exitCode = await result.exited;
       const stdout = await new Response(result.stdout).text();
       const stderr = await new Response(result.stderr).text();
-
       expect(exitCode).toBe(0);
       expect(stderr).toBe('');
-      expect(stdout).toContain(`wrote ${OPERATION_CLIENT_PATH}`);
-      expect(await Bun.file(OPERATION_CLIENT_PATH).text()).toBe(expectedSource);
-      expect(await Bun.file(snapshotPath).text()).toBe(expectedSource);
+      for (const [fileName, source] of sources) {
+        expect(stdout).toContain(`wrote ${join(directory, fileName)}`);
+        expect(await Bun.file(join(directory, fileName)).text()).toBe(source);
+      }
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
   });
 });
 
-describe('alias selection thresholds', () => {
-  const object = (...names: string[]): TypeNode => ({
-    kind: 'object',
-    fields: names.map((name) => ({
-      name,
-      optional: false,
-      value: { kind: 'primitive', text: 'string' },
-    })),
-  });
-
-  it('does not alias the 1-field key object in real output', async () => {
-    const source = await createOperationClientSource(createCatalogSnapshot());
-    // The attribute element { gt, gte, key, lt, lte, value } is aliased, but a
-    // bare { readonly "key": string } object must never become its own alias.
-    expect(source).not.toMatch(/type Shared\w+ = \{ readonly "key": string; \};/);
-  });
-
-  it('hoists a >=3-field object that repeats twice', () => {
-    expect(isHoistWorthy(object('a', 'b', 'c'), 2)).toBe(true);
-  });
-
-  it('never hoists a 1-field object no matter how often it repeats', () => {
-    expect(isHoistWorthy(object('key'), 2)).toBe(false);
-    expect(isHoistWorthy(object('key'), 9)).toBe(false);
-  });
-
-  it('hoists a 2-field object only when it repeats at least three times', () => {
-    expect(isHoistWorthy(object('a', 'b'), 2)).toBe(false);
-    expect(isHoistWorthy(object('a', 'b'), 3)).toBe(true);
-  });
-
-  it('never hoists non-object nodes', () => {
-    expect(isHoistWorthy({ kind: 'primitive', text: 'string' }, 9)).toBe(false);
-    expect(
-      isHoistWorthy({ kind: 'array', element: { kind: 'primitive', text: 'string' } }, 9),
-    ).toBe(false);
-  });
-});
-
-describe('selectAliases — prune to fixed point', () => {
-  // Both fixed-point tests below share the same nested shape: a 3-field `inner`
-  // object embedded as the first field of a 3-field `outer` object. The factory
-  // returns a fresh pair so neither test can mutate the other's nodes.
-  const nestedPair = (): { inner: TypeNode; outer: TypeNode } => {
-    const inner: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'p', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'q', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'r', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
-    const outer: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'a', optional: false, value: inner },
-        { name: 'b', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
-    return { inner, outer };
-  };
-
-  it('prunes a child whose references collapse into a single alias body', () => {
-    // `inner` occurs once inside `outer`; `outer` occurs twice across the roots.
-    // By occurrence count both qualify (inner=2 via the two outers, outer=2).
-    // But once `outer` is hoisted, `inner` is referenced only from `outer`'s one
-    // body — a single reference — so the prune pass drops `inner`, keeping `outer`.
-    const { outer } = nestedPair();
-    const { aliasNameByKey, nodeByKey } = selectAliases([outer, outer]);
-    expect(aliasNameByKey.size).toBe(1);
-    expect([...nodeByKey.values()]).toEqual([outer]);
-  });
-
-  it('keeps a child alias referenced by a surviving parent and an entry', () => {
-    const { inner, outer } = nestedPair();
-    // `outer` appears twice (two roots) -> survives -> references `inner` once;
-    // `inner` also appears directly as a root -> 2 references total -> survives.
-    const { aliasNameByKey } = selectAliases([outer, outer, inner]);
-    expect(aliasNameByKey.size).toBe(2);
-  });
-
-  it('recovers a deeply nested alias after its parent is pruned', () => {
-    // C nests in B nests in A. B is referenced only once (in A's body) so B is
-    // pruned; once B inlines into A, C surfaces twice inside A and survives.
-    // This exercises the body-discovery walk: it must descend through a pruned
-    // parent to keep a grandchild that is genuinely shared.
-    const prim = (text: string): TypeNode => ({ kind: 'primitive', text });
-    const c: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'p', optional: false, value: prim('number') },
-        { name: 'q', optional: false, value: prim('number') },
-        { name: 'r', optional: false, value: prim('number') },
-      ],
-    };
-    const b: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'm', optional: false, value: c },
-        { name: 'n', optional: false, value: c },
-        { name: 'o', optional: false, value: prim('string') },
-      ],
-    };
-    const a: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'a', optional: false, value: b },
-        { name: 'b', optional: false, value: prim('string') },
-        { name: 'c', optional: false, value: prim('string') },
-      ],
-    };
-    const { aliasNameByKey, nodeByKey } = selectAliases([a, a]);
-    // Survivors: A (two roots) and C (twice inside A after B inlines). Not B.
-    expect(aliasNameByKey.size).toBe(2);
-    const survivors = new Set(nodeByKey.values());
-    expect(survivors.has(a)).toBe(true);
-    expect(survivors.has(c)).toBe(true);
-    expect(survivors.has(b)).toBe(false);
-  });
-});
-
-describe('aliasNameFor — stable naming', () => {
-  const rangeNode: TypeNode = {
-    kind: 'object',
-    fields: [
-      { name: 'gt', optional: true, value: { kind: 'primitive', text: 'number' } },
-      { name: 'gte', optional: true, value: { kind: 'primitive', text: 'number' } },
-      { name: 'lt', optional: true, value: { kind: 'primitive', text: 'number' } },
-      { name: 'lte', optional: true, value: { kind: 'primitive', text: 'number' } },
-    ],
-  };
-
-  it('produces a Shared<hint>_<hash> name with an 8-hex-char hash', () => {
-    const name = aliasNameFor(rangeNode);
-    expect(name).toMatch(/^SharedGtGteLt_[0-9a-f]{8}$/);
-  });
-
-  it('is stable across calls', () => {
-    expect(aliasNameFor(rangeNode)).toBe(aliasNameFor(rangeNode));
-  });
-
-  it('truncates the readable hint to at most 24 characters', () => {
-    const wide: TypeNode = {
-      kind: 'object',
-      fields: [
-        {
-          name: 'alphaBravoCharlie',
-          optional: false,
-          value: { kind: 'primitive', text: 'string' },
-        },
-        { name: 'deltaEchoFoxtrot', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'golfHotelIndia', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
-    const hint = aliasNameFor(wide)
-      .slice('Shared'.length)
-      .replace(/_[0-9a-f]{8}$/, '');
-    expect(hint.length).toBeLessThanOrEqual(24);
-  });
-});
-
-describe('assignAliasNames — collision guard', () => {
-  it('throws when two distinct shapes resolve to the same alias name', () => {
-    const nodeA: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'a', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'b', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
-    const nodeB: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'a', optional: false, value: { kind: 'primitive', text: 'number' } },
-        { name: 'b', optional: false, value: { kind: 'primitive', text: 'number' } },
-        { name: 'c', optional: false, value: { kind: 'primitive', text: 'number' } },
-      ],
-    };
-    const candidates = new Map<string, TypeNode>([
-      [canonicalKey(nodeA), nodeA],
-      [canonicalKey(nodeB), nodeB],
-    ]);
-    // A constant hash forces both distinct keys to the same name through the
-    // real production assignment path.
-    expect(() => assignAliasNames(candidates, () => 'deadbeef')).toThrow(/alias name collision/);
-  });
-});
-
-describe('type equivalence — aliases are transparent at call sites', () => {
-  // These assignments fail `bun run typecheck` (and `bun test`'s tsc pass) if
-  // hoisting an inline shape into a named alias ever changes the structural type
-  // a consumer sees. The central PR contract is checked at compile time here.
-  it('accepts a bulk-filter input literal through the hoisted alias', () => {
-    const input: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = {
-      idPrefix: 'order-',
-      limit: 10,
-      createdAt: { gt: 1, lte: 2 },
-      executionDeadline: { gte: 3 },
-      attributes: [{ key: 'region', value: 'us-east' }],
-      tags: ['urgent'],
-      confirmationToken: 'token',
-      dryRun: true,
-    };
-    expect(input.limit).toBe(10);
-  });
-
-  it('keeps bulk.cancel, bulk.delete, and bulk.retryfailed inputs mutually assignable', () => {
-    const cancel: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = { limit: 1 };
-    const remove: CatalogOperationTypes['weft.workflows.bulk.delete']['input'] = cancel;
-    const retryFailed: CatalogOperationTypes['weft.workflows.bulk.retryfailed']['input'] = remove;
-    const back: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = retryFailed;
-    expect(back.limit).toBe(1);
-  });
-
-  it('exposes the nested date-range alias as the same structural shape', () => {
-    const range: NonNullable<
-      CatalogOperationTypes['weft.workflows.bulk.signal']['input']['createdAt']
-    > = { gt: 1, gte: 2, lt: 3, lte: 4 };
-    expect(range.lte).toBe(4);
+describe('snapshotOperation', () => {
+  it('throws when no catalog operation matches the given name', () => {
+    expect(() => snapshotOperation('not-a-real-operation-name')).toThrow(
+      'Missing operation snapshot not-a-real-operation-name',
+    );
   });
 });

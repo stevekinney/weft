@@ -1,9 +1,8 @@
 # Remote Workers
 
-Your workflow engine runs on one machine, but your activities need to run on GPU nodes, region-specific servers, or isolated containers. Remote workers connect to the Weft server over WebSocket (or HTTP long-polling as a fallback) and execute activities wherever they're deployed.
+Your workflow engine runs on one machine, but your activities need to run on GPU nodes, region-specific servers, or isolated containers. Remote workers connect to the Weft server over WebSocket (or HTTP long-polling as a fallback) and execute activities wherever they're deployed. The [recovery and adoption guide](remote-task-recovery.md) explains how the server retains task ownership and outcomes across restarts.
 
-> [!NOTE]
-> [`RemoteWorker`](../reference/api-workers.md#remoteworker) is a candidate-stable, provisional surface. The v3 task transport and worker lifecycle are intended for serious trials, but release notes may still call out Tier-0-driven changes to error codes or storage-capability failures before 1.0. See the [canonical stability-tier inventory](../contributing/breaking-changes.md#stability-tiers).
+> [!NOTE] [`RemoteWorker`](../reference/api-workers.md#remoteworker) is an internal workspace API. The v6 task transport requires clients to match the [wire protocol](../reference/remote-worker-protocol.md), including its version and storage-capability requirements.
 
 ## The RemoteWorker class
 
@@ -41,13 +40,15 @@ await worker.connect();
 
 Use `wss://` for deployed workers. Plain `ws://` is only appropriate for localhost or trusted development networks because task metadata and propagated headers travel over that connection.
 
-The `RemoteWorkerOptions` interface:
+The following subset shows the required identity and common execution options. The [worker API reference](../reference/api-workers.md#remoteworkeroptions) also covers complete manifests, artifact digests, authentication headers, and runtime metadata:
 
 ```typescript
 import type { ActivityInterceptor } from '@lostgradient/weft';
 
 interface RemoteWorkerOptions {
   serverUrl: string;
+  deploymentName: string;
+  buildId: string;
   workerId?: string; // default: crypto.randomUUID()
   workflows: Record<
     string,
@@ -60,7 +61,37 @@ interface RemoteWorkerOptions {
 }
 ```
 
-On connection, the worker sends a v3 `register` message carrying its worker ID, concurrency limit, and a canonical manifest describing its deployment, runtime, and workflows. The server derives routing activities from the manifest and reads the queue from the connection URL. `connect()` resolves only after the server replies with `registerAck`; it rejects on `registerError` or if the socket closes before acknowledgement. The server tracks the accepted worker in the `WorkerRegistry`.
+On connection, the worker sends a v6 `register` message carrying its worker ID, concurrency limit, and a canonical manifest describing its deployment, runtime, and workflows. The server derives routing activities from the manifest and reads the queue from the connection URL. `connect()` resolves only after the server replies with `registerAck`; it rejects on `registerError` or if the socket closes before acknowledgement. The server tracks the accepted worker in the `WorkerRegistry`.
+
+## Dispatching `ctx.run()` to remote workers
+
+A workflow reaches a `RemoteWorker` the same way it reaches any other activity: through `ctx.run()`. Configure the engine with `activityExecution: { mode: 'remote' }` and every `ctx.run()` call durably enqueues its activity onto the engine's own task ledger for a connected worker to claim, instead of running on the main thread or a local Worker pool.
+
+```typescript
+import { Engine, activity, workflow } from '@lostgradient/weft';
+
+const formatGreeting = activity({
+  name: 'formatGreeting',
+  execute: async (input: { name: string }) => `Hello, ${input.name}!`,
+});
+
+const greetingWorkflow = workflow({ name: 'greeting' })
+  .activities({ formatGreeting })
+  .execute(async function* (ctx, input: { name: string }) {
+    return yield* ctx.run(formatGreeting, input);
+  });
+
+const engine = new Engine({
+  activityExecution: { mode: 'remote', queue: 'default' },
+});
+engine.register(greetingWorkflow);
+```
+
+`formatGreeting`'s own `execute` body never runs in this configuration — it exists so the workflow type-checks and so an inline or worker-mode engine could still run the same workflow. The engine derives the activity's qualified name (`greeting.formatGreeting`) from its own canonical workflow registration, never from the call site, and durably records queue, retry policy, headers, and the workflow's execution token on the task before any worker claims it.
+
+Because dispatch is durable, `ctx.run()` never falls back to local execution: an activity call started before any `serve()` call exists (or before a worker with capacity connects) simply leaves its task `queued` on the engine's storage until one does. Attach a server the same way `dispatchTask` requires — `serve({ engine })` — and a connected `RemoteWorker` advertising the matching workflow type claims and executes it, exactly as in [Task dispatch](#task-dispatch) below.
+
+This is a genuinely different durability domain from `dispatchTask`: `ctx.run()` durably parks the calling workflow (the same durable-completion mechanism `ActivityContext.completeAsync()` uses) until the result arrives, and the exact value or error a worker returns resumes that `ctx.run()` call — including through an engine restart, since the task's `queued`/`leased` ledger record and the workflow's own checkpoint both survive independently of the process that created them.
 
 ## Task dispatch
 
@@ -70,6 +101,7 @@ When the engine needs to execute an activity, the server finds a worker that has
 {
   "type": "task",
   "operationId": "abc-123",
+  "attemptToken": "attempt-1",
   "activityName": "media.transcribe",
   "input": { "audioUrl": "..." }
 }
@@ -81,6 +113,7 @@ The worker looks up the activity function, executes it, and sends back a result:
 {
   "type": "taskResult",
   "operationId": "abc-123",
+  "attemptToken": "attempt-1",
   "status": "completed",
   "value": { "transcript": "..." }
 }
@@ -88,11 +121,11 @@ The worker looks up the activity function, executes it, and sends back a result:
 
 If the activity function throws, the result message carries `"status": "failed"` with an error string. If the activity name isn't registered on this worker, an error result is sent immediately.
 
-`task` optionally carries `workflowRevision` (WFT-20) — the dispatching workflow run's persisted revision, when the `TaskDispatch` caller supplied one. Echo it back on `taskResult` unchanged; the server rejects a completion whose echoed revision disagrees with the dispatch's as stale. See [the protocol reference](../reference/remote-worker-protocol.md#taskresult) for the exact WebSocket-additive-versus-long-poll-strict authorization rule.
+`task` optionally carries `workflowRevision`—the dispatching workflow run's persisted revision, when the `TaskDispatch` caller supplied one. Echo it back on `taskResult` unchanged; the server rejects a completion whose echoed revision disagrees with the dispatch's as stale. See [the protocol reference](../reference/remote-worker-protocol.md#taskresult) for the exact WebSocket-additive-versus-long-poll-strict authorization rule.
 
 ## Activity interceptors
 
-You want to trace every remote activity with OpenTelemetry, log timing for the on-call dashboard, or validate that the headers coming across the wire carry the metadata you expect before anything touches your business logic. Sprinkling that code into every activity function is exactly the kind of duplication interceptors exist to solve.
+You want to trace every remote activity with [OpenTelemetry](https://opentelemetry.io/), log timing for the on-call dashboard, or validate that the headers coming across the wire carry the metadata you expect before anything touches your business logic. Sprinkling that code into every activity function is exactly the kind of duplication interceptors exist to solve.
 
 Pass an array of `ActivityInterceptor` objects to `RemoteWorker`, and they wrap every task execution on this worker. The chain runs _after_ the task arrives off the WebSocket but _before_ your activity function sees the input, which means interceptors can read propagated headers, transform inputs, observe failures, and record timing without your activities knowing anything about them.
 
@@ -170,23 +203,33 @@ const worker = new RemoteWorker({
 });
 ```
 
-Multiple interceptors compose like middleware: the first one in the array is the outermost wrapper, and each calls `next(interception)` to delegate inward. Registration order matters—put tracing first so it measures everything that happens inside, and put validation near the inside so it runs after logging has already captured the attempt. See the [interceptors guide](./interceptors.md) for the full composition model and the workflow-side counterparts.
+Multiple interceptors compose like middleware: the first one in the array is the outermost wrapper, and each calls `next(interception)` to delegate inward. Registration order matters—put tracing first so it measures everything that happens inside, and put validation near the inside so it runs after logging has already captured the attempt.
 
-> [!NOTE]
-> If you pass zero interceptors (or omit the option entirely), the worker skips the composition path and calls your activity function directly. There's no overhead for workers that don't need instrumentation.
+> [!NOTE] If you pass zero interceptors (or omit the option entirely), the worker skips the composition path and calls your activity function directly. There's no overhead for workers that don't need instrumentation.
 
 ## Heartbeats
 
-The `HeartbeatManager` sends periodic keep-alive messages (every 10 seconds by default) to prevent the server from considering the worker dead. It starts after the server acknowledges registration and stops on disconnect.
+Two independent clocks run on the same 10-second interval by default, but they renew different things (COR-230, protocol v5):
+
+- The **worker-session heartbeat** (`{ type: 'heartbeat', workerId }`) tells the server the connection is alive. `WorkerRegistry.heartbeat()` updates `lastHeartbeat` and nothing else — it does NOT extend any task's visibility timeout, even though it did before v5.
+- The **activity heartbeat** (`{ type: 'activityHeartbeat', workerId, operationId, attemptToken }`) extends the visibility timeout of exactly one in-flight attempt, fenced by the same `(operationId, attemptToken)` identity check `taskResult` uses. A worker sends one per long-running attempt, in addition to the session heartbeat, for as long as that attempt is still executing.
 
 ```typescript partial
 // Internally, the worker does:
 this.#heartbeat = new HeartbeatManager(() => {
   this.#sendMessage({ type: 'heartbeat', workerId: this.#options.workerId });
 }, 10_000);
+
+// ...and, per in-flight long-running attempt:
+this.#sendMessage({
+  type: 'activityHeartbeat',
+  workerId: this.#options.workerId,
+  operationId,
+  attemptToken,
+});
 ```
 
-The `HeartbeatManager` is a simple interval wrapper with `start()`, `stop()`, and a `beat(details?)` method for one-off heartbeats with optional payload. The server's `WorkerRegistry` updates the worker's `lastHeartbeat` timestamp on each heartbeat.
+The `HeartbeatManager` is a simple interval wrapper with `start()`, `stop()`, and a `beat(details?)` method for one-off heartbeats with optional payload. Renewal is capped by the attempt's absolute deadline — a fixed ceiling on total attempt lifetime that neither heartbeat kind can extend, so a stalled worker that only ever heartbeats cannot hold an attempt open forever.
 
 ## Queue-based routing
 
@@ -262,19 +305,13 @@ const worker = new LongPollWorker({
 worker.start();
 ```
 
-The long-poll worker runs a loop: it `GET`s
-`/api/v1/tasks/:queue?activity=<name>&timeout=<milliseconds>` with one repeated
-`activity` query parameter per registered activity, blocks for up to
-`pollTimeout` milliseconds waiting for a task, executes it, and `POST`s the
-result to `/api/v1/tasks/:queue/result`. It respects the concurrency limit by
-pausing the poll loop when all slots are in use.
+The long-poll worker runs a loop: it `GET`s `/api/v1/tasks/:queue?activity=<name>&timeout=<milliseconds>` with one repeated `activity` query parameter per registered activity, blocks for up to `pollTimeout` milliseconds waiting for a task, executes it, and `POST`s the result to `/api/v1/tasks/:queue/result`. It respects the concurrency limit by pausing the poll loop when all slots are in use.
 
-The poll response includes a synthetic `workerId` and per-claim `attemptToken`.
-The result body echoes both fields so the server can reject stale completions
-after a visibility timeout or re-claim. The protocol details live in the
-[HTTP long-poll transport reference](../reference/remote-worker-protocol.md#http-long-poll-transport).
+The poll response includes a synthetic `workerId` and per-claim `attemptToken`. The result body echoes both fields so the server can reject stale completions after a visibility timeout or re-claim. The protocol details live in the [HTTP long-poll transport reference](../reference/remote-worker-protocol.md#http-long-poll-transport).
 
-Error handling is built in—network failures trigger a 1-second backoff, abort errors during shutdown are suppressed.
+For each in-flight activity, `LongPollWorker` also `POST`s a heartbeat to `/api/v1/tasks/:queue/heartbeat` on a `heartbeatIntervalMs` interval (default 10 seconds, matching `HeartbeatManager`'s WebSocket-transport default) — COR-230's long-poll counterpart to the WebSocket transport's `activityHeartbeat`, renewing the same attempt-fenced visibility deadline through the identical server-side `renewAttemptLease` transition. Long-poll has no server-to-worker push channel, so a server-initiated cancellation (`WeftServer.cancelTask`) is signaled back on the heartbeat response's `cancelled` field instead of a pushed control message; `LongPollWorker` aborts that activity's own `AbortController` — keyed by `(operationId, attemptToken)`, exactly like `RemoteWorker`'s — and reports `status: "cancelled"` on its next result.
+
+Error handling is built in—network failures trigger a 1-second backoff, abort errors during shutdown are suppressed, and a missed heartbeat is simply retried on the next interval tick.
 
 ## Graceful shutdown
 
@@ -286,14 +323,15 @@ await worker.disconnect();
 
 The server can also initiate shutdown by sending a `{ type: 'shutdown' }` message. The worker stops accepting new tasks, waits for in-flight work to complete, then closes.
 
-Both classes implement `Disposable` for use with `using`:
+Both classes implement `Disposable` for immediate cleanup with `using`. That synchronous cleanup is not an awaited drain. Call `disconnect()` for a remote worker or `stop()` for a long-poll worker before leaving the scope when in-flight work must settle:
 
 ```typescript partial
 {
   using worker = new RemoteWorker(options);
   await worker.connect();
   // Worker runs...
-} // Automatically cleaned up
+  await worker.disconnect();
+} // Immediate disposal after the awaited drain
 ```
 
 The `connected`, `inFlight`, and `shuttingDown` properties let you monitor worker status for health checks and dashboards.

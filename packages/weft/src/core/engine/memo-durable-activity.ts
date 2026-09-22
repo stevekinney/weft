@@ -235,6 +235,9 @@ class MemoDurableActivityScope implements DurableActivityScope {
         {
           reconciliationCompletion: 'immediate-fenced',
           beforeImmediateReconciliationCommit: () => this.#beginNonCancellableWrite(),
+          // Acceptance criterion 12: durableActivity()'s helper activities never
+          // reach remote dispatch, regardless of `activityExecution.mode`.
+          allowRemoteDispatch: false,
         },
       ),
     );

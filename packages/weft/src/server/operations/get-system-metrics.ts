@@ -38,14 +38,14 @@ export type GetSystemMetricsOutput = MetricsSnapshot;
 export function createGetSystemMetricsOperation(options?: {
   metricsCollector?: MetricsCollector | undefined;
 }) {
-  return defineOperation<GetSystemMetricsInput, GetSystemMetricsOutput>({
+  return defineOperation({
     name: 'weft.system.metrics',
     mcpExposable: false,
     summary: 'Get JSON-shaped system metrics',
     destructive: false,
     tags: ['Observability'],
     inputSchema: getSystemMetricsInput,
-    outputSchema: getSystemMetricsOutput as z.ZodType<GetSystemMetricsOutput>,
+    outputSchema: getSystemMetricsOutput,
     access: {
       kind: 'scoped',
       scopes: { kind: 'anyOf', scopes: ['system:read'] },

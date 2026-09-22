@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { MetricDefinition, PrometheusExporter } from './metrics';
+import type { MetricDefinition, PrometheusExporter } from './metrics.ts';
 import {
   METRICS,
   MetricsCollector,
   createMetricsCollectorExporter,
   createOpenTelemetryMetrics,
   serializeMetricsSnapshotForPrometheus,
-} from './metrics';
-import type { OpenTelemetryMeter } from './no-op-telemetry';
+} from './metrics.ts';
+import type { OpenTelemetryMeter } from './no-op-telemetry.ts';
 
 describe('metrics', () => {
   const entries = Object.entries(METRICS) as [string, MetricDefinition][];

@@ -21,7 +21,7 @@ describe('speculative operation helpers', () => {
       return 'never';
     });
 
-    await expect(
+    expect(
       executeSpeculativeBranch(
         { inlineStrategy: null } as unknown as EngineInternals,
         'workflow-id',
@@ -38,7 +38,7 @@ describe('speculative operation helpers', () => {
       return 'never';
     });
 
-    await expect(
+    expect(
       executeSpeculativeBranch(
         {
           inlineStrategy: {

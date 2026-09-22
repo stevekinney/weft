@@ -6,7 +6,7 @@ import {
   createBunCompressor,
   decompressPayload,
   resolveCompressionOptions,
-} from './compression';
+} from './compression.ts';
 
 async function withRuntimeOverrides(
   overrides: Parameters<typeof setPortableRuntimeTestOverridesForTesting>[0],
@@ -221,26 +221,26 @@ describe('compression fallbacks', () => {
 describe('malformed payloads without a canonical header', () => {
   it('rejects raw msgpack data starting with 0x80+', async () => {
     const headerless = new Uint8Array([0x80, 0xa1, 0x61, 0x01]);
-    await expect(decompressPayload(headerless)).rejects.toThrow(
+    expect(decompressPayload(headerless)).rejects.toThrow(
       'Compression payload missing magic byte 0xC1.',
     );
   });
 
   it('rejects data with an arbitrary unrecognized first byte', async () => {
     const headerless = new Uint8Array([0xff, 0xab, 0xcd]);
-    await expect(decompressPayload(headerless)).rejects.toThrow(
+    expect(decompressPayload(headerless)).rejects.toThrow(
       'Compression payload missing magic byte 0xC1.',
     );
   });
 
   it('rejects single-byte payloads because they cannot contain the full header', async () => {
-    await expect(decompressPayload(new Uint8Array([0x00]))).rejects.toThrow(
+    expect(decompressPayload(new Uint8Array([0x00]))).rejects.toThrow(
       'Compression payload missing 2-byte header.',
     );
   });
 
   it('rejects an unknown algorithm byte after the magic byte', async () => {
-    await expect(decompressPayload(new Uint8Array([0xc1, 0x7f, 0x01]))).rejects.toThrow(
+    expect(decompressPayload(new Uint8Array([0xc1, 0x7f, 0x01]))).rejects.toThrow(
       'Compression payload uses unsupported algorithm byte 0x7f.',
     );
   });
@@ -265,13 +265,13 @@ describe('empty data', () => {
   });
 
   it('rejects empty unframed data when decompressing', async () => {
-    await expect(decompressPayload(new Uint8Array(0))).rejects.toThrow(
+    expect(decompressPayload(new Uint8Array(0))).rejects.toThrow(
       'Compression payload missing 2-byte header.',
     );
   });
 
   it('rejects single-byte unframed data when decompressing', async () => {
-    await expect(decompressPayload(new Uint8Array([0x42]))).rejects.toThrow(
+    expect(decompressPayload(new Uint8Array([0x42]))).rejects.toThrow(
       'Compression payload missing 2-byte header.',
     );
   });

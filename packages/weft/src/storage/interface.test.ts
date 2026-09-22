@@ -734,13 +734,13 @@ describe('storageDeleteRange', () => {
 
   it('throws on invalid options (empty bounds, non-string bound, bad limit)', async () => {
     const storage = createCoreStorageAdapter();
-    await expect(storageDeleteRange(storage, 'k:', {})).rejects.toThrow(
+    expect(storageDeleteRange(storage, 'k:', {})).rejects.toThrow(
       /at least one of gt\/gte\/lt\/lte/,
     );
-    await expect(storageDeleteRange(storage, 'k:', { lt: 3 } as never)).rejects.toThrow(
+    expect(storageDeleteRange(storage, 'k:', { lt: 3 } as never)).rejects.toThrow(
       'deleteRange bounds must be strings',
     );
-    await expect(storageDeleteRange(storage, 'k:', { lt: 'z', limit: -1 })).rejects.toThrow(
+    expect(storageDeleteRange(storage, 'k:', { lt: 'z', limit: -1 })).rejects.toThrow(
       'deleteRange limit must be a finite non-negative integer',
     );
   });
@@ -792,7 +792,7 @@ describe('storageConditionalBatch', () => {
     // createCoreStorageAdapter reports capabilities().conditionalBatch === false.
     const storage = createCoreStorageAdapter();
 
-    await expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
+    expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
       'Feature "storageConditionalBatch" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
     );
   });
@@ -811,7 +811,7 @@ describe('storageConditionalBatch', () => {
       }),
     };
 
-    await expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
+    expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
       'This storage backend reports conditionalBatch capability but does not implement the conditionalBatch() method.',
     );
   });
@@ -831,7 +831,7 @@ describe('storageConditionalBatch', () => {
         conditions.length === 1 && operations.length === 1,
     };
 
-    await expect(
+    expect(
       storageConditionalBatch(
         storage,
         [{ key: 'wf:1', expectedValue: null }],
@@ -858,7 +858,7 @@ describe('storageConditionalBatch', () => {
       },
     };
 
-    await expect(
+    expect(
       storageConditionalBatch(storage, [], createDeleteOperations(MAX_BATCH_OPERATIONS + 1)),
     ).rejects.toBeInstanceOf(StorageBatchOperationLimitExceededError);
     expect(adapterCalled).toBe(false);
@@ -882,7 +882,7 @@ describe('storageConditionalBatch', () => {
       },
     };
 
-    await expect(
+    expect(
       storageConditionalBatch(storage, createAbsentConditions(MAX_BATCH_OPERATIONS + 1), []),
     ).rejects.toMatchObject({
       cap: MAX_BATCH_OPERATIONS,

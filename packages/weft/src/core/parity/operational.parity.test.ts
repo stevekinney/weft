@@ -260,7 +260,7 @@ describe('operational parity', () => {
     await engine.advanceTime('1 second');
     await engine.signal(handle.id, 'approval', 'approved');
 
-    await expect(handle.result()).resolves.toBe('4:approved');
+    expect(handle.result()).resolves.toBe('4:approved');
     expect(events).toEqual([
       'workflow-start:parity-intercepted-workflow:3',
       'workflow-activity:before:addOne:3',
@@ -330,7 +330,7 @@ describe('operational parity', () => {
     await recoveredEngine.advanceTime('1 second');
     await recoveredEngine.signal(handle.id, 'approval', 'approved');
 
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('4:approved');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('4:approved');
     expect(activityExecutions).toBe(1);
     expect(events.filter((event) => event === 'sleep:after:1000')).toHaveLength(1);
     expect(events).toContain('signal-received:approval:approved');
@@ -385,7 +385,7 @@ describe('operational parity', () => {
     expect(events).toHaveLength(eventsBeforeRecovery);
 
     await recoveredEngine.advanceTime('1 hour');
-    await expect(recoveredHandles[0]!.result()).resolves.toBe('approved');
+    expect(recoveredHandles[0]!.result()).resolves.toBe('approved');
     expect(events).toHaveLength(eventsBeforeRecovery);
 
     recoveredEngine[Symbol.dispose]();
@@ -421,7 +421,7 @@ describe('operational parity', () => {
     const handle = await engine.start('parity-observed-workflow', 5);
     await engine.advanceTime('1 second');
     await engine.signal(handle.id, 'finish', 'done');
-    await expect(handle.result()).resolves.toBe('10:done');
+    expect(handle.result()).resolves.toBe('10:done');
     dispose();
 
     const workflowSpan = findSpan(spans, 'workflow:parity-observed-workflow');

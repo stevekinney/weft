@@ -109,7 +109,7 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     const pool = new FaultInjectingPool(5);
     await using storage = new NeonStorage({ url: 'stub://', pool });
 
-    await expect(
+    expect(
       storage.conditionalBatch(
         [{ key: 'idem:k', expectedValue: null }],
         [{ type: 'put', key: 'idem:k', value: encode('v') }],
@@ -141,7 +141,7 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     const pool = new FaultInjectingPool(1, '23502'); // not_null_violation
     await using storage = new NeonStorage({ url: 'stub://', pool });
 
-    await expect(
+    expect(
       storage.conditionalBatch(
         [{ key: 'idem:k', expectedValue: null }],
         [{ type: 'put', key: 'idem:k', value: encode('v') }],

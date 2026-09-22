@@ -107,7 +107,7 @@ describe('Outbox concurrency', () => {
       }
     }
     const { outbox } = createOutboxFixture({ storage: new LosingStorage() });
-    await expect(outbox.enqueue(deliveryInput())).rejects.toThrow(OutboxContentionError);
+    expect(outbox.enqueue(deliveryInput())).rejects.toThrow(OutboxContentionError);
     outbox.dispose();
   });
 
@@ -127,13 +127,13 @@ describe('Outbox concurrency', () => {
     await enqueueOne(outbox);
     const claim = await beginOne(outbox);
     losing = true;
-    await expect(outbox.claim()).rejects.toThrow(OutboxContentionError);
-    await expect(outbox.settle({ ...claim, outcome: { status: 'acknowledged' } })).rejects.toThrow(
+    expect(outbox.claim()).rejects.toThrow(OutboxContentionError);
+    expect(outbox.settle({ ...claim, outcome: { status: 'acknowledged' } })).rejects.toThrow(
       OutboxContentionError,
     );
-    await expect(outbox.heartbeat(claim)).rejects.toThrow(OutboxContentionError);
-    await expect(outbox.requestCancellation({ deliveryId })).rejects.toThrow(OutboxContentionError);
-    await expect(outbox.retry({ deliveryId: 'x' })).resolves.toEqual({ status: 'unknown' });
+    expect(outbox.heartbeat(claim)).rejects.toThrow(OutboxContentionError);
+    expect(outbox.requestCancellation({ deliveryId })).rejects.toThrow(OutboxContentionError);
+    expect(outbox.retry({ deliveryId: 'x' })).resolves.toEqual({ status: 'unknown' });
     const error = await outbox.runMaintenance().catch((cause: unknown) => cause);
     void error;
     losing = false;

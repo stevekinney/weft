@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../storage/memory';
-import { decode } from './codec';
+import { MemoryStorage } from '../storage/memory.ts';
+import { decode } from './codec.ts';
 import {
   checkExpiredDeadlines,
   cleanupDeadlineOperations,
   createDeadlineOperations,
   timeRemaining,
   WorkflowTimeoutError,
-} from './timeouts';
-import { HISTORY_CIRCUIT_BREAKER_REASON } from './types/history-policy';
+} from './timeouts.ts';
+import { HISTORY_CIRCUIT_BREAKER_REASON } from './types/history-policy.ts';
 
 // ---------------------------------------------------------------------------
 // createDeadlineOperations

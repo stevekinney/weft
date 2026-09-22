@@ -15,11 +15,11 @@
  * @module client/in-process-operations
  */
 
-import type { CatalogTransport } from '../cli/operation-client-runtime.ts';
 import type { Engine } from '../core/engine.ts';
 import { executeOperation } from '../server/operation-catalog.ts';
 import { principalFromStdioLocal } from '../server/principal.ts';
 import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
+import type { CatalogTransport } from './operation-client-runtime.ts';
 
 /**
  * Build a {@link CatalogTransport} that dispatches catalog operations against

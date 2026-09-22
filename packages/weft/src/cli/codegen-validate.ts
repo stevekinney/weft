@@ -14,14 +14,15 @@
 
 import { z } from 'zod';
 
-import {
-  parseWorkflowRevisionManifest,
-  type WorkflowRevisionManifest,
-} from '../core/contract/index.ts';
-import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../core/contract/limits.ts';
 import { MAX_REGISTRY_WORKFLOW_COUNT } from '../core/registry-limits.ts';
-import { REGISTRY_VERSION, type RegistryActivityEntry } from '../core/registry-snapshot.ts';
-import { isRecord } from '../worker/manifest/is-record.ts';
+import {
+  MAX_CONTRACT_IDENTIFIER_BYTES,
+  parseWorkflowRevisionManifest,
+  REGISTRY_VERSION,
+  type RegistryActivityEntry,
+  type WorkflowRevisionManifest,
+} from '../index.ts';
+import { isPlainRecord } from '../worker/manifest/is-plain-record.ts';
 import { utf8ByteLength } from '../worker/manifest/utf8.ts';
 import type { CodegenWorkflowEntry } from './codegen-emit-registry.ts';
 
@@ -48,7 +49,7 @@ export interface ActiveRegistryProjection {
 
 // JSON Schema permits a boolean at any schema position (`true` →
 // accept anything, `false` → accept nothing). `RegistryActivityEntry`
-// schemas are validated with this Zod-level tolerance (unchanged from v1);
+// schemas are validated with this Zod-level tolerance for Activity entries;
 // workflow schemas are not — see the module doc on `resolveActiveWorkflowEntries`.
 const jsonSchema = z.union([z.boolean(), z.record(z.string(), z.unknown())]);
 
@@ -107,10 +108,8 @@ function normalizeRootSchema(
 function projectActivities(
   raw: Record<string, z.infer<typeof activityEntrySchema>>,
 ): Record<string, RegistryActivityEntry> {
-  const projected: Record<string, RegistryActivityEntry> = Object.create(null) as Record<
-    string,
-    RegistryActivityEntry
-  >;
+  const projected: Record<string, RegistryActivityEntry> = {};
+  Object.setPrototypeOf(projected, null);
   for (const [name, entry] of Object.entries(raw)) {
     const projection: RegistryActivityEntry = { queue: entry.queue };
     const input = normalizeRootSchema(entry.inputSchema);
@@ -142,19 +141,21 @@ function formatZodError(error: z.ZodError): string {
 function readActiveRevisions(
   value: unknown,
 ): ValidateSnapshotResult<Readonly<Record<string, string>>> {
-  if (!isRecord(value)) {
+  if (!isPlainRecord(value)) {
     return {
       ok: false,
       error: 'codegen: invalid registry snapshot: activeRevisions must be an object',
     };
   }
   // Reject an oversized pointer map before a single key or value is read —
-  // walk own-enumerable keys incrementally with `for...in` (`isRecord`
+  // walk own-enumerable keys incrementally with `for...in` (`isPlainRecord`
   // already confirmed a plain object, so no prototype-chain keys leak in)
   // and bail the moment the count is exceeded, rather than materializing
   // every key first via `Object.keys()`/`Object.entries()`, which a hostile
   // `--server`/`--from` payload with millions of entries would force to
   // allocate in full before any check could reject it.
+  const revisions: Record<string, string> = {};
+  Object.setPrototypeOf(revisions, null);
   let entryCount = 0;
   for (const name in value) {
     entryCount += 1;
@@ -183,8 +184,9 @@ function readActiveRevisions(
         error: `codegen: invalid registry snapshot: activeRevisions[${JSON.stringify(name)}] exceeds the maximum identifier length of ${MAX_CONTRACT_IDENTIFIER_BYTES} bytes`,
       };
     }
+    revisions[name] = revision;
   }
-  return { ok: true, value: value as Readonly<Record<string, string>> };
+  return { ok: true, value: revisions };
 }
 
 /** Parse every raw `workflows` array element, short-circuiting with an indexed diagnostic on the first hostile-input rejection. */
@@ -298,7 +300,7 @@ function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWork
  * a real registry snapshot always produces (`definitionSchemaToJsonSchema`
  * never emits a boolean root). A hand-vendored `--from` file using a
  * boolean root schema is rejected with a clear diagnostic rather than
- * silently coarsened, a deliberate narrowing from v1 — see CHANGELOG.md.
+ * silently coarsened. Workflow entries must provide an object root schema.
  */
 async function resolveActiveWorkflowEntries(
   workflowsRaw: readonly unknown[],
@@ -315,10 +317,8 @@ async function resolveActiveWorkflowEntries(
   if (!indexed.ok) return indexed;
   const byName = indexed.value;
 
-  const projected: Record<string, CodegenWorkflowEntry> = Object.create(null) as Record<
-    string,
-    CodegenWorkflowEntry
-  >;
+  const projected: Record<string, CodegenWorkflowEntry> = {};
+  Object.setPrototypeOf(projected, null);
   for (const [name, revision] of Object.entries(activeRevisions)) {
     const manifest = byName.get(name)?.get(revision);
     // No matching manifest: as of WFT-11 this is an expected divergence

@@ -11,6 +11,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { defineOperation } from '../operation-registry.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 import {
   queryWorkflowOperation,
@@ -204,7 +205,7 @@ describe('weft.workflows.query', () => {
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
-    const failingOperation = {
+    const failingOperation = defineOperation({
       ...queryWorkflowOperation,
       invoke: async () => {
         const fault: OperationFault = {
@@ -214,7 +215,7 @@ describe('weft.workflows.query', () => {
         };
         throw fault;
       },
-    };
+    });
     const failingRegistry = createOperationRegistry([failingOperation]);
 
     const response = await handleRequest(

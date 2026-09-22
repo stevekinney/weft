@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MAX_BATCH_OPERATIONS, StorageBatchOperationLimitExceededError } from './interface';
-import { MemoryStorage } from './memory';
+import { MAX_BATCH_OPERATIONS, StorageBatchOperationLimitExceededError } from './interface.ts';
+import { MemoryStorage } from './memory.ts';
 import {
   collect,
   decodeText as decode,
@@ -37,7 +37,7 @@ describe('MemoryStorage', () => {
       value: encode(String(index)),
     }));
 
-    await expect(storage.batch(operations)).rejects.toBeInstanceOf(
+    expect(storage.batch(operations)).rejects.toBeInstanceOf(
       StorageBatchOperationLimitExceededError,
     );
     expect(await storage.get('oversized:0')).toBeNull();

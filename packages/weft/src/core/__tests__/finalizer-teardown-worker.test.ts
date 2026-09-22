@@ -219,7 +219,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     // storage) and stages the teardownOwed marker + timer atomically.
     await engine.cancel(handle.id);
     await waitForWorkerParkCleanup(engine, 'T2');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // The teardownOwed marker must be staged before the tick.
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-cancel-1'))).not.toBeNull();
@@ -307,7 +307,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       getNow: () => now,
       workflowExecutionMode: 'worker',
       workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 30_000 },
-      activityExecution: { workerUrl, poolSize: 1 },
+      activityExecution: { mode: 'worker', workerUrl, poolSize: 1 },
     });
     engine.register(engineSideWorkflow);
 
@@ -335,7 +335,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
 
     await engine.cancel(handle.id);
     await waitForWorkerParkCleanup(engine, 'T4');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // Tick to drive the finalizer.
     await engine.scheduler.tick(now);
@@ -407,7 +407,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     // Cancel: terminal transition stages teardownOwed marker.
     await engine.cancel(handle.id);
     await waitForWorkerParkCleanup(engine, 'T5');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // POST-CANCEL tick: teardownOwed marker present, workflow is terminal → drives finalizer.
     await engine.scheduler.tick(now);
@@ -460,7 +460,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
 
     await engine.cancel(handle.id);
     await waitForWorkerParkCleanup(engine, 'T6');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // First attempt: finalizer throws → failed event + owed marker re-armed.
     await engine.scheduler.tick(now);
@@ -530,7 +530,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     // No `writeFinalizerStateToStorage` call here — nothing is recorded.
     await engine.cancel(handle.id);
     await waitForWorkerParkCleanup(engine, 'T7');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // No teardown marker was staged because no finalizer state was recorded.
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-nostate-1'))).toBeNull();
@@ -584,7 +584,7 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     });
     await engine1.cancel(handle.id);
     await waitForWorkerParkCleanup(engine1, 'T8/engine1');
-    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // The teardown marker is staged and still `owed` — engine1 dies before any drive tick.
     const owedBytes = await storage.get(KEYS.teardownOwed('worker-finalizer-recover-1'));

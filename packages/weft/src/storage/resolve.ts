@@ -1,5 +1,12 @@
+import { resolveDefaultStorage } from './auto.ts';
+import { BunSQLiteStorage } from './bun-sql.ts';
+import { HTTPStorage } from './http.ts';
+import { IndexedDBStorage } from './indexeddb.ts';
 import type { Storage } from './interface.ts';
+import { LMDBStorage } from './lmdb.ts';
 import { MemoryStorage } from './memory.ts';
+import { NeonStorage } from './neon.ts';
+import { NodeSQLiteStorage } from './node-sqlite.ts';
 import type {
   AutoStorageConfiguration,
   HTTPStorageConfiguration,
@@ -14,6 +21,8 @@ import type {
   TursoStorageConfiguration,
   WebExtensionStorageConfiguration,
 } from './storage-configuration.ts';
+import { TursoStorage } from './turso.ts';
+import { WebExtensionStorage } from './web-extension.ts';
 
 export type {
   AutoStorageConfiguration,
@@ -42,27 +51,6 @@ type StorageConfigurationValidatorMap = {
   ) => Extract<StorageConfiguration, { type: Type }>;
 };
 
-function storageModuleSpecifier(sourceSpecifier: string, buildSpecifier: string): string {
-  return import.meta.url.endsWith('.ts') ? sourceSpecifier : buildSpecifier;
-}
-
-async function importStorageModule<Module>(specifier: string): Promise<Module> {
-  return (await import(specifier)) as Module;
-}
-
-const BUN_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./bun-sql.ts', './bun-sql.js');
-const NODE_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./node-sqlite.ts', './node-sqlite.js');
-const LMDB_STORAGE_MODULE = storageModuleSpecifier('./lmdb.ts', './lmdb.js');
-const TURSO_STORAGE_MODULE = storageModuleSpecifier('./turso.ts', './turso.js');
-const NEON_STORAGE_MODULE = storageModuleSpecifier('./neon.ts', './neon.js');
-const INDEXEDDB_STORAGE_MODULE = storageModuleSpecifier('./indexeddb.ts', './indexeddb.js');
-const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
-  './web-extension.ts',
-  './web-extension.js',
-);
-const HTTP_STORAGE_MODULE = storageModuleSpecifier('./http.ts', './http.js');
-const AUTO_STORAGE_MODULE = storageModuleSpecifier('./auto.ts', './auto.js');
-
 function isBunRuntime(): boolean {
   return typeof Bun !== 'undefined';
 }
@@ -90,15 +78,10 @@ function hasIndexedDB(): boolean {
 
 async function resolveSQLiteStorage(path?: string): Promise<Storage> {
   if (isBunRuntime()) {
-    const { BunSQLiteStorage } =
-      await importStorageModule<typeof import('./bun-sql.ts')>(BUN_SQLITE_STORAGE_MODULE);
     return new BunSQLiteStorage(path);
   }
 
   if (isNodeRuntime()) {
-    const { NodeSQLiteStorage } = await importStorageModule<typeof import('./node-sqlite.ts')>(
-      NODE_SQLITE_STORAGE_MODULE,
-    );
     return new NodeSQLiteStorage(path);
   }
 
@@ -107,21 +90,14 @@ async function resolveSQLiteStorage(path?: string): Promise<Storage> {
 
 async function resolveAutoStorage(): Promise<Storage> {
   if (isBunRuntime() || isNodeRuntime()) {
-    const { resolveDefaultStorage } =
-      await importStorageModule<typeof import('./auto.ts')>(AUTO_STORAGE_MODULE);
     return resolveDefaultStorage();
   }
 
   if (hasWebExtensionStorage()) {
-    const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
-      WEB_EXTENSION_STORAGE_MODULE,
-    );
     return new WebExtensionStorage();
   }
 
   if (hasIndexedDB()) {
-    const { IndexedDBStorage } =
-      await importStorageModule<typeof import('./indexeddb.ts')>(INDEXEDDB_STORAGE_MODULE);
     return new IndexedDBStorage();
   }
 
@@ -133,42 +109,29 @@ const storageResolvers = {
   sqlite: async (configuration: SQLiteStorageConfiguration) =>
     resolveSQLiteStorage(configuration.path),
   lmdb: async (configuration: LMDBStorageConfiguration) => {
-    const { LMDBStorage } =
-      await importStorageModule<typeof import('./lmdb.ts')>(LMDB_STORAGE_MODULE);
     return new LMDBStorage(
       configuration.path,
       configuration.durability === undefined ? {} : { durability: configuration.durability },
     );
   },
   turso: async (configuration: TursoStorageConfiguration) => {
-    const { TursoStorage } =
-      await importStorageModule<typeof import('./turso.ts')>(TURSO_STORAGE_MODULE);
     return new TursoStorage({
       url: configuration.url,
       ...(configuration.authToken === undefined ? {} : { authToken: configuration.authToken }),
     });
   },
   neon: async (configuration: NeonStorageConfiguration) => {
-    const { NeonStorage } =
-      await importStorageModule<typeof import('./neon.ts')>(NEON_STORAGE_MODULE);
     return new NeonStorage({ url: configuration.url });
   },
   indexeddb: async (configuration: IndexedDBStorageConfiguration) => {
-    const { IndexedDBStorage } =
-      await importStorageModule<typeof import('./indexeddb.ts')>(INDEXEDDB_STORAGE_MODULE);
     return new IndexedDBStorage(configuration.databaseName);
   },
   'web-extension': async (configuration: WebExtensionStorageConfiguration) => {
-    const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
-      WEB_EXTENSION_STORAGE_MODULE,
-    );
     return new WebExtensionStorage(
       configuration.area === undefined ? {} : { area: configuration.area },
     );
   },
   http: async (configuration: HTTPStorageConfiguration) => {
-    const { HTTPStorage } =
-      await importStorageModule<typeof import('./http.ts')>(HTTP_STORAGE_MODULE);
     return new HTTPStorage({
       baseUrl: configuration.baseUrl,
       ...(configuration.headers === undefined ? {} : { headers: configuration.headers }),
@@ -338,7 +301,7 @@ function isStorageConfigurationType(value: string): value is StorageConfiguratio
  *
  * @example
  * ```ts
- * import { resolveStorage } from '@lostgradient/weft/storage/resolve';
+ * import { resolveStorage } from '@lostgradient/weft';
  *
  * const storage = await resolveStorage({ type: 'sqlite', path: './weft.db' });
  * void storage;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { BunSQLiteStorage } from './bun-sql';
+import { BunSQLiteStorage } from './bun-sql.ts';
 import {
   collect,
   bytes as encode,
@@ -159,7 +159,7 @@ describe('BunSQLiteStorage', () => {
   it('query rejects non-read-only SQL statements', async () => {
     const storage = new BunSQLiteStorage(':memory:');
 
-    await expect(storage.query('DELETE FROM kv')).rejects.toThrow(
+    expect(storage.query('DELETE FROM kv')).rejects.toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 
@@ -169,7 +169,7 @@ describe('BunSQLiteStorage', () => {
   it('query rejects multiple SQL statements', async () => {
     const storage = new BunSQLiteStorage(':memory:');
 
-    await expect(storage.query('SELECT key FROM kv; DELETE FROM kv')).rejects.toThrow(
+    expect(storage.query('SELECT key FROM kv; DELETE FROM kv')).rejects.toThrow(
       'Storage query must contain exactly one read-only statement.',
     );
 
@@ -179,7 +179,7 @@ describe('BunSQLiteStorage', () => {
   it('query rejects write PRAGMA statements', async () => {
     const storage = new BunSQLiteStorage(':memory:');
 
-    await expect(storage.query('PRAGMA journal_mode = WAL')).rejects.toThrow(
+    expect(storage.query('PRAGMA journal_mode = WAL')).rejects.toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 

@@ -6,19 +6,18 @@
  * those contract shapes. Migrated off the retired `op:queued:`/`op:inflight:`/
  * `op:resolved:`/`op:dead-letter:` keys onto the durable `task-ledger:` record
  * (WFT-22) — fixtures now write real ledger records instead of the deleted
- * `markInflight`. Two shapes deliberately changed across the cutover, not a
- * migration artifact: a completion for an operation with no ledger record now
- * returns 403 instead of a tolerant 200 no-op, and a terminal-commit
- * persistence failure now returns 403 instead of a tolerant 200 (see
- * `isLongPollCompletionAuthorized`'s and `task-ledger-completion.ts`'s doc
- * comments). Both are pinned below rather than silently dropped.
+ * `markInflight`. A completion for an operation with no ledger record returns
+ * 403 instead of a tolerant 200 no-op (see `isLongPollCompletionAuthorized`'s
+ * doc comment). A terminal-commit persistence failure that escalates to a
+ * dead letter (WFT-24) returns 200 with `disposition: 'dead-lettered'`
+ * (COR-240) rather than either a tolerant 200 or a 403 — see
+ * `task-ledger-completion.ts`'s doc comment for the disposition contract.
+ * Every success response now also reports its `disposition` (COR-240).
  */
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
 import type { TaskResultDeadLetteredEvent } from '../../core/events.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { principalFromApiKey } from '../principal.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
@@ -26,7 +25,9 @@ import {
   taskLedgerKey,
   type RemoteTaskLeased,
   type RemoteTaskTerminalResolved,
-} from '../task-ledger.ts';
+} from '../../core/task-ledger/task-ledger.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import { principalFromApiKey } from '../principal.ts';
 import {
   FailingTerminalCommitStorage,
   minimalServeOptions,
@@ -55,7 +56,11 @@ function makePostRequest(body: unknown): Request {
   });
 }
 
-function makeUrl(path = '/v1/tasks/op-123/result'): URL {
+// The `:queue` path segment must match each fixture's ledger record `queue`
+// field (COR-240) — every fixture in this file uses the shared `queue:
+// 'default'` default from `leasedFixture()`, so the default URL segment
+// here is `default`, not an operation-specific slug.
+function makeUrl(path = '/v1/tasks/default/result'): URL {
   return new URL(`http://localhost${path}`);
 }
 
@@ -207,7 +212,7 @@ describe('handleTaskResultRequest', () => {
     const response = await handleTaskResultRequest(context, options, request, makeUrl());
 
     expect(response?.status).toBe(413);
-    await expect(response?.json()).resolves.toEqual({ error: 'Payload Too Large' });
+    expect(response?.json()).resolves.toEqual({ error: 'Payload Too Large' });
   });
 
   it('returns 400 when operationId is missing', async () => {
@@ -253,7 +258,36 @@ describe('handleTaskResultRequest', () => {
     const response = await handleTaskResultRequest(context, options, request, makeUrl());
     expect(response?.status).toBe(200);
     const body = await response?.json();
-    expect(body).toEqual({ ok: true });
+    expect(body).toEqual({ ok: true, disposition: 'applied' });
+  });
+
+  it("rejects a result posted against a :queue path segment that does not match the record's queue (COR-240)", async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-queue-mismatch', queue: 'default' });
+    const request = makePostRequest({
+      operationId: 'op-queue-mismatch',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: 42,
+    });
+
+    // The record's own queue is "default"; the request arrives on a
+    // different queue's result path. The rest of the body — worker,
+    // attemptToken, status — is otherwise perfectly valid.
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/other-queue/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(403);
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-queue-mismatch')));
+    expect(record?.state).toBe('leased');
   });
 
   it('returns 200 ok for a valid failed result', async () => {
@@ -271,7 +305,7 @@ describe('handleTaskResultRequest', () => {
     const response = await handleTaskResultRequest(context, options, request, makeUrl());
     expect(response?.status).toBe(200);
     const body = await response?.json();
-    expect(body).toEqual({ ok: true });
+    expect(body).toEqual({ ok: true, disposition: 'applied' });
   });
 
   it('rejects oversized completed results and resolves the long-poll task as failed', async () => {
@@ -293,7 +327,7 @@ describe('handleTaskResultRequest', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-oversize-http/result'),
+      makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
 
@@ -329,7 +363,7 @@ describe('handleTaskResultRequest', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-oversize-http-failure/result'),
+      makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
 
@@ -360,7 +394,7 @@ describe('handleTaskResultRequest', () => {
         status: 'failed',
         error: '12345678',
       }),
-      makeUrl('/v1/tasks/op-failure-size-boundary/result'),
+      makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
 
@@ -370,17 +404,17 @@ describe('handleTaskResultRequest', () => {
     expect(resolved.error).toBe('12345678');
   });
 
-  // Renamed from "logs and still returns 200 when resolved-result persistence
-  // fails": the ledger cutover changed this response shape deliberately, not
-  // as a migration artifact. `handleTaskResultRequest` now returns 403 (not a
-  // tolerant 200) whenever `commitTaskLedgerCompletion` itself fails — see
-  // the doc comment on `applyTaskResult`'s caller in task-polling.ts.
-  it('logs, dead-letters, and returns 403 when the terminal ledger commit cannot be persisted', async () => {
+  // Renamed again for COR-240: a sustained terminal-commit persistence
+  // failure now surfaces as a 200 with `disposition: 'dead-lettered'` (COR-240
+  // acceptance criterion 10), not a bare 403 — the point of the disposition
+  // protocol is that the caller gets a definitive, actionable answer instead
+  // of an ambiguous rejection. Operator visibility moved from a console.error
+  // to the structured `TaskResultDeadLetteredEvent` dispatch, asserted below.
+  it('dead-letters and returns 200 with disposition dead-lettered when the terminal ledger commit cannot be persisted', async () => {
     const storage = new FailingTerminalCommitStorage('op-resolved-write-fails');
     const context = createMinimalContext();
     const options = createMinimalOptions(storage);
     await writeLeasedRecord(storage, { operationId: 'op-resolved-write-fails' });
-    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const dispatchEventSpy = spyOn(options.engine, 'dispatchEvent');
 
     const response = await handleTaskResultRequest(
@@ -393,15 +427,13 @@ describe('handleTaskResultRequest', () => {
         status: 'completed',
         value: { ok: true },
       }),
-      makeUrl('/v1/tasks/op-resolved-write-fails/result'),
+      makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
 
-    expect(response?.status).toBe(403);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '[weft] Failed to commit task result for "op-resolved-write-fails" through the durable ledger:',
-      'lost the compare-and-swap race on operation "op-resolved-write-fails" after 3 attempt(s)',
-    );
+    expect(response?.status).toBe(200);
+    const body = await response?.json();
+    expect(body).toEqual({ ok: true, disposition: 'dead-lettered' });
 
     // WFT-24: the sustained terminal-commit failure escalates to a
     // best-effort Completing --> DeadLettered write (FailingTerminalCommitStorage
@@ -421,13 +453,13 @@ describe('handleTaskResultRequest', () => {
     );
   });
 
-  it('logs when persisting an oversized-result rejection fails', async () => {
+  it('dead-letters an oversized-result rejection whose persistence itself fails', async () => {
     const storage = new FailingTerminalCommitStorage('op-oversize-rejection-write-fails');
     const context = createMinimalContext();
     setPayloadSizeLimit(context, 64);
     const options = createMinimalOptions(storage);
     await writeLeasedRecord(storage, { operationId: 'op-oversize-rejection-write-fails' });
-    using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    const dispatchEventSpy = spyOn(options.engine, 'dispatchEvent');
 
     const response = await handleTaskResultRequest(
       context,
@@ -439,15 +471,23 @@ describe('handleTaskResultRequest', () => {
         status: 'completed',
         value: { blob: 'x'.repeat(200) },
       }),
-      makeUrl('/v1/tasks/op-oversize-rejection-write-fails/result'),
+      makeUrl('/v1/tasks/default/result'),
       WORKER_PRINCIPAL,
     );
 
+    // The 413 response reports the oversize rejection to the caller
+    // regardless of how the ledger resolved the substitute "failed" result —
+    // but that substitute result itself still dead-letters here (COR-240),
+    // observable through the same structured event as any other dead letter.
     expect(response?.status).toBe(413);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '[weft] Failed to persist oversized task result rejection for task "op-oversize-rejection-write-fails":',
-      'lost the compare-and-swap race on operation "op-oversize-rejection-write-fails" after 3 attempt(s)',
+    const deadLettered = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey('op-oversize-rejection-write-fails')),
     );
+    expect(deadLettered?.state).toBe('deadLettered');
+    expect(dispatchEventSpy).toHaveBeenCalledTimes(1);
+    const dispatchedEvent = dispatchEventSpy.mock.calls[0]?.[0] as TaskResultDeadLetteredEvent;
+    expect(dispatchedEvent.type).toBe('task:dead-lettered');
+    expect(dispatchedEvent.operationId).toBe('op-oversize-rejection-write-fails');
   });
 
   it('removes the deadline tracker entry on success', async () => {
@@ -469,11 +509,103 @@ describe('handleTaskResultRequest', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-tracked/result'),
+      makeUrl('/v1/tasks/default/result'),
     );
 
     expect(response?.status).toBe(200);
     expect(context.deadlineTracker.size).toBe(0);
+  });
+
+  it('returns 403 and logs when the ledger commit fails outright (not dead-lettered)', async () => {
+    // Unlike FailingTerminalCommitStorage (which only blocks the terminal
+    // write and so still succeeds via dead-lettering), this fails every
+    // conditionalBatch — including beginCompletion's own CAS, before any
+    // dead-letter attempt is even reachable — so applyTaskResult's
+    // {ok: false} propagates all the way to a bare 403.
+    class LosesCasStorage extends MemoryStorage {
+      override async conditionalBatch(): Promise<boolean> {
+        return false;
+      }
+    }
+    const storage = new LosesCasStorage();
+    const context = createMinimalContext();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-begin-completion-cas-loss' });
+
+    using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-begin-completion-cas-loss',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 'ok',
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Failed to commit task result for "op-begin-completion-cas-loss" through the durable ledger:',
+      ),
+      expect.any(String),
+    );
+    const record = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey('op-begin-completion-cas-loss')),
+    );
+    expect(record?.state).toBe('leased');
+  });
+
+  it('logs and still reports the oversize rejection when persisting the substitute failure result fails outright', async () => {
+    // Same LosesCasStorage technique as above, but for the oversized-value
+    // branch: the substitute "failed" result's own beginCompletion CAS
+    // loses (never reaches dead-lettering), so applyWorkerTaskResult itself
+    // returns {ok: false} and the caller-facing 413 comes from a path that
+    // logged a persistence failure rather than one that dead-lettered.
+    class LosesCasStorage extends MemoryStorage {
+      override async conditionalBatch(): Promise<boolean> {
+        return false;
+      }
+    }
+    const storage = new LosesCasStorage();
+    const context = createMinimalContext();
+    setPayloadSizeLimit(context, 64);
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-oversize-rejection-cas-loss' });
+
+    using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-oversize-rejection-cas-loss',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: { blob: 'x'.repeat(200) },
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(413);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Failed to persist oversized task result rejection for task "op-oversize-rejection-cas-loss":',
+      ),
+      expect.any(String),
+    );
+    const record = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey('op-oversize-rejection-cas-loss')),
+    );
+    expect(record?.state).toBe('leased');
   });
 });
 
@@ -502,7 +634,7 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-revision-missing/result'),
+      makeUrl('/v1/tasks/default/result'),
     );
 
     expect(response?.status).toBe(403);
@@ -530,7 +662,7 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-revision-wrong/result'),
+      makeUrl('/v1/tasks/default/result'),
     );
 
     expect(response?.status).toBe(403);
@@ -558,7 +690,7 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-revision-match/result'),
+      makeUrl('/v1/tasks/default/result'),
     );
 
     expect(response?.status).toBe(200);
@@ -581,7 +713,7 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
       context,
       options,
       request,
-      makeUrl('/v1/tasks/op-revision-none/result'),
+      makeUrl('/v1/tasks/default/result'),
     );
 
     expect(response?.status).toBe(200);
@@ -982,5 +1114,94 @@ describe('handleTaskPollRequest', () => {
       WORKER_PRINCIPAL,
     );
     expect(response?.status).toBe(403);
+  });
+
+  // COR-233 item 2: a `queued` record has no current attempt either — it was
+  // never claimed by anyone (or was requeued after a previous attempt), so
+  // there is no worker/attempt identity to authorize against. Same rejection
+  // shape as no record at all, not a tolerant no-op.
+  it('rejects a task result for an operation whose ledger record is still queued', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    const now = Date.now();
+    await storage.put(
+      taskLedgerKey('op-queued'),
+      encodeRemoteTaskRecord({
+        recordVersion: 1,
+        operationId: 'op-queued',
+        workflowType: 'testWorkflow',
+        activityName: 'charge',
+        queue: 'default',
+        input: null,
+        headers: {},
+        visibilityTimeoutMilliseconds: 30_000,
+        createdAt: now,
+        generation: 1,
+        state: 'queued',
+        attempt: 0,
+        availableAt: now,
+        firstQueuedAt: now,
+        lastQueuedAt: now,
+        retryCount: 0,
+        requeueCount: 0,
+      }),
+    );
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-queued',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+    expect(response?.status).toBe(403);
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-queued')));
+    expect(record?.state).toBe('queued');
+  });
+
+  // COR-233 item 3: `isLongPollCompletionAuthorized` used to require
+  // `record.state` to still be `leased`/`completing`, which meant a resend of
+  // an already-resolved result — the same content, same attemptToken, after
+  // the worker never received the first `{ ok: true, disposition: 'applied' }`
+  // response — was rejected with 403 instead of reaching
+  // `commitTaskLedgerCompletion`'s idempotent `duplicate` handling. The
+  // shared `authorizeTaskResultForCurrentAttempt` decision now authorizes a
+  // resend against a `terminal` record by attempt token alone (the only
+  // identity a resolved record still carries), so the resend is accepted and
+  // answered `duplicate` without writing a second terminal record.
+  it('accepts a resend of an already-resolved result and answers duplicate without a second terminal write (COR-233)', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-resend' });
+
+    const request = () =>
+      makePostRequest({
+        operationId: 'op-resend',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      });
+
+    const first = await handleTaskResultRequest(context, options, request(), makeUrl());
+    expect(first?.status).toBe(200);
+    expect(await first?.json()).toEqual({ ok: true, disposition: 'applied' });
+    const resolved = await readResolvedTerminalRecord(storage, 'op-resend');
+
+    const second = await handleTaskResultRequest(context, options, request(), makeUrl());
+    expect(second?.status).toBe(200);
+    expect(await second?.json()).toEqual({ ok: true, disposition: 'duplicate' });
+
+    const afterResend = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-resend')));
+    expect(afterResend?.state).toBe('terminal');
+    expect(afterResend?.generation).toBe(resolved.generation);
   });
 });

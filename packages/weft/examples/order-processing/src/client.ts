@@ -1,5 +1,10 @@
-import { Engine, WorkflowAlreadyExistsError, type WorkflowHandle } from '@lostgradient/weft';
-import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+import {
+  BunSQLiteStorage,
+  Engine,
+  WorkflowAlreadyExistsError,
+  type WorkflowHandle,
+} from '@lostgradient/weft';
+import { resolveExampleEnvironment } from '../../environment-configuration.ts';
 
 import { addItemUpdate, cancelOrderSignal, orderStatusQuery } from './messages';
 import { calculateOrderTotal, type AddItemInput, type OrderProcessingInput } from './model';
@@ -7,10 +12,10 @@ import { createOrderProcessingEngine } from './registry';
 import { highValueOrderInput, standardOrderInput } from './sample-data';
 
 const command = Bun.argv[2] ?? 'place';
-const databasePath = Bun.env['WEFT_DATABASE_PATH'] ?? './order-processing.sqlite';
+const databasePath = resolveExampleEnvironment().weftDatabasePath ?? './order-processing.sqlite';
 
 if (import.meta.main) {
-  using storage = new SQLiteStorage(databasePath);
+  using storage = new BunSQLiteStorage(databasePath);
   await using engine = createOrderProcessingEngine(new Engine({ storage }));
   await engine.recoverAll({ acknowledgeUnknownWorkflowTypes: true });
 
@@ -31,11 +36,13 @@ if (import.meta.main) {
         await handle.update(addItemUpdate, giftWrapItem);
       }
       const reviews = await engine.listReviews({ workflowId: highValueOrderInput.orderId });
-      console.log({
-        orderId: highValueOrderInput.orderId,
-        pendingReviewId: reviews[0]?.reviewId ?? null,
-        statusQuery: orderStatusQuery.name,
-      });
+      process.stdout.write(
+        `${JSON.stringify({
+          orderId: highValueOrderInput.orderId,
+          pendingReviewId: reviews[0]?.reviewId ?? null,
+          statusQuery: orderStatusQuery.name,
+        })}\n`,
+      );
       break;
     }
     case 'approve': {
@@ -46,7 +53,7 @@ if (import.meta.main) {
         reviewer: 'operations@example.com',
       });
       const handle = engine.getHandle(highValueOrderInput.orderId);
-      console.log(await handle.result());
+      process.stdout.write(`${JSON.stringify(await handle.result())}\n`);
       break;
     }
     case 'cancel': {
@@ -60,12 +67,12 @@ if (import.meta.main) {
         cancellableOrderInput,
       );
       await handle.signal(cancelOrderSignal, { reason: 'customer-requested' });
-      console.log(await handle.result());
+      process.stdout.write(`${JSON.stringify(await handle.result())}\n`);
       break;
     }
     case 'list': {
-      console.log(
-        await engine.list({ attributes: [{ key: 'orderStatus', value: 'awaiting-review' }] }),
+      process.stdout.write(
+        `${JSON.stringify(await engine.list({ attributes: [{ key: 'orderStatus', value: 'awaiting-review' }] }))}\n`,
       );
       break;
     }

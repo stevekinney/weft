@@ -32,7 +32,7 @@ describe('ctx.waitUntil', () => {
     );
 
     const handle = await engine.start('already-true', null);
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
   });
 
   it('returns true immediately when a timed predicate is already true', async () => {
@@ -45,7 +45,7 @@ describe('ctx.waitUntil', () => {
     );
 
     const handle = await engine.start('timed-already-true', null);
-    await expect(handle.result()).resolves.toBe(true);
+    expect(handle.result()).resolves.toBe(true);
   });
 
   it('re-evaluates the predicate when an inline update handler mutates state', async () => {
@@ -73,7 +73,7 @@ describe('ctx.waitUntil', () => {
     // ...the third pushes value to 3, and the inline-update hook re-drives the
     // predicate, which now passes.
     await engine.update(handle.id, 'bump', 2);
-    await expect(handle.result()).resolves.toBe(3);
+    expect(handle.result()).resolves.toBe(3);
   });
 
   it('re-evaluates even when the update handler throws after mutating state (catch-path hook)', async () => {
@@ -96,8 +96,8 @@ describe('ctx.waitUntil', () => {
     // The update mutates `armed` and then throws. The caller sees the error, but
     // the catch-path re-drive still re-evaluates the predicate (now true), so the
     // workflow unblocks.
-    await expect(engine.update(handle.id, 'arm-then-throw', null)).rejects.toThrow('handler boom');
-    await expect(handle.result()).resolves.toBe('unblocked');
+    expect(engine.update(handle.id, 'arm-then-throw', null)).rejects.toThrow('handler boom');
+    expect(handle.result()).resolves.toBe('unblocked');
   });
 
   it('resolves false when the deadline elapses before the predicate is met', async () => {
@@ -131,7 +131,7 @@ describe('ctx.waitUntil', () => {
       kind: 'wait-condition',
     });
 
-    await expect(handle.result()).resolves.toBe(false);
+    expect(handle.result()).resolves.toBe(false);
   });
 
   it('polls once and resolves false for a zero timeout when the predicate is unmet', async () => {
@@ -149,7 +149,7 @@ describe('ctx.waitUntil', () => {
     );
 
     const handle = await engine.start('zero-timeout', null);
-    await expect(handle.result()).resolves.toBe(false);
+    expect(handle.result()).resolves.toBe(false);
     // It never needs the deadline timer — settled before arming.
     now += 1;
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('completed');
@@ -168,7 +168,7 @@ describe('ctx.waitUntil', () => {
     );
 
     const handle = await engine.start('negative-timeout', null);
-    await expect(handle.result()).rejects.toThrow();
+    expect(handle.result()).rejects.toThrow();
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
@@ -201,7 +201,7 @@ describe('ctx.waitUntil', () => {
       kind: 'wait-condition',
     });
 
-    await expect(handle.result()).resolves.toBe(true);
+    expect(handle.result()).resolves.toBe(true);
   });
 
   it('waits forever (no timeout) until the predicate is satisfied', async () => {
@@ -225,7 +225,7 @@ describe('ctx.waitUntil', () => {
     expect(unblocked).toBe(0);
 
     await engine.update(handle.id, 'go', null);
-    await expect(handle.result()).resolves.toBe('void-outcome');
+    expect(handle.result()).resolves.toBe('void-outcome');
   });
 
   it('rejects ctx.waitUntil used as a ctx.race branch (true predicate) with an actionable error', async () => {
@@ -242,7 +242,7 @@ describe('ctx.waitUntil', () => {
     // throws here just as it does for a false predicate — instead of silently
     // resolving the branch and hanging on the 1h sleep.
     const handle = await engine.start('race-misuse-true', null);
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() / ctx.speculate() branch',
     );
   });
@@ -257,7 +257,7 @@ describe('ctx.waitUntil', () => {
     );
 
     const handle = await engine.start('race-misuse-false', null);
-    await expect(handle.result()).rejects.toThrow(
+    expect(handle.result()).rejects.toThrow(
       'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() / ctx.speculate() branch',
     );
   });
@@ -279,7 +279,7 @@ describe('ctx.waitUntil', () => {
     // A throwing predicate must surface as a workflow failure at the
     // `yield* ctx.waitUntil` site (like a throwing activity/memo), not park the
     // run forever. The `result()` promise resolving either way proves no hang.
-    await expect(handle.result()).rejects.toThrow('predicate boom');
+    expect(handle.result()).rejects.toThrow('predicate boom');
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
@@ -308,7 +308,7 @@ describe('ctx.waitUntil', () => {
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('running');
 
     await engine.update(handle.id, 'arm', null);
-    await expect(handle.result()).rejects.toThrow('redrive boom');
+    expect(handle.result()).rejects.toThrow('redrive boom');
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
@@ -350,7 +350,7 @@ describe('ctx.waitUntil', () => {
     // Satisfy the predicate via update; the wait completes (`true`) and then the
     // teardown cancel throws. The op was already settled as completed.
     await engine.update(handle.id, 'go', null);
-    await expect(handle.result()).resolves.toBe(true);
+    expect(handle.result()).resolves.toBe(true);
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('completed');
   });
 
@@ -413,7 +413,7 @@ describe('ctx.waitUntil', () => {
     await engine.signal(handle.id, 'begin', null);
 
     // Without the pending-drain re-drive, this hangs (Bun per-test timeout).
-    await expect(handle.result()).resolves.toBe('unblocked');
+    expect(handle.result()).resolves.toBe('unblocked');
   });
 
   it('handles a satisfying buffered update with a second pending update behind it (mid-drain re-entrancy)', async () => {
@@ -459,7 +459,7 @@ describe('ctx.waitUntil', () => {
     // duplicate would sum to >= 12), and the handler ran exactly twice. Delivery
     // ORDER is intentionally not asserted — FIFO ties on `createdAt` break on the
     // random UUID, so `[1, 11]` vs `[10, 11]` is legitimately nondeterministic.
-    await expect(handle.result()).resolves.toBe(11);
+    expect(handle.result()).resolves.toBe(11);
     expect(seen.length).toBe(2);
   });
 
@@ -482,11 +482,11 @@ describe('ctx.waitUntil', () => {
 
     // The update is handled by the inline handler; its poke finds no condition
     // waiter and does nothing. The workflow stays parked until the signal.
-    await expect(engine.update(handle.id, 'ping', null)).resolves.toBe('pong');
+    expect(engine.update(handle.id, 'ping', null)).resolves.toBe('pong');
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('running');
 
     await engine.signal(handle.id, 'go', 'done');
-    await expect(handle.result()).resolves.toBe('done');
+    expect(handle.result()).resolves.toBe('done');
   });
 });
 
@@ -533,7 +533,7 @@ describe('ctx.waitUntil recovery consistency', () => {
 
     // The run is past the wait, parked on `finish`; resuming completes it.
     await recovered.signal('cached-id', 'finish', 'done');
-    await expect(handle!.result()).resolves.toBe('done');
+    expect(handle!.result()).resolves.toBe('done');
   });
 
   it('(b) a wait still parked at the crash re-evaluates on recovery and stays waiting until re-driven', async () => {
@@ -585,6 +585,6 @@ describe('ctx.waitUntil recovery consistency', () => {
     // — consistent state throughout.
     await recovered.update(handle!.id, 'bump', 1);
     await recovered.update(handle!.id, 'bump', 1);
-    await expect(handle!.result()).resolves.toBe(2);
+    expect(handle!.result()).resolves.toBe(2);
   });
 });

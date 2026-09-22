@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
-import { MemoryStorage } from '../storage/memory';
-import { asConcreteContext } from './context/run-operation';
-import { Engine } from './engine';
+import { MemoryStorage } from '../storage/memory.ts';
+import { asConcreteContext } from './context/run-operation.ts';
+import { Engine } from './engine.ts';
 import {
   compileStepWorkflow,
   isAsyncGeneratorFunction,
   isGeneratorFunction,
   isGeneratorResult,
-} from './step-context';
-import type { StepWorkflowContext, WorkflowContext } from './types';
-import { workflow } from './types';
+} from './step-context.ts';
+import type { StepWorkflowContext, WorkflowContext } from './types.ts';
+import { workflow } from './types.ts';
 
 describe('step-context', () => {
   it('runs a simple step workflow', async () => {
@@ -103,7 +103,7 @@ describe('step-context', () => {
     engine.register(errorStepWorkflow);
 
     const handle = await engine.start('error-step', {});
-    await expect(handle.result()).rejects.toThrow('Step failed intentionally');
+    expect(handle.result()).rejects.toThrow('Step failed intentionally');
   });
 
   it('auto-detects step functions in register()', async () => {
@@ -386,7 +386,7 @@ describe('step-context durability', () => {
     );
 
     const handle = await engine.start('failing-step', null, { id: 'wf-failing-step' });
-    await expect(handle.result()).rejects.toThrow('step blew up');
+    expect(handle.result()).rejects.toThrow('step blew up');
 
     engine[Symbol.dispose]();
   });
@@ -413,7 +413,7 @@ describe('step-context durability', () => {
     );
 
     const handle = await engine.start('lone-failing-step', null, { id: 'wf-lone-failing' });
-    await expect(handle.result()).rejects.toThrow('lone boom');
+    expect(handle.result()).rejects.toThrow('lone boom');
 
     engine[Symbol.dispose]();
   }, 5_000);

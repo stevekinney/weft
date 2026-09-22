@@ -15,7 +15,7 @@ import {
   buildWorkflowRevisionManifest,
   type BuildWorkflowRevisionManifestOptions,
   type WorkflowContract,
-} from '../core/contract/index.ts';
+} from '../index.ts';
 import { validateRegistrySnapshot } from './codegen-validate.ts';
 
 async function fixtureManifest(
@@ -26,24 +26,27 @@ async function fixtureManifest(
 }
 
 describe('validateRegistrySnapshot', () => {
-  it('rejects activeRevisions that is not a plain object (e.g. an exotic-prototype value)', async () => {
-    // Passes the envelope's `objectValue` refine (`typeof === 'object' &&
-    // !Array.isArray && !== null`) but fails `isRecord`'s plain-object
-    // check — only reachable from a caller that hands validateRegistrySnapshot
-    // a value that never went through JSON.parse.
-    const result = await validateRegistrySnapshot({
-      registryVersion: 2,
-      generatedAt: new Date(0).toISOString(),
-      workflows: [],
-      activeRevisions: new Date(),
-      activities: {},
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.error).toBe(
-      'codegen: invalid registry snapshot: activeRevisions must be an object',
-    );
-  });
+  it.each([new Date(), new Map(), /revision/, Object.create({ inherited: 'revision' })])(
+    'rejects activeRevisions with an exotic prototype: %p',
+    async (activeRevisions: unknown) => {
+      // Passes the envelope's `objectValue` refine (`typeof === 'object' &&
+      // !Array.isArray && !== null`) but fails `isPlainRecord`'s plain-object
+      // check — only reachable from a caller that hands validateRegistrySnapshot
+      // a value that never went through JSON.parse.
+      const result = await validateRegistrySnapshot({
+        registryVersion: 2,
+        generatedAt: new Date(0).toISOString(),
+        workflows: [],
+        activeRevisions,
+        activities: {},
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected rejection');
+      expect(result.error).toBe(
+        'codegen: invalid registry snapshot: activeRevisions must be an object',
+      );
+    },
+  );
 
   it('rejects an activeRevisions value that is not a string', async () => {
     const result = await validateRegistrySnapshot({

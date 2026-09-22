@@ -1,47 +1,46 @@
-import { z } from 'zod';
+import { bulkCancelOutputSchema } from './bulk-output-schemas.ts';
+import {
+  assertOperationEngineMethods,
+  engineFailureFault,
+  faultMessage,
+  invalidParamsFault,
+  readOptionalJsonBody,
+} from './operation-helpers.ts';
 
-import { BulkOperationConfirmationError, type Engine } from '../../core/engine.ts';
+import { BulkOperationConfirmationError } from '../../core/engine.ts';
 import type { BulkCancelResult, BulkOperationDryRunResult } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
+import { bulkListFilterInputSchema, type BulkListFilterInput } from './bulk-filter-input.ts';
 import {
-  bulkListFilterInputSchema,
   bulkOperationControlInputSchema,
   bulkOperationOptionsFromInput,
   bulkOperatorAccessPolicy,
-  engineFailureFault,
-  faultMessage,
-  parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
-  readOptionalJsonBody,
-  type BulkListFilterInput,
   type BulkOperationControlInput,
-} from './bulk-filter-helpers.ts';
+} from './bulk-operation-controls.ts';
 import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 const bulkCancelWorkflowsInput = bulkListFilterInputSchema.merge(bulkOperationControlInputSchema);
-const bulkCancelWorkflowsOutput = z.unknown();
 
 export type BulkCancelWorkflowsInput = BulkListFilterInput & BulkOperationControlInput;
 export type BulkCancelWorkflowsOutput = BulkCancelResult | BulkOperationDryRunResult;
 
-export const bulkCancelWorkflowsOperation = defineOperation<
-  BulkCancelWorkflowsInput,
-  BulkCancelWorkflowsOutput
->({
+export const bulkCancelWorkflowsOperation = defineOperation({
   name: 'weft.workflows.bulk.cancel',
   mcpExposable: false,
   summary: 'Cancel workflows in bulk',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkCancelWorkflowsInput,
-  outputSchema: bulkCancelWorkflowsOutput as z.ZodType<BulkCancelWorkflowsOutput>,
+  outputSchema: bulkCancelOutputSchema,
   access: bulkOperatorAccessPolicy,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }): Promise<BulkCancelWorkflowsOutput> => {
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['cancelAll']);
+    const e = engine;
 
     const filter = validatedListFilterFromBulkInput(input);
     const operationOptions = bulkOperationOptionsFromInput(input, principal);

@@ -8,9 +8,10 @@
  *
  * ## Running
  *
- * Gate: `WEFT_BROWSER_SMOKE=1` must be set (the same flag the sibling Service
- * Worker and `browser-smoke` CI job use). Otherwise the suite skips and does not
- * run in the default `bun test` pass.
+ * Gate: `WEFT_BROWSER_SMOKE=1` must be set (the same flag the sibling IndexedDB
+ * and Service Worker smokes use, via `browserSmokeEnabled`). Otherwise the suite
+ * skips and does not run in the default `bun test` pass. Run it with
+ * `bun run --filter=@lostgradient/weft test:browser`.
  *
  * Browser provisioning: `bunx playwright install --with-deps chromium`. The
  * pinned binary is resolved by Playwright — no manual discovery.
@@ -42,7 +43,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
 
-const shouldRun = Bun.env['WEFT_BROWSER_SMOKE'] === '1';
+import { browserSmokeEnabled } from '../testing/browser-smoke-gate.test-support.ts';
 
 /** Attribute on `<html>` the content script writes its JSON result into. */
 const RESULT_ATTRIBUTE = 'data-weft-smoke-result';
@@ -158,7 +159,7 @@ let context: BrowserContext;
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
 
-(shouldRun ? describe : describe.skip)('WebExtensionStorage — real Chromium smoke', () => {
+describe.skipIf(!browserSmokeEnabled)('WebExtensionStorage — real Chromium smoke', () => {
   beforeAll(async () => {
     temporaryDirectory = mkdtempSync(join(tmpdir(), 'weft-web-extension-smoke-'));
     const extensionDirectory = join(temporaryDirectory, 'extension');

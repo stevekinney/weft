@@ -54,7 +54,7 @@ import {
   WorkflowTimeoutError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from '../index.ts';
-// StandardSchemaValidationError is public via the `@lostgradient/weft/json-schema` subpath,
+// StandardSchemaValidationError is public via the `@lostgradient/weft` subpath,
 // not the root entry — so it belongs in WeftErrorCode and is imported here.
 import { StandardSchemaValidationError } from '../json-schema.ts';
 import {

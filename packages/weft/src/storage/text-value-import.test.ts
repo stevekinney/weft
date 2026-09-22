@@ -31,7 +31,7 @@ describe('copyTextKeyValueRowsToStorage', () => {
     await using storage = new MemoryStorage();
     await storage.put('app:my-service:session:1', new TextEncoder().encode('existing'));
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         targetPrefix: 'app:my-service',
@@ -45,7 +45,7 @@ describe('copyTextKeyValueRowsToStorage', () => {
   it('refuses duplicate source rows that map to the same target key', async () => {
     await using storage = new MemoryStorage();
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         rows: [
@@ -59,14 +59,14 @@ describe('copyTextKeyValueRowsToStorage', () => {
   it('rejects rows whose runtime key or value is not text', async () => {
     await using storage = new MemoryStorage();
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         rows: [{ key: 1, value: 'session' } as never],
       }),
     ).rejects.toThrow('Text key-value import rows must have string keys');
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         rows: [{ key: 'session:1', value: 1 } as never],
@@ -77,7 +77,7 @@ describe('copyTextKeyValueRowsToStorage', () => {
   it('rejects target keys that would write into Weft reserved keyspace', async () => {
     await using storage = new MemoryStorage();
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         targetPrefix: 'wf',
@@ -101,7 +101,7 @@ describe('copyTextKeyValueRowsToStorage', () => {
 
     await using storage = new RacingStorage();
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage,
         rows: [{ key: 'session:1', value: 'new' }],
@@ -138,13 +138,13 @@ describe('copyTextKeyValueRowsToStorage', () => {
       [Symbol.dispose]: storage[Symbol.dispose].bind(storage),
     };
 
-    await expect(
+    expect(
       copyTextKeyValueRowsToStorage({
         storage: unavailable,
         rows: [{ key: 'session:1', value: 'new' }],
       }),
     ).rejects.toThrow('requires storage capability "conditionalBatch"');
 
-    await expect(storageConditionalBatch(storage, [], [])).resolves.toBe(true);
+    expect(storageConditionalBatch(storage, [], [])).resolves.toBe(true);
   });
 });

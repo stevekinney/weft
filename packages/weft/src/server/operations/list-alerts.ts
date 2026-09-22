@@ -9,10 +9,10 @@
 import { z } from 'zod';
 
 import { ALERT_METRICS } from '../../alerting/types.ts';
-import type { Engine } from '../../core/engine.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const alertMetricSchema = z.enum(ALERT_METRICS);
 
@@ -32,7 +32,7 @@ export type ListAlertsInput = z.infer<typeof listAlertsInput>;
 export type ActiveAlert = z.infer<typeof activeAlertSchema>;
 export type ListAlertsOutput = { items: ActiveAlert[] };
 
-export const listAlertsOperation = defineOperation<ListAlertsInput, ListAlertsOutput>({
+export const listAlertsOperation = defineOperation({
   name: 'weft.alerts.list',
   mcpExposable: false,
   summary: 'List currently firing alerts',
@@ -49,7 +49,8 @@ export const listAlertsOperation = defineOperation<ListAlertsInput, ListAlertsOu
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ engine }): Promise<ListAlertsOutput> => {
-    const activeAlerts = (engine as Engine).getActiveAlerts();
+    assertOperationEngineMethods(engine, ['getActiveAlerts']);
+    const activeAlerts = engine.getActiveAlerts();
     return {
       items: activeAlerts.map((state) => ({
         metric: state.rule.metric,

@@ -1,4 +1,4 @@
-import { VERSION } from '../version.ts';
+import { VERSION } from '../index.ts';
 
 import type { CommandOutput } from './types.ts';
 

@@ -78,6 +78,8 @@ export interface ServerContext {
    * this window cancels the pending requeue. `0` means inline requeue.
    */
   readonly workerReconnectGracePeriodMs: number;
+  /** Cancellation grace period in milliseconds (COR-230, acceptance criterion 15). See `ServeOptions.cancellationGracePeriodMs`. */
+  readonly cancellationGracePeriodMs: number;
   /** Engine-level cap for activity results delivered by remote workers. */
   readonly payloadSizeMaxBytes: number | null;
   /**

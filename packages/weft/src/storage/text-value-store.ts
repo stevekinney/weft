@@ -12,7 +12,7 @@
  * so a string consumer never sees corrupted data masquerading as
  * valid text.
  *
- * @module @lostgradient/weft/storage/text-value-store
+ * @module @lostgradient/weft
  */
 import {
   storageConditionalBatch,
@@ -22,14 +22,14 @@ import {
   type BatchOperation,
   type ConditionalBatchCondition,
   type Storage,
-} from './interface';
+} from './interface.ts';
 
 /**
  * Options for {@link textValueStore}.
  *
  * @example
  * ```ts
- * import { type TextValueStoreOptions } from '@lostgradient/weft/storage';
+ * import { type TextValueStoreOptions } from '@lostgradient/weft';
  *
  * const options: TextValueStoreOptions = {
  *   disposeUnderlyingStorage: false,
@@ -53,7 +53,7 @@ export type TextValueStoreOptions = {
  *
  * @example
  * ```ts
- * import { type TextValueStoreCondition } from '@lostgradient/weft/storage';
+ * import { type TextValueStoreCondition } from '@lostgradient/weft';
  *
  * const condition: TextValueStoreCondition = {
  *   key: 'api-key:1:last-used-at',
@@ -77,7 +77,7 @@ export type TextValueStoreCondition = {
  *
  * @example
  * ```ts
- * import { type TextValueStoreBatchOperation } from '@lostgradient/weft/storage';
+ * import { type TextValueStoreBatchOperation } from '@lostgradient/weft';
  *
  * const operation: TextValueStoreBatchOperation = {
  *   type: 'set',
@@ -106,7 +106,7 @@ export type TextValueStoreBatchOperation =
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { textValueStore, type TextValueStore } from '@lostgradient/weft/storage/text-value-store';
+ * import { textValueStore, type TextValueStore } from '@lostgradient/weft';
  *
  * await using base = new MemoryStorage();
  * const store: TextValueStore = textValueStore(base);
@@ -143,8 +143,8 @@ export type TextValueStore = {
  *
  * @example
  * ```ts
- * import { MemoryStorage } from '@lostgradient/weft/storage';
- * import { type ConditionalTextValueStore, textValueStore } from '@lostgradient/weft/storage/text-value-store';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ * import { type ConditionalTextValueStore, textValueStore } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const store: ConditionalTextValueStore = textValueStore(storage);
@@ -183,7 +183,7 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
  * @example
  * ```ts
  * import { MemoryStorage } from '@lostgradient/weft';
- * import { textValueStore } from '@lostgradient/weft/storage/text-value-store';
+ * import { textValueStore } from '@lostgradient/weft';
  *
  * await using base = new MemoryStorage();
  * const store = textValueStore(base);

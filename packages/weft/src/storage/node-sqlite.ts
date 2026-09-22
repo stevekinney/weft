@@ -6,7 +6,7 @@
  * storage layer to run on Node.js 22+.
  *
  * `better-sqlite3` is a peer dependency — it must be installed separately by
- * consumers who import `@lostgradient/weft/storage/sqlite/node`.
+ * consumers who import `@lostgradient/weft`.
  *
  * @module storage/node-sqlite
  */
@@ -40,10 +40,17 @@ import {
 type NodeSQLiteStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
 
 /**
- * Runtime-neutral alias for the Node SQLite adapter. Consumers that import
- * from `@lostgradient/weft/storage/sqlite` get this class under Node.
+ * Runtime-neutral alias for the Node SQLite adapter. Consumers importing
+ * `@lostgradient/weft/storage/sqlite` resolve here under Node, and `storage/sqlite.ts` is a
+ * declaration-only `types` entry, so this alias is the only thing that exists at runtime.
+ * Without it the subpath type-checks for a consumer and throws on import.
  */
 export { NodeSQLiteStorage as SQLiteStorage };
+
+/**
+ * Runtime-neutral alias for the Node SQLite adapter. Consumers that import
+ * from `@lostgradient/weft` get this class under Node.
+ */
 
 /**
  * SQLite-backed {@link Storage} using `better-sqlite3` for Node.js 22+
@@ -52,19 +59,19 @@ export { NodeSQLiteStorage as SQLiteStorage };
  * Implements the same WAL-mode schema as {@link BunSQLiteStorage}
  * but resolves the `better-sqlite3` peer dependency lazily at construction time,
  * so the module compiles without it installed.  Import from
- * `@lostgradient/weft/storage/sqlite/node` to use this adapter.
+ * `@lostgradient/weft` to use this adapter.
  *
  * Unlike BunSQLiteStorage, this adapter currently implements only the required
  * Storage methods (`get`, `put`, `delete`, `scan`, `batch`, and
  * `conditionalBatch`). The optional `has`, `keys`, `count`, `deletePrefix`, and
  * `scoped` helpers fall back to the generic implementations in
- * `@lostgradient/weft/storage/interface`; `deleteRange` falls back to `storageDeleteRange`
- * (exported from `@lostgradient/weft` / `@lostgradient/weft/storage`). There is no SQL passthrough
+ * `@lostgradient/weft`; `deleteRange` falls back to `storageDeleteRange`
+ * (exported from `@lostgradient/weft` / `@lostgradient/weft`). There is no SQL passthrough
  * `query()` method.
  *
  * @example
  * ```ts
- * import { NodeSQLiteStorage } from '@lostgradient/weft/storage/sqlite/node';
+ * import { NodeSQLiteStorage } from '@lostgradient/weft';
  * import { workflow, Engine } from '@lostgradient/weft';
  *
  * // Requires: bun add better-sqlite3

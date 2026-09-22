@@ -65,7 +65,7 @@ describe('validateStandardSchema', () => {
   });
 
   it('throws StandardSchemaValidationError on failure', async () => {
-    await expect(
+    expect(
       validateStandardSchema(stringSchema, 123, {
         fieldName: 'payload',
         operation: 'weft.workflows.signal',
@@ -84,7 +84,7 @@ describe('validateStandardSchema', () => {
       },
     };
 
-    await expect(validateStandardSchema(throwingSchema, 1, { fieldName: 'input' })).rejects.toThrow(
+    expect(validateStandardSchema(throwingSchema, 1, { fieldName: 'input' })).rejects.toThrow(
       /validator blew up/,
     );
   });
@@ -184,7 +184,7 @@ describe('validateStandardSchema', () => {
       },
     };
 
-    await expect(
+    expect(
       validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'input' }),
     ).rejects.toBeInstanceOf(TypeError);
   });
@@ -201,7 +201,7 @@ describe('validateStandardSchema', () => {
       },
     };
 
-    await expect(
+    expect(
       validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'workflow.input' }),
     ).rejects.toThrow(/workflow\.input/);
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { emitPropertyKey, jsonSchemaToTypeScript } from '../../cli/codegen-emit.ts';
+import { emitPropertyKey, jsonSchemaToTypeScript } from '../../json-schema/codegen-emit.ts';
 import hostileContract from './__fixtures__/hostile-identifiers.json';
 import { contractHash } from './hash.ts';
 import { buildWorkflowRevisionManifest } from './manifest.ts';
@@ -20,11 +20,11 @@ describe('unsafe identifiers and descriptions cannot inject generated TypeScript
 
   it('contractHash and canonicalWorkflowContractJson round-trip without throwing', async () => {
     expect(() => canonicalWorkflowContractJson(contract)).not.toThrow();
-    await expect(contractHash(contract)).resolves.toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(contractHash(contract)).resolves.toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it('buildWorkflowRevisionManifest round-trips the hostile contract without throwing', async () => {
-    await expect(buildWorkflowRevisionManifest(contract)).resolves.toBeDefined();
+    expect(buildWorkflowRevisionManifest(contract)).resolves.toBeDefined();
   });
 
   it('a __proto__-named signal survives as an own enumerable property, never prototype pollution', () => {

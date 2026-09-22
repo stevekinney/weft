@@ -119,7 +119,7 @@ export type TypedBatchOperation<Value> =
  *
  * @example
  * ```ts
- * import { type TypedConditionalBatchCondition } from '@lostgradient/weft/storage';
+ * import { type TypedConditionalBatchCondition } from '@lostgradient/weft';
  *
  * type SessionMetadata = { lastUsedAt: string };
  * const condition: TypedConditionalBatchCondition<SessionMetadata> = {
@@ -141,7 +141,7 @@ export type TypedConditionalBatchCondition<Value> = {
  *
  * @example
  * ```ts
- * import { type CodecStorageOptions } from '@lostgradient/weft/storage';
+ * import { type CodecStorageOptions } from '@lostgradient/weft';
  *
  * const options: CodecStorageOptions = {
  *   disposeUnderlyingStorage: false,

@@ -36,7 +36,15 @@ export function resolvePerAttemptTimeout(
   activitySignal: AbortSignal;
 } {
   const workflowAbortController = internals.inlineStrategy?.getAbortController(workflowId);
-  const perAttemptTimeoutMs = internals.activityWorkerDispatcher
+  // Remote mode (COR-152) never reaches this local abort controller either:
+  // `invokeRemoteActivity` durably parks the operation and returns before any
+  // per-attempt timer here could matter, and the same worker-mode reasoning
+  // above applies — the remote worker keeps running independent of the
+  // engine's local await, so racing a local deadline against it would orphan
+  // the eventual result.
+  const isOutOfProcessMode =
+    Boolean(internals.activityWorkerDispatcher) || Boolean(internals.remoteActivityBroker);
+  const perAttemptTimeoutMs = isOutOfProcessMode
     ? undefined
     : parsePerAttemptTimeoutMs(operation.options?.['timeout']);
   const attemptAbortController =

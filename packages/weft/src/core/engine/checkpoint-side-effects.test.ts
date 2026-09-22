@@ -136,7 +136,7 @@ async function expectCheckpointCommitFailure(
   const bytes = serializeCheckpoint(nextCheckpoint);
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
-  await expect(
+  expect(
     persistCheckpoint(
       internals,
       checkpoint.workflowId,

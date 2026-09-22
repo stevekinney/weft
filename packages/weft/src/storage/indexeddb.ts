@@ -2,7 +2,7 @@ import {
   normalizeDeleteRangeOptions,
   resolveDeleteRangeBounds,
   type DeleteRangeOptions,
-} from './delete-range';
+} from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
   matchesScanOptions,
@@ -13,8 +13,8 @@ import {
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface';
-import { scopedStorage } from './scoped-storage';
+} from './interface.ts';
+import { scopedStorage } from './scoped-storage.ts';
 
 const STORE_NAME = 'kv';
 
@@ -184,7 +184,7 @@ async function* iterateCursor<TCursor extends IDBCursor | IDBCursorWithValue, TV
  *
  * @example
  * ```ts
- * import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
+ * import { IndexedDBStorage } from '@lostgradient/weft';
  * import { workflow, Engine, type WorkflowContext } from '@lostgradient/weft';
  *
  * // Opens (or re-opens) the default 'weft' IndexedDB database

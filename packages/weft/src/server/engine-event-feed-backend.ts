@@ -50,7 +50,7 @@ import {
  * import {
  *   createEngineEventFeedBackend,
  *   createWorkflowEventFeed,
- * } from '@lostgradient/weft/server/handler';
+ * } from '@lostgradient/weft';
  *
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const workflowEventFeed = createWorkflowEventFeed(createEngineEventFeedBackend(engine));

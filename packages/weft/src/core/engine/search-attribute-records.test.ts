@@ -37,10 +37,8 @@ describe('search attribute record readers', () => {
 
     await storage.put(KEYS.attribute('workflow-1'), encode({ segment: 'enterprise' }));
 
-    await expect(readSearchAttributesForFilter(internals, 'workflow-1', undefined)).resolves.toBe(
-      null,
-    );
-    await expect(
+    expect(readSearchAttributesForFilter(internals, 'workflow-1', undefined)).resolves.toBe(null);
+    expect(
       readSearchAttributesForStates(internals, [encode(workflowState('workflow-1'))], undefined),
     ).resolves.toEqual(new Map());
   });
@@ -51,7 +49,7 @@ describe('search attribute record readers', () => {
 
     await storage.put(KEYS.attribute('workflow-1'), encode({ segment: 'enterprise' }));
 
-    await expect(
+    expect(
       readSearchAttributesForFilter(internals, 'workflow-1', attributeFilter),
     ).resolves.toEqual({ segment: 'enterprise' });
 

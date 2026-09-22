@@ -9,8 +9,8 @@
  */
 
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import type { WorkflowState } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -35,7 +35,7 @@ const getWorkflowOutput = z.unknown();
 export type GetWorkflowInput = z.infer<typeof getWorkflowInput>;
 export type GetWorkflowOutput = WorkflowState;
 
-export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflowOutput>({
+export const getWorkflowOperation = defineOperation({
   name: 'weft.workflows.get',
   mcpExposable: false,
   summary: 'Get workflow state by id',
@@ -46,7 +46,7 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
   destructive: false,
   tags: ['Workflows'],
   inputSchema: getWorkflowInput,
-  outputSchema: getWorkflowOutput as z.ZodType<GetWorkflowOutput>,
+  outputSchema: getWorkflowOutput,
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
@@ -58,7 +58,8 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
     // The catalog stores `engine: unknown` so the pipeline is transport-
     // neutral; per `operation-catalog.ts`'s JSDoc the concrete adapter
     // (here: REST via serve()) is responsible for passing an `Engine`.
-    const e = engine as Engine;
+    assertOperationEngineMethods(engine, ['get']);
+    const e = engine;
     const state = await e.get(input.workflowId);
     if (state === null) {
       // Throw a fully-shaped `OperationFault` — `classifyEngineError`

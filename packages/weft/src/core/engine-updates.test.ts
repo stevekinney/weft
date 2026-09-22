@@ -411,7 +411,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(engine.update(handle.id, 'someUpdate', 'payload')).rejects.toBeInstanceOf(
+        expect(engine.update(handle.id, 'someUpdate', 'payload')).rejects.toBeInstanceOf(
           WorkflowTerminalError,
         );
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
@@ -443,9 +443,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe(
-          'late-response',
-        );
+        expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe('late-response');
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
       });
 
@@ -475,7 +473,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe(
+        expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe(
           'post-delete-response',
         );
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
@@ -536,7 +534,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe(
+        expect(engine.update(handle.id, 'someUpdate', 'payload')).resolves.toBe(
           'fifth-poll-response',
         );
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
@@ -573,7 +571,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(engine.update(handle.id, 'someUpdate', 'payload')).rejects.toBeInstanceOf(
+        expect(engine.update(handle.id, 'someUpdate', 'payload')).rejects.toBeInstanceOf(
           WorkflowTerminalError,
         );
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
@@ -601,7 +599,7 @@ for (const backend of storageBackends) {
 
         staleWorkflowStateStorage.armStaleWorkflowStateRead(workflowKey, runningStateBytes!);
 
-        await expect(
+        expect(
           engine.submitCoordinatedUpdate(handle.id, 'someUpdate', 'payload'),
         ).rejects.toBeInstanceOf(WorkflowTerminalError);
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
@@ -1082,10 +1080,10 @@ for (const backend of storageBackends) {
 
         const handle = await engine.start('immediate-update', undefined);
 
-        await expect(handle.update('test', 'hello')).resolves.toBe('echo: hello');
+        expect(handle.update('test', 'hello')).resolves.toBe('echo: hello');
 
         await handle.signal('finish', 'done');
-        await expect(handle.result()).resolves.toBe('done');
+        expect(handle.result()).resolves.toBe('done');
       });
     });
 
@@ -1145,7 +1143,7 @@ for (const backend of storageBackends) {
         }
 
         expect(timeoutError).not.toBeNull();
-        await expect(handle.result()).resolves.toBe('processed without respond: my-data');
+        expect(handle.result()).resolves.toBe('processed without respond: my-data');
         await flush();
         expect(await collectKeys(result.storage, KEYS.updatePrefix(handle.id))).toEqual([]);
         expect(await engine.getUpdateResult(timeoutError!.updateId)).toBeNull();
@@ -1272,8 +1270,8 @@ for (const backend of storageBackends) {
             await flush();
             releaseDelayedScan.resolve();
 
-            await expect(delayedUpdate).resolves.toBe('second:first-payload');
-            await expect(handle.result()).resolves.toEqual(['second-payload', 'first-payload']);
+            expect(delayedUpdate).resolves.toBe('second:first-payload');
+            expect(handle.result()).resolves.toEqual(['second-payload', 'first-payload']);
           },
           { timeout: 15_000 },
         );
@@ -1328,7 +1326,7 @@ for (const backend of storageBackends) {
 
           await updateInsertedBeforeSecondScan.promise;
 
-          await expect(handle.result()).resolves.toBe('arrived-during-registration');
+          expect(handle.result()).resolves.toBe('arrived-during-registration');
           await flush();
 
           const responseBytes = await result.storage.get(

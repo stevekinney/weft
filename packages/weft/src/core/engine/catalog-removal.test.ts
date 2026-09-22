@@ -1171,7 +1171,7 @@ describe('getWorkflowRevisionDiagnostics — dynamic-source extension (WFT-15/16
       ),
     );
 
-    await expect(engine.start('lazy-checkout', null)).rejects.toThrow();
+    expect(engine.start('lazy-checkout', null)).rejects.toThrow();
 
     const diagnosticsAfter = await getWorkflowRevisionDiagnostics(
       engine,
@@ -1435,7 +1435,7 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     );
 
     gate.resolve();
-    await expect(startPromise).rejects.toThrow(WorkflowRevisionUnavailableError);
+    expect(startPromise).rejects.toThrow(WorkflowRevisionUnavailableError);
 
     const state = await engineA.get('race-fail-closed-new');
     expect(state).toBeNull();

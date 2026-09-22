@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
@@ -13,7 +13,7 @@ const cancelScheduleOutput = z.undefined();
 export type CancelScheduleInput = z.infer<typeof cancelScheduleInput>;
 export type CancelScheduleOutput = z.infer<typeof cancelScheduleOutput>;
 
-export const cancelScheduleOperation = defineOperation<CancelScheduleInput, CancelScheduleOutput>({
+export const cancelScheduleOperation = defineOperation({
   name: 'weft.schedules.cancel',
   mcpExposable: false,
   summary: 'Cancel a recurring schedule',
@@ -30,7 +30,8 @@ export const cancelScheduleOperation = defineOperation<CancelScheduleInput, Canc
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<CancelScheduleOutput> => {
-    const typedEngine = engine as Engine;
+    assertOperationEngineMethods(engine, ['cancelSchedule']);
+    const typedEngine = engine;
 
     try {
       await typedEngine.cancelSchedule(input.scheduleId);

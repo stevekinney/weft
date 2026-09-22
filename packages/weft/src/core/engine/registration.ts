@@ -1,4 +1,4 @@
-import { isRecord } from '../../worker/manifest/is-record.ts';
+import { isPlainRecord } from '../../worker/manifest/is-plain-record.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { WorkflowDefinitionRegisteredEvent } from '../events.ts';
 import {
@@ -309,7 +309,7 @@ function commitWorkflowDefinition(
  * the runtime check is sufficient because the builder is the only producer of
  * objects with all five fields as plain `Readonly<Record<string, ...>>`.
  *
- * Uses {@link isRecord}, not a bare `typeof === 'object' && !== null` check —
+ * Uses {@link isPlainRecord}, not a bare `typeof === 'object' && !== null` check —
  * the latter also accepts an array, `Map`, `Date`, or another exotic-prototype
  * value. For a malformed loader export in the dynamic workflow-source
  * validation pipeline (`core/source/validate.ts`, WFT-13/14), a field like
@@ -322,7 +322,7 @@ function commitWorkflowDefinition(
 function hasNonNullObjectField(value: object, key: string): boolean {
   if (!(key in value)) return false;
   const fieldValue = (value as { [k: string]: unknown })[key];
-  return isRecord(fieldValue);
+  return isPlainRecord(fieldValue);
 }
 
 /**

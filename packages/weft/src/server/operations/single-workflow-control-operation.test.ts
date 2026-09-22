@@ -23,6 +23,7 @@ describe('single-workflow control operation helpers', () => {
       inputSchema,
       outputSchema: z.undefined(),
       producibleFaults: ['NotFound'],
+      requiredEngineMethods: [],
       invoke: async () => {
         throw new Error('workflow not found');
       },
@@ -37,7 +38,7 @@ describe('single-workflow control operation helpers', () => {
       transport: 'http-rest',
     });
 
-    await expect(result).rejects.toEqual({
+    expect(result).rejects.toEqual({
       code: 'NotFound',
       message: 'workflow not found',
       data: { resource: 'workflow', identifier: 'missing-workflow' },
@@ -53,6 +54,7 @@ describe('single-workflow control operation helpers', () => {
       inputSchema,
       outputSchema: z.object({ id: z.string() }),
       producibleFaults: ['NotFound', 'Conflict'],
+      requiredEngineMethods: [],
       invoke: async () => {
         throw new Error('Cannot resume completed workflow');
       },
@@ -73,7 +75,7 @@ describe('single-workflow control operation helpers', () => {
       transport: 'http-rest',
     });
 
-    await expect(result).rejects.toEqual({
+    expect(result).rejects.toEqual({
       code: 'Conflict',
       message: 'Cannot resume completed workflow',
       data: { reason: 'Cannot resume completed workflow' },

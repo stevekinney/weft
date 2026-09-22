@@ -59,9 +59,7 @@ describe('#449 scheduleToCloseTimeout', () => {
     // The error crosses the durable boundary as a message string; assert on it.
     // (The `timeout` failure-category classification is pinned by the dedicated
     // classifyErrorAsFailureCategory unit test below.)
-    await expect(handle.result()).rejects.toThrow(
-      'exceeded its scheduleToCloseTimeout budget of 1000ms',
-    );
+    expect(handle.result()).rejects.toThrow('exceeded its scheduleToCloseTimeout budget of 1000ms');
     // Exactly ONE attempt ran: the retry boundary blocked attempt 2 before
     // dispatch, well short of maxAttempts: 5.
     expect(attempts).toBe(1);
@@ -101,7 +99,7 @@ describe('#449 scheduleToCloseTimeout', () => {
     );
 
     const handle = await engine.start('stc-noretry-wf', null, { id: 'stc-noretry-1' });
-    await expect(handle.result()).rejects.toThrow('boom');
+    expect(handle.result()).rejects.toThrow('boom');
     expect(attempts).toBe(1);
   });
 

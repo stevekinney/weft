@@ -6,9 +6,9 @@ import type {
   SleepInterception,
   WorkflowInterceptor,
   WorkflowStartInterception,
-} from '../core/interceptor';
-import type { SpanLink } from './no-op-telemetry';
-import { extractTraceParent } from './propagation';
+} from '../core/interceptor.ts';
+import type { SpanLink } from './no-op-telemetry.ts';
+import { extractTraceParent } from './propagation.ts';
 import {
   applyCustomAttributes,
   injectSpanContext,
@@ -17,9 +17,9 @@ import {
   runGeneratorWithSpan,
   runWithSpan,
   serializePayload,
-} from './span-helpers';
-import type { ObservabilityState } from './types';
-import { endAndRemoveWorkflowSpan, evictStaleWorkflowSpans } from './workflow-lifecycle';
+} from './span-helpers.ts';
+import type { ObservabilityState } from './types.ts';
+import { endAndRemoveWorkflowSpan, evictStaleWorkflowSpans } from './workflow-lifecycle.ts';
 
 export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInterceptor {
   return {

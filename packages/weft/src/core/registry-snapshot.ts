@@ -57,6 +57,25 @@ export { RegistrySchemaConversionError, RegistryWorkflowCountLimitError };
  * Current registry contract version. Future incompatible changes to the
  * snapshot shape must bump this number; the codegen CLI rejects unknown
  * versions with a clear upgrade message.
+ *
+ * Compare against it before parsing a snapshot you did not just produce — a
+ * vendored file, or one fetched from a server of unknown age. Failing loudly
+ * on a version you do not recognise is the point: a newer snapshot read by an
+ * older parser would otherwise lose fields silently.
+ *
+ * @example
+ * ```ts
+ * import { REGISTRY_VERSION } from '@lostgradient/weft';
+ *
+ * declare const snapshot: { version: number };
+ *
+ * if (snapshot.version !== REGISTRY_VERSION) {
+ *   throw new Error(
+ *     'registry snapshot is version ' + snapshot.version +
+ *       '; this build understands ' + REGISTRY_VERSION,
+ *   );
+ * }
+ * ```
  */
 export const REGISTRY_VERSION = 2;
 
@@ -71,6 +90,22 @@ export const REGISTRY_VERSION = 2;
  * metadata can be attached structurally; activity names are now typed
  * per-workflow via the builder's `.activities({...})` step, so there is no
  * global activity-type registry to attach metadata to.
+ *
+ * `weft codegen` turns each of these into one typed activity signature, so the
+ * schemas here are what decide whether a caller's arguments typecheck. Read
+ * them when you generate or audit client code; `queue` is always populated,
+ * since the engine assigns a default when a definition omits one.
+ *
+ * @example
+ * ```ts
+ * import type { RegistryActivityEntry } from '@lostgradient/weft';
+ *
+ * declare const activities: Readonly<Record<string, RegistryActivityEntry>>;
+ *
+ * for (const [name, activity] of Object.entries(activities)) {
+ *   console.log(name, 'runs on', activity.queue);
+ * }
+ * ```
  */
 export type RegistryActivityEntry = {
   inputSchema?: Record<string, unknown>;

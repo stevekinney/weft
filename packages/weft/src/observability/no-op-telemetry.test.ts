@@ -7,7 +7,7 @@ import {
   resetCachedOpenTelemetryApiForTesting,
   resolveInstalledOpenTelemetryApi,
   type OpenTelemetryApi,
-} from './no-op-telemetry';
+} from './no-op-telemetry.ts';
 
 /**
  * Builds a fresh object matching the supported OpenTelemetry API shape Weft

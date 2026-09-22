@@ -574,7 +574,10 @@ export function paginateWorkflowSummaries(
   items: WorkflowSummary[],
   filter?: ListFilter,
 ): PaginatedResult<WorkflowSummary> {
-  return paginateItems(items, filter);
+  return paginateItems(items, {
+    ...(filter?.limit === undefined ? {} : { limit: filter.limit }),
+    ...(filter?.offset === undefined ? {} : { offset: filter.offset }),
+  });
 }
 
 export function paginateItems<T>(

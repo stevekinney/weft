@@ -3,9 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Engine } from '@lostgradient/weft';
-import { serve } from '@lostgradient/weft/server';
-import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+import { BunSQLiteStorage, Engine, serve } from '@lostgradient/weft';
 
 import { createOrderProcessingEngine, orderProcessingSchedule } from '../src/registry';
 
@@ -14,7 +12,7 @@ describe('order-processing server smoke check', () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), 'weft-order-processing-smoke-'));
 
     try {
-      using storage = new SQLiteStorage(join(temporaryDirectory, 'order-processing.sqlite'));
+      using storage = new BunSQLiteStorage(join(temporaryDirectory, 'order-processing.sqlite'));
       await using engine = createOrderProcessingEngine(new Engine({ storage }));
       await engine.schedule(orderProcessingSchedule);
 
@@ -24,6 +22,7 @@ describe('order-processing server smoke check', () => {
         }),
         engine,
         hostname: '127.0.0.1',
+        unauthenticatedAccess: 'allow',
         port: 0,
         publicOrigin: 'http://localhost',
       });

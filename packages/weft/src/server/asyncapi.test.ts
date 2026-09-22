@@ -7,29 +7,11 @@ import { VERSION } from '../version.ts';
 import { generateAsyncApiDocument } from './asyncapi.ts';
 import { isDiscoverable } from './discovery-filter.ts';
 import { serve, type WeftServer } from './index.ts';
-import type { ErasedOperation, OperationRegistry } from './operation-catalog.ts';
+import type { OperationRegistry } from './operation-catalog.ts';
+import { defineOperation } from './operation-registry.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 
-type AsyncApiDocument = {
-  asyncapi?: unknown;
-  info?: {
-    title?: unknown;
-    version?: unknown;
-  };
-  channels?: Record<string, unknown>;
-  components?: {
-    messages?: Record<string, { payload?: unknown }>;
-  };
-  servers?: Record<
-    string,
-    {
-      host?: unknown;
-      protocol?: unknown;
-    }
-  >;
-};
-
-const PRIVATE_STREAM_OPERATION: ErasedOperation = {
+const PRIVATE_STREAM_OPERATION = defineOperation({
   name: 'weft.private.stream',
   mcpExposable: false,
   destructive: false,
@@ -44,7 +26,7 @@ const PRIVATE_STREAM_OPERATION: ErasedOperation = {
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
   invoke: async () => ({ chunks: [] }),
-};
+});
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -87,10 +69,12 @@ describe('AsyncAPI document', () => {
     servers.push(server);
 
     const response = await fetch(`${server.url}/asyncapi.json`);
-    const document = (await response.json()) as AsyncApiDocument;
+    const document = await response.json();
 
     expect(response.status).toBe(200);
-    expect(document.asyncapi).toBe('3.0.0');
+    expect(isRecord(document)).toBe(true);
+    if (!isRecord(document)) throw new Error('expected AsyncAPI document object');
+    expect(document['asyncapi']).toBe('3.0.0');
   });
 
   it('includes the workflow event subscription channel', () => {
@@ -102,12 +86,17 @@ describe('AsyncAPI document', () => {
   it('documents the workflow subscription session method on the subscribe request', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
-    }) as AsyncApiDocument;
-    const request = document.components?.messages?.['weft_workflows_events_subscribeRequest'];
-    const payload = request?.payload as
-      { properties?: { method?: { const?: unknown } } } | undefined;
+    });
+    const components = document['components'];
+    const messages = isRecord(components) ? components['messages'] : undefined;
+    const request = isRecord(messages)
+      ? messages['weft_workflows_events_subscribeRequest']
+      : undefined;
+    const payload = isRecord(request) ? request['payload'] : undefined;
+    const properties = isRecord(payload) ? payload['properties'] : undefined;
+    const method = isRecord(properties) ? properties['method'] : undefined;
 
-    expect(payload?.properties?.method?.const).toBe('weft.workflows.subscribe');
+    expect(isRecord(method) ? method['const'] : undefined).toBe('weft.workflows.subscribe');
   });
 
   it('includes the workflow SSE stream channel', () => {
@@ -126,19 +115,23 @@ describe('AsyncAPI document', () => {
   it('emits object payload schemas for every component message', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
-    }) as AsyncApiDocument;
-    const messages = document.components?.messages ?? {};
+    });
+    const components = document['components'];
+    const messages =
+      isRecord(components) && isRecord(components['messages']) ? components['messages'] : {};
 
     expect(Object.keys(messages).length).toBeGreaterThan(0);
     for (const message of Object.values(messages)) {
-      expect(isRecord(message.payload)).toBe(true);
+      expect(isRecord(message)).toBe(true);
     }
   });
 
   it('keeps discoverable async operations and emitted channels in parity', () => {
     const registry = createLiveOperationRegistry();
-    const document = generateAsyncApiDocument({ registry }) as AsyncApiDocument;
-    const channelNames = new Set(Object.keys(document.channels ?? {}));
+    const document = generateAsyncApiDocument({ registry });
+    const channelNames = new Set(
+      isRecord(document['channels']) ? Object.keys(document['channels']) : [],
+    );
     const expectedChannelNames = registry
       .list()
       .filter(
@@ -166,9 +159,9 @@ describe('AsyncAPI document', () => {
   it('filters out private non-discoverable async operations', () => {
     const document = generateAsyncApiDocument({
       registry: createRegistryWithPrivateStream(),
-    }) as AsyncApiDocument;
+    });
 
-    expect(document.channels).not.toHaveProperty('weft/private/stream');
+    expect(document['channels']).not.toHaveProperty('weft/private/stream');
   });
 
   it('serves /asyncapi.json without an auth header when authentication is enabled', async () => {
@@ -193,19 +186,19 @@ describe('AsyncAPI document', () => {
   it('uses default info title and version', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
-    }) as AsyncApiDocument;
-
-    expect(document.info?.title).toBe('Weft Workflow Engine');
-    expect(document.info?.version).toBe(VERSION);
+    });
+    const info = isRecord(document['info']) ? document['info'] : undefined;
+    expect(info?.['title']).toBe('Weft Workflow Engine');
+    expect(info?.['version']).toBe(VERSION);
   });
 
   it('uses ws for non-TLS server URLs', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
       serverUrl: 'http://api.example.com/api/v1/tasks/default/stream',
-    }) as AsyncApiDocument;
+    });
 
-    expect(document.servers?.['default']).toEqual({
+    expect(isRecord(document['servers']) ? document['servers']['default'] : undefined).toEqual({
       host: 'api.example.com',
       protocol: 'ws',
     });
@@ -215,9 +208,9 @@ describe('AsyncAPI document', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
       serverUrl: 'https://api.example.com/api/v1/tasks/default/stream',
-    }) as AsyncApiDocument;
+    });
 
-    expect(document.servers?.['default']).toEqual({
+    expect(isRecord(document['servers']) ? document['servers']['default'] : undefined).toEqual({
       host: 'api.example.com',
       protocol: 'wss',
     });
@@ -227,9 +220,9 @@ describe('AsyncAPI document', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
       serverUrl: 'not-a-url',
-    }) as AsyncApiDocument;
+    });
 
-    expect(document.servers?.['default']).toEqual({
+    expect(isRecord(document['servers']) ? document['servers']['default'] : undefined).toEqual({
       host: 'not-a-url',
       protocol: 'ws',
     });

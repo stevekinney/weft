@@ -16,11 +16,10 @@
  */
 
 import { faultToJsonRpcError } from './fault-to-json-rpc.ts';
-import type { FleetEventEnvelope } from './fleet-event-feed.ts';
 import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
 import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-rpc-protocol.ts';
+import { pumpSubscriptionIterable } from './json-rpc-websocket-subscription-pump.ts';
 import {
-  createSubscriptionErrorTerminatedFrame,
   FLEET_EVENTS_OPERATION_NAME,
   SESSION_METHODS,
   WORKFLOW_EVENTS_OPERATION_NAME,
@@ -39,7 +38,6 @@ import {
   type DispatchResult,
   type SubscriptionStartEnvelope,
 } from './operation-catalog.ts';
-import type { EventEnvelope } from './workflow-event-feed.ts';
 
 export type {
   JsonRpcWebSocketEmitter,
@@ -62,15 +60,19 @@ type SessionRequest = {
   readonly expectsResponse: boolean;
 };
 
-type JsonRpcSubscriptionEnvelope = EventEnvelope | FleetEventEnvelope;
-
-type SubscriptionExecution<TEnvelope extends JsonRpcSubscriptionEnvelope> = Promise<
+type SubscriptionExecution = Promise<
   DispatchResult<{
-    envelope: SubscriptionStartEnvelope;
-    iterable: AsyncIterable<TEnvelope>;
+    envelope: unknown;
+    iterable: AsyncIterable<unknown>;
     close: () => Promise<void>;
   }>
 >;
+
+function isSubscriptionStartEnvelope(value: unknown): value is SubscriptionStartEnvelope {
+  if (value === null || typeof value !== 'object') return false;
+  if (!('subscriptionId' in value) || !('cursor' in value)) return false;
+  return typeof value.subscriptionId === 'string' && typeof value.cursor === 'string';
+}
 
 function isSessionPrimitive(method: unknown): boolean {
   return (
@@ -145,7 +147,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     await startSubscription(request, () =>
-      executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
+      executeSubscription(
         WORKFLOW_EVENTS_OPERATION_NAME,
         {
           workflowId: validation.workflowId,
@@ -170,22 +172,18 @@ export function createJsonRpcWebSocketSession(
     params: Record<string, unknown> | undefined,
   ): Promise<void> {
     await startSubscription(request, () =>
-      executeSubscription<FleetEventEnvelope, SubscriptionStartEnvelope>(
-        FLEET_EVENTS_OPERATION_NAME,
-        params ?? {},
-        {
-          principal,
-          engine: { fleetFeed },
-          transport,
-          registry,
-        },
-      ),
+      executeSubscription(FLEET_EVENTS_OPERATION_NAME, params ?? {}, {
+        principal,
+        engine: { fleetFeed },
+        transport,
+        registry,
+      }),
     );
   }
 
-  async function startSubscription<TEnvelope extends JsonRpcSubscriptionEnvelope>(
+  async function startSubscription(
     request: SessionRequest,
-    execute: () => SubscriptionExecution<TEnvelope>,
+    execute: () => SubscriptionExecution,
   ): Promise<void> {
     if (subscriptions.size >= maxSubscriptions) {
       emitResponse(request, {
@@ -217,6 +215,15 @@ export function createJsonRpcWebSocketSession(
     }
 
     const { envelope, iterable, close: closeSubscription } = result.value;
+    if (!isSubscriptionStartEnvelope(envelope)) {
+      await closeSubscription().catch(() => {});
+      emitResponse(request, {
+        jsonrpc: JSON_RPC_VERSION,
+        error: { code: JSON_RPC_ERROR_CODES.INTERNAL_ERROR, message: 'internal error' },
+        id: request.id ?? null,
+      });
+      return;
+    }
     const { subscriptionId, cursor } = envelope;
 
     emitResponse(request, {
@@ -225,100 +232,20 @@ export function createJsonRpcWebSocketSession(
       id: request.id ?? null,
     });
 
-    const pump = pumpSubscriptionIterable(
+    const pump = pumpSubscriptionIterable({
       subscriptionId,
       iterable,
-      controller.signal,
+      signal: controller.signal,
       closeSubscription,
-    );
+      shouldSuppressOutput,
+      emit,
+      onComplete: () => subscriptions.delete(subscriptionId),
+    });
     subscriptions.set(subscriptionId, {
       id: subscriptionId,
       controller,
       pump,
       isTerminating: false,
-    });
-  }
-
-  async function pumpSubscriptionIterable<TEnvelope extends JsonRpcSubscriptionEnvelope>(
-    subscriptionId: string,
-    iterable: AsyncIterable<TEnvelope>,
-    signal: AbortSignal,
-    closeSubscription: () => Promise<void>,
-  ): Promise<void> {
-    let closeStarted = false;
-    async function closeOnce(): Promise<void> {
-      if (closeStarted) return;
-      closeStarted = true;
-      await closeSubscription();
-    }
-
-    const abortSubscription = (): void => {
-      void closeOnce().catch(() => {});
-    };
-    signal.addEventListener('abort', abortSubscription, { once: true });
-    try {
-      for await (const envelope of iterable) {
-        // Once the controller fires we stop forwarding immediately.
-        // `closeOnce()` is also wired to the abort listener; calling it
-        // here is idempotent and just guarantees teardown has been
-        // requested before we exit the loop. Breaking unconditionally
-        // (instead of skipping one envelope and waiting for a second
-        // iteration) means convergence does not depend on the iterable
-        // yielding again — a producer that pauses or stalls after abort
-        // cannot keep us in the loop.
-        if (signal.aborted) {
-          await closeOnce().catch(() => {});
-          break;
-        }
-        deliver(subscriptionId, envelope);
-      }
-      // Natural termination path. The feed closes the iterable for
-      // three reasons: abort (client unsubscribed — handled via the
-      // abort path), buffer overflow, or workflow terminal-state
-      // cleanup. Today the feed does not distinguish those two
-      // non-abort cases at its API surface, so we report a generic
-      // `server-closed` reason without claiming it was overflow —
-      // the client can reopen with its last cursor and replay missed
-      // events either way. When the feed gains an explicit
-      // terminal-reason signal (a planned future refinement) this
-      // can carry it through to `workflow-terminal` / `overflow`.
-      if (!signal.aborted && !shouldSuppressOutput()) {
-        emit({
-          jsonrpc: JSON_RPC_VERSION,
-          method: SESSION_METHODS.TERMINATED,
-          params: { subscriptionId, reason: 'server-closed' },
-        });
-      }
-    } catch (error) {
-      // Per-element schema-contract failures throw SubscriptionElementValidationError
-      // (see stream-pipeline.ts validateElements). Surface them with the
-      // distinct `validation-failed` reason so clients can distinguish a
-      // contract violation from a transient server-side closure. All other
-      // thrown values fall through to the generic `server-closed` path with
-      // a sanitized fault — the wire must not carry potentially-sensitive
-      // data from a thrown value of unknown origin.
-      //
-      // Skip the emission entirely when the controller is aborted: that
-      // path is owned by `handleUnsubscribe`, which has already sent
-      // `client-unsubscribed`. A teardown-induced throw from the iterable
-      // (e.g. when `closeOnce()` aborts the inner controller and the feed
-      // raises during cleanup) must not produce a duplicate `terminated`
-      // frame for the same `subscriptionId`.
-      if (!signal.aborted && !shouldSuppressOutput()) {
-        emit(createSubscriptionErrorTerminatedFrame(subscriptionId, error));
-      }
-    } finally {
-      signal.removeEventListener('abort', abortSubscription);
-      await closeOnce().catch(() => {});
-      subscriptions.delete(subscriptionId);
-    }
-  }
-
-  function deliver(subscriptionId: string, envelope: JsonRpcSubscriptionEnvelope): void {
-    emit({
-      jsonrpc: JSON_RPC_VERSION,
-      method: SESSION_METHODS.DELIVER,
-      params: { subscriptionId, envelope },
     });
   }
 

@@ -1,8 +1,13 @@
 /**
  * `weft codegen` subcommand executor. Reads a registry snapshot from
  * either a live Weft server or a vendored JSON file, validates the
- * envelope, and emits a deterministic `.d.ts` augmenting the public
- * `'weft'` module.
+ * envelope, and emits a deterministic `.d.ts` augmenting the module name this
+ * package is published under.
+ *
+ * That name comes from weft's own manifest rather than from a string constant
+ * in source. The manifest is the only place that is rewritten everywhere this
+ * source is published from, so reading it is what keeps the generated
+ * `declare module '…'` naming a package the consumer can actually import.
  *
  * All user-caused failures (missing file, bad JSON, version mismatch,
  * HTTP errors, network timeout, missing parent directory, filesystem
@@ -16,10 +21,29 @@
 import { promises as fs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { ConnectionConfigurationError, resolveConnection } from '../connection.ts';
-import { CodegenEmitError, emitRegistryDeclaration } from './codegen-emit-registry.ts';
+import manifest from '../../package.json';
+
+import { ConnectionConfigurationError, resolveConnection } from '../index.ts';
+import {
+  CodegenEmitError,
+  CodegenPackageNameError,
+  emitRegistryDeclaration,
+} from './codegen-emit-registry.ts';
 import { validateRegistrySnapshot } from './codegen-validate.ts';
 import type { CommandOutput } from './types.ts';
+
+/**
+ * The module name every generated declaration augments: what this package is
+ * published as, read from its own manifest.
+ *
+ * Read here rather than written as a literal because a literal is invisible to
+ * every tool that renames this package. The mirror transform rewrites module
+ * specifiers and manifest fields and deliberately leaves ordinary strings
+ * alone, so a literal would keep naming the internal workspace in a repository
+ * where that workspace does not exist, and `weft codegen` would emit an
+ * augmentation of nothing.
+ */
+export const codegenPackageName: string = manifest.name;
 
 /** Parsed options accepted by {@link executeCodegen}. */
 export type CodegenOptions = {
@@ -48,9 +72,9 @@ export async function executeCodegen(options: CodegenOptions): Promise<CommandOu
   const { workflows, activities } = validation.value;
   let content: string;
   try {
-    content = emitRegistryDeclaration(workflows);
+    content = emitRegistryDeclaration(workflows, codegenPackageName);
   } catch (error) {
-    if (error instanceof CodegenEmitError) {
+    if (error instanceof CodegenEmitError || error instanceof CodegenPackageNameError) {
       return formatFailure(`codegen: ${error.message}`, options);
     }
     const message = error instanceof Error ? error.message : String(error);

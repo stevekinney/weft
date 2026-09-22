@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { normalizeDeleteRangeOptions } from './delete-range';
+import { normalizeDeleteRangeOptions } from './delete-range.ts';
 import {
   SQLITE_COUNT_KEYS_BY_PREFIX,
   SQLITE_CREATE_KEY_VALUE_TABLE,
@@ -14,7 +14,7 @@ import {
   buildSqliteKeyRangeSelect,
   buildSqliteKeyValueRangeSelect,
   buildSqlitePrefixRangeParameters,
-} from './sqlite-key-value-queries';
+} from './sqlite-key-value-queries.ts';
 
 describe('SQLite key-value query helpers', () => {
   it('exposes the shared key-value SQL statements used by storage adapters', () => {

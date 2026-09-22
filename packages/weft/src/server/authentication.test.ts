@@ -196,7 +196,7 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1' }, 'wrong-secret-that-is-long-enough!!', 'HS256');
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid JWT signature');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid JWT signature');
   });
 
   it('rejects a JWT with a mismatched algorithm', async () => {
@@ -205,15 +205,15 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1' }, TEST_SECRET, 'HS384');
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('Algorithm mismatch');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('Algorithm mismatch');
   });
 
   it('rejects a malformed JWT (not three parts)', async () => {
     const config: JWTConfig = { secret: TEST_SECRET };
     const key = await importTestKey(config);
 
-    await expect(verifyJWT('not-a-jwt', key, config)).rejects.toThrow('Invalid JWT format');
-    await expect(verifyJWT('two.parts', key, config)).rejects.toThrow('Invalid JWT format');
+    expect(verifyJWT('not-a-jwt', key, config)).rejects.toThrow('Invalid JWT format');
+    expect(verifyJWT('two.parts', key, config)).rejects.toThrow('Invalid JWT format');
   });
 
   it('rejects an expired JWT', async () => {
@@ -222,7 +222,7 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1', exp: pastExpiry }, TEST_SECRET);
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('JWT expired');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('JWT expired');
   });
 
   it('accepts an expired JWT within clock tolerance', async () => {
@@ -241,7 +241,7 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1', nbf: futureNbf }, TEST_SECRET);
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('JWT not yet valid');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('JWT not yet valid');
   });
 
   it('rejects a JWT with the wrong issuer', async () => {
@@ -249,7 +249,7 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1', iss: 'https://evil.com' }, TEST_SECRET);
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid issuer');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid issuer');
   });
 
   it('accepts a JWT with the correct issuer', async () => {
@@ -266,7 +266,7 @@ describe('JWT verification', () => {
     const token = await signJWT({ sub: 'user-1', aud: 'other-api' }, TEST_SECRET);
     const key = await importTestKey(config);
 
-    await expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid audience');
+    expect(verifyJWT(token, key, config)).rejects.toThrow('Invalid audience');
   });
 
   it('accepts a JWT with a matching audience in an array', async () => {
@@ -301,16 +301,16 @@ describe('JWT verification', () => {
   });
 
   it('rejects importJWTKey when the HMAC secret is missing', async () => {
-    await expect(importTestKey({ algorithm: 'HS512' })).rejects.toThrow(
+    expect(importTestKey({ algorithm: 'HS512' })).rejects.toThrow(
       'JWT configuration requires "secret"',
     );
   });
 
   it('rejects importJWTKey when the public key is missing', async () => {
-    await expect(importTestKey({ algorithm: 'RS256' })).rejects.toThrow(
+    expect(importTestKey({ algorithm: 'RS256' })).rejects.toThrow(
       'JWT configuration requires "publicKey"',
     );
-    await expect(importTestKey({ algorithm: 'ES256' })).rejects.toThrow(
+    expect(importTestKey({ algorithm: 'ES256' })).rejects.toThrow(
       'JWT configuration requires "publicKey"',
     );
   });

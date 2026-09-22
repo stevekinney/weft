@@ -1,12 +1,15 @@
-import { decode } from '../core/codec.ts';
-import { Engine } from '../core/engine.ts';
-import { serve, type WeftServer } from '../server/index.ts';
-import { isRemoteTaskTerminalResolved, taskLedgerKey } from '../server/task-ledger.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import {
+  decode,
+  Engine,
+  isRemoteTaskTerminalCancelled,
+  isRemoteTaskTerminalResolved,
+  MemoryStorage,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
-} from '../worker/protocol.ts';
+  serve,
+  taskLedgerKey,
+  type WeftServer,
+} from '../index.ts';
 import type { CommandOutput } from './types.ts';
 
 type ConformanceCommandOptions = {
@@ -170,9 +173,7 @@ async function waitForWorkerIdle(
  * Only a `resolved`-disposition terminal record carries a `status`; a
  * cancelled or retry-exhausted disposition returns `undefined` since neither
  * represents "resolved as completed/failed" the way this harness's checks
- * expect (the conformance "cancellation" check dispatches a normal activity
- * that the worker itself fails in response to the cancel signal — there is
- * no ledger-native cancellation transition wired into `cancelTask()` yet).
+ * expect.
  */
 async function readResolvedStatus(
   storage: MemoryStorage,
@@ -195,6 +196,35 @@ async function waitForResolvedStatus(
     async () => (await readResolvedStatus(storage, operationId)) === status,
     timeoutMs,
     `${operationId} to resolve as ${status}`,
+  );
+}
+
+/**
+ * Whether a task has resolved with the ledger's distinct `cancelled`
+ * disposition (COR-230, acceptance criterion 13) — a `RemoteTaskTerminalCancelled`
+ * record, not a `resolved`-disposition record with `status: 'failed'`. Before
+ * COR-230, a worker's cooperative `taskResult(status: 'cancelled')` was
+ * folded into an ordinary failed resolution; this check exists specifically
+ * to prove that conflation is gone.
+ */
+async function readCancelledDisposition(
+  storage: MemoryStorage,
+  operationId: string,
+): Promise<boolean> {
+  const stored = await storage.get(taskLedgerKey(operationId));
+  if (stored === null) return false;
+  return isRemoteTaskTerminalCancelled(decode(stored));
+}
+
+async function waitForCancelledDisposition(
+  storage: MemoryStorage,
+  operationId: string,
+  timeoutMs: number,
+): Promise<void> {
+  await waitForCondition(
+    () => readCancelledDisposition(storage, operationId),
+    timeoutMs,
+    `${operationId} to resolve with the cancelled disposition`,
   );
 }
 
@@ -290,11 +320,13 @@ async function runConformanceChecks(
       timeoutMs,
       'cancellable task assignment',
     );
-    if (!server.cancelTask(cancelOperationId)) {
-      throw new Error('Server could not send cancel message');
+    if (!(await server.cancelTask(cancelOperationId))) {
+      throw new Error('Server could not record cancellation intent');
     }
-    await waitForResolvedStatus(storage, cancelOperationId, 'failed', timeoutMs);
-    checks.push(createCheck('cancellation', true, 'cancelled task resolved as failed'));
+    await waitForCancelledDisposition(storage, cancelOperationId, timeoutMs);
+    checks.push(
+      createCheck('cancellation', true, 'cancelled task resolved with the cancelled disposition'),
+    );
 
     const reconnectOperationId = 'conformance-reconnect';
     // Keep the first worker busy while its replacement registers, but leave room for retry.
