@@ -157,6 +157,11 @@ await Bun.build({
   naming: '[dir]/[name].js',
   minify: true,
   external: [
+    // A declared runtime dependency, resolved by the consumer rather than inlined: bundling it
+    // under `target: 'bun'` rewrote its CommonJS dependencies' `require` to `import.meta.require`,
+    // which does not exist under Node, and every storage entry point that reaches the runtime
+    // environment configuration failed to import there (0.26.0 release check).
+    '@lostgradient/environmentalist',
     'lmdb',
     '@libsql/client',
     '@neondatabase/serverless',
