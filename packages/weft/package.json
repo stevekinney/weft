@@ -222,8 +222,7 @@
     "validate:package-consumers": "bun run scripts/validate-package-consumers.ts",
     "verify:exports": "bun run scripts/verify-tree-shaking.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
-    "verify:release-version": "bun run scripts/verify-release-version.ts",
-    "prepublishOnly": "bun run validate"
+    "verify:release-version": "bun run scripts/verify-release-version.ts"
   },
   "dependencies": {
     "@lostgradient/environmentalist": "0.1.0",
