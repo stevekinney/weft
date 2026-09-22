@@ -22,7 +22,7 @@ const DEFAULT_EXIT_TIMEOUT_MS = 2_000;
  *
  * @example
  * ```ts
- * import type { SubprocessServerOptions } from '@lostgradient/weft';
+ * import type { SubprocessServerOptions } from '@lostgradient/weft/testing';
  * const options: SubprocessServerOptions = { entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' };
  * ```
  */
@@ -57,7 +57,7 @@ const subprocessServerHandleBrand: unique symbol = Symbol('SubprocessServerHandl
 /** Minimal public view of the child process managed by a {@link SubprocessServerHandle}.
  * @example
  * ```ts
- * import type { SubprocessServerProcess } from '@lostgradient/weft';
+ * import type { SubprocessServerProcess } from '@lostgradient/weft/testing';
  * declare const server: { process: SubprocessServerProcess };
  * const process: SubprocessServerProcess = server.process;
  * ```
@@ -74,7 +74,7 @@ export interface SubprocessServerProcess {
  *
  * @example
  * ```ts
- * import { spawnServerSubprocess, type SubprocessServerHandle } from '@lostgradient/weft';
+ * import { spawnServerSubprocess, type SubprocessServerHandle } from '@lostgradient/weft/testing';
  * const server: SubprocessServerHandle = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * await server.stop();
  * ```
@@ -315,7 +315,7 @@ async function verifyProcessSurvivedReadiness(
  *
  * @example
  * ```ts
- * import { spawnServerSubprocess } from '@lostgradient/weft';
+ * import { spawnServerSubprocess } from '@lostgradient/weft/testing';
  * const server = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * await server.stop();
  * ```
@@ -357,7 +357,7 @@ export async function spawnServerSubprocess(
 /** Kills a running server subprocess and starts a replacement.
  * @example
  * ```ts
- * import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft';
+ * import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft/testing';
  * const server = await spawnServerSubprocess({ entrypoint: './tmp/entrypoint.ts', databasePath: './tmp/weft.db' });
  * const rebooted = await killAndReboot(server);
  * await rebooted.stop();
@@ -390,7 +390,7 @@ export async function killAndReboot(
 /** Runs a callback with a server subprocess and tears it down afterward.
  * @example
  * ```ts
- * import { withSubprocessServer } from '@lostgradient/weft';
+ * import { withSubprocessServer } from '@lostgradient/weft/testing';
  * declare const options: Parameters<typeof withSubprocessServer>[0];
  * await withSubprocessServer(options, async (server) => fetch(`${server.url}/v1/health`));
  * ```
