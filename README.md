@@ -1,6 +1,8 @@
 # Weft
 
-A Bun-native durable execution engine with pluggable key-value storage. This repository is a Turborepo-powered monorepo using Bun workspaces.
+A Bun-native durable execution engine with pluggable key-value storage.
+
+This repository is a **publication mirror** of the private corvidae workspace, which is the source of truth for `@lostgradient/weft`. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; here, the transform-emitted `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag. Pull requests are welcome, but they cannot be merged as submitted: a change is ported into corvidae by hand and arrives back through a sync.
 
 ## Packages
 
@@ -13,16 +15,14 @@ The operator console is now developed and built as `@lostgradient/weft-ui` from 
 ```bash
 bun install
 bun run build       # turbo run build across all packages
-bun run test        # turbo run test across all packages
-bun run lint        # turbo run lint across all packages
 bun run typecheck   # turbo run typecheck across all packages
 ```
 
 Run a single package's scripts either through Turborepo filters or directly in the package directory:
 
 ```bash
-bunx turbo run test --filter=@lostgradient/weft
-cd packages/weft && bun run test
+bunx turbo run build --filter=@lostgradient/weft
+cd packages/weft && bun run typecheck
 ```
 
 ## Repository layout
