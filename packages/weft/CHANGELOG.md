@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.26.0] - 2026-09-21
 
+### Added
+
+- `Engine.pruneCheckpoints(workflowId, { keepLast, signal? })` (WFT-137) — a public, on-demand prune of a workflow's checkpoint history, distinct from the automatic per-commit keep-last-N driven by `EngineOptions.checkpointHistory`. Deletes every `wf:<workflowId>:ckpt:<step>` history entry except the newest `keepLast`, resolving with `{ removed, retained }`. Never touches the live `wf:<workflowId>:ckpt` checkpoint record. Safe to call on a terminal workflow, and a documented no-op (`{ removed: 0, retained: 0 }`, never a throw) on a workflow with no checkpoint history entries, including an unknown workflow id. Rejects with the storage adapter's own error when a delete batch fails, and honors `options.signal` by throwing its abort reason before any delete is issued.
+- `weft.catalog.sources.list` (`GET /v1/catalog/sources`), a discoverable operation listing the registered workflow sources (`src/server/operations/list-catalog-sources.ts`).
+
 ### Changed
 
 - This repository is now a publication mirror of the private corvidae workspace: its source, tests and documentation arrive through a sync, and the repository's own CI, hooks and gate scripts were retired in favour of the transform-emitted `mirror-verify.yaml` (corvidae COR-1286).
@@ -20,10 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The published 0.25.0 carried 157 `InternalResolutionError` findings under node16 ESM (declaration files importing extensionless specifiers); this release carries zero.
-
-### Added
-
-- `Engine.pruneCheckpoints(workflowId, { keepLast, signal? })` (WFT-137) — a public, on-demand prune of a workflow's checkpoint history, distinct from the automatic per-commit keep-last-N driven by `EngineOptions.checkpointHistory`. Deletes every `wf:<workflowId>:ckpt:<step>` history entry except the newest `keepLast`, resolving with `{ removed, retained }`. Never touches the live `wf:<workflowId>:ckpt` checkpoint record. Safe to call on a terminal workflow, and a documented no-op (`{ removed: 0, retained: 0 }`, never a throw) on a workflow with no checkpoint history entries, including an unknown workflow id. Rejects with the storage adapter's own error when a delete batch fails, and honors `options.signal` by throwing its abort reason before any delete is issued.
+- Workflow sources exported as Bun module namespaces are accepted; their interop prototype no longer fails validation as a non-plain record (`src/core/source/validate.ts`).
 
 ## [0.25.0] - 2026-09-11
 
