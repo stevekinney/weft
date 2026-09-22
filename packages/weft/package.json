@@ -215,7 +215,7 @@
     "dev": "bun --watch run src/index.ts",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
-    "prepack": "bun run scripts/run-gates.ts prepack",
+    "prepack": "bun run build && bun run verify:exports && bun run verify:portability && bun run validate:package-consumers",
     "pr:title": "bun run scripts/pr-title.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
