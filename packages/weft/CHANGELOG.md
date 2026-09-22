@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-21
+
+### Changed
+
+- This repository is now a publication mirror of the private corvidae workspace: its source, tests and documentation arrive through a sync, and the repository's own CI, hooks and gate scripts were retired in favour of the transform-emitted `mirror-verify.yaml` (corvidae COR-1286).
+
+### Removed
+
+- The optional peer dependency on `@lostgradient/weft-ui`, which the published 0.25.0 manifest declared although the package was never published.
+
+### Fixed
+
+- The published 0.25.0 carried 157 `InternalResolutionError` findings under node16 ESM (declaration files importing extensionless specifiers); this release carries zero.
+
 ### Added
 
 - `Engine.pruneCheckpoints(workflowId, { keepLast, signal? })` (WFT-137) — a public, on-demand prune of a workflow's checkpoint history, distinct from the automatic per-commit keep-last-N driven by `EngineOptions.checkpointHistory`. Deletes every `wf:<workflowId>:ckpt:<step>` history entry except the newest `keepLast`, resolving with `{ removed, retained }`. Never touches the live `wf:<workflowId>:ckpt` checkpoint record. Safe to call on a terminal workflow, and a documented no-op (`{ removed: 0, retained: 0 }`, never a throw) on a workflow with no checkpoint history entries, including an unknown workflow id. Rejects with the storage adapter's own error when a delete batch fails, and honors `options.signal` by throwing its abort reason before any delete is issued.
