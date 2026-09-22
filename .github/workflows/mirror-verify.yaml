@@ -71,7 +71,7 @@ jobs:
             }
           }
           MIRROR_VERIFY_EOF
-          cat > smoke.ts <<'MIRROR_VERIFY_EOF'
+          cat > smoke.mjs <<'MIRROR_VERIFY_EOF'
           import * as module0 from '@lostgradient/weft';
           import * as module1 from '@lostgradient/weft/client';
           import * as module2 from '@lostgradient/weft/client/local';
@@ -110,6 +110,43 @@ jobs:
             }
           }
           MIRROR_VERIFY_EOF
+          cat > smoke-node.mjs <<'MIRROR_VERIFY_EOF'
+          import * as module0 from '@lostgradient/weft';
+          import * as module1 from '@lostgradient/weft/client';
+          import * as module2 from '@lostgradient/weft/client/local';
+          import * as module3 from '@lostgradient/weft/json-schema';
+          import * as module4 from '@lostgradient/weft/mcp';
+          import * as module5 from '@lostgradient/weft/observability';
+          import * as module6 from '@lostgradient/weft/server';
+          import * as module7 from '@lostgradient/weft/server/handler';
+          import * as module8 from '@lostgradient/weft/service-worker';
+          import * as module9 from '@lostgradient/weft/storage';
+          import * as module10 from '@lostgradient/weft/storage/auto';
+          import * as module11 from '@lostgradient/weft/storage/cloudflare';
+          import * as module12 from '@lostgradient/weft/storage/compressed';
+          import * as module13 from '@lostgradient/weft/storage/http';
+          import * as module14 from '@lostgradient/weft/storage/indexeddb';
+          import * as module15 from '@lostgradient/weft/storage/interface';
+          import * as module16 from '@lostgradient/weft/storage/lmdb';
+          import * as module17 from '@lostgradient/weft/storage/memory';
+          import * as module18 from '@lostgradient/weft/storage/neon';
+          import * as module19 from '@lostgradient/weft/storage/postgres';
+          import * as module20 from '@lostgradient/weft/storage/resolve';
+          import * as module21 from '@lostgradient/weft/storage/sqlite';
+          import * as module22 from '@lostgradient/weft/storage/sqlite/node';
+          import * as module23 from '@lostgradient/weft/storage/text-value-import';
+          import * as module24 from '@lostgradient/weft/storage/text-value-store';
+          import * as module25 from '@lostgradient/weft/storage/turso';
+          import * as module26 from '@lostgradient/weft/storage/web-extension';
+          import * as module27 from '@lostgradient/weft/testing';
+          import * as module28 from '@lostgradient/weft/worker-protocol';
+          const loaded = [module0, module1, module2, module3, module4, module5, module6, module7, module8, module9, module10, module11, module12, module13, module14, module15, module16, module17, module18, module19, module20, module21, module22, module23, module24, module25, module26, module27, module28];
+          for (const [index, module] of loaded.entries()) {
+            if (typeof module !== 'object' || module === null) {
+              throw new Error(`${["@lostgradient/weft","@lostgradient/weft/client","@lostgradient/weft/client/local","@lostgradient/weft/json-schema","@lostgradient/weft/mcp","@lostgradient/weft/observability","@lostgradient/weft/server","@lostgradient/weft/server/handler","@lostgradient/weft/service-worker","@lostgradient/weft/storage","@lostgradient/weft/storage/auto","@lostgradient/weft/storage/cloudflare","@lostgradient/weft/storage/compressed","@lostgradient/weft/storage/http","@lostgradient/weft/storage/indexeddb","@lostgradient/weft/storage/interface","@lostgradient/weft/storage/lmdb","@lostgradient/weft/storage/memory","@lostgradient/weft/storage/neon","@lostgradient/weft/storage/postgres","@lostgradient/weft/storage/resolve","@lostgradient/weft/storage/sqlite","@lostgradient/weft/storage/sqlite/node","@lostgradient/weft/storage/text-value-import","@lostgradient/weft/storage/text-value-store","@lostgradient/weft/storage/turso","@lostgradient/weft/storage/web-extension","@lostgradient/weft/testing","@lostgradient/weft/worker-protocol"][index]} did not resolve to a module`);
+            }
+          }
+          MIRROR_VERIFY_EOF
 
       - name: install the packed tarballs into the consumer project
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
@@ -119,4 +156,9 @@ jobs:
       - name: import 31 specifier(s) from the packed tarballs
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
         run: |
-          bun run smoke.ts
+          bun run smoke.mjs
+
+      - name: import 29 specifier(s) from the packed tarballs under node
+        working-directory: ${{ runner.temp }}/mirror-verify/consumer
+        run: |
+          node smoke-node.mjs
