@@ -31,6 +31,13 @@ describe('the root entry and the testing barrel', () => {
     }
   });
 
+  test('the subprocess engine documents itself under the testing subpath, not the root', async () => {
+    const source = await Bun.file(join(import.meta.dir, 'testing', 'subprocess-engine.ts')).text();
+    const rootImports = source.match(/^ \* import .* from '@lostgradient\/weft';$/gm) ?? [];
+    expect(rootImports).toEqual([]);
+    expect(source).toContain("from '@lostgradient/weft/testing';");
+  });
+
   test('the root bundles for the browser without Bun.spawn', async () => {
     const outdir = await mkdtemp(join(tmpdir(), 'weft-root-portability-'));
     try {
