@@ -9,8 +9,8 @@ This file provides guidance to coding agents working with code in this repositor
 ## Working in this repository
 
 - Run `bun install` at the repository root; there is one root `bun.lock` for the whole workspace.
-- Root scripts fan out through Turborepo: `bun run build`, `bun run lint`, `bun run typecheck`, `bun run test` each run `turbo run <task>` across packages. Use `bunx turbo run <task> --filter=<package>` or `cd` into a package to scope to one package.
-- Git hooks live at the repository root (`.husky/`) and delegate into each package's `scripts/husky/` hooks with the package directory as the working directory.
-- CI uses the Turborepo remote cache for the deterministic jobs only, and `release.yaml` gates never use it.
+- Root scripts fan out through Turborepo: `bun run build` and `bun run typecheck` each run `turbo run <task>` across packages. Use `bunx turbo run <task> --filter=<package>` or `cd` into a package to scope to one package. There are no lint, test or coverage scripts here: This repository is a **publication mirror** of the private corvidae workspace, which is the source of truth for `@lostgradient/weft`. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; here, the transform-emitted `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag. Pull requests are welcome, but they cannot be merged as submitted: a change is ported into corvidae by hand and arrives back through a sync.
+- There are no Git hooks. The repository's own CI, hooks and gate scripts were retired when it became a mirror (corvidae COR-1286).
+- CI is `.github/workflows/mirror-verify.yaml`, emitted by the corvidae mirror transform from the same steps its sync runs, plus `pr-title.yaml` and `release.yaml`. Do not edit `mirror-verify.yaml` by hand; a sync overwrites it.
 - Each package keeps its own lint, formatting, TypeScript, and test configuration. Do not hoist package configuration to the root.
 - The `v*.*.*` release tags publish `@lostgradient/weft` only. The operator console (`@lostgradient/weft-ui`) is developed and built from its own repository, and is not yet published to npm.

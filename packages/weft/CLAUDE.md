@@ -19,65 +19,29 @@ bun ./dist/index.js       # After build, run with Bun
 
 ### Testing
 
-```bash
-bun test                  # Run all tests
-bun test src/utils        # Run tests in specific directory
-bun test logger          # Run tests matching pattern
-bun test --watch         # Watch mode
-bun run test:coverage    # Generate coverage report (sets WEFT_COVERAGE_MODE=1, applies project timeout)
-```
+Tests, coverage and benchmarks run in corvidae, the source of truth this mirror is synced from; the test files ship here as source but no script runs them. `mirror-verify.yaml` verifies every pull request by building, typechecking, packing and linting the published package (publint, attw) and importing every published specifier from a fresh consumer project.
 
 ### Code Quality
 
 ```bash
-bun run lint             # Check linting errors
-bun run lint:fix         # Auto-fix linting errors
 bun run typecheck        # TypeScript type checking
 bun run format           # Format all files with Prettier
 bun run format:check     # Check formatting without changes
-bun scripts/check-lint-disables.ts
-bun run scripts/check-implementation-file-sizes.ts
-bun run scripts/check-revision-keyed-lookups.ts
 ```
 
-### Lint suppression policy
-
-The repository allows **at most 5** `oxlint-disable` directives in production source code under `src/` (not `scripts/`, `tests/`, or any other top-level directory). The included extensions are `*.{ts,tsx,mts,cts}`; the excluded patterns are `*.test.{ts,tsx,mts,cts}`, `*.spec.{ts,tsx,mts,cts}`, `/test/`, and `/__tests__/`. The exact scope is defined in `scripts/check-lint-disables.ts` by the exported constants `SOURCE_FILE_GLOB` (inclusion) and `TEST_FILE_EXCLUSION_GLOBS` (exclusion); update both this paragraph and those constants together if the scope ever changes.
-
-Every directive must carry an inline rationale after `--`, at least 40 characters long. The conventional format is `-- <one-sentence reason why this rule cannot apply>; rejected: <alternative that was considered>`. This is enforced in PR review, not by the script — but the 40-character floor exists so the script catches drive-by suppressions.
-
-Adding a new suppression requires explicit justification in the PR description and reviewer sign-off. The ceiling is enforced by `scripts/check-lint-disables.ts`, which runs as part of `bun run lint` (CI) and is also invoked from the pre-commit hook so local commits are gated by the same check.
-
-`typescript/no-unnecessary-type-parameters` is turned off via `.oxlintrc.json` overrides (not inline `oxlint-disable`) for `src/core/types/workflow-context.ts` and `src/core/context/index.ts`. `WorkflowContext#waitForUpdate` and `WorkflowContext#getAttribute` (and `Context`'s matching implementations) have a string-key fallback overload with a return-type-only default generic (`<T = unknown>` / `<T extends SearchAttributeValue = SearchAttributeValue>`) — the same deliberate pattern as `JSON.parse<T>()`: nothing in the parameter list infers `T`, so it exists purely so a caller can write `ctx.getAttribute<MyType>(key)`. No overload, `NoInfer` constraint, or helper-type extraction preserves that caller-supplied `<T>` ergonomic, so the rule is disabled file-scoped for exactly these two files instead. The same reasoning, and the same override mechanism, covers `start`/`startOrSignal`/`schedule`'s string-name fallback overload in `src/client/interface.ts`, `src/client/local.ts`, and `src/client/http-client.ts`: that overload's own `<TName extends string>` type parameter must stay generic so a caller-supplied explicit type argument (e.g. `client.start<'my-workflow'>(...)`) still resolves against it when `WorkflowRegistry` has no augmented names.
-
-### Revision-keyed lookup guard
-
-A process-local lookup keyed by workflow `type` alone is a bug whenever a dynamic-source type can have 2+ registered revisions live at once (two concurrent runs of different revisions, or a redeploy with an old run still in flight) — key by the running instance's exact `(type, revision)` pin (read from `EngineInternals.workflowTypeByWorkflowId`) instead. `scripts/check-revision-keyed-lookups.ts` enforces this for the two fields most prone to it, `internals.activityRegistriesByWorkflow` and `internals.sources.lastResolvedRevisionByName`, against an exhaustive, audited allowlist (exported as `GUARDED_FIELDS`) — a reference to either field from a file outside its allowlist fails `bun run lint` (CI) and the pre-commit hook. Widen the allowlist only when the new call site is itself provably eager-only or revision-gated the same way the existing allowed files are (see each field's `rationale` in the script); otherwise fix the lookup to key by the instance's own pin.
+Lint, the lint-suppression ceiling, the revision-keyed lookup guard and the other `check-*.ts` gates run in corvidae and were retired from this repository; their policies are corvidae's `packages/weft/AGENTS.md`'s to state.
 
 ### Utilities
 
 ```bash
 bun run clean            # Clean build artifacts (dist/, coverage/, caches)
-bun run verify:documentation
-bun run verify:markdown-doctests
-bun run verify:jsdoc:doctests
-bun run verify:jsdoc:full
-bun run scripts/check-coverage.ts
 weft conformance -- <worker-command>
 weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts
 ```
 
-`verify:documentation` is the minimum gate for public Markdown, generated reference links, and documentation anchors. Run `verify:markdown-doctests` when Markdown examples change, `verify:jsdoc:doctests` when JSDoc examples change, and `verify:jsdoc:full` before shipping changes that alter exported declarations.
-
-For documentation refreshes driven by recent pull requests, use the mirrored `documentation-refresh` skill. Gather merged pull request evidence before editing, avoid re-documenting behavior already covered by the latest documentation refresh, and mirror workflow guidance across `AGENTS.md`, `CLAUDE.md`, `.agents/skills`, and `.claude/skills`. If the window contains only a documentation-refresh pull request, treat it as the lower bound, state that no post-refresh runtime/API/workflow behavior landed, and leave `README.md` plus `documentation/**` unchanged unless a specific stale claim remains.
-
-Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs one Bun coverage pass, parses `coverage/lcov.info`, applies the repository's explicit allowances, and fails when the coverage process exits non-zero or adjusted line or function coverage is below 100 percent. This is a coverage gate only, so it does not replace a passing `bun test` or `bun run validate`.
-
-Use `bun run prepack` before release or package-surface changes. It runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The GitHub release workflow publishes `@lostgradient/weft` with `npm publish --ignore-scripts`, so local publish dry runs should use `npm publish --dry-run --ignore-scripts` after `prepack`. Release changes must also keep the tag, `package.json.version`, and exported `VERSION` constant aligned through `bun run scripts/verify-release-version.ts --tag=<tag>`.
+Use `bun run prepack` before release or package-surface changes. It runs the build, the export and portability checks, and the package-consumer validation — the same checks `release.yaml` runs before `npm publish`.
 
 Release version changes must keep `package.json`, `src/version.ts`, and server discovery defaults aligned. Run `bun run verify:release-version` before release pull requests, and include OpenAPI, OpenRPC, AsyncAPI, and MCP discovery tests when the default version string changes.
-
-When a release adds compiled modules, update `maximumEntryCount` in `scripts/check-package-contents.ts` only from the packed count reported by `prepack`. Keep `scripts/validate-package-consumers.ts` workflow starts keyed by each registered `workflow({ name })` value, not the source variable name; this is the packed-consumer contract exercised by the release gate.
 
 Use `weft conformance` when a change touches the `RemoteWorker` protocol or worker SDK compatibility. Use `weft codegen` when validating cross-process type-generation docs or client fixtures; the command reads `/v1/registry` from a live server or `--from` a vendored registry JSON file and writes a deterministic `.d.ts`.
 
@@ -96,13 +60,7 @@ Use `weft conformance` when a change touches the `RemoteWorker` protocol or work
 
 ### Git Hooks Architecture
 
-Hooks live as Bun TypeScript files under `scripts/husky/` and are invoked by tiny sh wrappers in `.husky/`:
-
-- `pre-commit`: runs lint-staged, the lint-disable ceiling check, basic dependency checks, and the diagnosable Bun test runner in `scripts/husky/run-tests.ts`
-- `post-checkout`: installs deps when `package.json`+`bun.lock` change; surfaces config changes
-- `post-merge`: installs/cleans when dependencies or config changed; shows merge stats
-
-They use `chalk` for color, `change-case` for headings, and Bun’s `$` and `Bun.write` for shell/IO.
+There are no Git hooks in this repository; they were retired with the rest of its own CI when it became a publication mirror (corvidae COR-1286).
 
 ### Types
 
@@ -204,18 +162,6 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - Duplicate-audit cleanup must classify generated artifacts, reference-documentation mirrors, and intentional script cross-checks before refactoring. Use `documentation/contributing/duplicate-audits.md` and run `jscpd src scripts documentation tests --min-lines 18 --min-tokens 120 --exit-code 0`; do not quiet the audit by adding broad `src/` or `documentation/` ignores. When hand-authored test duplicates share fixture setup, extract only the repeated harness, such as lease-renewal failure setup, sleep-timer resolver choreography, or historical `review-decision:*` record construction, while keeping the scenario-specific timing inputs and assertions in each test. When test fixtures intentionally cover older persisted records or protocol shapes, name them `historical-*` or by the exact current scenario instead of leaving generic `legacy` identifiers. Coverage allowance changes must reject duplicate keys, cross-layer-shadowed keys, and keys matching a `coveragePathIgnorePatterns` entry in `scripts/check-coverage.ts` tests. Implementation-file-size exception wording must stay synchronized between `documentation/contributing/development-setup.md` and `scripts/check-implementation-file-sizes.ts`, and should describe the current responsibility boundary instead of old-path shims or compatibility barrels.
 - CLI version-surface changes must preserve leading-token semantics: `weft --version`, `weft -v`, and `weft version` print the bare `VERSION` string and exit 0, while subcommand-local flags such as `weft serve --version` remain owned by that subcommand and reject unknown options.
 - CLI command-suggestion refactors must preserve user-visible wording and thresholds: top-level subcommands use distance `2`, `weft api` operation suggestions use distance `6`, and tie breaks keep the first candidate. Pin those invariants in `src/cli/command-suggestions.test.ts` and parser integration tests.
-
-### Diagnosing a `coverage` job failure
-
-`bun run scripts/check-coverage.ts` fails in a distinctive, misleading way when Bun's coverage instrumentation dies: the captured stdout ends **mid-line**, there is no `(fail)` line anywhere, and no coverage summary is printed — only `coverage shard exited with code 1` / `Coverage execution failed.` That is a crashed process, not a failing assertion. `scripts/check-coverage.ts` already carries a note that forcing this repository into one instrumented process "can crash Bun before it writes LCOV on large suites."
-
-Work the following list before theorizing, in this order. Each of these was learned the expensive way during WFT-79, where the real cause was found last:
-
-- **Check the Bun version on both sides first.** `.github/workflows/ci.yaml` pins `bun-version:` in every job; local development may be on a different release. A version gap explains "coverage passes locally, fails on CI" more cheaply than any theory about the diff, and every experiment run on the local version is void if the bug is version-specific.
-- **Check the base commit's own CI result**, not `main`'s latest. A branch cut from a commit whose `coverage` job was red inherits that failure — this happened once already, and the fix was a rebase, not a code change.
-- **Read where the run died.** Test files are grouped in path order, so `src/testing/**` near the tail means the run got nearly to the end (a report-writing crash) while an early group means it died mid-suite. Different causes, different fixes.
-- **Do not reach for `--parallel` to tune it.** `bun test --parallel` implies `--isolate`, so it changes execution semantics rather than just worker count, and it makes the coverage run fail on this repository at any value — including on a known-good base. `runCoverageShard` accepts a `parallelism` option; leaving it unset is deliberate.
-- **Sharding the coverage run is not currently implementable.** Bun's lcov reporter emits `FNF`/`FNH` per-file summaries but no `FN:` or `FNDA:` records, so per-function hits cannot be merged across shards: summing over-counts (false passes on a release gate) and taking the maximum under-counts (false failures). Line coverage would merge correctly via `DA:`, function coverage would not. Do not build a merge that silently miscounts the gate that guards publication.
 
 ### Fetching CI logs
 
