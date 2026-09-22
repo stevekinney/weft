@@ -274,7 +274,9 @@ await Bun.build({
   root: './src',
   naming: '[dir]/[name].js',
   minify: false,
-  external: ['bun:sqlite', 'better-sqlite3'],
+  // The same externals as the first pass, so a future import of the runtime configuration from
+  // either sqlite entry cannot inline the dependency back in.
+  external: ['@lostgradient/environmentalist', 'bun:sqlite', 'better-sqlite3'],
 });
 
 // Browser entrypoints (IndexedDB, web-extension, HTTPStorage).
