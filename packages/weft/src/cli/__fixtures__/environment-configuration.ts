@@ -6,7 +6,7 @@ const schema = z.object({
   protocolVersion: z
     .string()
     .optional()
-    .transform((value) => Number(value ?? '6'))
+    .transform((value) => Number(value ?? '8'))
     .meta({ env: 'WEFT_WORKER_PROTOCOL_VERSION' }),
   activities: z
     .string()
@@ -28,7 +28,6 @@ const schema = z.object({
     .optional()
     .transform((value) => value ?? 'default')
     .meta({ env: 'WEFT_SHORT_SLEEP_EXIT_MODE' }),
-  shortSleepExitStateFile: z.string().optional().meta({ env: 'WEFT_SHORT_SLEEP_EXIT_STATE_FILE' }),
   lostAckStateFile: z.string().optional().meta({ env: 'WEFT_LOST_ACK_STATE_FILE' }),
 });
 
@@ -41,7 +40,6 @@ export function resolveFixtureEnvironment() {
     'WEFT_WORKER_ACTIVITIES',
     'WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS',
     'WEFT_SHORT_SLEEP_EXIT_MODE',
-    'WEFT_SHORT_SLEEP_EXIT_STATE_FILE',
     'WEFT_LOST_ACK_STATE_FILE',
   ]) {
     const value = Bun.env[name];

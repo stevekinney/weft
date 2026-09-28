@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol-version.ts';
 import { testWorkerManifest } from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
@@ -100,7 +101,7 @@ describe('weft.workers.diagnostics — REST GET /v1/workers/:workerId/diagnostic
       runtimeVersion: '1.3.14',
       sdkVersion: '0.18.0',
       manifestVersion: 1,
-      protocolVersion: 6,
+      protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
       manifestDigest: 'sha256:accepted',
       workflows: {
         checkout: {

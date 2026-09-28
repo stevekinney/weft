@@ -106,6 +106,33 @@ export class WorkerFaultHandler {
     });
   }
 
+  /**
+   * COR-113: a `completed`/`failed` result is ACCEPTED only once its durable
+   * commit succeeds — never solely because a realm sent it. The caller must
+   * check this BEFORE its own terminal-settle path, which would otherwise
+   * release the worker and clear ownership regardless of `handlerFailed`.
+   * Routes a rejected commit through the ordinary discard-and-refail path,
+   * so the workflow is retryable rather than silently orphaned. Returns
+   * `true` when it handled the message.
+   */
+  rejectUncommittedTerminalMessage(
+    worker: Worker,
+    message: WorkerOutboundMessage,
+    handlerFailed: boolean,
+  ): boolean {
+    if (!handlerFailed || (message.type !== 'completed' && message.type !== 'failed')) {
+      return false;
+    }
+    this.discardWorkerAndFailWorkflows(worker, {
+      targetWorkflowId: message.workflowId,
+      targetCategory: 'system',
+      targetError: `Turn result for workflow ${message.workflowId} could not be durably committed`,
+      otherCategory: 'system',
+      otherError: `Worker discarded after a workflow turn result failed to commit durably: ${message.workflowId}`,
+    });
+    return true;
+  }
+
   handleWorkerError(worker: Worker, errorEvent: ErrorEvent): void {
     this.discardWorkerAndFailWorkflows(worker, {
       targetCategory: 'system',

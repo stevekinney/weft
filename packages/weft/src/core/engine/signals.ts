@@ -116,6 +116,27 @@ export async function signal(
 }
 
 /**
+ * Register `resolve` as the signal waiter under `waiterKey` and index it by
+ * workflow — the one place a signal waiter is added — then wake any test
+ * waiting on `ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING` for this workflow.
+ */
+export function registerSignalWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  waiterKey: string,
+  resolve: () => void,
+): void {
+  internals.signalWaiters.set(waiterKey, resolve);
+  trackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+
+  const readinessWaiters = internals.signalWaiterReadyWaitersForTesting?.get(workflowId);
+  if (readinessWaiters !== undefined) {
+    internals.signalWaiterReadyWaitersForTesting?.delete(workflowId);
+    for (const notifyReady of readinessWaiters) notifyReady();
+  }
+}
+
+/**
  * Remove the signal waiter registered under `waiterKey`, optionally only when
  * it is still `expectedResolve`.
  *

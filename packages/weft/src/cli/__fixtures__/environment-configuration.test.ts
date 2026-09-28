@@ -20,7 +20,7 @@ afterEach(() => {
 test('conformance configuration preserves numeric defaults and Number semantics', () => {
   setEnvironment('WEFT_WORKER_PROTOCOL_VERSION', undefined);
   setEnvironment('WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS', undefined);
-  expect(resolveFixtureEnvironment().protocolVersion).toBe(6);
+  expect(resolveFixtureEnvironment().protocolVersion).toBe(8);
   expect(resolveFixtureEnvironment().heartbeatIntervalMs).toBe(10_000);
   setEnvironment('WEFT_WORKER_PROTOCOL_VERSION', '');
   expect(resolveFixtureEnvironment().protocolVersion).toBe(0);

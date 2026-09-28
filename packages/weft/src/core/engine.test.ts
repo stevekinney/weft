@@ -1,6 +1,7 @@
 import { describe, expect, it, jest, mock, spyOn } from 'bun:test';
 import {
   advanceTimersByTime,
+  flushMicrotasks,
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
@@ -26,6 +27,7 @@ import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
   ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING,
   ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING,
   EngineCreateNameMismatchError,
   SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING,
@@ -384,6 +386,70 @@ describe('Engine', () => {
       await engine[Symbol.asyncDispose]();
       restoreRealTimers();
     }
+  });
+
+  it('waits for a signal waiter to register before reporting test-only signal readiness', async () => {
+    const workflowId = 'wait-for-signal-readiness';
+    const workflowStarted = Promise.withResolvers<void>();
+    const allowWait = Promise.withResolvers<void>();
+    useFakeTimers();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-signal-readiness' }).execute(async function* (ctx) {
+        workflowStarted.resolve();
+        await allowWait.promise;
+        // Inline mode parks a top-level signal wait without registering a
+        // signal waiter; a race branch registers one.
+        return yield* ctx.race([ctx.waitForSignal('go'), ctx.waitForSignal('stop')]);
+      }),
+    );
+
+    try {
+      await engine.start('wait-for-signal-readiness', null, { id: workflowId });
+      await workflowStarted.promise;
+
+      let barrierSettled = false;
+      const barrier = engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId).then(() => {
+        barrierSettled = true;
+      });
+      await flushMicrotasks();
+      expect(barrierSettled).toBe(false);
+
+      allowWait.resolve();
+      await barrier;
+      expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBeGreaterThanOrEqual(1);
+
+      // Already registered: resolves at once, with no timer of its own.
+      const timerCountBefore = jest.getTimerCount();
+      await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
+      expect(jest.getTimerCount()).toBe(timerCountBefore);
+    } finally {
+      allowWait.resolve();
+      await engine[Symbol.asyncDispose]();
+      restoreRealTimers();
+    }
+  });
+
+  it('settles a pending test-only signal readiness wait when the engine is disposed', async () => {
+    const workflowId = 'wait-for-signal-readiness-disposed';
+    const workflowStarted = Promise.withResolvers<void>();
+    const neverWait = Promise.withResolvers<void>();
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'wait-for-signal-readiness-disposed' }).execute(async function* (ctx) {
+        workflowStarted.resolve();
+        await neverWait.promise;
+        return yield* ctx.race([ctx.waitForSignal('go'), ctx.waitForSignal('stop')]);
+      }),
+    );
+
+    await engine.start('wait-for-signal-readiness-disposed', null, { id: workflowId });
+    await workflowStarted.promise;
+    const barrier = engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
+
+    await engine[Symbol.asyncDispose]();
+    await barrier;
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
   });
 
   it('fireTimer tolerates a sleep timer that has no registered resolver', async () => {

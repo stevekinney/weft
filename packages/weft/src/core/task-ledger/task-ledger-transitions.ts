@@ -173,6 +173,7 @@ export type RenewAttemptLeaseInput = Readonly<{
   attemptToken: string;
   workerSessionId: string;
   leaseDurationMilliseconds: number;
+  details?: JSONValue; // Heartbeat details (COR-226); omitted leaves `lastHeartbeatDetails` unchanged.
 }>;
 
 /**
@@ -235,6 +236,7 @@ export function renewAttemptLease(
     generation: current.generation + 1,
     leaseDeadline: nextLeaseDeadline,
     lastHeartbeatAt: now,
+    ...(input.details !== undefined ? { lastHeartbeatDetails: input.details } : {}),
   };
   return { ok: true, nextRecord };
 }
@@ -399,6 +401,10 @@ export function requeueExpiredAttempt(
     retryCount: Math.max(current.retryCount, nextAttempt - 1),
     requeueCount: current.requeueCount + 1,
     lastRequeueReason: input.requeueReason,
+    // COR-226: survives into the queued record so the next claim inherits it.
+    ...(current.lastHeartbeatDetails !== undefined
+      ? { lastHeartbeatDetails: current.lastHeartbeatDetails }
+      : {}),
   };
   return { ok: true, nextRecord: queuedRecord };
 }

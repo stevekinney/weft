@@ -106,6 +106,19 @@ export type RemoteTaskAttemptFields = Readonly<{
   retryCount: number;
   requeueCount: number;
   lastRequeueReason?: string;
+  /**
+   * The most recent heartbeat details a worker recorded for this operation
+   * (COR-226) — mirrors {@link
+   * import('../types.ts').ActivityContext.lastHeartbeatDetails}'s
+   * resumable-batch pattern for worker-executed activities. Set by
+   * `renewAttemptLease` when an `activityHeartbeat`/long-poll heartbeat
+   * carries `details`, and carried unchanged through every other transition
+   * via `pickAttemptFields` — including a requeue back to `queued` and the
+   * next `claimQueued` — so a redispatched attempt's `task` frame can echo it
+   * back to the worker as `lastHeartbeatDetails`. Never cleared by a
+   * heartbeat that carries no details; only ever replaced by one that does.
+   */
+  lastHeartbeatDetails?: JSONValue;
 }>;
 
 // ---------------------------------------------------------------------------

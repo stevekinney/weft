@@ -139,6 +139,22 @@ function handleTask(message: Record<string, unknown>): void {
   const tokenField = { attemptToken, ...(workflowRevision !== undefined && { workflowRevision }) };
 
   if (activityName === 'conformance.sleep') {
+    const input = message['input'];
+    if (isInputRecord(input) && input['holdForReassignment'] === true) {
+      const attempt = typeof message['attempt'] === 'number' ? message['attempt'] : 1;
+      if (attempt <= 1) {
+        // First attempt (COR-233/COR-235's reconnect check): hold this task
+        // indefinitely instead of resolving it on a timer. The conformance
+        // harness kills this worker once it has confirmed a replacement is
+        // ready, and expects the reassigned attempt — not this one — to
+        // complete the task.
+        inFlightTasks.set(operationId, { activityName, ...tokenField });
+        return;
+      }
+      // Reassigned attempt: there is nothing left to wait for.
+      complete(operationId, input, attemptToken, workflowRevision);
+      return;
+    }
     const timeout = setTimeout(
       () => complete(operationId, message['input'], attemptToken, workflowRevision),
       millisecondsFromInput(message['input']),

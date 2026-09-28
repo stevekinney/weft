@@ -32,6 +32,7 @@ import type {
   ComposedWorkflowInterceptor,
   Interceptor,
 } from '../interceptor.ts';
+import type { RevisionRealmRegistry } from '../realm/revision-realm-registry.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
@@ -138,6 +139,8 @@ export interface EngineInternals {
   sleepResolversByWorkflow: Map<string, Set<string>>;
   /** Test-only event waiters notified when a workflow registers a sleep resolver. */
   sleepResolverReadyWaitersForTesting?: Map<string, Set<() => void>>;
+  /** Test-only event waiters notified when a workflow registers a signal waiter. */
+  signalWaiterReadyWaitersForTesting?: Map<string, Set<() => void>>;
   /**
    * Fired sleep timers awaiting proof that the awakened inline workflow reached
    * its next durable checkpoint or terminal state. External schedulers must not
@@ -451,6 +454,15 @@ export interface EngineInternals {
    * for the full field-by-field breakdown. Process-local, never persisted.
    */
   sources: WorkflowSourceRuntimeState;
+  /**
+   * Opt-in registry of real Worker-backed revision realms (COR-249).
+   * `undefined` unless a host explicitly enables revision realms — no
+   * construction path sets this field, so every default engine's behavior
+   * is unchanged. When present,
+   * {@link import('./catalog-removal.ts').countWorkflowRevisionReferences}
+   * reads `activeExecutionRealms` from it instead of the default `0`.
+   */
+  revisionRealmRegistry?: RevisionRealmRegistry;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();

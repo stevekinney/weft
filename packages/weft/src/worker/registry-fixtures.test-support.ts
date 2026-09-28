@@ -11,11 +11,12 @@
 
 import type { WorkerManifest, WorkerWorkflowContract } from './manifest/index.ts';
 import { WORKER_MANIFEST_VERSION } from './manifest/index.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from './protocol-version.ts';
 
 export function testWorkerManifest(overrides: Partial<WorkerManifest> = {}): WorkerManifest {
   return {
     manifestVersion: WORKER_MANIFEST_VERSION,
-    protocolVersion: 6,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     sdkVersion: '0.18.0',
     runtime: { name: 'bun', version: '1.3.14' },
     deployment: { name: 'test-deployment', buildId: 'b1', artifactDigest: 'sha256:test' },

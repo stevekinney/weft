@@ -26,7 +26,7 @@ import {
 import {
   consumeSignalWithAtomicWorkflowCommit,
   peekSignal,
-  trackWaiterKey,
+  registerSignalWaiter,
   untrackWaiterKey,
 } from './signals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
@@ -116,8 +116,7 @@ export async function processWaitSignalOperation(
     }
 
     const { promise, resolve } = Promise.withResolvers<void>();
-    internals.signalWaiters.set(waiterKey, resolve);
-    trackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+    registerSignalWaiter(internals, workflowId, waiterKey, resolve);
 
     if (abortSignal.aborted) {
       internals.signalWaiters.delete(waiterKey);

@@ -1,15 +1,27 @@
 import {
-  decode,
   Engine,
-  isRemoteTaskTerminalCancelled,
-  isRemoteTaskTerminalResolved,
   MemoryStorage,
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
   serve,
-  taskLedgerKey,
   type WeftServer,
 } from '../index.ts';
+import {
+  CONFORMANCE_ACTIVITIES,
+  CONFORMANCE_HEARTBEAT_INTERVAL_MS,
+  CONFORMANCE_QUEUE,
+  type RunningWorker,
+  startWorker,
+  stopWorker,
+  waitForCancelledDisposition,
+  waitForCondition,
+  waitForReassignmentPastFirstAttempt,
+  waitForRegisteredWorker,
+  waitForReplacementWorker,
+  waitForResolvedStatus,
+  waitForWorkerHeartbeat,
+  waitForWorkerIdle,
+} from './conformance-harness.ts';
 import type { CommandOutput } from './types.ts';
 
 type ConformanceCommandOptions = {
@@ -24,208 +36,8 @@ type ConformanceCheck = {
   message: string;
 };
 
-type RunningWorker = {
-  process: ReturnType<typeof Bun.spawn>;
-};
-
-const CONFORMANCE_QUEUE = 'conformance';
-const CONFORMANCE_ACTIVITIES = [
-  'conformance.echo',
-  'conformance.sleep',
-  'conformance.cancel',
-] as const;
-const CONFORMANCE_HEARTBEAT_INTERVAL_MS = 25;
-
 function createCheck(name: string, ok: boolean, message: string): ConformanceCheck {
   return { name, ok, message };
-}
-
-async function waitForCondition(
-  predicate: () => boolean | Promise<boolean>,
-  timeoutMs: number,
-  label: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() <= deadline) {
-    try {
-      if (await predicate()) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await Bun.sleep(25);
-  }
-
-  const message = `Timed out after ${timeoutMs}ms waiting for ${label}`;
-  throw lastError instanceof Error
-    ? new Error(`${message}: ${lastError.message}`)
-    : new Error(message);
-}
-
-function startWorker(command: string[], server: WeftServer): RunningWorker {
-  const environment = {
-    ...Bun.env,
-    WEFT_WORKER_URL: `${server.url.replace('http://', 'ws://')}/v1/tasks/${CONFORMANCE_QUEUE}/stream`,
-    WEFT_WORKER_QUEUE: CONFORMANCE_QUEUE,
-    WEFT_WORKER_ACTIVITIES: CONFORMANCE_ACTIVITIES.join(','),
-    WEFT_WORKER_PROTOCOL_VERSION: String(REMOTE_WORKER_PROTOCOL_VERSION),
-    WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS: String(CONFORMANCE_HEARTBEAT_INTERVAL_MS),
-  };
-
-  return {
-    process: Bun.spawn(command, {
-      env: environment,
-      stdout: 'ignore',
-      stderr: 'ignore',
-    }),
-  };
-}
-
-async function stopWorker(worker: RunningWorker | undefined): Promise<void> {
-  if (worker === undefined) return;
-  if (worker.process.exitCode !== null) return;
-
-  worker.process.kill('SIGTERM');
-  try {
-    await Promise.race([worker.process.exited, Bun.sleep(1_000)]);
-  } catch {
-    // Ignore shutdown races; the fallback kill below handles a still-running child.
-  }
-  if (worker.process.exitCode === null) {
-    worker.process.kill('SIGKILL');
-    await worker.process.exited.catch(() => undefined);
-  }
-}
-
-async function waitForRegisteredWorker(server: WeftServer, timeoutMs: number): Promise<string> {
-  await waitForCondition(() => server.registry.getAll().length > 0, timeoutMs, 'worker register');
-  const worker = server.registry.getAll()[0];
-  if (worker === undefined) {
-    throw new Error('worker registry was empty after registration wait');
-  }
-  return worker.id;
-}
-
-async function waitForReplacementWorker(
-  server: WeftServer,
-  originalWorkerId: string,
-  timeoutMs: number,
-): Promise<string> {
-  let replacementWorkerId: string | undefined;
-  await waitForCondition(
-    () => {
-      replacementWorkerId = server.registry
-        .getAll()
-        .find((registeredWorker) => registeredWorker.id !== originalWorkerId)?.id;
-      return replacementWorkerId !== undefined;
-    },
-    timeoutMs,
-    'replacement worker register',
-  );
-  if (replacementWorkerId === undefined) {
-    throw new Error('replacement worker registry was empty after registration wait');
-  }
-  return replacementWorkerId;
-}
-
-async function waitForWorkerHeartbeat(
-  server: WeftServer,
-  workerId: string,
-  timeoutMs: number,
-): Promise<void> {
-  const disconnectedMessage = `Worker ${workerId} disconnected before heartbeat was observed`;
-  const heartbeatBefore = server.registry.getWorker(workerId)?.lastHeartbeat;
-  if (heartbeatBefore === undefined) {
-    throw new Error(disconnectedMessage);
-  }
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
-    const worker = server.registry.getWorker(workerId);
-    if (worker === undefined) {
-      throw new Error(disconnectedMessage);
-    }
-    if (worker.lastHeartbeat > heartbeatBefore) return;
-    await Bun.sleep(25);
-  }
-  throw new Error(`Timed out after ${timeoutMs}ms waiting for worker ${workerId} heartbeat`);
-}
-
-async function waitForWorkerIdle(
-  server: WeftServer,
-  workerId: string,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
-    const worker = server.registry.getWorker(workerId);
-    if (worker === undefined) {
-      throw new Error(`Worker ${workerId} disconnected while waiting to become idle`);
-    }
-    if (worker.inFlight === 0) return;
-    await Bun.sleep(25);
-  }
-  throw new Error(`Timed out after ${timeoutMs}ms waiting for worker ${workerId} to become idle`);
-}
-
-/**
- * Read the resolved status of a task through the durable remote task ledger
- * (WFT-22) — the sole writer of task state; `op:resolved:` no longer exists.
- * Only a `resolved`-disposition terminal record carries a `status`; a
- * cancelled or retry-exhausted disposition returns `undefined` since neither
- * represents "resolved as completed/failed" the way this harness's checks
- * expect.
- */
-async function readResolvedStatus(
-  storage: MemoryStorage,
-  operationId: string,
-): Promise<'completed' | 'failed' | undefined> {
-  const stored = await storage.get(taskLedgerKey(operationId));
-  if (stored === null) return undefined;
-  const decoded = decode(stored);
-  if (!isRemoteTaskTerminalResolved(decoded)) return undefined;
-  return decoded.status;
-}
-
-async function waitForResolvedStatus(
-  storage: MemoryStorage,
-  operationId: string,
-  status: 'completed' | 'failed',
-  timeoutMs: number,
-): Promise<void> {
-  await waitForCondition(
-    async () => (await readResolvedStatus(storage, operationId)) === status,
-    timeoutMs,
-    `${operationId} to resolve as ${status}`,
-  );
-}
-
-/**
- * Whether a task has resolved with the ledger's distinct `cancelled`
- * disposition (COR-230, acceptance criterion 13) — a `RemoteTaskTerminalCancelled`
- * record, not a `resolved`-disposition record with `status: 'failed'`. Before
- * COR-230, a worker's cooperative `taskResult(status: 'cancelled')` was
- * folded into an ordinary failed resolution; this check exists specifically
- * to prove that conflation is gone.
- */
-async function readCancelledDisposition(
-  storage: MemoryStorage,
-  operationId: string,
-): Promise<boolean> {
-  const stored = await storage.get(taskLedgerKey(operationId));
-  if (stored === null) return false;
-  return isRemoteTaskTerminalCancelled(decode(stored));
-}
-
-async function waitForCancelledDisposition(
-  storage: MemoryStorage,
-  operationId: string,
-  timeoutMs: number,
-): Promise<void> {
-  await waitForCondition(
-    () => readCancelledDisposition(storage, operationId),
-    timeoutMs,
-    `${operationId} to resolve with the cancelled disposition`,
-  );
 }
 
 async function dispatchAndWait(
@@ -329,13 +141,21 @@ async function runConformanceChecks(
     );
 
     const reconnectOperationId = 'conformance-reconnect';
-    // Keep the first worker busy while its replacement registers, but leave room for retry.
-    const reconnectDelayMs = Math.min(1_500, Math.max(250, Math.floor(timeoutMs * 0.75)));
+    // `holdForReassignment` (COR-233/COR-235) tells a conforming fixture to
+    // block its FIRST attempt (protocol `attempt` <= 1) indefinitely instead
+    // of resolving it on a timer, and to resolve a reassigned attempt
+    // (`attempt` > 1) immediately. A fixed sleep duration used to stand in
+    // for "busy long enough to survive replacement registration": under
+    // load, a machine slow enough to delay that registration let the
+    // original worker complete the task on its own before this harness
+    // could kill it, defeating the very reassignment this check exists to
+    // prove. Blocking unconditionally removes that race instead of widening
+    // its margin.
     const reconnectDispatched = await server.dispatchTask({
       operationId: reconnectOperationId,
       activityName: 'conformance.sleep',
       workflowType: 'conformance',
-      input: { milliseconds: reconnectDelayMs },
+      input: { holdForReassignment: true },
       queue: CONFORMANCE_QUEUE,
       visibilityTimeout: Math.max(500, timeoutMs),
     });
@@ -359,15 +179,18 @@ async function runConformanceChecks(
     // The disconnect-driven requeue and redispatch to the replacement worker
     // happen asynchronously after the original worker is unregistered above
     // — there is no synchronous guarantee the reassignment has landed yet.
-    // Wait for the replacement to actually pick up the reassigned task (or
-    // to have already disconnected itself) before checking for idle, or a
-    // not-yet-assigned replacement would read as trivially idle.
-    await waitForCondition(
-      () =>
-        (server.registry.getWorker(replacementWorkerId)?.inFlight ?? 0) > 0 ||
-        server.registry.getWorker(replacementWorkerId) === undefined,
+    // Observe the reassignment itself through the ledger's own monotonic
+    // attempt counter (see `waitForReassignmentPastFirstAttempt`'s doc
+    // comment for why that, rather than registry `inFlight` or "has resolved
+    // at all", is the reliable AND discriminating signal here) before
+    // checking for idle, or a not-yet-assigned replacement would read as
+    // trivially idle.
+    await waitForReassignmentPastFirstAttempt(
+      server,
+      storage,
+      reconnectOperationId,
+      replacementWorkerId,
       timeoutMs,
-      'reassigned reconnect task delivered to replacement worker',
     );
     await waitForWorkerIdle(server, replacementWorkerId, timeoutMs);
     await waitForResolvedStatus(storage, reconnectOperationId, 'completed', timeoutMs);

@@ -1,6 +1,8 @@
+import type { JSONValue } from '../../core/json.ts';
 import {
   buildClaimAttemptRecordWrite,
   buildCurrentAttemptDispositionWrites,
+  buildTaskAttemptTransitionEvent,
   digestAttemptToken,
 } from '../../core/task-ledger/task-attempt-runtime.ts';
 import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-runtime.ts';
@@ -15,14 +17,21 @@ import { isAuthenticated, type Principal } from '../principal.ts';
 import { readRestJsonBody, type RestBodyReadOptions } from '../rest-body.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
-import type { TaskResultDisposition } from './task-ledger-completion.ts';
+import type {
+  TaskLedgerCompletionFailureReason,
+  TaskResultDisposition,
+} from './task-ledger-completion.ts';
 import { recordTaskBacklogMetric, recordTaskQueueLatencyMetric } from './task-metrics.ts';
 import { applyWorkerTaskResult } from './task-result-application.ts';
 import {
   authorizeTaskResultForCurrentAttempt,
   currentAttemptFromLedgerRecord,
+  type TaskResultAuthorizationFailure,
 } from './task-result-authorization.ts';
-import { taskResultPayloadSizeError } from './task-result-resolution.ts';
+import {
+  activityHeartbeatDetailsPayloadSizeError,
+  taskResultPayloadSizeError,
+} from './task-result-resolution.ts';
 
 const TASK_POLL_RE = /^\/v1\/tasks\/([\w-]+)$/;
 const TASK_RESULT_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
@@ -171,19 +180,41 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
  * as long as the rest of the body matched, which is not the contract the
  * queue segment exists to enforce.
  */
+/**
+ * Every reason `handleTaskResultRequest` can permanently reject a `taskResult`
+ * submission for, surfaced on the `403`/`413` response body's `reason` field
+ * (COR-237) so a caller — including `LongPollWorker`'s own result-delivery
+ * logic — does not have to pattern-match `error` text to tell the classes
+ * apart. `TaskResultAuthorizationFailure` covers the shared identity gate
+ * both transports go through; `'queue-mismatch'` and `'revision-mismatch'`
+ * are long-poll-specific preconditions checked before/alongside it;
+ * `TaskLedgerCompletionFailureReason` (currently only `'conflicting-content'`)
+ * is the one named ledger-commit outcome from below that gate.
+ */
+export type LongPollTaskResultRejectionReason =
+  | TaskResultAuthorizationFailure
+  | 'queue-mismatch'
+  | 'revision-mismatch'
+  | TaskLedgerCompletionFailureReason;
+
+type LongPollCompletionAuthorization =
+  Readonly<{ ok: true }> | Readonly<{ ok: false; reason: LongPollTaskResultRejectionReason }>;
+
 function isLongPollCompletionAuthorized(
   record: RemoteTaskRecord | null,
   validated: ValidatedTaskResult,
   queue: string,
-): boolean {
-  if (record !== null && record.queue !== queue) return false;
+): LongPollCompletionAuthorization {
+  if (record !== null && record.queue !== queue) {
+    return { ok: false, reason: 'queue-mismatch' };
+  }
 
   const authorization = authorizeTaskResultForCurrentAttempt(
     currentAttemptFromLedgerRecord(record),
     validated.workerId,
     validated.attemptToken,
   );
-  if (!authorization.ok) return false;
+  if (!authorization.ok) return authorization;
 
   if (
     record !== null &&
@@ -191,10 +222,10 @@ function isLongPollCompletionAuthorized(
     record.workflowRevision !== undefined &&
     validated.workflowRevision !== record.workflowRevision
   ) {
-    return false;
+    return { ok: false, reason: 'revision-mismatch' };
   }
 
-  return true;
+  return { ok: true };
 }
 
 /**
@@ -208,7 +239,10 @@ async function applyTaskResult(
   context: ServerContext,
   options: ServeOptions,
   result: ValidatedTaskResult,
-): Promise<{ ok: true; disposition: TaskResultDisposition } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; disposition: TaskResultDisposition }
+  | { ok: false; reason: string; reasonCode?: TaskLedgerCompletionFailureReason }
+> {
   const { operationId, status, value, error } = result;
 
   const applied = await applyWorkerTaskResult(
@@ -224,7 +258,11 @@ async function applyTaskResult(
     result.workerId,
   );
   if (!applied.ok) {
-    return { ok: false, reason: applied.reason };
+    return {
+      ok: false,
+      reason: applied.reason,
+      ...(applied.reasonCode !== undefined ? { reasonCode: applied.reasonCode } : {}),
+    };
   }
 
   // Dead-lettered is terminal-ish: no further heartbeat/visibility extension
@@ -240,6 +278,31 @@ async function applyTaskResult(
   }
 
   return { ok: true, disposition: applied.disposition };
+}
+
+/**
+ * `403` response for a `taskResult` this transport will never apply — no
+ * matter how many times it is resent — carrying the `operationId`/
+ * `attemptToken` that identify exactly which submission was rejected, plus a
+ * machine-distinguishable `reason` (COR-237) when the caller has one:
+ * `LongPollTaskResultRejectionReason` names the full set. Mirrors the
+ * WebSocket transport's correlated `protocolError` (protocol v7,
+ * `websocket-worker.ts`'s `commitAndAcknowledgeTaskResult`/
+ * `applyTaskResultFallback`) in semantics, not shape: `LongPollWorker`'s own
+ * result-delivery buffer (`LongPollResultDelivery`) drops the matching
+ * buffered entry based on `operationId`/`attemptToken` correlation alone —
+ * `reason` is surfaced to callers for diagnostics/logging only and plays no
+ * part in that drop-versus-retry decision.
+ */
+function taskResultForbiddenResponse(
+  operationId: string,
+  attemptToken: string,
+  reason?: LongPollTaskResultRejectionReason,
+): Response {
+  return Response.json(
+    { error: 'Forbidden', operationId, attemptToken, ...(reason !== undefined ? { reason } : {}) },
+    { status: 403 },
+  );
 }
 
 function payloadSizeExceededResponse(error: {
@@ -265,6 +328,8 @@ function payloadSizeExceededResponse(error: {
 export interface LongPollClaim {
   workerId: string;
   attemptToken: string;
+  /** A PRIOR attempt's recorded heartbeat details (COR-226), echoed back so this (possibly redispatched) attempt can resume from them. */
+  lastHeartbeatDetails?: unknown;
 }
 
 /**
@@ -343,8 +408,27 @@ export async function markTaskClaimedByLongPollWorker(
     lastDispatchedAt: Date.now(),
   });
   recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+  // COR-198: attempt-by-attempt worker transition.
+  options.engine.dispatchEvent(
+    await buildTaskAttemptTransitionEvent(options.engine.storage, {
+      operationId: task.operationId,
+      workflowId: task.workflowId,
+      activityName: task.activityName,
+      attempt: result.record.attempt,
+      attemptTokenDigest,
+      workerSessionId,
+      executionIdentity: undefined,
+      executionRequirement: result.record.executionRequirement,
+    }),
+  );
 
-  return { workerId: workerSessionId, attemptToken };
+  return {
+    workerId: workerSessionId,
+    attemptToken,
+    ...(result.record.lastHeartbeatDetails !== undefined && {
+      lastHeartbeatDetails: result.record.lastHeartbeatDetails,
+    }),
+  };
 }
 
 export async function handleTaskPollRequest(
@@ -401,6 +485,9 @@ export async function handleTaskPollRequest(
       ...task,
       workerId: claim.workerId,
       attemptToken: claim.attemptToken,
+      ...(claim.lastHeartbeatDetails !== undefined && {
+        lastHeartbeatDetails: claim.lastHeartbeatDetails,
+      }),
       ...(task.workflowExecutionToken !== undefined && {
         workflowExecutionToken: task.workflowExecutionToken,
       }),
@@ -453,8 +540,13 @@ export async function handleTaskResultRequest(
   const record = decodeRemoteTaskRecord(
     await options.engine.storage.get(taskLedgerKey(validated.operationId)),
   );
-  if (!isLongPollCompletionAuthorized(record, validated, queue)) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  const authorization = isLongPollCompletionAuthorized(record, validated, queue);
+  if (!authorization.ok) {
+    return taskResultForbiddenResponse(
+      validated.operationId,
+      validated.attemptToken,
+      authorization.reason,
+    );
   }
 
   const payloadError = taskResultPayloadSizeError(
@@ -503,7 +595,18 @@ export async function handleTaskResultRequest(
       `[weft] Failed to commit task result for "${validated.operationId}" through the durable ledger:`,
       applied.reason,
     );
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+    // Mirrors the WebSocket transport's correlated `protocolError` (protocol
+    // v7): the error body carries `operationId`/`attemptToken` plus, when
+    // this is the one named ledger-commit outcome (`applied.reasonCode`,
+    // e.g. `'conflicting-content'`), a machine-distinguishable `reason` too
+    // (COR-237) — `LongPollWorker`'s own result-delivery logic reads it to
+    // decide whether this rejection is permanent (drop the buffered result)
+    // or a generic, potentially-transient commit failure worth retrying.
+    return taskResultForbiddenResponse(
+      validated.operationId,
+      validated.attemptToken,
+      applied.reasonCode,
+    );
   }
   return Response.json({ ok: true, disposition: applied.disposition });
 }
@@ -516,6 +619,8 @@ type ValidatedTaskHeartbeat = {
   operationId: string;
   workerId: string | undefined;
   attemptToken: string;
+  /** Heartbeat details this beat carries (COR-226), or `undefined` when the body omitted the field. */
+  details: unknown;
 };
 
 /**
@@ -523,7 +628,9 @@ type ValidatedTaskHeartbeat = {
  * Mirrors {@link validateTaskResultBody}'s shape and strictness — `attemptToken`
  * is required exactly the same way, since this is the same identity fence
  * `authorizeTaskResultForCurrentAttempt` checks for both a completion and a
- * heartbeat.
+ * heartbeat. `details` (COR-226) is unvalidated shape here — the size bound
+ * is enforced by the caller once authorization succeeds, matching
+ * `taskResult`'s own validate-then-size-check ordering.
  */
 function validateTaskHeartbeatBody(
   body: Record<string, unknown>,
@@ -540,6 +647,7 @@ function validateTaskHeartbeatBody(
     operationId,
     workerId: typeof body['workerId'] === 'string' ? body['workerId'] : undefined,
     attemptToken,
+    details: body['details'],
   };
 }
 
@@ -618,8 +726,19 @@ export async function handleTaskHeartbeatRequest(
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // COR-226: validate `details` at the protocol boundary, same bound and
+  // error shape a `taskResult` value already gets.
+  const detailsError = activityHeartbeatDetailsPayloadSizeError(
+    validated.details,
+    context.payloadSizeMaxBytes,
+  );
+  if (detailsError !== null) {
+    return Response.json({ error: detailsError.message }, { status: 413 });
+  }
+  const details = validated.details as JSONValue | undefined;
+
   if (record !== null && record.state === 'cancelling') {
-    return Response.json({ ok: true, cancelled: true });
+    return Response.json({ ok: true, cancelled: true, reason: record.cancellationReason });
   }
   if (record === null || record.state !== 'leased') {
     // Authorization succeeded (terminal/deadLettered, matched by
@@ -639,6 +758,7 @@ export async function handleTaskHeartbeatRequest(
           attemptToken: validated.attemptToken,
           workerSessionId: record.workerSessionId,
           leaseDurationMilliseconds: record.visibilityTimeoutMilliseconds,
+          ...(details !== undefined ? { details } : {}),
         },
         now,
       ),
@@ -664,6 +784,9 @@ export async function handleTaskHeartbeatRequest(
     return Response.json({
       ok: true,
       cancelled: current !== null && current.state === 'cancelling',
+      ...(current !== null && current.state === 'cancelling'
+        ? { reason: current.cancellationReason }
+        : {}),
     });
   }
 

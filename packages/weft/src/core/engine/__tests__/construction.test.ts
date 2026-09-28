@@ -433,4 +433,98 @@ describe('normalizeWorkerExecutionConfiguration', () => {
       }),
     ).not.toThrow();
   });
+
+  it('rejects workflowExecutionMode "realm" (a disjoint strategy branch handled entirely before this function)', () => {
+    expect(() =>
+      normalizeWorkerExecutionConfiguration({ workflowExecutionMode: 'realm' as never }),
+    ).toThrow('does not handle workflowExecutionMode "realm"');
+  });
+});
+
+describe('createExecutionStrategyBundle (workflowExecutionMode: "realm", COR-249)', () => {
+  const workerUrl = new URL('../../../workers/test-browser-worker.ts', import.meta.url);
+  const resolveRevisionRealmConfig = () => undefined;
+  const baseParameters = {
+    getNow,
+    maxNestingDepth: 10,
+    development: false,
+    broadcastEvents: false,
+    getRegistration: () => undefined,
+    listRegisteredWorkflowTypes: () => [],
+    resolveWorkflowType: (target: unknown) => String(target),
+  };
+
+  it('requires options.revisionRealmExecution', () => {
+    expect(() =>
+      createExecutionStrategyBundle({
+        ...baseParameters,
+        options: { workflowExecutionMode: 'realm' },
+        getWorkflowRevisionPin: () => undefined,
+      }),
+    ).toThrow('options.revisionRealmExecution is required');
+  });
+
+  it('rejects options.revisionRealmExecution when workflowExecutionMode is not "realm"', () => {
+    expect(() =>
+      createExecutionStrategyBundle({
+        ...baseParameters,
+        options: { revisionRealmExecution: { resolveRevisionRealmConfig } },
+        getWorkflowRevisionPin: () => undefined,
+      }),
+    ).toThrow('options.workflowExecutionMode must be "realm"');
+  });
+
+  it('rejects options.workerExecution when workflowExecutionMode is "realm"', () => {
+    expect(() =>
+      createExecutionStrategyBundle({
+        ...baseParameters,
+        options: {
+          workflowExecutionMode: 'realm',
+          revisionRealmExecution: { resolveRevisionRealmConfig },
+          workerExecution: { workerUrl },
+        },
+        getWorkflowRevisionPin: () => undefined,
+      }),
+    ).toThrow('cannot be provided when workflowExecutionMode is "realm"');
+  });
+
+  it('requires getWorkflowRevisionPin to be supplied for realm mode', () => {
+    expect(() =>
+      createExecutionStrategyBundle({
+        ...baseParameters,
+        options: {
+          workflowExecutionMode: 'realm',
+          revisionRealmExecution: { resolveRevisionRealmConfig },
+        },
+      }),
+    ).toThrow('getWorkflowRevisionPin is required');
+  });
+
+  it('routes explicit realm mode through RevisionRealmExecutionStrategy with a fresh registry, leaving inlineStrategy null', () => {
+    const bundle = createExecutionStrategyBundle({
+      ...baseParameters,
+      options: {
+        workflowExecutionMode: 'realm',
+        revisionRealmExecution: { resolveRevisionRealmConfig },
+      },
+      getWorkflowRevisionPin: () => undefined,
+    });
+
+    expect(bundle.inlineStrategy).toBeNull();
+    expect(bundle.revisionRealmRegistry).toBeDefined();
+    expect(bundle.strategy).toBeDefined();
+  });
+
+  it('the default and "worker" branches are unaffected by the realm branch existing', () => {
+    const defaultBundle = createExecutionStrategyBundle({ ...baseParameters, options: undefined });
+    expect(defaultBundle.revisionRealmRegistry).toBeUndefined();
+    expect(defaultBundle.inlineStrategy).not.toBeNull();
+
+    const workerBundle = createExecutionStrategyBundle({
+      ...baseParameters,
+      options: { workflowExecutionMode: 'worker', workerExecution: { workerUrl } },
+    });
+    expect(workerBundle.revisionRealmRegistry).toBeUndefined();
+    expect(workerBundle.inlineStrategy).toBeNull();
+  });
 });

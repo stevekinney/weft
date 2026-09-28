@@ -16,10 +16,11 @@
  * together, for both transports.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
 import {
   ATTEMPT_DEADLINE_MULTIPLIER,
+  beginCompletion,
   claimQueued,
   createQueued,
   recordCancellationIntent,
@@ -232,6 +233,44 @@ describe('Worker-session heartbeat vs. activity heartbeat (COR-230)', () => {
     ).toBe(false);
   });
 
+  it('rejects an activityHeartbeat whose details exceed the configured payload size limit (COR-226), and never renews the lease', async () => {
+    const { storage, options, context, ws, claimed } = await setUp();
+    // Test-only override, same pattern as `setCancellationGracePeriod` in
+    // task-cancellation.test.ts — `payloadSizeMaxBytes` is otherwise readonly.
+    (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = 10;
+
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-1',
+        operationId: 'op-1',
+        attemptToken: 'attempt-1',
+        details: { farExceedsTenBytesOfEncodedPayload: true },
+      }),
+      NOOP_CLEANUP,
+    );
+
+    await waitForCondition(
+      () =>
+        ws.sentMessages.some(
+          (raw) => (JSON.parse(raw) as { type: string }).type === 'protocolError',
+        ),
+      { label: 'oversized heartbeat details rejected' },
+    );
+    const protocolError = ws.sentMessages
+      .map((raw) => JSON.parse(raw) as { type: string; message?: string })
+      .find((message) => message.type === 'protocolError');
+    expect(protocolError?.message).toContain('heartbeat details');
+
+    // Rejected before the renewal is even attempted — the lease is untouched.
+    const record = await readLeasedRecord(storage, 'op-1');
+    expect(record.leaseDeadline).toBe(claimed.leaseDeadline);
+    expect(record.lastHeartbeatDetails).toBeUndefined();
+  });
+
   it('acceptance criterion 3: a stale attemptToken is rejected and cannot modify the current attempt', async () => {
     const { storage, options, context, ws, claimed } = await setUp();
 
@@ -382,6 +421,134 @@ describe('Worker-session heartbeat vs. activity heartbeat (COR-230)', () => {
     const afterScan = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-1')));
     expect(afterScan?.attempt).toBe(claimed.attempt + 1);
     expect(afterScan?.state).toBe('queued');
+  });
+
+  it('acceptance criterion 3: an activityHeartbeat against a COMPLETING attempt is rejected once the registry has forgotten it, and the record is untouched', async () => {
+    const { storage, options, context, ws, claimed } = await setUp();
+
+    const completing = beginCompletion(claimed, {
+      attemptToken: 'attempt-1',
+      pendingStatus: 'completed',
+      pendingResultDigest: 'digest-1',
+    });
+    if (!completing.ok)
+      throw new Error(`Expected beginCompletion to succeed: ${completing.reason}`);
+    await storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(completing.nextRecord));
+
+    // The registry forgets the in-flight entry the instant the FIRST
+    // taskResult for an operation is processed (`completeTask()`,
+    // synchronously, before the durable `completing` transition even
+    // begins) — see `onTaskResultMessage`. `activityHeartbeat` has no
+    // ledger-backed fallback, so it authorizes purely against this
+    // ephemeral view.
+    context.registry.completeTask('op-1');
+
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-1',
+        operationId: 'op-1',
+        attemptToken: 'attempt-1',
+      }),
+      NOOP_CLEANUP,
+    );
+
+    await waitForCondition(
+      () =>
+        ws.sentMessages.some(
+          (raw) => (JSON.parse(raw) as { type: string }).type === 'protocolError',
+        ),
+      { label: 'heartbeat against a completing attempt rejected' },
+    );
+    const protocolError = ws.sentMessages
+      .map((raw) => JSON.parse(raw) as { type: string; message?: string })
+      .find((message) => message.type === 'protocolError');
+    expect(protocolError?.message).toContain('not assigned to worker');
+
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-1')));
+    expect(record?.state).toBe('completing');
+    expect(record?.state === 'completing' && record.leaseDeadline).toBe(claimed.leaseDeadline);
+  });
+
+  it('acceptance criterion 3: an activityHeartbeat against a TERMINAL attempt is rejected once the registry has forgotten it, and the record is untouched', async () => {
+    const { storage, options, context, ws, claimed } = await setUp();
+
+    const terminal = {
+      ...claimed,
+      state: 'terminal' as const,
+      disposition: 'resolved' as const,
+      status: 'completed' as const,
+      resultDigest: 'digest-1',
+      terminalAt: Date.now(),
+      adopted: false,
+      retentionGeneration: 0,
+    };
+    await storage.put(taskLedgerKey('op-1'), encodeRemoteTaskRecord(terminal));
+    context.registry.completeTask('op-1');
+
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-1',
+        operationId: 'op-1',
+        attemptToken: 'attempt-1',
+      }),
+      NOOP_CLEANUP,
+    );
+
+    await waitForCondition(
+      () =>
+        ws.sentMessages.some(
+          (raw) => (JSON.parse(raw) as { type: string }).type === 'protocolError',
+        ),
+      { label: 'heartbeat against a terminal attempt rejected' },
+    );
+    const protocolError = ws.sentMessages
+      .map((raw) => JSON.parse(raw) as { type: string; message?: string })
+      .find((message) => message.type === 'protocolError');
+    expect(protocolError?.message).toContain('not assigned to worker');
+
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-1')));
+    expect(record?.state).toBe('terminal');
+  });
+
+  it('acceptance criterion 1: a bare session heartbeat performs ZERO storage writes touching the ledger key (regression guard against reintroducing the pre-COR-230 fan-out)', async () => {
+    const { storage, options, context, ws, claimed } = await setUp();
+
+    // Spies on the exact storage surface the old fan-out wrote through
+    // (`conditionalBatch`/`put`) — a regression that reintroduced it as a
+    // fire-and-forget async write (`void withRetry(...)`) would still show
+    // up here even though it wouldn't be observable by reading the record
+    // back synchronously.
+    const conditionalBatchSpy = spyOn(storage, 'conditionalBatch');
+    const putSpy = spyOn(storage, 'put');
+
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({ type: 'heartbeat', workerId: 'w-1' }),
+      NOOP_CLEANUP,
+    );
+
+    // `onHeartbeatMessage` is fully synchronous (no `await` at all), so
+    // there is no async gap to wait out here — by the time this line runs,
+    // every storage call it could ever make has already happened or never
+    // will.
+    expect(conditionalBatchSpy).not.toHaveBeenCalled();
+    expect(putSpy).not.toHaveBeenCalled();
+
+    const record = await readLeasedRecord(storage, 'op-1');
+    expect(record.leaseDeadline).toBe(claimed.leaseDeadline);
+
+    conditionalBatchSpy.mockRestore();
+    putSpy.mockRestore();
   });
 });
 
@@ -584,8 +751,10 @@ describe('Long-poll activity heartbeat — same shared seam as WebSocket (COR-23
     });
     const response = await handleTaskHeartbeatRequest(context, options, request, url);
     expect(response?.status).toBe(200);
-    const body = (await response?.json()) as { ok: boolean; cancelled: boolean };
-    expect(body).toEqual({ ok: true, cancelled: true });
+    const body = (await response?.json()) as { ok: boolean; cancelled: boolean; reason?: string };
+    // COR-223: the cancellation response also echoes the durably recorded
+    // reason, so LongPollWorker can surface it instead of a generic literal.
+    expect(body).toEqual({ ok: true, cancelled: true, reason: 'operator requested' });
 
     // Cancelling is never renewed by a heartbeat, for either transport.
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-lp-1')));
@@ -729,6 +898,24 @@ describe('Long-poll activity heartbeat — same shared seam as WebSocket (COR-23
     expect(response?.status).toBe(413);
   });
 
+  it('returns 413 when heartbeat details exceed the configured payload size limit (COR-226), and never renews the lease', async () => {
+    const { storage, options, context, claimed } = await setUpLongPoll();
+    (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = 10;
+
+    const { request, url } = heartbeatRequest({
+      operationId: 'op-lp-1',
+      workerId: 'longpoll-w1',
+      attemptToken: 'lp-attempt-1',
+      details: { farExceedsTenBytesOfEncodedPayload: true },
+    });
+    const response = await handleTaskHeartbeatRequest(context, options, request, url);
+    expect(response?.status).toBe(413);
+
+    const record = await readLeasedRecord(storage, 'op-lp-1');
+    expect(record.leaseDeadline).toBe(claimed.leaseDeadline);
+    expect(record.lastHeartbeatDetails).toBeUndefined();
+  });
+
   it('returns 400 for an invalid JSON heartbeat body', async () => {
     const { options, context } = await setUpLongPoll();
     const request = new Request('http://localhost/v1/tasks/default/heartbeat', {
@@ -828,6 +1015,37 @@ describe('Long-poll activity heartbeat — same shared seam as WebSocket (COR-23
     const response = await handleTaskHeartbeatRequest(context, options, request, url);
     expect(response?.status).toBe(200);
     expect(await response?.json()).toEqual({ ok: true, cancelled: false });
+  });
+
+  it('acceptance criterion 3: answers ok/not-cancelled as a harmless no-op against a COMPLETING attempt, and the record is untouched', async () => {
+    const { storage, options, context, claimed } = await setUpLongPoll();
+
+    const completing = beginCompletion(claimed, {
+      attemptToken: claimed.attemptToken,
+      pendingStatus: 'completed',
+      pendingResultDigest: 'digest-1',
+    });
+    if (!completing.ok)
+      throw new Error(`Expected beginCompletion to succeed: ${completing.reason}`);
+    await storage.put(taskLedgerKey('op-lp-1'), encodeRemoteTaskRecord(completing.nextRecord));
+
+    const { request, url } = heartbeatRequest({
+      operationId: 'op-lp-1',
+      workerId: 'longpoll-w1',
+      attemptToken: 'lp-attempt-1',
+    });
+    const response = await handleTaskHeartbeatRequest(context, options, request, url);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ ok: true, cancelled: false });
+
+    // `renewAttemptLease` is never even attempted — the `record.state !==
+    // 'leased'` guard short-circuits before any storage write — so the
+    // completing record's leaseDeadline and generation are byte-for-byte
+    // unchanged.
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-lp-1')));
+    expect(record?.state).toBe('completing');
+    expect(record?.state === 'completing' && record.leaseDeadline).toBe(claimed.leaseDeadline);
+    expect(record?.generation).toBe(completing.nextRecord.generation);
   });
 
   it('re-reads the current record and answers accurately when the lease renewal loses the race', async () => {

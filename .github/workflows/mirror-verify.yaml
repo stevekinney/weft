@@ -52,15 +52,25 @@ jobs:
         run: |
           bun pm pack --ignore-scripts --quiet --destination ${{ runner.temp }}/mirror-verify/tarballs
 
+      - name: move @lostgradient/weft's packed tarball into the shared tarballs directory
+        working-directory: packages/weft
+        run: |
+          bun -e 'const [source, stem, destination] = process.argv.slice(-3); const { readFileSync, renameSync } = require("node:fs"); const { version } = JSON.parse(readFileSync("package.json", "utf8")); renameSync(require("node:path").join(source, stem + "-" + version + ".tgz"), destination);' ${{ runner.temp }}/mirror-verify/tarballs lostgradient-weft ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft.tgz
+
+      - name: check @lostgradient/weft's packed README
+        working-directory: .
+        run: |
+          bun -e 'const archive = Bun.spawn(["tar", "-xOf", process.argv.at(-1), "package/README.md"], {stdout: "pipe", stderr: "pipe"}); const [text, , status] = await Promise.all([new Response(archive.stdout).text(), new Response(archive.stderr).text(), archive.exited]); const marker = ["workspace:*","Corvidae"].find(value => text.includes(value)); const result = status !== 0 ? {ok: false, problem: {kind: "missing"}} : marker ? {ok: false, problem: {kind: "internal-marker", marker}} : {ok: true}; console.log(JSON.stringify(result)); process.exit(result.ok ? 0 : 1);' ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft.tgz
+
       - name: publint @lostgradient/weft
         working-directory: .
         run: |
-          bunx --bun publint@0.3.24 --strict ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz
+          bunx --bun publint@0.3.24 --strict ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft.tgz
 
       - name: check @lostgradient/weft's published types with attw
         working-directory: .
         run: |
-          bunx --bun @arethetypeswrong/cli@0.18.5 ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz --no-definitely-typed --format ascii --ignore-rules cjs-resolves-to-esm no-resolution
+          bunx --bun @arethetypeswrong/cli@0.18.5 ${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft.tgz --no-definitely-typed --format ascii --ignore-rules cjs-resolves-to-esm no-resolution
 
       - name: write the consumer smoke-test project
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
@@ -72,7 +82,7 @@ jobs:
             "private": true,
             "type": "module",
             "dependencies": {
-              "@lostgradient/weft": "file:${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft-0.26.0.tgz"
+              "@lostgradient/weft": "file:${{ runner.temp }}/mirror-verify/tarballs/lostgradient-weft.tgz"
             }
           }
           MIRROR_VERIFY_EOF

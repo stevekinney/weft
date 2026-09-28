@@ -39,6 +39,7 @@ import {
   claimQueued,
   createQueued,
   renewAttemptLease,
+  requeueExpiredAttempt,
   type CreateQueuedInput,
 } from '../core/task-ledger/task-ledger-transitions.ts';
 import {
@@ -220,6 +221,61 @@ describe('Three independent clocks (COR-230)', () => {
     // Not a leased record: queued, terminal, etc. — no live attempt to view.
     expect(activityAttemptLeaseFromRecord(queued)).toBeUndefined();
     expect(activityAttemptLeaseFromRecord(null)).toBeUndefined();
+  });
+
+  it('heartbeat details survive a requeue and are visible to the NEXT attempt after redispatch (COR-226)', () => {
+    const now = 1_000_000;
+    const queued = freshQueued(now, { visibilityTimeoutMilliseconds: 10_000 });
+    const leased = claim(queued, now);
+    expect(leased.lastHeartbeatDetails).toBeUndefined();
+
+    // The worker heartbeats with details mid-attempt.
+    const renewed = renewAttemptLease(
+      leased,
+      {
+        attemptToken: 'attempt-1',
+        workerSessionId: 'worker-1',
+        leaseDurationMilliseconds: 10_000,
+        details: { progress: 0.5 },
+      },
+      now + 1_000,
+    );
+    if (!renewed.ok) throw new Error(`Expected renewal to succeed: ${renewed.reason}`);
+    expect(renewed.nextRecord.lastHeartbeatDetails).toEqual({ progress: 0.5 });
+
+    // This exact attempt is later abandoned (visibility timeout) and
+    // requeued — the SAME mechanism every other RemoteTaskAttemptFields
+    // field (retryCount, requeueCount, lastRequeueReason) already survives
+    // requeue through, via `pickAttemptFields`.
+    const requeued = requeueExpiredAttempt(
+      renewed.nextRecord,
+      { attemptToken: 'attempt-1', requeueReason: 'visibility-timeout' },
+      now + 20_000,
+    );
+    if (!requeued.ok) throw new Error(`Expected requeue to succeed: ${requeued.reason}`);
+    if (requeued.nextRecord.state !== 'queued') {
+      throw new Error(`Expected requeue to land in "queued", got "${requeued.nextRecord.state}"`);
+    }
+    expect(requeued.nextRecord.lastHeartbeatDetails).toEqual({ progress: 0.5 });
+
+    // A NEW attempt claims the requeued record — its own record inherits
+    // the PRIOR attempt's heartbeat details. This is exactly the value
+    // `task-dispatch.ts`/`task-polling.ts` echo back on the redispatched
+    // `task` frame as `lastHeartbeatDetails`, surfacing it to the new
+    // attempt's activity context.
+    const redispatched = claimQueued(
+      requeued.nextRecord,
+      {
+        expectedGeneration: requeued.nextRecord.generation,
+        attemptToken: 'attempt-2',
+        workerSessionId: 'worker-1',
+        leaseDurationMilliseconds: 10_000,
+      },
+      now + 20_000,
+    );
+    if (!redispatched.ok) throw new Error(`Expected reclaim to succeed: ${redispatched.reason}`);
+    expect(redispatched.nextRecord.lastHeartbeatDetails).toEqual({ progress: 0.5 });
+    expect(redispatched.nextRecord.attemptToken).toBe('attempt-2');
   });
 });
 

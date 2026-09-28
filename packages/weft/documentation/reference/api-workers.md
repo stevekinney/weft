@@ -101,7 +101,7 @@ If `signal` is already aborted when called, returns a failed result immediately 
 
 ### `RemoteWorker`
 
-WebSocket-based remote worker client. Connects to the Weft server, sends a v6 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
+WebSocket-based remote worker client. Connects to the Weft server, sends a v8 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
 
 ```ts partial
 class RemoteWorker implements Disposable {
@@ -207,6 +207,28 @@ class HeartbeatManager {
 | `stop()`         | Stop the periodic interval.                                  |
 | `beat(details?)` | Send a one-off heartbeat with optional details payload.      |
 
+### `RemoteActivityContext`
+
+The optional second parameter every worker-executed activity function receives, on both `RemoteWorker` and `LongPollWorker`. Shared by both worker classes so an activity function does not need to know which transport dispatched it.
+
+```ts partial
+type RemoteActivityContext = {
+  signal: AbortSignal;
+  workflowExecutionToken?: string;
+  activityAttemptToken?: string;
+  heartbeat: (details?: unknown) => void;
+  lastHeartbeatDetails?: unknown;
+};
+```
+
+| Field                    | Type                          | Description                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signal`                 | `AbortSignal`                 | Fires when the server requests cancellation of this attempt. `signal.reason` (COR-223) carries the durably recorded, operator-supplied cancellation reason as a string when the signal was aborted by a server `cancel`; a signal aborted by shutdown, `dispose()`, or a drain timeout carries no string reason.                            |
+| `workflowExecutionToken` | `string \| undefined`         | Durable per-run token for the workflow that dispatched this activity, when known.                                                                                                                                                                                                                                                           |
+| `activityAttemptToken`   | `string \| undefined`         | The per-dispatch attempt token echoed from the `task` frame.                                                                                                                                                                                                                                                                                |
+| `heartbeat`              | `(details?: unknown) => void` | Record heartbeat progress for this attempt (COR-226) — the SAME public shape as the inline engine's `ActivityContext.heartbeat()`, not a second heartbeat API. Sends `details` on the wire immediately, in addition to the worker's automatic per-attempt keepalive. `details` must be JSON-serializable and within `payloadSize.maxBytes`. |
+| `lastHeartbeatDetails`   | `unknown`                     | The heartbeat details a PRIOR attempt of this operation recorded before being redispatched, or `undefined` when none exists — mirrors `ActivityContext.lastHeartbeatDetails`'s resumable-batch pattern for worker-executed activities.                                                                                                      |
+
 ### `LongPollWorker`
 
 HTTP long-poll fallback for environments without WebSocket support. Polls `/api/v1/tasks/:queue` for tasks and reports results through `/api/v1/tasks/:queue/result`. Implements `Disposable`.
@@ -216,26 +238,38 @@ class LongPollWorker implements Disposable {
   constructor(options: LongPollWorkerOptions);
 
   start(): void;
-  async stop(): Promise<void>;
+  async stop(): Promise<{ unacknowledgedResults: number }>;
 
   get inFlight(): number;
   get running(): boolean;
+  get unacknowledgedResultCount(): number;
 
   [Symbol.dispose](): void;
 }
 ```
 
+| Method / Property           | Returns                                      | Description                                                                                                                                                                                                                                       |
+| --------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start()`                   | `void`                                       | Start polling for tasks, and (COR-235) resume delivery of any result still buffered from a previous `stop()`                                                                                                                                      |
+| `stop()`                    | `Promise<{ unacknowledgedResults: number }>` | Stop polling, wait for in-flight activities up to `disconnectTimeoutMs`, then suspend result delivery. Resolves with the number of buffered results still awaiting a durable disposition -- mirrors `RemoteWorker.disconnect()`'s identical shape |
+| `inFlight`                  | `number`                                     | Number of activities currently executing                                                                                                                                                                                                          |
+| `running`                   | `boolean`                                    | Whether the poll loop is active                                                                                                                                                                                                                   |
+| `unacknowledgedResultCount` | `number`                                     | Number of buffered results still awaiting an `applied`/`duplicate`/`dead-lettered` disposition (COR-235) -- mirrors `RemoteWorker`'s identical getter                                                                                             |
+| `[Symbol.dispose]()`        | `void`                                       | Immediate shutdown -- stop polling and abort in-flight activities. Unlike `stop()`, this discards any unacknowledged results rather than preserving them for a later `start()`                                                                    |
+
 ### `LongPollWorkerOptions`
 
-| Field                 | Type                                                   | Default     | Description                                                                                                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`           | `string`                                               | --          | Base HTTP URL of the Weft server                                                                                                                                                                                                             |
-| `activities`          | `Record<string, (input: unknown) => Promise<unknown>>` | --          | Activity functions                                                                                                                                                                                                                           |
-| `concurrency`         | `number`                                               | `10`        | Maximum concurrent tasks                                                                                                                                                                                                                     |
-| `queue`               | `string`                                               | `'default'` | Task queue                                                                                                                                                                                                                                   |
-| `pollTimeout`         | `number`                                               | `30_000`    | Long-poll timeout in ms                                                                                                                                                                                                                      |
-| `heartbeatIntervalMs` | `number`                                               | `10_000`    | Per-activity heartbeat interval (COR-230) — see [Long-poll fallback](../guides/remote-workers.md#long-poll-fallback).                                                                                                                        |
-| `disconnectTimeoutMs` | `number`                                               | `30_000`    | Bound on how long `stop()` waits for in-flight activities to finish after aborting them (COR-220) — matches `RemoteWorker`'s identical bound. A non-cooperative activity that ignores its `AbortSignal` cannot hold `stop()` open past this. |
+| Field                    | Type                                                   | Default     | Description                                                                                                                                                                                                                                  |
+| ------------------------ | ------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`              | `string`                                               | --          | Base HTTP URL of the Weft server                                                                                                                                                                                                             |
+| `activities`             | `Record<string, (input: unknown) => Promise<unknown>>` | --          | Activity functions                                                                                                                                                                                                                           |
+| `concurrency`            | `number`                                               | `10`        | Maximum concurrent tasks                                                                                                                                                                                                                     |
+| `queue`                  | `string`                                               | `'default'` | Task queue                                                                                                                                                                                                                                   |
+| `pollTimeout`            | `number`                                               | `30_000`    | Long-poll timeout in ms                                                                                                                                                                                                                      |
+| `heartbeatIntervalMs`    | `number`                                               | `10_000`    | Per-activity heartbeat interval (COR-230) — see [Long-poll fallback](../guides/remote-workers.md#long-poll-fallback).                                                                                                                        |
+| `disconnectTimeoutMs`    | `number`                                               | `30_000`    | Bound on how long `stop()` waits for in-flight activities to finish after aborting them (COR-220) — matches `RemoteWorker`'s identical bound. A non-cooperative activity that ignores its `AbortSignal` cannot hold `stop()` open past this. |
+| `resultRetryBaseDelayMs` | `number`                                               | `1_000`     | Delay before the first retry of a result POST that failed or was transiently rejected (COR-235) — see [Result delivery and acknowledgement](../guides/remote-workers.md#result-delivery-and-acknowledgement).                                |
+| `resultRetryMaxDelayMs`  | `number`                                               | `30_000`    | Upper bound the result-retry delay backs off to (COR-235).                                                                                                                                                                                   |
 
 **Example:**
 
@@ -708,6 +742,44 @@ type ListWorkerRegistrationRejectionsResponse = {
 Deliberately excludes the free-text rejection message and any manifest content—this is a bounded, auditable event log, not a diagnostic dump. The log is in-memory and capped at the 200 most recent entries per server process; it is not persisted.
 
 The JSON-RPC operation name is `weft.workers.rejections`.
+
+### `GET /api/v1/tasks/diagnostics`
+
+Bounded task-attempt diagnostics (COR-198): stuck queued tasks, stale in-flight attempts, retry storms, queues where every worker is at capacity, dead letters, expected-delayed tasks, and terminal records still awaiting adoption. Requires `system:read`. Item shapes vary by `kind`; see [`get-task-diagnostics.ts`](../../src/server/operations/get-task-diagnostics.ts) for the full per-kind response type.
+
+Every filter is optional and independently bounded; supplying several combines them with AND:
+
+```ts
+type GetTaskDiagnosticsInput = {
+  operationId?: string;
+  workflowId?: string;
+  queue?: string;
+  // Execution-identity filters, sourced from each matching task's current
+  // TaskAttemptRecord.executionIdentity—see "Attempt history and
+  // provenance" in the remote task recovery guide for what that identity
+  // is and how it differs from the ledger's routing requirement.
+  deploymentName?: string;
+  buildId?: string;
+  artifactDigest?: string;
+  workerId?: string;
+  workflowRevision?: string;
+  staleQueuedAfterMs?: number; // default 60000
+  staleHeartbeatAfterMs?: number; // default 60000
+  retryStormMinimumAttempts?: number; // default 3
+  includeExpectedDelayed?: boolean; // default false
+  unadoptedAfterMs?: number; // default 60000
+  limit?: number; // default 50, max 200
+};
+```
+
+The five identity filters answer "which attempts ran on this build/deployment/artifact/worker/workflow revision"—for example, `?buildId=b47` returns only diagnostics for tasks whose current attempt actually executed on build `b47`, regardless of what a task's dispatch-time `WorkerExecutionRequirement` asked for. A `queued` task (no attempt has claimed it yet) never matches any of these; it is excluded, not treated as a wildcard. A long-poll attempt has no `executionIdentity` (no registered manifest to build one from) and is likewise unfilterable by these five fields—filter by `operationId`, `workflowId`, or `queue` instead when long-poll attempts matter.
+
+```bash
+curl -sS 'http://127.0.0.1:7233/api/v1/tasks/diagnostics?buildId=b47&limit=10' \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+The JSON-RPC operation name is `weft.tasks.diagnostics`.
 
 ### `GET /api/v1/task-queues`
 

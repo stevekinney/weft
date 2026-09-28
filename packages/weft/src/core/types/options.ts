@@ -423,7 +423,7 @@ export interface EngineOptions<TServices = unknown> {
    * Worker turn-timeout and protocol-message-size limits. Explicit `'inline'`
    * rejects `workerExecution`.
    */
-  workflowExecutionMode?: 'inline' | 'worker';
+  workflowExecutionMode?: 'inline' | 'worker' | 'realm';
   /**
    * Enable Worker-based workflow execution. When provided, workflow generator
    * turns run in Web Workers instead of inline on the engine isolate. Activities
@@ -459,6 +459,7 @@ export interface EngineOptions<TServices = unknown> {
      */
     maxProtocolMessageBytes?: number;
   };
+  revisionRealmExecution?: import('./revision-realm-execution-options.ts').RevisionRealmExecutionOptions; // COR-249
 
   /**
    * Select how `ctx.run()` activity calls execute (COR-152). Omitting this

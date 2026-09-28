@@ -2,6 +2,7 @@ import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { ConstraintDefinition } from '../constraint.ts';
 import type { ExecutionStrategy } from '../execution-strategy.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
+import type { RevisionRealmRegistry } from '../realm/revision-realm-registry.ts';
 import type {
   AnyActivityDefinition,
   ArchiveAdapter,
@@ -123,6 +124,8 @@ export type EngineConstructorOptions<TServices = unknown> = Partial<EngineOption
 export type ExecutionStrategyBundle = {
   strategy: ExecutionStrategy;
   inlineStrategy: InlineExecutionStrategy | null;
+  /** Set only for `workflowExecutionMode: 'realm'` (COR-249's engine integration); installed onto `EngineInternals.revisionRealmRegistry`. */
+  revisionRealmRegistry?: RevisionRealmRegistry;
 };
 
 export type TrackedWaiterKeys = string | Set<string>;

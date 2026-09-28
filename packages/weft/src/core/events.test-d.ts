@@ -1,11 +1,13 @@
 import {
   Engine,
+  TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
   WorkflowRevisionActivatedEvent,
   WorkflowRevisionActivationRejectedEvent,
   WorkflowRevisionDrainingEvent,
   WorkflowRevisionInstalledEvent,
   WorkflowRevisionRemovedEvent,
+  type WorkerExecutionIdentity,
 } from '../index.ts';
 
 const eventType: 'task:dead-lettered' = TaskResultDeadLetteredEvent.type;
@@ -15,6 +17,23 @@ const engine = new Engine();
 engine.addEventListener(TaskResultDeadLetteredEvent.type, (event) => {
   const operationId: string = event.operationId;
   void operationId;
+});
+
+// COR-205 acceptance criterion 14: server operations, generated clients, and
+// workflow events share one provenance type. `TaskAttemptTransitionEvent`'s
+// `executionIdentity` must be the SAME `WorkerExecutionIdentity` type
+// `TaskAttemptRecord` and `weft.tasks.get`'s `attempts[]` already carry, not
+// a second, independently-drifting shape — this assignment fails to compile
+// if it were.
+engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
+  const narrowed: TaskAttemptTransitionEvent = event;
+  const executionIdentity: WorkerExecutionIdentity | undefined = narrowed.executionIdentity;
+  const previousExecutionIdentity: WorkerExecutionIdentity | undefined =
+    narrowed.previousExecutionIdentity;
+  const crossBuildRetry: boolean = narrowed.crossBuildRetry;
+  void executionIdentity;
+  void previousExecutionIdentity;
+  void crossBuildRetry;
 });
 
 engine.addEventListener('catalog:revision-installed', (event) => {

@@ -5,6 +5,7 @@
 
 import type { ActivityInterceptor } from '../core/interceptor.ts';
 import { composeActivityInterceptors } from '../core/interceptor.ts';
+import type { RemoteActivityContext } from './remote-activity-context.ts';
 
 export interface TaskInfo {
   activityName: string;
@@ -14,17 +15,18 @@ export interface TaskInfo {
   headers?: Record<string, string>;
   workflowExecutionToken?: string;
   attemptToken: string;
+  /**
+   * The heartbeat details a PREVIOUS attempt of this operation recorded
+   * before being redispatched (COR-226) — surfaced to the activity as
+   * `context.lastHeartbeatDetails`. `undefined` when no prior attempt ever
+   * heartbeated with details.
+   */
+  lastHeartbeatDetails?: unknown;
 }
 
 export interface ComposedInterceptor {
   execute: ReturnType<typeof composeActivityInterceptors>['execute'];
 }
-
-type ActivityExecutionContext = {
-  signal: AbortSignal;
-  workflowExecutionToken?: string;
-  activityAttemptToken?: string;
-};
 
 /**
  * Pre-compose interceptors once (at construction time) so the chain
@@ -38,16 +40,25 @@ export function buildComposedInterceptor(
 }
 
 /**
- * Execute an activity function, optionally wrapped by a pre-composed interceptor chain.
- * Provides a consistent AbortSignal and headers Map to the interception context.
+ * Execute an activity function, optionally wrapped by a pre-composed
+ * interceptor chain. Provides a consistent `AbortSignal`, headers `Map`, and
+ * (COR-226) `heartbeat`/`lastHeartbeatDetails` surface to the interception
+ * context.
+ *
+ * `sendHeartbeat`, when supplied, is called with the activity's OWN
+ * `context.heartbeat(details)` invocation — this function never calls it
+ * itself. It is the caller's (`RemoteWorker`/`LongPollWorker`'s) job to send
+ * the periodic AUTOMATIC keepalive; this seam only carries an on-demand,
+ * details-bearing heartbeat the activity chooses to send.
  */
 export async function executeWithInterceptors(
-  activityFunction: (input: unknown, context?: ActivityExecutionContext) => Promise<unknown>,
+  activityFunction: (input: unknown, context?: RemoteActivityContext) => Promise<unknown>,
   task: TaskInfo,
   composed: ComposedInterceptor | null,
   signal?: AbortSignal,
+  sendHeartbeat?: (details?: unknown) => void,
 ): Promise<unknown> {
-  const activityContext = createActivityExecutionContext(task, signal);
+  const activityContext = createActivityExecutionContext(task, signal, sendHeartbeat);
   if (!composed) {
     return activityFunction(task.input, activityContext);
   }
@@ -71,7 +82,13 @@ export async function executeWithInterceptors(
 function createActivityExecutionContext(
   task: TaskInfo,
   signal: AbortSignal | undefined,
-): ActivityExecutionContext | undefined {
+  sendHeartbeat: ((details?: unknown) => void) | undefined,
+): RemoteActivityContext | undefined {
+  // Preserves the pre-COR-226 omission rule exactly: no context at all when
+  // this call carries neither a signal nor a workflow execution token — the
+  // isolated (non-worker) caller this serves has nothing execution-context
+  // shaped to offer. Every REAL RemoteWorker/LongPollWorker dispatch always
+  // passes a signal, so this omission never applies in production.
   if (signal === undefined && task.workflowExecutionToken === undefined) {
     return undefined;
   }
@@ -82,5 +99,7 @@ function createActivityExecutionContext(
       workflowExecutionToken: task.workflowExecutionToken,
     }),
     activityAttemptToken: task.attemptToken,
+    lastHeartbeatDetails: task.lastHeartbeatDetails,
+    heartbeat: sendHeartbeat ?? (() => {}),
   };
 }

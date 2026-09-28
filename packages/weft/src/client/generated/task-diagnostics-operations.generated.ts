@@ -3,6 +3,9 @@
 export type TaskDiagnosticsOperationTypes = {
   'weft.tasks.diagnostics': {
     readonly input: {
+      readonly artifactDigest?: string;
+      readonly buildId?: string;
+      readonly deploymentName?: string;
       readonly includeExpectedDelayed: boolean;
       readonly limit: number;
       readonly operationId?: string;
@@ -11,7 +14,9 @@ export type TaskDiagnosticsOperationTypes = {
       readonly staleHeartbeatAfterMs: number;
       readonly staleQueuedAfterMs: number;
       readonly unadoptedAfterMs: number;
+      readonly workerId?: string;
       readonly workflowId?: string;
+      readonly workflowRevision?: string;
     };
     readonly output: {
       readonly items: ReadonlyArray<

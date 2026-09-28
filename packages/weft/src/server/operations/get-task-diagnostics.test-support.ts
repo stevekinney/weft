@@ -1,4 +1,5 @@
 import { Engine } from '../../core/engine.ts';
+import { encodeTaskAttemptRecord, taskAttemptKey } from '../../core/task-ledger/task-attempt.ts';
 import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
@@ -10,6 +11,8 @@ import {
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
+import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -157,6 +160,51 @@ export async function putLedgerRecord(
   record: RemoteTaskQueued | RemoteTaskLeased | RemoteTaskTerminalResolved | RemoteTaskDeadLettered,
 ): Promise<void> {
   await storage.put(taskLedgerKey(record.operationId), encodeRemoteTaskRecord(record));
+}
+
+export function executionIdentityFixture(
+  overrides: Partial<WorkerExecutionIdentity> = {},
+): WorkerExecutionIdentity {
+  return {
+    workerId: 'w-1',
+    manifestDigest: 'manifest-digest',
+    protocolVersion: 1,
+    sdkVersion: '1.0.0',
+    runtimeName: 'bun',
+    runtimeVersion: '1.0.0',
+    deploymentName: 'checkout',
+    buildId: 'b1',
+    artifactDigest: 'sha256:b1',
+    workflowType: 'test',
+    workflowRevision: 'rev-1',
+    activityName: 'charge',
+    activityContractHash: 'contract-hash',
+    ...overrides,
+  };
+}
+
+/** Writes a leased ledger record together with its current attempt's `TaskAttemptRecord`, for COR-198's identity-filter tests. */
+export async function putLeasedWithAttempt(
+  storage: MemoryStorage,
+  leased: RemoteTaskLeased,
+  executionIdentity?: WorkerExecutionIdentity,
+): Promise<void> {
+  await putLedgerRecord(storage, leased);
+  const digest = sha256HexSync(leased.attemptToken);
+  await storage.put(
+    taskAttemptKey(leased.operationId, digest),
+    encodeTaskAttemptRecord({
+      recordVersion: 1,
+      operationId: leased.operationId,
+      attempt: leased.attempt,
+      attemptTokenDigest: digest,
+      workerSessionId: leased.workerSessionId,
+      claimedAt: leased.startedAt,
+      disposition: 'leased',
+      dispositionAt: leased.startedAt,
+      ...(executionIdentity !== undefined ? { executionIdentity } : {}),
+    }),
+  );
 }
 
 export async function runDiagnostics({

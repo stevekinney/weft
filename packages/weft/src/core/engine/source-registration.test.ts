@@ -263,8 +263,26 @@ describe('engine.registerSource() structural validation', () => {
     });
     const { source } = checkoutSource();
 
-    expect(() => engine.registerSource(source)).toThrow(/inline execution mode/);
+    // COR-249's engine integration extends this guard to also allow
+    // `workflowExecutionMode: 'realm'` (a revision realm never receives the
+    // loaded module either way — see `source-registration.ts`'s own doc) —
+    // the generic Worker mode this test targets is still rejected.
+    expect(() => engine.registerSource(source)).toThrow(/generic Worker realm/);
     expect(getInternals(engine).sources.byName.size).toBe(0);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('does not throw under workflowExecutionMode: "realm" (COR-249) — a revision realm never receives the loaded module', () => {
+    const engine = new Engine({
+      workflowExecutionMode: 'realm',
+      revisionRealmExecution: { resolveRevisionRealmConfig: () => undefined },
+    });
+    const { source, loader } = checkoutSource();
+
+    expect(() => engine.registerSource(source)).not.toThrow();
+    expect(loader).not.toHaveBeenCalled();
+    expect(getInternals(engine).sources.byName.get('checkout')?.get('r1')).toBe(source);
 
     engine[Symbol.dispose]();
   });

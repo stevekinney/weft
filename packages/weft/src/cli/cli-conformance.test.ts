@@ -1,7 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import { rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 import { executeConformance } from './index.ts';
 
@@ -116,19 +113,16 @@ describe('executeConformance', () => {
   });
 
   it('surfaces a replacement worker that disconnects before graceful shutdown', async () => {
-    const launchStateFile = join(tmpdir(), `weft-short-sleep-exit-${crypto.randomUUID()}.txt`);
     const result = await executeConformance({
       timeoutMs: 1_000,
       json: true,
       workerCommand: [
         'env',
         'WEFT_SHORT_SLEEP_EXIT_MODE=replacement-disconnect',
-        `WEFT_SHORT_SLEEP_EXIT_STATE_FILE=${launchStateFile}`,
         'bun',
         './src/cli/__fixtures__/conformance-short-sleep-exit-worker.ts',
       ],
     });
-    rmSync(launchStateFile, { force: true });
 
     expect(result.exitCode).toBe(1);
     const report: {
@@ -137,5 +131,37 @@ describe('executeConformance', () => {
     } = JSON.parse(result.stdout);
     expect(report.ok).toBe(false);
     expect(report.checks[0]?.message).toContain('to become idle');
+  });
+
+  /**
+   * COR-235: proves the reconnect check discriminates. A worker written
+   * against the pre-COR-235 contract — no notion of `holdForReassignment`
+   * — resolves the reconnect task's first attempt in place, in time, with no
+   * reassignment ever happening. That is exactly the failure this check
+   * exists to catch, and it is also exactly the gap an earlier version of
+   * `waitForReassignmentPastFirstAttempt` (then keyed on "has the task
+   * resolved at all" rather than "has the attempt counter passed 1") let
+   * through: a resolved-in-place attempt 1 satisfied "resolved", so the
+   * check passed without any worker ever seeing a second attempt.
+   */
+  it('fails the reconnect check when a worker ignores holdForReassignment and resolves attempt 1 in place', async () => {
+    const result = await executeConformance({
+      timeoutMs: 1_000,
+      json: true,
+      workerCommand: [
+        'env',
+        'WEFT_SHORT_SLEEP_EXIT_MODE=ignore-hold',
+        'bun',
+        './src/cli/__fixtures__/conformance-short-sleep-exit-worker.ts',
+      ],
+    });
+
+    expect(result.exitCode).toBe(1);
+    const report: {
+      ok: boolean;
+      checks: Array<{ name: string; ok: boolean; message: string }>;
+    } = JSON.parse(result.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.checks[0]?.message).toContain('claimed past attempt 1');
   });
 });

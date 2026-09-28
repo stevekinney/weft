@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
@@ -278,11 +278,12 @@ describe('workflow and activity execution tokens', () => {
       activityExecution: { mode: 'remote', broker: recordingBroker },
     });
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
 
     engine.register(
@@ -307,5 +308,6 @@ describe('workflow and activity execution tokens', () => {
 
     await engine.completeAsyncActivity(requests[0]!.operationId, 'charged');
     expect(await handle.result()).toBe('charged');
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 });

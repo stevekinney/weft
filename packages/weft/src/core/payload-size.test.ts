@@ -62,18 +62,21 @@ describe('assertPayloadWithinLimit', () => {
     expect(read).toBe(false);
   });
 
-  it.each<PayloadKind>(['workflow input', 'signal payload', 'activity result', 'finalizer state'])(
-    'names the payload kind %p in the rejection message',
-    (kind) => {
-      try {
-        assertPayloadWithinLimit('over the tiny limit', 1, kind);
-        throw new Error('expected throw');
-      } catch (error) {
-        expect((error as PayloadSizeExceededError).payloadKind).toBe(kind);
-        expect((error as PayloadSizeExceededError).message).toContain(kind);
-      }
-    },
-  );
+  it.each<PayloadKind>([
+    'workflow input',
+    'signal payload',
+    'activity result',
+    'finalizer state',
+    'heartbeat details',
+  ])('names the payload kind %p in the rejection message', (kind) => {
+    try {
+      assertPayloadWithinLimit('over the tiny limit', 1, kind);
+      throw new Error('expected throw');
+    } catch (error) {
+      expect((error as PayloadSizeExceededError).payloadKind).toBe(kind);
+      expect((error as PayloadSizeExceededError).message).toContain(kind);
+    }
+  });
 });
 
 describe('encodePayloadWithinLimit', () => {

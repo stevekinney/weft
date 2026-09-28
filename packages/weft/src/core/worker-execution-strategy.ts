@@ -3,6 +3,7 @@ import type { ExecutionStrategy } from './execution-strategy.ts';
 import type { OperationOutcome, WorkerInboundMessage, WorkerOutboundMessage } from './types.ts';
 import { WorkerCheckpointResumeState } from './worker-checkpoint-resume-state.ts';
 import { WorkerExecutionDispatcher } from './worker-execution-dispatcher.ts';
+import { WorkerExecutionDisposal } from './worker-execution-disposal.ts';
 import { WorkerExecutionOwnership } from './worker-execution-ownership.ts';
 import type { WorkerExecutionStrategyOptions } from './worker-execution-strategy-options.ts';
 import { WorkerFaultHandler } from './worker-fault-handling.ts';
@@ -50,14 +51,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   readonly #faultHandler: WorkerFaultHandler;
   readonly #dispatcher: WorkerExecutionDispatcher;
   #messageHandler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null;
-  #disposed: boolean;
+  readonly #disposal: WorkerExecutionDisposal;
   #nextTurnId: number;
-  /**
-   * Per-workflow captured revision (WFT-20), set once at `startWorkflow()`
-   * and read by every subsequent turn's `beginTurn` — including `resume`
-   * turns, whose inbound message never re-carries the revision. Cleared when
-   * the workflow reaches a terminal outbound message or is cancelled.
-   */
+  /** Per-workflow captured revision (WFT-20), set at `startWorkflow()` and read by every subsequent turn's `beginTurn` (including `resume`, whose inbound message never re-carries it). Cleared on a terminal outbound message or cancellation. */
   readonly #workflowRevisions: Map<string, string>;
 
   constructor(pool: WorkerPool, options?: WorkerExecutionStrategyOptions) {
@@ -114,7 +110,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#dispatcher = new WorkerExecutionDispatcher({
       pool: this.#pool,
       ownership: this.#ownership,
-      isDisposed: () => this.#disposed,
+      isDisposed: () => this.#disposal.isDisposed,
       requireProtocolVersion: () => this.#requireProtocolVersion,
       validateHostToWorkerMessage: (workflowId, message, worker) =>
         this.#faultHandler.assertHostToWorkerMessageWithinLimit(workflowId, message, worker),
@@ -148,7 +144,11 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#messageHandler = null;
     this.#broadcastChannel = null;
     this.#broadcastListener = null;
-    this.#disposed = false;
+    this.#disposal = new WorkerExecutionDisposal({
+      teardown: () => this.#teardown(),
+      disposeSync: () => this.#pool[Symbol.dispose](),
+      disposeAsync: () => this.#pool[Symbol.asyncDispose](),
+    });
     this.#nextTurnId = 1;
 
     if (broadcastEvents) {
@@ -222,7 +222,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       return;
     }
 
-    if (!this.#disposed) {
+    if (!this.#disposal.isDisposed) {
       this.#emit({
         type: 'failed',
         workflowId: parameters.workflowId,
@@ -257,10 +257,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   cancelWorkflow(workflowId: string): void {
-    // Cancellation is terminal for this strategy's own bookkeeping even
-    // though a stray outbound message can still arrive after — the turn
-    // watchdog is cleared below (via `#releaseActiveWorker`/discard), so any
-    // late message fails the guard's turn-match check regardless.
+    // Terminal for this strategy's own bookkeeping even though a stray
+    // message can still arrive after — the cleared turn watchdog below
+    // fails the guard's turn-match check regardless.
     this.#workflowRevisions.delete(workflowId);
     const worker = this.#ownership.getActiveWorker(workflowId);
     if (worker) {
@@ -304,19 +303,17 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     void this.#dispatcher.cancelParkedWorkflow(workflowId, parkedWorker);
   }
 
+  /** See `WorkerExecutionDisposal` (COR-113: idempotent termination). */
   [Symbol.dispose](): void {
-    this.#teardown();
-    this.#pool[Symbol.dispose]();
+    this.#disposal.disposeSync();
   }
 
-  async [Symbol.asyncDispose](): Promise<void> {
-    this.#teardown();
-    await this.#pool[Symbol.asyncDispose]();
+  /** See `WorkerExecutionDisposal` (COR-113: idempotent termination). */
+  [Symbol.asyncDispose](): Promise<void> {
+    return this.#disposal.disposeAsync();
   }
 
   #teardown(): void {
-    this.#disposed = true;
-
     if (this.#broadcastChannel) {
       if (this.#broadcastListener) {
         this.#broadcastChannel.removeEventListener('message', this.#broadcastListener);
@@ -341,10 +338,9 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
 
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
     // Every worker realm sends `ready` at boot regardless of whether this
-    // strategy requires the handshake (WFT-28), so it must be intercepted here
-    // unconditionally — `ready` has no `workflowId` and would otherwise reach
-    // `WorkerFaultHandler.acceptWorkerMessage`'s strict gate, which requires
-    // one, and get the worker discarded before it ever executes a turn.
+    // strategy requires the handshake (WFT-28), so it must be intercepted
+    // unconditionally — `ready` has no `workflowId` and would otherwise fail
+    // `acceptWorkerMessage`'s strict gate before the worker ever runs a turn.
     if (isWorkerRealmReadyMessage(message)) {
       if (this.#realmReadiness) {
         await this.#realmReadiness.noteReadyMessage(worker, message);
@@ -372,6 +368,10 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     const handlerFailed = emitResult instanceof Promise ? await emitResult : emitResult;
 
     try {
+      if (this.#faultHandler.rejectUncommittedTerminalMessage(worker, message, handlerFailed)) {
+        return;
+      }
+
       if (this.#settleTerminalWorkerMessage(worker, message)) {
         return;
       }
