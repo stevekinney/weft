@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-09-28
+
+### Fixed
+
+- Refresh the public mirror from the verified Corvidae source, including the SQLite storage runtime exports and current publication inputs.
+
 ## [0.26.0] - 2026-09-21
 
 ### Added
