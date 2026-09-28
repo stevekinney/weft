@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-28
+
+### Added
+
+- Public worker authoring and deployment-versioning APIs, including persisted worker bindings, compatibility checks for auto-upgrade, and a scoped preview for start-time overrides.
+- Remote-worker diagnostics, session and long-poll handling, with stricter worker payload validation.
+
 ## [0.26.1] - 2026-09-28
 
 ### Fixed
