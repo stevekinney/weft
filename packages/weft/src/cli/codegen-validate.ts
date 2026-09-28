@@ -24,7 +24,7 @@ import {
 } from '../index.ts';
 import { isPlainRecord } from '../worker/manifest/is-plain-record.ts';
 import { utf8ByteLength } from '../worker/manifest/utf8.ts';
-import type { CodegenWorkflowEntry } from './codegen-emit-registry.ts';
+import type { CodegenActivityContract, CodegenWorkflowEntry } from './codegen-emit-registry.ts';
 
 /**
  * Ceiling on the raw `workflows` array's length, checked before a single
@@ -257,6 +257,7 @@ function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWork
   const entry: CodegenWorkflowEntry = {
     revision: manifest.revision,
     workflowVersion: manifest.workflowVersion,
+    contractHash: manifest.contractHash,
   };
   if (manifest.contract.inputSchema !== undefined)
     entry.inputSchema = manifest.contract.inputSchema;
@@ -266,6 +267,17 @@ function toCodegenWorkflowEntry(manifest: WorkflowRevisionManifest): CodegenWork
     entry.description = manifest.contract.description;
   if (manifest.contract.tags !== undefined && manifest.contract.tags.length > 0) {
     entry.tags = manifest.contract.tags;
+  }
+  if (manifest.contract.activities !== undefined) {
+    const activities: Record<string, CodegenActivityContract> = {};
+    Object.setPrototypeOf(activities, null);
+    for (const [name, contract] of Object.entries(manifest.contract.activities)) {
+      const activity: CodegenActivityContract = {};
+      if (contract.inputSchema !== undefined) activity.inputSchema = contract.inputSchema;
+      if (contract.outputSchema !== undefined) activity.outputSchema = contract.outputSchema;
+      activities[name] = activity;
+    }
+    entry.activities = activities;
   }
   return entry;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import type { WorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import { encode } from '../codec.ts';
 import {
   decodeRemoteTaskRecord,
@@ -45,6 +46,23 @@ const EXECUTION_IDENTITY: WorkerExecutionIdentity = {
   workflowRevision: 'sha256:111',
   activityName: 'charge',
   activityContractHash: 'sha256:222',
+};
+
+const WORKFLOW_WORKER_BINDING: WorkflowWorkerBinding = {
+  workflowId: 'wf-1',
+  workflowType: 'checkout',
+  deploymentName: 'billing',
+  buildId: 'build-1',
+  artifactDigest: 'sha256:def',
+  manifestDigest: 'sha256:manifest',
+  routingGeneration: 3,
+  workflowRevision: 'sha256:111',
+  workflowContractHash: 'sha256:workflow',
+  activityContracts: { charge: 'sha256:222' },
+  activityName: 'charge',
+  activityContractHash: 'sha256:222',
+  boundAt: 1_000,
+  checkpointId: 'checkpoint-1',
 };
 
 function baseFields() {
@@ -352,6 +370,21 @@ describe('isValidTaskBase retryPolicy and executionRequirement bounds', () => {
 
   it('rejects an executionRequirement that is not an object', () => {
     expect(isRemoteTaskQueued({ ...queuedFixture(), executionRequirement: 'billing' })).toBe(false);
+  });
+
+  it('accepts a well-formed workflowWorkerBinding', () => {
+    expect(
+      isRemoteTaskQueued(queuedFixture({ workflowWorkerBinding: WORKFLOW_WORKER_BINDING })),
+    ).toBe(true);
+  });
+
+  it('rejects a malformed workflowWorkerBinding', () => {
+    expect(
+      isRemoteTaskQueued({
+        ...queuedFixture(),
+        workflowWorkerBinding: { ...WORKFLOW_WORKER_BINDING, routingGeneration: 'stale' },
+      }),
+    ).toBe(false);
   });
 });
 

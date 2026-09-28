@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createRegisterCheck } from './conformance.ts';
 import { executeConformance } from './index.ts';
+
+describe('createRegisterCheck', () => {
+  const activities = ['conformance.echo', 'conformance.sleep', 'conformance.cancel'];
+
+  it('passes a worker on the conformance queue advertising every required activity', () => {
+    expect(createRegisterCheck('worker-1', { queue: 'conformance', activities })).toEqual({
+      name: 'register',
+      ok: true,
+      message: 'registered worker worker-1',
+    });
+  });
+
+  it('names both a wrong queue and each missing activity', () => {
+    expect(
+      createRegisterCheck('worker-1', { queue: 'other', activities: ['conformance.echo'] }),
+    ).toEqual({
+      name: 'register',
+      ok: false,
+      message:
+        'worker worker-1 registered on queue other, expected conformance; does not advertise conformance.sleep, conformance.cancel',
+    });
+  });
+
+  it('fails a worker that left the registry before its registration was judged', () => {
+    expect(createRegisterCheck('worker-1', undefined)).toEqual({
+      name: 'register',
+      ok: false,
+      message: 'worker worker-1 disconnected after registering',
+    });
+  });
+});
 
 describe('executeConformance', () => {
   it('returns exitCode 2 when the worker command is missing', async () => {
@@ -74,7 +106,14 @@ describe('executeConformance', () => {
     expect(result.stdout).toContain('FAIL conformance:');
   });
 
-  it('fails when the registered worker does not advertise the required activities', async () => {
+  /**
+   * The mismatch is judged from the registry record at registration, not
+   * inferred from a later dispatch timing out. This test once asserted the
+   * echo dispatch's timeout message, which made the outcome depend on which
+   * phase a loaded host happened to exhaust its budget in. The `not.toMatch`
+   * guard fails if the check ever goes back to waiting on a timer.
+   */
+  it('fails the register check when the registered worker does not advertise the required activities', async () => {
     const result = await executeConformance({
       timeoutMs: 750,
       json: true,
@@ -87,11 +126,15 @@ describe('executeConformance', () => {
       checks: Array<{ name: string; ok: boolean; message: string }>;
     } = JSON.parse(result.stdout);
     expect(report.ok).toBe(false);
-    expect(report.checks[0]).toEqual({
-      name: 'conformance',
-      ok: false,
-      message: 'Timed out after 750ms waiting for conformance-echo to resolve as completed',
-    });
+    expect(report.checks).toEqual([
+      {
+        name: 'register',
+        ok: false,
+        message:
+          'worker wrong-activities-worker does not advertise conformance.echo, conformance.sleep, conformance.cancel',
+      },
+    ]);
+    expect(report.checks[0]?.message).not.toMatch(/Timed out/);
   });
 
   it('surfaces a worker that disconnects before heartbeat readiness', async () => {

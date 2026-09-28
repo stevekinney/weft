@@ -52,7 +52,6 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -67,6 +66,7 @@ import { replaceActivityWorkerDispatcherForTesting } from '../engine/activity-wo
 import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING,
 } from '../engine/index.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -90,27 +90,26 @@ const workerUrl = new URL('../../workers/test-browser-worker.ts', import.meta.ur
 // ---------------------------------------------------------------------------
 
 /**
- * Wait until the engine has exactly one signal waiter registered. In worker mode a
- * workflow parks by yielding a `signal-wait` operation FROM the Worker, which the engine
- * receives and registers as a `signalWaiter`. This is the cheapest available proof that
- * the workflow generator ran inside a Web Worker rather than in the engine isolate:
+ * Wait for `workflowId` to park, then assert it is the engine's only signal waiter. In
+ * worker mode a workflow parks by yielding a `signal-wait` operation FROM the Worker, which
+ * the engine receives and registers as a `signalWaiter`. This is the cheapest available
+ * proof that the workflow generator ran inside a Web Worker rather than in the engine
+ * isolate:
  * - `ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING() === 1` → Worker yielded the park;
  * - `ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING() === 0` → NOT an inline-strategy park.
+ *
+ * The park is awaited as an event rather than polled against a budget, as in
+ * `worker-execution-suspension.test.ts` (COR-1330, COR-1337): reaching it means booting a
+ * real Worker and running a turn, and a workflow that never parks is a real hang, reported
+ * by the test runner's own per-test timeout.
+ *
+ * Once parked, the post-cancel checks assert `ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING() === 0`
+ * directly: `cancel()` awaits `terminateWorkflow`, whose `cleanupWaiters` drops the
+ * workflow's signal waiter before `cancel()` resolves.
  */
-async function waitForWorkerPark(engine: Engine, label: string): Promise<void> {
-  await waitForCondition(() => engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
-    timeoutMs: 5_000,
-    intervalMs: 25,
-    label: `${label}: worker-mode signal waiter registered`,
-  });
-}
-
-async function waitForWorkerParkCleanup(engine: Engine, label: string): Promise<void> {
-  await waitForCondition(() => engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
-    timeoutMs: 5_000,
-    intervalMs: 25,
-    label: `${label}: worker-mode signal waiter cleaned up`,
-  });
+async function waitForWorkerPark(engine: Engine, workflowId: string): Promise<void> {
+  await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
+  expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,11 +201,13 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       },
     );
     const resultPromise = handle.result();
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
 
     // WORKER-TURN OBSERVABLE: once the signal waiter is registered the Worker has run
     // its first turn and yielded the park — not the engine-side handler.
-    await waitForWorkerPark(engine, 'T2');
-    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(1);
+    await waitForWorkerPark(engine, 'worker-finalizer-cancel-1');
     expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(0); // not inline-parked
 
     // Write `finalizerState` directly to storage — simulates what `ctx.setFinalizerState`
@@ -218,8 +219,8 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     // Cancel the workflow. The terminal batch reads the finalizerState key (already in
     // storage) and stages the teardownOwed marker + timer atomically.
     await engine.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine, 'T2');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // The teardownOwed marker must be staged before the tick.
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-cancel-1'))).not.toBeNull();
@@ -325,8 +326,11 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       },
     );
     const resultPromise = handle.result();
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
 
-    await waitForWorkerPark(engine, 'T4');
+    await waitForWorkerPark(engine, 'worker-finalizer-no-dispatch-1');
 
     // Write finalizerState so the teardown marker is staged on cancel.
     await writeFinalizerStateToStorage(storage, 'worker-finalizer-no-dispatch-1', {
@@ -334,8 +338,8 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     });
 
     await engine.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine, 'T4');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // Tick to drive the finalizer.
     await engine.scheduler.tick(now);
@@ -390,8 +394,11 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       },
     );
     const resultPromise = handle.result();
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
 
-    await waitForWorkerPark(engine, 'T5');
+    await waitForWorkerPark(engine, 'worker-finalizer-ordering-1');
 
     // PRE-CANCEL tick: no teardownOwed marker exists; drive returns 'cleared' immediately.
     // The finalizer must NOT have run.
@@ -406,8 +413,8 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
 
     // Cancel: terminal transition stages teardownOwed marker.
     await engine.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine, 'T5');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // POST-CANCEL tick: teardownOwed marker present, workflow is terminal → drives finalizer.
     await engine.scheduler.tick(now);
@@ -451,16 +458,19 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       },
     );
     const resultPromise = handle.result();
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
 
-    await waitForWorkerPark(engine, 'T6');
+    await waitForWorkerPark(engine, 'worker-finalizer-flaky-1');
 
     await writeFinalizerStateToStorage(storage, 'worker-finalizer-flaky-1', {
       sandboxId: 'sbx-worker-flaky',
     });
 
     await engine.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine, 'T6');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // First attempt: finalizer throws → failed event + owed marker re-armed.
     await engine.scheduler.tick(now);
@@ -524,13 +534,16 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       { id: 'worker-finalizer-nostate-1' },
     );
     const resultPromise = handle.result();
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
 
-    await waitForWorkerPark(engine, 'T7');
+    await waitForWorkerPark(engine, 'worker-finalizer-nostate-1');
 
     // No `writeFinalizerStateToStorage` call here — nothing is recorded.
     await engine.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine, 'T7');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // No teardown marker was staged because no finalizer state was recorded.
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-nostate-1'))).toBeNull();
@@ -578,13 +591,16 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
       { id: 'worker-finalizer-recover-1' },
     );
     const resultPromise = handle.result();
-    await waitForWorkerPark(engine1, 'T8/engine1');
+    // `result()` returns a fresh promise that rejects inside `cancel()`; mark it handled now
+    // so it cannot surface as an unhandled rejection before the `.rejects` assertion below.
+    void resultPromise.catch(() => {});
+    await waitForWorkerPark(engine1, 'worker-finalizer-recover-1');
     await writeFinalizerStateToStorage(storage, 'worker-finalizer-recover-1', {
       sandboxId: 'sbx-worker-recover',
     });
     await engine1.cancel(handle.id);
-    await waitForWorkerParkCleanup(engine1, 'T8/engine1');
-    expect(resultPromise).rejects.toThrow('Workflow cancelled');
+    expect(engine1[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
 
     // The teardown marker is staged and still `owed` — engine1 dies before any drive tick.
     const owedBytes = await storage.get(KEYS.teardownOwed('worker-finalizer-recover-1'));

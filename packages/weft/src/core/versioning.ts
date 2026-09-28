@@ -24,6 +24,25 @@ export const DEFAULT_WORKFLOW_VERSION = '0.0.0';
 
 export type VersionCompatibility = 'compatible' | 'incompatible';
 
+/**
+ * Controls how a workflow resolves its worker implementation across turns.
+ * The default is pinned so a started workflow cannot silently change workers.
+ */
+export type WorkflowWorkerVersioningPolicy =
+  | { mode?: 'pinned'; maxBindingHistory?: number }
+  | {
+      mode: 'auto-upgrade';
+      compatibility: {
+        deploymentName: string;
+        buildId: string;
+        artifactDigest: string;
+        manifestDigest: string;
+        workflowRevision: string;
+        activityContractHash: string;
+      };
+      maxBindingHistory?: number;
+    };
+
 // ---------------------------------------------------------------------------
 // Version comparison
 // ---------------------------------------------------------------------------

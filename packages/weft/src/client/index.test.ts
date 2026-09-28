@@ -9,7 +9,7 @@ import {
   CONTRACT_PAYLOAD_CAP_BYTES,
   nextAsyncPendingToken,
 } from '../testing/async-activity.test-support.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
@@ -1092,17 +1092,11 @@ describe('HttpClient live event streaming (end-to-end)', () => {
     );
 
     // Second signal completes the workflow; the resumed stream must deliver
-    // the terminal event and the tail must terminate cleanly.
+    // the terminal event and the tail must terminate cleanly. `withTimeout`
+    // (shared test support) always clears its timer, so a passing `consume`
+    // never leaves a real timeout alive for the guard to flag.
     await handle.signal('continue', undefined, { signalId: 'second' });
-    await Promise.race([
-      consume,
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(
-          () => reject(new Error(`resumed stream did not complete; seen=${JSON.stringify(seen)}`)),
-          3000,
-        ),
-      ),
-    ]);
+    await withTimeout(consume, 3000, 'resumed stream to complete');
 
     expect(seen).toContain('workflow:completed');
     expect(await handle.result()).toBe('resume:done');

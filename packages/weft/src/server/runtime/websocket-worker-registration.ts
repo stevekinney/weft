@@ -30,6 +30,7 @@ import type {
   WorkerAdmissionRequest,
 } from '../worker-admission-policy.ts';
 import type { ServerContext } from './context.ts';
+import { drainLongPollQueueInBackground } from './long-poll-drain.ts';
 import { rejectRegistration, sendWorkerProtocolMessage } from './websocket-worker-messaging.ts';
 import { runWorkerDisconnectRequeue } from './worker-disconnect-requeue.ts';
 
@@ -286,6 +287,9 @@ function commitWorkerRegistration(
   options.engine.dispatchEvent(
     new WorkerConnectedEvent(message.workerId, queue, registrationInfo.activities, concurrency),
   );
+  // Tasks that fell back to the long-poll queue while no WebSocket worker
+  // could take them have somewhere to go now.
+  drainLongPollQueueInBackground(context, options, queue);
 }
 
 /**

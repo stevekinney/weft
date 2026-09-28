@@ -8,7 +8,7 @@ import * as fixture from './get-task-detail.test-support.ts';
 describe('weft.tasks.get', () => {
   it('faults NotFound for an operationId that was never dispatched', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
 
     const result = await fixture.runGetTaskDetail(engine, 'never-dispatched');
 
@@ -19,7 +19,7 @@ describe('weft.tasks.get', () => {
 
   it('faults EngineFailure, not NotFound, when the ledger key exists but does not decode', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await storage.put(taskLedgerKey('corrupt-op'), encode({ invalid: true }));
 
     const result = await fixture.runGetTaskDetail(engine, 'corrupt-op');
@@ -34,7 +34,7 @@ describe('weft.tasks.get', () => {
     // under operation A's key (manual repair gone wrong, import, or
     // corruption). Must not silently hand back B's data for an A lookup.
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await storage.put(
       taskLedgerKey('op-a'),
       encodeRemoteTaskRecord(fixture.queuedFixture({ operationId: 'op-b' })),
@@ -49,7 +49,7 @@ describe('weft.tasks.get', () => {
 
   it('rejects an operationId larger than the ledger byte limit with InvalidParams, not a storage lookup', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     const oversized = 'x'.repeat(600);
 
     const result = await fixture.runGetTaskDetail(engine, oversized);
@@ -66,7 +66,7 @@ describe('weft.tasks.get', () => {
     // .strict() schema verbatim would EngineFailure an otherwise valid,
     // running task.
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(
       storage,
       fixture.queuedFixture({
@@ -104,7 +104,7 @@ describe('weft.tasks.get', () => {
 
   it('reports workflowExecutionToken when the task is workflow-bound', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(
       storage,
       fixture.queuedFixture({ workflowExecutionToken: 'exec-token-abc' }),
@@ -119,7 +119,7 @@ describe('weft.tasks.get', () => {
 
   it('reports a queued task with envelope fields, header keys only, and no header values', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.queuedFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-queued');
@@ -154,7 +154,7 @@ describe('weft.tasks.get', () => {
 
   it('reports the retained retry and routing envelope when configured', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(
       storage,
       fixture.queuedFixture({
@@ -191,7 +191,7 @@ describe('weft.tasks.get', () => {
 
   it('omits the retry and routing envelope fields entirely when not configured', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.leasedFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-leased');
@@ -207,7 +207,7 @@ describe('weft.tasks.get', () => {
 
   it('reports a leased task without attemptToken, workerSessionId, or executionIdentity', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.leasedFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-leased');
@@ -229,7 +229,7 @@ describe('weft.tasks.get', () => {
 
   it("reports a leased task's attemptDeadline when the record carries one (COR-220)", async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.leasedFixture({ attemptDeadline: 180_000 }));
 
     const result = await fixture.runGetTaskDetail(engine, 'op-leased');

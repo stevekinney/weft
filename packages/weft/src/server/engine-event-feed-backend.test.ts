@@ -100,7 +100,7 @@ async function collect(
 
 describe('createEngineEventFeedBackend — replay(events)', () => {
   it('yields persisted event log entries in ascending sequence order', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', { hello: 'world' }, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -127,7 +127,7 @@ describe('createEngineEventFeedBackend — replay(events)', () => {
   });
 
   it('skips entries at or below afterSequence', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', { hello: 'world' }, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -147,7 +147,7 @@ describe('createEngineEventFeedBackend — replay(events)', () => {
   });
 
   it('yields nothing for an unknown workflow id', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const backend = createEngineEventFeedBackend(engine);
     const envelopes: EventEnvelope[] = [];
     for await (const envelope of backend.replay({
@@ -163,14 +163,14 @@ describe('createEngineEventFeedBackend — replay(events)', () => {
 
 describe('createEngineEventFeedBackend — snapshotTailSequence(events)', () => {
   it('returns -1 for an unknown workflow', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const backend = createEngineEventFeedBackend(engine);
     const tail = await backend.snapshotTailSequence('never-started', 'events');
     expect(tail).toBe(-1);
   });
 
   it('returns the highest committed sequence for a running workflow', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', { hello: 'world' }, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -182,7 +182,7 @@ describe('createEngineEventFeedBackend — snapshotTailSequence(events)', () => 
   });
 
   it('throws for an unhandled selector value instead of silently falling through', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const backend = createEngineEventFeedBackend(engine);
 
     expect(() =>
@@ -197,7 +197,7 @@ describe('createEngineEventFeedBackend — snapshotTailSequence(events)', () => 
 
 describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
   it('delivers post-commit envelopes to registered listeners', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', { hello: 'world' }, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -223,7 +223,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
   });
 
   it('does not deliver events for other workflows to a per-workflow listener', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const a = await engine.start('hold', { id: 'a' }, {});
     const b = await engine.start('hold', { id: 'b' }, {});
     await waitForEventCount(engine, a.id, 1);
@@ -247,7 +247,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
   });
 
   it('stops delivering events after unsubscribe', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', {}, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -265,7 +265,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
   });
 
   it('isolates listener exceptions from the emitter', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', {}, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -294,7 +294,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
     // engine's notifier, the rejection escapes as a process-level
     // unhandled-rejection event. This test catches that regression
     // by registering a detector.
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', {}, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -331,7 +331,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
 
 describe('createEngineEventFeedBackend — atomic handoff through the feed', () => {
   it('yields every committed event exactly once, in order, across replay + live', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const handle = await engine.start('hold', {}, {});
     await waitForEventCount(engine, handle.id, 1);
 
@@ -419,7 +419,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
   }
 
   it('replays stored stream chunks keyed under "tokens"', async () => {
-    const engine = createTokenStreamerEngine(['hello', 'world']);
+    await using engine = createTokenStreamerEngine(['hello', 'world']);
     const handle = await engine.start('streamer', {}, {});
     await waitForStreamChunks(engine, handle.id, 2);
     const prefix = KEYS.streamChunkPrefix(handle.id, 'tokens');
@@ -444,7 +444,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
   });
 
   it('snapshotTailSequence returns the last stored chunk index', async () => {
-    const engine = createTokenStreamerEngine(['a', 'b', 'c']);
+    await using engine = createTokenStreamerEngine(['a', 'b', 'c']);
     const handle = await engine.start('streamer', {}, {});
     await waitForStreamChunks(engine, handle.id, 3);
     const prefix = KEYS.streamChunkPrefix(handle.id, 'tokens');
@@ -458,7 +458,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
   });
 
   it('skips chunks at or below afterSequence', async () => {
-    const engine = createTokenStreamerEngine(['zero', 'one', 'two']);
+    await using engine = createTokenStreamerEngine(['zero', 'one', 'two']);
     const handle = await engine.start('streamer', {}, {});
     await waitForStreamChunks(engine, handle.id, 3);
 
@@ -475,7 +475,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
   });
 
   it('snapshotTailSequence returns -1 when no chunks were written', async () => {
-    const engine = createEngineWithSignalWorkflow();
+    await using engine = createEngineWithSignalWorkflow();
     const backend = createEngineEventFeedBackend(engine);
     expect(await backend.snapshotTailSequence('nothing', 'tokens')).toBe(-1);
   });
@@ -514,7 +514,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
 
   it('delivers live stream chunks to listeners', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     registerGatedStreamerWorkflow(engine, 'gated-streamer', ['first', 'second']);
     const backend = createEngineEventFeedBackend(engine);
 
@@ -549,7 +549,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
 
   it('uses the token tail pointer for subscribe handoff without duplicating live chunks', async () => {
     const storage = new ScanCountingMemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     let releaseSecondChunk!: () => void;
     const secondChunkGate = new Promise<void>((resolve) => {
       releaseSecondChunk = resolve;
@@ -610,7 +610,7 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     // gated emission keep this deterministic — subscribe first,
     // unblock both, then assert.
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     registerGatedStreamerWorkflow(engine, 'streamer-a', ['first-a', 'second-a']);
     registerGatedStreamerWorkflow(engine, 'streamer-b', ['first-b', 'second-b']);
 

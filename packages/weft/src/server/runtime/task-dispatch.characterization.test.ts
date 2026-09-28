@@ -41,6 +41,11 @@ describe('dispatchTaskImpl', () => {
     for (const timer of context.pendingTimers) {
       clearTimeout(timer);
     }
+    // A long-poll fallback dispatch (enqueueTaskForLongPoll) arms a
+    // pending-task expiration timer (default TTL 5 minutes) on
+    // context.taskQueue; this bare fixture has no server shutdown path to
+    // clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('returns false for a duplicate operationId already in the task queue', async () => {
@@ -575,6 +580,11 @@ describe('scheduleDelayedDispatch', () => {
     for (const timer of context.pendingTimers) {
       clearTimeout(timer);
     }
+    // A long-poll fallback dispatch (enqueueTaskForLongPoll) arms a
+    // pending-task expiration timer (default TTL 5 minutes) on
+    // context.taskQueue; this bare fixture has no server shutdown path to
+    // clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('arms a tracked timer when the server is not stopping', () => {
@@ -675,6 +685,11 @@ describe('dispatchTaskImpl revision staleness (WFT-20)', () => {
     for (const timer of context.pendingTimers) {
       clearTimeout(timer);
     }
+    // A long-poll fallback dispatch (enqueueTaskForLongPoll) arms a
+    // pending-task expiration timer (default TTL 5 minutes) on
+    // context.taskQueue; this bare fixture has no server shutdown path to
+    // clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   function minimalWorkflowState(overrides: { id: string; revision?: string }): unknown {

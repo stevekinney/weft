@@ -906,6 +906,7 @@ describe('catalog.install() vs. a concurrent removeCatalogEntry() tombstone — 
     const removed = await removalPromise;
     expect(removed).toEqual({ removed: true });
     expect(await storage.get(tombstoneKey)).toBeNull();
+    engineA[Symbol.dispose]();
   });
 
   it("fork() itself fails closed even when its target revision's load-and-install step races a FULL removal+finalization cycle that begins and ends while the load is in flight (WFT-21, Codex review round 4, P1 — verified NOT reachable through fork()'s real commit path)", async () => {

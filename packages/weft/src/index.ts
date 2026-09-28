@@ -229,6 +229,7 @@ export type {
   TypedStorage,
 } from './storage/typed-storage.ts';
 export * from './storage/web-extension.ts';
+export * from './worker/index.ts';
 // The portable testing primitives, named rather than `export *`: the testing barrel also exports
 // the subprocess engine (`spawnServerSubprocess`, `withSubprocessServer`, `killAndReboot`), which
 // calls `Bun.spawn` and belongs under `@lostgradient/weft/testing` alone. Re-exporting the whole
@@ -248,6 +249,27 @@ export { TestEngine } from './testing/test-engine.ts';
 export type { RunNOptions, RunNResult } from './testing/test-engine.ts';
 export { TimeControl } from './testing/time-control.ts';
 export { VERSION } from './version.ts';
+export {
+  bindingFromExecution,
+  executionRequirementFromWorkflowWorkerBinding,
+  inheritWorkflowWorkerBinding,
+  selectWorkflowActivityBinding,
+} from './worker/binding-helpers.ts';
+export {
+  WORKER_DEPLOYMENT_ROUTING_PREFIX,
+  WORKER_DEPLOYMENT_VERSION_PREFIX,
+  WorkerDeploymentCatalog,
+  selectWorkerDeployment,
+} from './worker/deployment-routing.ts';
+export type {
+  DeploymentRoutingCandidate,
+  DeploymentSelection,
+  DeploymentSelectionFailure,
+  DeploymentSelectionResult,
+  WorkerDeploymentRouting,
+  WorkerDeploymentVersion,
+  WorkerDeploymentVersionState,
+} from './worker/deployment-routing.ts';
 export { HeartbeatManager } from './worker/heartbeat.ts';
 export { RemoteWorker } from './worker/index.ts';
 export { LongPollWorker } from './worker/long-poll.ts';
@@ -289,6 +311,26 @@ export type {
 export * from './worker/protocol.ts';
 export { WorkerRegistry } from './worker/registry.ts';
 export type { RoutingPolicy } from './worker/registry.ts';
+export {
+  consumeWorkflowWorkerStartOverridePreview,
+  issueWorkflowWorkerStartOverridePreview,
+  verifyWorkflowWorkerStartOverridePreview,
+} from './worker/start-override-preview.ts';
+export type { WorkerStartOverridePreview } from './worker/start-override-preview.ts';
+export {
+  DEFAULT_WORKFLOW_WORKER_VERSIONING_POLICY,
+  bindWorkflowWorkerAtStart,
+  evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint,
+  evaluateWorkflowWorkerUpgrade,
+  readWorkflowWorkerBinding,
+  recordWorkflowWorkerUpgrade,
+} from './worker/versioning-policy.ts';
+export type {
+  WorkerUpgradeBlockedReason,
+  WorkerUpgradeEvaluation,
+  WorkflowWorkerBinding,
+  WorkflowWorkerBindingRecord,
+} from './worker/versioning-policy.ts';
 export {
   WorkerProtocolIncompatibleError,
   workerProtocolIncompatibleMessage,

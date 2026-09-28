@@ -10,6 +10,7 @@ import { getEnginePayloadSizeMaxBytes } from '../core/engine/payload-size-policy
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
 import { resolveServerEnvironment } from '../runtime/environment-configuration.ts';
+import { WorkerDeploymentCatalog } from '../worker/deployment-routing.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import {
   buildTLSOptions,
@@ -45,6 +46,7 @@ import {
   scanExpiredTasks,
 } from './runtime/task-reconciliation.ts';
 import { DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW } from './runtime/websocket-stream.ts';
+import { endWorkerReconnectGracePeriods } from './runtime/worker-disconnect-requeue.ts';
 import { TaskQueue } from './task-queue.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
@@ -259,6 +261,7 @@ export function buildServerContext(
       ? { schedulingPolicy: options.schedulingPolicy }
       : undefined,
   );
+  const workerDeploymentCatalog = new WorkerDeploymentCatalog(options.engine.storage);
   // Registry-erase the widened `ServeOptions.engine` back to the plain
   // default `Engine` these internal helpers expect — see the field's JSDoc /
   // #708. Every helper below only exercises registry-erased `Engine`
@@ -286,6 +289,7 @@ export function buildServerContext(
 
   const context: ServerContext = {
     registry: workerRegistry,
+    longPollWorkerSessions: new Map(),
     taskQueue,
     workerSockets: new Map(),
     streamSockets: new Map(),
@@ -302,6 +306,11 @@ export function buildServerContext(
       workerRegistry,
       taskQueue,
       metricsCollector: serverMetricsCollector,
+      workerDeploymentCatalog,
+      storage: options.engine.storage,
+      ...(options.workerStartOverrideSigningSecret === undefined
+        ? {}
+        : { workerStartOverrideSigningSecret: options.workerStartOverrideSigningSecret }),
       ...(options.operations === undefined ? {} : { additionalOperations: options.operations }),
     }),
     liveRestBindings: createLiveRestBindings(),
@@ -330,6 +339,7 @@ export function buildServerContext(
     scanRunning: false,
     processingOperations: new Set(),
     reconciliationRunning: false,
+    longPollDrains: new Map(),
     taskLedgerRecovery: { ready: taskLedgerRecoveryReady },
     stopping: false,
   };
@@ -492,12 +502,10 @@ export function registerStackDisposers(
       clearTimeout(timer);
     }
     context.pendingTimers.clear();
-    // Clear any pending worker-reconnect grace timers so they cannot fire
-    // against a torn-down registry/storage.
-    for (const timer of context.pendingWorkerRequeues.values()) {
-      clearTimeout(timer);
-    }
-    context.pendingWorkerRequeues.clear();
+    // End any pending worker-reconnect grace windows so their timers cannot
+    // fire against a torn-down registry/storage, and so `shutdownAllWorkers`
+    // below does not wait on a socket that already closed.
+    endWorkerReconnectGracePeriods(context, options, onOperationCleanup);
     // Tear down the task queue: clears expiration timers and settles any parked
     // long-poll waiters with null so no timer fires and no poll promise leaks
     // against a stopped server.

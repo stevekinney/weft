@@ -1,4 +1,3 @@
-import { afterEach } from 'bun:test';
 import { z } from 'zod';
 
 import { Engine } from '../../core/engine.ts';
@@ -72,11 +71,18 @@ export const catalogUnknownKeyPolicy = {
 
 const engines: Engine[] = [];
 
-afterEach(() => {
+/**
+ * Dispose every engine {@link createEngine} has created. Each test file that
+ * creates engines registers this in its own `afterEach`: a hook registered
+ * here, at module scope, would attach only to whichever test file first
+ * imports this module in a shared `bun test` process, leaving every later
+ * importer's engines undisposed (COR-1342).
+ */
+export function disposeCreatedEngines(): void {
   while (engines.length > 0) {
     engines.pop()?.[Symbol.dispose]();
   }
-});
+}
 
 export function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });

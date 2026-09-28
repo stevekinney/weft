@@ -1,6 +1,15 @@
 export {
   WorkflowCatalogConflictError,
+  WorkflowRefreshCoordinator,
   WorkflowRevisionNotInstalledError,
+  type WorkflowCatalogActivationMode,
+  type WorkflowRefreshArtifact,
+  type WorkflowRefreshCoordinatorOptions,
+  type WorkflowRefreshDiagnostics,
+  type WorkflowRefreshOptions,
+  type WorkflowRefreshResponse,
+  type WorkflowRefreshResult,
+  type WorkflowRefreshSource,
 } from './catalog/index.ts';
 export type {
   WorkflowCatalogActivationResult,

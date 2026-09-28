@@ -26,7 +26,7 @@ import { createGetTaskDiagnosticsOperation } from './get-task-diagnostics.ts';
 describe('weft.tasks.diagnostics filters', () => {
   it('reports only unadopted terminal tasks at or beyond the configured age', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     const registry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
@@ -73,7 +73,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
   it('combines record filters with AND and counts new kinds before truncation', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     const registry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
@@ -143,7 +143,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
   it('excludes malformed ledger rows from items and summary', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     await storage.put(taskLedgerKey('malformed'), encode({ state: 'queued' }));
 
     const result = await runDiagnostics({
@@ -162,7 +162,7 @@ describe('weft.tasks.diagnostics filters', () => {
   });
 
   it('propagates storage scan failures through the existing server fault path', async () => {
-    const engine = createEngine(new ThrowingScanStorage());
+    await using engine = createEngine(new ThrowingScanStorage());
 
     const result = await runDiagnostics({
       engine,
@@ -177,7 +177,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
   it('bounds diagnostic result items while retaining summary counts', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     const registry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
@@ -210,7 +210,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
   it('requires system read scope', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     const operation = createGetTaskDiagnosticsOperation({
       registry: new WorkerRegistry(),
       taskQueue: new TaskQueue(),
@@ -236,7 +236,7 @@ describe('weft.tasks.diagnostics filters', () => {
   describe('execution-identity filters (COR-198)', () => {
     it('filters stale-inflight diagnostics by buildId, sourced from the attempt record rather than the ledger', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -267,7 +267,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it('combines deploymentName, artifactDigest, and workflowRevision filters with AND', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -315,7 +315,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it('rejects on a mismatching deploymentName or artifactDigest, independent of any other field matching', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -368,7 +368,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it("filters by workerId against the attempt's executionIdentity.workerId, not the ledger's workerSessionId", async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -409,7 +409,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it('excludes a task with no attempt record from every identity filter, rather than treating it as a wildcard match', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -435,7 +435,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it('leaves every other diagnostic kind unaffected when no identity filter is set', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -459,7 +459,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it('excludes a queued record from every identity filter — no attempt has claimed it yet', async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 
@@ -482,7 +482,7 @@ describe('weft.tasks.diagnostics filters', () => {
 
     it("matches a resolved terminal record's identity filter via its retained attempt record", async () => {
       const storage = new MemoryStorage();
-      const engine = createEngine(storage);
+      await using engine = createEngine(storage);
       const registry = new WorkerRegistry();
       const taskQueue = new TaskQueue();
 

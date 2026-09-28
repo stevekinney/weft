@@ -63,6 +63,8 @@ The task ledger's `RemoteTaskRecord` holds exactly one CURRENT state per `operat
 `server.getTaskResult()` (above) omits attempt history entirely—it is a public, session-free projection. Read attempt history through the `weft.tasks.get` operation (`GET /api/v1/tasks/detail/:operationId`) instead, whose response includes an `attempts` array, oldest first:
 
 ```ts
+import type { WorkerExecutionIdentity, WorkerExecutionRequirement } from '@lostgradient/weft';
+
 type TaskAttempt = {
   attempt: number;
   attemptTokenDigest: string; // sha256Hex(attemptToken)—never the raw token
@@ -81,7 +83,7 @@ Keep `executionRequirement` and `executionIdentity` distinct, the same distincti
 
 **Reading a cross-build retry.** Because `attempts` is ordered oldest first, comparing consecutive entries' `executionIdentity.buildId` (or `.artifactDigest`) tells you whether a retry moved to a different build:
 
-```ts
+```ts partial
 const attempts = taskDetail.attempts;
 for (let i = 1; i < attempts.length; i++) {
   const previous = attempts[i - 1]?.executionIdentity;

@@ -6,8 +6,8 @@ type __WeftSchema_37338c5048389ed2 = { "name": string; };
 
 declare module '@lostgradient/weft' {
   interface WorkflowRegistry {
-    "farewell": { input: __WeftSchema_37338c5048389ed2; output: { "message": string; }; revision: "sha256:c97ef278988bff8fab840890dd2d565a74590b16a50db9576b5cb195bb44d95a"; workflowVersion: "0.0.0" };
-    "welcome": { input: __WeftSchema_37338c5048389ed2; output: { "greeting": string; }; revision: "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924"; workflowVersion: "0.0.0" };
+    "farewell": { input: __WeftSchema_37338c5048389ed2; output: { "message": string; }; revision: "sha256:c97ef278988bff8fab840890dd2d565a74590b16a50db9576b5cb195bb44d95a"; workflowVersion: "0.0.0"; contractHash: "sha256:d8c6ef410fb88c2dc258e4876d449bb1d56689c9ce671c533466f759a2074e82" };
+    "welcome": { input: __WeftSchema_37338c5048389ed2; output: { "greeting": string; }; revision: "sha256:459490e35ec0c6cab26b944ac5d023f0d3a581f3ab8229cd2ac3b500f779f924"; workflowVersion: "0.0.0"; contractHash: "sha256:bde06376052a19f389af708478bff226f1615601f1982416bd0533768b607edc" };
   }
 }
 

@@ -6,6 +6,7 @@ import {
   resumeWorkflowFromStorage as resumeWorkflowFromStorageFromLifecycle,
   type LifecycleCallbacks,
 } from './lifecycle.ts';
+import { notifySignalWaitReadyForTesting } from './signals.ts';
 import {
   recordDurableInlineOperation,
   rejectSleepTimerAcknowledgements,
@@ -92,6 +93,8 @@ export async function parkInlineWorkflowAfterCheckpoint(
   if (!publishedParkedMarker) {
     return false;
   }
+  notifySignalWaitReadyForTesting(internals, workflowId);
+  notifyWorkflowParkedForTesting(internals, workflowId);
 
   // Close the race where a signal arrives after the pre-park scan above but
   // before the workflow becomes visibly parked. Once the parked marker is
@@ -102,6 +105,18 @@ export async function parkInlineWorkflowAfterCheckpoint(
   }
 
   return true;
+}
+
+/**
+ * Wake every test waiting on `ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING`
+ * for `workflowId`, once the workflow's park marker is published.
+ */
+function notifyWorkflowParkedForTesting(internals: EngineInternals, workflowId: string): void {
+  const readinessWaiters = internals.parkedWorkflowReadyWaitersForTesting?.get(workflowId);
+  if (readinessWaiters !== undefined) {
+    internals.parkedWorkflowReadyWaitersForTesting?.delete(workflowId);
+    for (const notifyReady of readinessWaiters) notifyReady();
+  }
 }
 
 export async function resumeParkedInlineWorkflow(

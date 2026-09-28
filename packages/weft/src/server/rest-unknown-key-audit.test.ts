@@ -252,7 +252,7 @@ function auditHandlerOptions(path: string) {
 describe('REST unknown-key disposition baseline audit', () => {
   for (const testCase of AUDIT_CASES) {
     it(`${testCase.name} — extra top-level key does not change status`, async () => {
-      const baselineEngine = createEngineForAudit();
+      await using baselineEngine = createEngineForAudit();
       const baselinePath =
         typeof testCase.path === 'string' ? testCase.path : await testCase.path(baselineEngine);
       const baselineResponse = await handleRequest(
@@ -264,7 +264,7 @@ describe('REST unknown-key disposition baseline audit', () => {
 
       // Independent engine for the extra-key probe to avoid cross-
       // contamination from the baseline call.
-      const auditEngine = createEngineForAudit();
+      await using auditEngine = createEngineForAudit();
       const auditPath =
         typeof testCase.path === 'string' ? testCase.path : await testCase.path(auditEngine);
 

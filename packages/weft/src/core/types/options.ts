@@ -1,5 +1,6 @@
 import type { AlertingOptions } from '../../alerting/types.ts';
 import type { Storage as WeftStorage } from '../../storage/interface.ts';
+import type { WorkerStartOverridePreview } from '../../worker/start-override-preview.ts';
 import type { CompressionOptions } from '../compression.ts';
 import type { Interceptor } from '../interceptor.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
@@ -74,6 +75,8 @@ export interface StartOptions<TServices = unknown> {
   startAfter?: Duration;
   tags?: string[];
   searchAttributes?: Record<string, SearchAttributeValue>;
+  workerStartOverridePreview?: WorkerStartOverridePreview;
+  workerStartOverrideSigningSecret?: string;
   /**
    * Host-supplied, per-run capabilities exposed to the workflow body as
    * `ctx.services` (live clients, closures, tool registries). The value is
@@ -239,21 +242,14 @@ export interface ForkOptions {
  *
  * @example
  * ```ts
- * import { Engine, type EngineOptions } from '@lostgradient/weft';
- *
- * const options: EngineOptions = {
- *   development: true,
- *   retention: { completed: '7d', failed: '30d' },
- *   checkpointSizeWarningThreshold: 128_000,
- * };
- *
- * const engine = new Engine(options);
- * void engine;
+ * import { Engine } from '@lostgradient/weft';
+ * const engine = new Engine({ development: true });
  * ```
  */
 export interface EngineOptions<TServices = unknown> {
   storage?: WeftStorage;
   development?: boolean;
+  workerStartOverrideSigningSecret?: string;
   /**
    * Select how engine-owned periodic work is driven. The default `'automatic'`
    * profile starts in-process intervals for update-response cleanup, configured

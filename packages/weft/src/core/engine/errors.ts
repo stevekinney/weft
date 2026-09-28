@@ -219,6 +219,9 @@ export class EngineCreateNameMismatchError extends WeftError<'EngineCreateNameMi
  * disposed while the workflow is still in flight. Disposing the engine tears
  * down the machinery that would eventually resolve the result, so awaiting
  * callers receive this rejection instead of a promise that never settles.
+ * Also thrown by work that reaches a write after the engine was disposed, such
+ * as a purge (`purge()`, `deleteAll()`) or a bulk operation's audit record:
+ * a disposed engine issues no new writes.
  *
  * @example
  * ```ts

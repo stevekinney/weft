@@ -40,6 +40,7 @@ import type {
   RemoteTaskTerminalRetryExhausted,
   WorkerExecutionRequirementInput,
 } from './task-ledger-types.ts';
+import { isValidWorkflowWorkerBinding } from './task-ledger-worker-binding-codec.ts';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -240,6 +241,7 @@ function isValidTaskPayloadFields(value: Record<string, unknown>): boolean {
     isJSONValue(value['input']) &&
     isValidTaskHeaders(value['headers']) &&
     isValidTaskRoutingFields(value) &&
+    isValidWorkflowWorkerBinding(value['workflowWorkerBinding']) &&
     isFiniteNumber(value['visibilityTimeoutMilliseconds']) &&
     isValidRetryPolicy(value['retryPolicy']) &&
     isOptionalFiniteNumber(value['scheduleToCloseDeadline']) &&

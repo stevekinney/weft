@@ -68,7 +68,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
   it('reports backlog, oldest queued age, in-flight, waiting pollers, and idle-worker queues', async () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     // queue-a: has backlog + a connected worker carrying one in-flight task.
     workerRegistry.register({
@@ -168,7 +168,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
   it('rejects unauthenticated callers with 401', async () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await assertOperationRejectsUnauthenticated({
       operationName: 'weft.task.queues.list',
@@ -180,7 +180,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
   it('rejects callers without system:read with 403', async () => {
     engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await assertOperationRejectsInsufficientScope({
       operationName: 'weft.task.queues.list',
@@ -193,7 +193,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
 describe('weft.task.queues.list — operation behavior', () => {
   it('invokes the clock exactly once per request', async () => {
     const workerRegistry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
     taskQueue.enqueue('alpha', pinnedTask('a1', 'work', 100));
     taskQueue.enqueue('alpha', pinnedTask('a2', 'work', 50));
     taskQueue.enqueue('beta', pinnedTask('b1', 'work', 200));
@@ -263,6 +263,7 @@ describe('mergeQueueHealth', () => {
         {
           id: 'w1',
           queue: 'orders',
+          transport: 'websocket' as const,
           activities: ['charge'],
           concurrency: 5,
           inFlight: 2,
@@ -277,6 +278,7 @@ describe('mergeQueueHealth', () => {
         {
           id: 'w2',
           queue: 'orders',
+          transport: 'websocket' as const,
           activities: ['charge'],
           concurrency: 4,
           inFlight: 1,
@@ -321,6 +323,7 @@ describe('mergeQueueHealth', () => {
         {
           id: 'w1',
           queue: 'idle',
+          transport: 'websocket' as const,
           activities: ['x'],
           concurrency: 1,
           inFlight: 0,

@@ -29,6 +29,7 @@ import {
   CodegenPackageNameError,
   emitRegistryDeclaration,
 } from './codegen-emit-registry.ts';
+import { emitWorkerImplementationModule } from './codegen-emit-worker.ts';
 import { validateRegistrySnapshot } from './codegen-validate.ts';
 import type { CommandOutput } from './types.ts';
 
@@ -51,6 +52,7 @@ export type CodegenOptions = {
   from?: string;
   token?: string;
   out: string;
+  target?: 'registry' | 'worker';
   timeoutMs: number;
   /** When true, emit a single JSON object on stdout for machine consumers. */
   json?: boolean;
@@ -72,7 +74,10 @@ export async function executeCodegen(options: CodegenOptions): Promise<CommandOu
   const { workflows, activities } = validation.value;
   let content: string;
   try {
-    content = emitRegistryDeclaration(workflows, codegenPackageName);
+    content =
+      options.target === 'worker'
+        ? emitWorkerImplementationModule(workflows, codegenPackageName)
+        : emitRegistryDeclaration(workflows, codegenPackageName);
   } catch (error) {
     if (error instanceof CodegenEmitError || error instanceof CodegenPackageNameError) {
       return formatFailure(`codegen: ${error.message}`, options);

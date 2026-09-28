@@ -15,6 +15,7 @@ import type {
   RegisterErrorMessage,
   RemoteWorkerJsonValue,
 } from './protocol-messages.ts';
+import { isStrictWorkerJsonValue } from './strict-json.ts';
 
 /**
  * Protocol parse failure with a machine-readable code.
@@ -67,24 +68,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  * ```
  */
 export function isRemoteWorkerJsonValue(value: unknown): value is RemoteWorkerJsonValue {
-  if (
-    value === null ||
-    typeof value === 'string' ||
-    typeof value === 'boolean' ||
-    (typeof value === 'number' && Number.isFinite(value))
-  ) {
-    return true;
-  }
-
-  if (Array.isArray(value)) {
-    return value.every(isRemoteWorkerJsonValue);
-  }
-
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return Object.values(value).every(isRemoteWorkerJsonValue);
+  return isStrictWorkerJsonValue(value);
 }
 
 export function isNonEmptyString(value: unknown): value is string {

@@ -505,24 +505,52 @@ The reconnect check dispatches one `conformance.sleep` task with `holdForReassig
 
 ## HTTP long-poll transport
 
-`LongPollWorker` uses the same task queue and activity execution model over plain HTTP. It does not use the WebSocket `register` frame. Each poll request advertises the activities it can execute, the server claims one matching task if available, and the worker posts the result to a queue-scoped result endpoint.
+`LongPollWorker` uses the same canonical worker manifest, queue identity, activity execution model, attempt fencing, and durable result acknowledgement as the WebSocket transport over plain HTTP. It does not use the WebSocket `register` frame. Instead, a worker explicitly registers a session, polls that accepted session for work, sends session heartbeats and activity heartbeats, posts results for durable acknowledgement, and unregisters the session on graceful stop. The opaque `sessionId` is a routing handle only; authentication still comes from the configured worker principal and must include `workers:write` when server authentication is enabled. Registration also returns a server-issued `sessionToken`; every continuation request must present it in the `Weft-Worker-Session-Token` header so leaking a session id alone cannot drive another worker's session.
 
-### Poll request
+### Register session
 
 ```text
-GET /api/v1/tasks/:queue?activity=<activity-name>&timeout=<milliseconds>
+POST /api/v1/worker-sessions
+Content-Type: application/json
 ```
 
-`:queue` must consist only of word characters and hyphens (`[\w-]+`). Repeat the `activity` query parameter once per activity name the worker can execute. At least one `activity` value is required. `timeout` is optional; it defaults to `30000` milliseconds and is clamped to a maximum of `60000` milliseconds.
+```json
+{
+  "manifest": { "manifestVersion": 1, "protocolVersion": 8, "workflows": {} },
+  "queue": "gpu",
+  "concurrency": 5,
+  "startedAt": 1778608010000
+}
+```
 
-With authentication configured, the caller must authenticate with a principal that has the `workers:write` scope.
+The `manifest` body is the same strict worker manifest the WebSocket transport sends in its `register` frame. The server validates it before accepting the session, derives the advertised activity set from the manifest, records the queue from this registration as authoritative, and exposes the worker in worker and deployment summaries with `transport: "long-poll"`.
 
-| Response | Meaning                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------ |
-| `200`    | A task was claimed and the response body is the task JSON.                                       |
-| `204`    | No matching task became available before the timeout, or the client disconnected before a claim. |
-| `400`    | No `activity` query parameter was supplied.                                                      |
-| `403`    | Authentication was present but did not include `workers:write`.                                  |
+| Response | Meaning                                                                                                                                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`    | Session accepted. Body includes `{ "ok": true, "sessionId": "...", "sessionToken": "...", "workerId": "...", "queue": "...", "acceptedManifestDigest": "...", "protocolVersion": 8 }`. |
+| `400`    | Invalid JSON, malformed manifest, unsupported protocol version, invalid queue, or invalid concurrency.                                                                                 |
+| `403`    | Authentication was present but did not include `workers:write`.                                                                                                                        |
+| `409`    | The manifest conflicts with an existing deployment identity.                                                                                                                           |
+
+Readiness is false until this registration succeeds. A worker that cannot register retries registration; it does not poll anonymously and a session id never replaces authentication. The session token is returned only in this registration response and is not exposed by diagnostics.
+
+### Poll session
+
+```text
+GET /api/v1/worker-sessions/:sessionId/tasks?timeout=<milliseconds>
+Weft-Worker-Session-Token: <sessionToken>
+```
+
+`timeout` is optional; it defaults to `30000` milliseconds and is clamped to a maximum of `60000` milliseconds. Activity matching comes from the accepted manifest, not from query parameters.
+
+| Response | Meaning                                                                                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`    | A task was claimed and the response body is the task JSON.                                                                             |
+| `204`    | No matching task became available before the timeout, or the client disconnected before a claim.                                       |
+| `403`    | Authentication failed for `workers:write`, the session token did not match, or the authenticated principal no longer owns the session. |
+| `404`    | The session is unknown or already unregistered.                                                                                        |
+| `409`    | The session generation is stale, or the session is draining and cannot accept new tasks.                                               |
+| `410`    | The session lease expired before the poll.                                                                                             |
 
 Task response body:
 
@@ -533,7 +561,7 @@ Task response body:
   "input": { "orderId": "order-42" },
   "attempt": 1,
   "headers": { "traceparent": "00-..." },
-  "workerId": "longpoll-a1b2c3d4",
+  "workerId": "session-id",
   "workflowExecutionToken": "workflow-run-token",
   "workflowRevision": "sha256:9f2c…",
   "attemptToken": "per-claim-token",
@@ -542,131 +570,79 @@ Task response body:
 }
 ```
 
-| Field                    | Type                     | Description                                                                                                                                                                                                        |
-| ------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `operationId`            | string                   | Opaque task identifier to echo in the result and heartbeat requests.                                                                                                                                               |
-| `activityName`           | string                   | Activity name selected from the advertised `activity` values.                                                                                                                                                      |
-| `input`                  | JSON value               | Activity input.                                                                                                                                                                                                    |
-| `attempt`                | number                   | Retry attempt number. Present on retried dispatches.                                                                                                                                                               |
-| `headers`                | `Record<string, string>` | Interceptor-propagated headers when present.                                                                                                                                                                       |
-| `workerId`               | string                   | Synthetic worker id for this HTTP claim. Echo it in the result and heartbeat requests.                                                                                                                             |
-| `workflowExecutionToken` | string                   | Durable per-run token exposed to the activity context for external writes.                                                                                                                                         |
-| `workflowRevision`       | string                   | The dispatching workflow run's persisted revision (WFT-20), when the dispatch carried one. Echo it back UNCHANGED in the result request—see below.                                                                 |
-| `attemptToken`           | string                   | Per-claim token for stale-attempt rejection. Echo it in the result and heartbeat requests.                                                                                                                         |
-| `visibilityTimeout`      | number                   | The heartbeat-renewable visibility window in milliseconds, when the dispatch carried one. Governs how often `LongPollWorker` should heartbeat (COR-230, acceptance criterion 5) — see the heartbeat request below. |
-| `lastHeartbeatDetails`   | any JSON value           | A PRIOR attempt's recorded heartbeat details (COR-226), when one exists — surfaced to the activity as `context.lastHeartbeatDetails`. Absent when no prior attempt ever heartbeated with details.                  |
+`operationId`, `workerId`, `attemptToken`, and `workflowRevision` form the fenced completion identity. Echo them unchanged in result and activity-heartbeat requests. Unknown operations, queued operations, wrong-session completions, stale attempt tokens, and revision mismatches are explicit non-success dispositions instead of being coerced into activity failures.
 
-### Result request
+### Result acknowledgement
 
 ```text
-POST /api/v1/tasks/:queue/result
+POST /api/v1/worker-sessions/:sessionId/results
 Content-Type: application/json
+Weft-Worker-Session-Token: <sessionToken>
 ```
-
-Success body:
 
 ```json
 {
   "operationId": "activity-operation-id",
-  "workerId": "longpoll-a1b2c3d4",
+  "workerId": "session-id",
   "attemptToken": "per-claim-token",
   "status": "completed",
   "value": null
 }
 ```
 
-Failure body:
+`status` is one of `"completed"`, `"failed"`, or `"cancelled"`. Completed results carry `value`; failed and cancelled results carry `error`; cancelled results may also carry `cancelled: true`. A successful HTTP send is not itself durable acknowledgement. The worker retains the result until the server returns an acknowledgement disposition.
 
-```json
-{
-  "operationId": "activity-operation-id",
-  "workerId": "longpoll-a1b2c3d4",
-  "attemptToken": "per-claim-token",
-  "status": "failed",
-  "error": "Activity failed"
-}
-```
+| Response | Meaning                                                                                                                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`    | Result durably resolved. Body is `{ "ok": true, "disposition": "applied" \| "duplicate" \| "dead-lettered" }`.                                                                                                                              |
+| `400`    | Invalid JSON, missing required fields, unsupported status, malformed attempt token, or malformed result payload.                                                                                                                            |
+| `403`    | Session authorization failed, or a correlated permanent rejection such as `"unknown-operation"`, `"stale-attempt"`, `"worker-mismatch"`, `"attempt-token-mismatch"`, `"queue-mismatch"`, `"revision-mismatch"`, or `"conflicting-content"`. |
+| `409`    | The session generation is stale.                                                                                                                                                                                                            |
+| `410`    | The session lease expired before the result was accepted.                                                                                                                                                                                   |
+| `413`    | The result body or serialized activity result exceeds `maxRequestBodyBytes` or `payloadSize.maxBytes`.                                                                                                                                      |
 
-Cancellation body (COR-230, acceptance criterion 13) — a worker's cooperative response after its heartbeat learned of a server-initiated cancellation (see the heartbeat request below):
+A result transport failure never turns a completed activity into a failed activity. `LongPollWorker` keeps the already-produced result in its `LongPollResultDelivery` buffer, retries it with the same `(operationId, attemptToken)` identity, and only drops it on an acknowledged disposition or a correlated permanent rejection.
 
-```json
-{
-  "operationId": "activity-operation-id",
-  "workerId": "longpoll-a1b2c3d4",
-  "attemptToken": "per-claim-token",
-  "status": "cancelled",
-  "cancelled": true,
-  "error": "Task cancelled"
-}
-```
+### Heartbeat and control
 
-| Field              | Type                                     | Required                    | Description                                                                                                                                           |
-| ------------------ | ---------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operationId`      | string                                   | Yes                         | Opaque task identifier from the poll response.                                                                                                        |
-| `workerId`         | string                                   | Yes for claimed tasks       | Synthetic worker id from the poll response.                                                                                                           |
-| `attemptToken`     | non-empty string                         | Yes                         | Per-claim token from the poll response.                                                                                                               |
-| `workflowRevision` | non-empty string                         | See below                   | Echo of the poll response's `workflowRevision`, when present—required whenever the stored ledger record has one; see below.                           |
-| `status`           | `"completed" \| "failed" \| "cancelled"` | Yes                         | Terminal activity result status. `"cancelled"` resolves through the ledger's distinct cancellation disposition, never as a generic failure (COR-230). |
-| `value`            | JSON value                               | Yes if `completed`          | Activity result. Use `null` when the activity has no value.                                                                                           |
-| `error`            | string                                   | Yes if `failed`/`cancelled` | Human-readable failure or cancellation message.                                                                                                       |
-| `cancelled`        | `true`                                   | No                          | Optional marker for a cancelled result, mirroring the WebSocket transport's `taskResult.cancelled`. If present, it must be `true`.                    |
-
-| Response | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `200`    | Result accepted. Body is `{ "ok": true, "disposition": "applied" \| "duplicate" \| "dead-lettered" }` (COR-240, v4) — see `taskResultAck`'s disposition table above; the same three outcomes apply here, since both transports commit through the same durable-ledger implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `400`    | Invalid JSON, missing required fields, unsupported status, or malformed `attemptToken`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `403`    | The echoed `workerId`, `attemptToken`, or `workflowRevision` does not match the current in-flight record, or the URL's `:queue` segment does not match the record's actual queue, or the ledger will never apply this exact submission (conflicting content resubmitted under one attempt token, or a queued/newer attempt already in progress). Body is `{ "error": "Forbidden", "operationId": "<string>", "attemptToken": "<string>", "reason": "<string>" }`, echoing the rejected submission's identity (mirrors the WebSocket transport's correlated `protocolError`, protocol v7, in semantics — like `RemoteWorker#handleProtocolError`, `LongPollWorker`'s own result-delivery buffer (`LongPollResultDelivery`, backed by the same `TaskResultOutbox` abstraction `RemoteWorker` uses) drops the buffered entry keyed on `operationId`/`attemptToken` correlation alone; `reason` is surfaced for diagnostics and logging only, and does not itself decide the drop-versus-retry branch). `reason` is one of (COR-237): `"unknown-operation"` (no ledger record has ever existed for this `operationId`), `"stale-attempt"` (a record exists but is not the current attempt — e.g. still `queued`), `"worker-mismatch"`, `"attempt-token-mismatch"`, `"queue-mismatch"`, `"revision-mismatch"`, or `"conflicting-content"` (a resubmission under the same attempt token with different content than what the ledger already recorded). |
-| `413`    | The result body or serialized activity result exceeds `maxRequestBodyBytes` or `payloadSize.maxBytes`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-
-**Revision staleness is STRICT for long-poll (WFT-20)**, unlike the WebSocket transport's additive policy above: when the stored ledger record for this task carries a `workflowRevision`, the result request must echo it back EXACTLY—a missing echo is rejected the same as a mismatched one. Long-poll has no live in-flight registry entry to fall back on the way the WebSocket transport does, so once ANY `TaskDispatch` caller starts supplying `workflowRevision` for a given operation, every worker completing it must echo the value back or receive `403`.
-
-Long-poll authorization is strict. A claimed task records the synthetic `workerId` and a fresh `attemptToken`; the completion must echo both while that record is still current. If the worker misses the visibility window and the task is reclaimed, a late result from the old claim is rejected instead of mutating the workflow.
-
-### Heartbeat request (COR-230)
-
-`LongPollWorker` sends one of these per in-flight activity, on the same interval `HeartbeatManager` uses for the WebSocket transport by default (`heartbeatIntervalMs`, 10 seconds), for as long as that activity has not yet reported a result, plus on demand whenever the activity calls `context.heartbeat(details)`. It is the long-poll counterpart to the WebSocket transport's `activityHeartbeat` message — same shared server-side authorization and renewal (`authorizeTaskResultForCurrentAttempt` / `renewAttemptLease`), same three clocks, same absolute-deadline cap (acceptance criterion 5: "long-running WebSocket and long-poll activities renew the same attempt-fenced lease contract").
+Session heartbeat and activity heartbeat are separate from each other and from the activity's absolute deadline. Session heartbeat keeps the accepted worker registration live; activity heartbeat renews only one in-flight attempt's visibility lease; an absolute activity deadline still caps execution.
 
 ```text
-POST /api/v1/tasks/:queue/heartbeat
+POST /api/v1/worker-sessions/:sessionId/heartbeat
 Content-Type: application/json
+Weft-Worker-Session-Token: <sessionToken>
 ```
+
+An empty body is a session heartbeat. A body with `operationId` and `attemptToken` is an activity heartbeat and may include `details`.
 
 ```json
 {
   "operationId": "activity-operation-id",
-  "workerId": "longpoll-a1b2c3d4",
+  "workerId": "session-id",
   "attemptToken": "per-claim-token",
   "details": { "done": 3 }
 }
 ```
 
-| Field          | Type             | Required     | Description                                                                                                                                                                                                                                                    |
-| -------------- | ---------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operationId`  | string           | Yes          | Opaque task identifier from the poll response.                                                                                                                                                                                                                 |
-| `workerId`     | string           | No           | Synthetic worker id from the poll response.                                                                                                                                                                                                                    |
-| `attemptToken` | non-empty string | Yes          | Per-claim token from the poll response — the worker's `AbortController` lookup is keyed by `(operationId, attemptToken)`, matching the WebSocket transport's `cancel` fencing (acceptance criterion 11).                                                       |
-| `details`      | any JSON value   | No (COR-226) | Progress details from the activity's own `context.heartbeat(details)` call. Omitted entirely (never sent as `null`) on an automatic interval tick with no pending on-demand call. Validated against the same `payloadSize.maxBytes` limit a result value gets. |
+| Response | Meaning                                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `200`    | Heartbeat accepted. Activity heartbeat responses include `cancelled`, optional `reason`, and optional `leaseDeadline`. |
+| `400`    | Invalid JSON or malformed heartbeat fields.                                                                            |
+| `403`    | Session authorization failed or the attempt identity is fenced out.                                                    |
+| `404`    | Session is unknown.                                                                                                    |
+| `409`    | The session generation is stale.                                                                                       |
+| `410`    | The session lease expired before the heartbeat.                                                                        |
+| `413`    | `details` exceeds `payloadSize.maxBytes`.                                                                              |
 
-Response body:
+Long-poll has no server-to-worker push channel, so cancellation is returned on the activity heartbeat response. `LongPollWorker` aborts the matching `AbortController`, keyed by `(operationId, attemptToken)`, and reports `status: "cancelled"` on the next result for that same attempt.
 
-```json
-{ "ok": true, "cancelled": false, "leaseDeadline": 1778608010000 }
+### Unregister session
+
+```text
+DELETE /api/v1/worker-sessions/:sessionId
+Weft-Worker-Session-Token: <sessionToken>
 ```
 
-| Field           | Type    | Description                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`            | boolean | Always `true` for a `200` response.                                                                                                                                                                                                                                                                                                                                                    |
-| `cancelled`     | boolean | `true` when the server has recorded cancellation intent for this attempt (a `cancelling` ledger record) — long-poll has no server-to-worker push channel, so this is how the cancellation signal reaches the worker. `LongPollWorker` aborts the matching `AbortController` when it sees `true`, and the activity's subsequent result should report `status: "cancelled"` (see above). |
-| `reason`        | string  | Present only alongside `cancelled: true` (COR-223) — the durably recorded `cancellationReason`. `LongPollWorker` sets this as the aborted `AbortSignal`'s `reason` and reports it on the resulting result's `error` field, in place of the generic literal `"Task cancelled"`.                                                                                                         |
-| `leaseDeadline` | number  | Present only when the attempt was actually renewed (`cancelled: false` and the record was still `leased`) — the new absolute visibility deadline, epoch milliseconds.                                                                                                                                                                                                                  |
-
-| Response | Meaning                                                                                                                                                                                                                                       |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `200`    | Heartbeat accepted — see the body fields above for whether the lease was renewed or cancellation was signaled. Also returned, as an idempotent no-op, for a heartbeat that arrives after the attempt has already resolved.                    |
-| `400`    | Invalid JSON or a missing/empty `operationId`/`attemptToken`.                                                                                                                                                                                 |
-| `403`    | The echoed `workerId` or `attemptToken` does not match the current attempt, or the URL's `:queue` segment does not match the record's actual queue — the same fencing `taskResult` and the WebSocket transport's `activityHeartbeat` enforce. |
-| `413`    | `details` exceeds `payloadSize.maxBytes` (COR-226).                                                                                                                                                                                           |
-
-A missed or failed heartbeat is not itself an error: `LongPollWorker` simply retries on the next interval tick, exactly as a dropped WebSocket `activityHeartbeat` frame would be.
+A graceful `stop()` unregisters the session after aborting local work and suspending result retries. Unregister removes the worker from live routing so it accepts no new tasks; already-produced, unacknowledged results remain in the local delivery buffer and are retried on the next `start()` after a new registration.
 
 Aborting a poll before a task is claimed returns `204` and leaves queued work available for another poller. After a `200` response, the task is in flight until the worker posts a result or the visibility timeout/reconciliation path makes it available for another attempt.

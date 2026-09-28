@@ -56,6 +56,8 @@ describe('weft.workflows.events.list', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual({ events: await engine.getEvents(handle.id) });
+
+    engine[Symbol.dispose]();
   });
 
   it('returns 404 with the canonical error body when the workflow does not exist', async () => {
@@ -76,6 +78,8 @@ describe('weft.workflows.events.list', () => {
       error: 'Workflow "does-not-exist" not found',
       data: { resource: 'workflow', identifier: 'does-not-exist' },
     });
+
+    engine[Symbol.dispose]();
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
@@ -105,5 +109,7 @@ describe('weft.workflows.events.list', () => {
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+    engine[Symbol.dispose]();
   });
 });

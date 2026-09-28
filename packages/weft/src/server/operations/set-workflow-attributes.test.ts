@@ -51,6 +51,8 @@ describe('weft.workflows.attributes.set', () => {
     const stored = await storage.get(KEYS.attribute('workflow-1'));
     expect(stored).not.toBeNull();
     expect(decode(stored!)).toEqual({ priority: 'high', score: 5 });
+
+    engine[Symbol.dispose]();
   });
 
   it('defaults to an empty attributes object when the field is missing', async () => {
@@ -67,6 +69,8 @@ describe('weft.workflows.attributes.set', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+
+    engine[Symbol.dispose]();
   });
 
   it('returns 400 when the request body is invalid JSON', async () => {
@@ -87,6 +91,8 @@ describe('weft.workflows.attributes.set', () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+
+    engine[Symbol.dispose]();
   });
 
   it('returns the sanitized 500 body when the engine throws', async () => {
@@ -112,6 +118,7 @@ describe('weft.workflows.attributes.set', () => {
       expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.setAttributes = originalSetAttributes;
+      engine[Symbol.dispose]();
     }
   });
 });

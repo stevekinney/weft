@@ -16,7 +16,7 @@ import { systemReadAuthContext } from './operation-registry-test-helpers.test-su
 describe('weft.tasks.get — projection', () => {
   it('reports a completing task with pendingStatus and resultDigest, not the raw result value', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.completingFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-completing');
@@ -30,7 +30,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('reports a cancelling task with cancellation reason and requested-at timestamp', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.cancellingFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-cancelling');
@@ -44,7 +44,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('reports a resolved terminal task with disposition, resultDigest, adoption, and resultStatus', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(
       storage,
       fixture.terminalResolvedFixture({ adopted: true, adoptedAt: 4_500 }),
@@ -65,7 +65,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('reports a cancelled terminal task with cancellationReason, not resultStatus, and never leaks the synthetic resultDigest that embeds attemptToken', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     // task-ledger-transitions-cancellation.ts builds a leased-origin
     // cancellation's resultDigest as `cancelled:${operationId}:${attemptToken}`
     // — this fixture mirrors that exact shape to prove the token doesn't leak.
@@ -90,7 +90,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('reports a retry-exhausted terminal task with its error, no retryCount/requeueCount, and never leaks the synthetic resultDigest that embeds attemptToken', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     // task-ledger-transitions.ts builds a retry-exhausted resultDigest as
     // `retry-exhausted:${operationId}:${attemptToken}` — same proof as above.
     await fixture.putLedgerRecord(
@@ -116,7 +116,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('reports a dead-lettered task with pendingStatus, resultDigest, and reason, never the raw pending value', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.deadLetteredFixture());
 
     const result = await fixture.runGetTaskDetail(engine, 'op-dead');
@@ -132,7 +132,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('requires system:read scope', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.queuedFixture());
 
     const result = await executeOperation(
@@ -153,7 +153,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('resolves GET /v1/tasks/detail/:operationId through the real REST router', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.queuedFixture());
 
     const response = await handleRequest(
@@ -174,7 +174,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('returns 404 through the real REST router for an unknown operationId', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
 
     const response = await handleRequest(
       new Request('http://localhost/v1/tasks/detail/never-dispatched', { method: 'GET' }),
@@ -196,7 +196,7 @@ describe('weft.tasks.get — projection', () => {
     // count from every other /v1/tasks/... binding), so this must resolve
     // to the task, not to weft.tasks.diagnostics.
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
     await fixture.putLedgerRecord(storage, fixture.queuedFixture({ operationId: 'diagnostics' }));
 
     const response = await handleRequest(
@@ -217,7 +217,7 @@ describe('weft.tasks.get — projection', () => {
 
   it('GET /v1/tasks/diagnostics still resolves to weft.tasks.diagnostics through the full static registry', async () => {
     const storage = new MemoryStorage();
-    const engine = fixture.createEngine(storage);
+    await using engine = fixture.createEngine(storage);
 
     const response = await handleRequest(
       new Request('http://localhost/v1/tasks/diagnostics', { method: 'GET' }),

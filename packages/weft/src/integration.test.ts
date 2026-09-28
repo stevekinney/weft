@@ -12,7 +12,7 @@ async function flush(): Promise<void> {
 describe('integration: full workflow lifecycle', () => {
   it('runs a complete multi-step workflow', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const welcome = workflow({ name: 'welcome' })
       .activities({
@@ -32,7 +32,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('handles signals in a workflow', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const approval = workflow({ name: 'approval' }).execute(async function* (
       ctx,
@@ -53,7 +53,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('cancels a running workflow', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const longRunning = workflow({ name: 'long-running' }).execute(async function* (ctx) {
       yield* ctx.sleep(999999);
@@ -68,7 +68,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('events fire for complete lifecycle', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const events: string[] = [];
 
     engine.addEventListener(WorkflowStartedEvent.type, () => events.push('started'));
@@ -87,7 +87,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('parallel operations complete', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const parallel = workflow({ name: 'parallel' })
       .activities({
@@ -109,7 +109,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('memo caches within a workflow', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     let callCount = 0;
 
     const expensive = async () => {
@@ -131,7 +131,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('search attributes are set and readable', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const withAttrs = workflow({ name: 'with-attrs' })
       .activities({ noop: async () => 'done' })
@@ -181,7 +181,7 @@ describe('integration: full workflow lifecycle', () => {
     const { BunSQLiteStorage } = await import('./storage/bun-sql.ts');
 
     using storage = new BunSQLiteStorage(':memory:');
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const sqliteTest = workflow({ name: 'sqlite-test' }).execute(async function* (
       _ctx,

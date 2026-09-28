@@ -25,11 +25,20 @@ import { describe, expect, it, jest } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.test-support.ts';
 import { activity, workflow, type WorkflowContext } from '../types.ts';
+import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 
 describe('inline launch queue: manual scheduling (COR-74)', () => {
   it('runs a multi-step inline workflow to completion via flushInlineLaunches() with no real macrotask', async () => {
+    // A real timer armed before fake timers take over, due at the very next
+    // event-loop turn. If the measured window below ever crosses a real turn,
+    // this canary fires inside it and arms a fake timer the count assertions
+    // see, deterministically, instead of only when an interval some earlier
+    // test file leaked happens to be due at that turn (COR-1339).
+    const eventLoopTurnCanary = setTimeout(() => {
+      setTimeout(() => {}, 60_000);
+    }, 0);
     useFakeTimers();
 
     try {
@@ -67,7 +76,15 @@ describe('inline launch queue: manual scheduling (COR-74)', () => {
       // No MessageChannel was constructed for manual scheduling.
       expect(getInternals(engine).queuedInlineWorkflowStartChannel).toBeNull();
 
-      // Baseline AFTER construction (not zero: the default
+      // The catalog's first readiness drain builds each registered workflow's
+      // manifest, which awaits `crypto.subtle`: a real event-loop turn. Left
+      // to `start()`, that drain runs inside the measured window, where any
+      // real interval another test file leaked can fire, and Bun re-arms it as
+      // a fake timer that `jest.getTimerCount()` includes (COR-1339). Draining
+      // it first leaves only the inline launch's own work in the window.
+      await ensureWorkflowCatalogReady(engine);
+
+      // Baseline AFTER construction and readiness (not zero: the default
       // `backgroundTasks: 'automatic'` profile already arms an unrelated
       // update-response-cleanup interval). What this test isolates is that
       // queuing, and then flushing, an inline launch never arms an ADDITIONAL
@@ -95,6 +112,7 @@ describe('inline launch queue: manual scheduling (COR-74)', () => {
       await engine[Symbol.asyncDispose]();
     } finally {
       restoreRealTimers();
+      clearTimeout(eventLoopTurnCanary);
     }
   });
 });

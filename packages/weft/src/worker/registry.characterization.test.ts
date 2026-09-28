@@ -15,7 +15,7 @@ import {
 } from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
 import { compareScores, FairShareCounters, scoreWorker } from './registry/fair-share.ts';
-import { projectWorkerSummaries } from './registry/summary.ts';
+import { compareDeploymentSummaries, projectWorkerSummaries } from './registry/summary.ts';
 
 // ---------------------------------------------------------------------------
 // findWorker — golden ordering over the full candidate matrix
@@ -474,6 +474,7 @@ describe('projectWorkerSummaries characterization', () => {
     const snapshots = registry.getAll().map((worker) => ({
       id: worker.id,
       queue: worker.queue,
+      transport: worker.transport,
       activities: worker.activities,
       concurrency: worker.concurrency,
       inFlight: worker.inFlight,
@@ -497,6 +498,7 @@ describe('projectWorkerSummaries characterization', () => {
       {
         id: 'zebra',
         queue: 'q',
+        transport: 'websocket' as const,
         activities: ['x'] as const,
         concurrency: 1,
         inFlight: 0,
@@ -509,6 +511,7 @@ describe('projectWorkerSummaries characterization', () => {
       {
         id: 'apple',
         queue: 'q',
+        transport: 'websocket' as const,
         activities: ['x'] as const,
         concurrency: 1,
         inFlight: 0,
@@ -528,6 +531,7 @@ describe('projectWorkerSummaries characterization', () => {
     const snapshot = {
       id: 'w1',
       queue: 'q',
+      transport: 'websocket' as const,
       activities: ['a'] as const,
       concurrency: 1,
       inFlight: 5,
@@ -547,6 +551,7 @@ describe('projectWorkerSummaries characterization', () => {
     const snapshot = {
       id: 'w1',
       queue: 'q',
+      transport: 'websocket' as const,
       activities,
       concurrency: 1,
       inFlight: 0,
@@ -567,6 +572,7 @@ describe('projectWorkerSummaries characterization', () => {
     const snapshot = {
       id: 'w1',
       queue: 'q',
+      transport: 'websocket' as const,
       activities: [] as const,
       concurrency: 1,
       inFlight: 0,
@@ -580,5 +586,38 @@ describe('projectWorkerSummaries characterization', () => {
     const result = projectWorkerSummaries([snapshot], 5000);
     expect(result[0]!.heartbeatAgeMs).toBe(2000);
     expect(result[0]!.lastHeartbeatAt).toBe(3000);
+  });
+
+  it('sorts deployment summaries by deployment identity including transport-bearing summaries', () => {
+    const left = {
+      deploymentName: 'billing',
+      buildId: 'b1',
+      runtimeVersion: '1.0.0',
+      transports: ['long-poll' as const],
+      health: 'active' as const,
+      workers: 1,
+      activeWorkers: 1,
+      drainingWorkers: 0,
+      drainedWorkers: 0,
+      inFlight: 0,
+      oldestStartedAt: 1000,
+    };
+    const right = {
+      deploymentName: 'checkout',
+      buildId: 'b1',
+      runtimeVersion: '1.0.0',
+      transports: ['websocket' as const],
+      health: 'active' as const,
+      workers: 1,
+      activeWorkers: 1,
+      drainingWorkers: 0,
+      drainedWorkers: 0,
+      inFlight: 0,
+      oldestStartedAt: 1000,
+    };
+
+    expect(compareDeploymentSummaries(left, right)).toBeLessThan(0);
+    expect(compareDeploymentSummaries(right, left)).toBeGreaterThan(0);
+    expect(compareDeploymentSummaries(left, left)).toBe(0);
   });
 });

@@ -46,12 +46,22 @@ function attemptKey(operationId: string, attemptToken: string): string {
  * table.delete('op-1', 'attempt-1'); // only this exact attempt's entry
  * ```
  */
+type AttemptEntry = {
+  controller: AbortController;
+  /**
+   * The attempt's automatic per-attempt heartbeat interval, attached via
+   * {@link AttemptControllerTable.setHeartbeatTimer} — `null` until then, or
+   * for a caller that never arms one.
+   */
+  heartbeatTimer: ReturnType<typeof setInterval> | null;
+};
+
 export class AttemptControllerTable {
-  #entries = new Map<string, AbortController>();
+  #entries = new Map<string, AttemptEntry>();
 
   /** Record the controller owning `attemptToken`'s execution of `operationId`. */
   set(operationId: string, attemptToken: string, controller: AbortController): void {
-    this.#entries.set(attemptKey(operationId, attemptToken), controller);
+    this.#entries.set(attemptKey(operationId, attemptToken), { controller, heartbeatTimer: null });
   }
 
   /**
@@ -61,23 +71,57 @@ export class AttemptControllerTable {
    * (a stale `attemptToken` matches nothing, by construction of the key).
    */
   get(operationId: string, attemptToken: string): AbortController | undefined {
-    return this.#entries.get(attemptKey(operationId, attemptToken));
+    return this.#entries.get(attemptKey(operationId, attemptToken))?.controller;
   }
 
   /**
-   * Remove exactly this attempt's entry. A stale attempt's `finally` block
-   * calling this with its OWN (now-superseded) `attemptToken` never touches a
-   * newer attempt's live entry for the same `operationId` — the whole point
-   * of keying by the tuple rather than `operationId` alone.
+   * Attach the attempt's automatic per-attempt heartbeat interval (armed by
+   * both {@link RemoteWorker} and {@link LongPollWorker} right after `set()`)
+   * so {@link delete} and {@link abortAll} clear it too. Aborting the
+   * controller only asks the activity function to stop — an activity that
+   * doesn't check its signal keeps running, and without this, its heartbeat
+   * interval would keep firing real timers until the activity's promise is
+   * eventually garbage-collected. The attempt's own `finally` block still
+   * clears its local `heartbeatTimer` reference on the normal completion
+   * path; this covers the attempt being torn down out from under it instead
+   * (drain timeout, dispose, or another attempt superseding it).
    */
-  delete(operationId: string, attemptToken: string): void {
-    this.#entries.delete(attemptKey(operationId, attemptToken));
+  setHeartbeatTimer(
+    operationId: string,
+    attemptToken: string,
+    timer: ReturnType<typeof setInterval>,
+  ): void {
+    const entry = this.#entries.get(attemptKey(operationId, attemptToken));
+    if (entry === undefined) return;
+    entry.heartbeatTimer = timer;
   }
 
-  /** Abort every tracked controller (with an optional reason) and clear the table. */
+  /**
+   * Remove exactly this attempt's entry, clearing its heartbeat interval (if
+   * any) first. A stale attempt's `finally` block calling this with its OWN
+   * (now-superseded) `attemptToken` never touches a newer attempt's live
+   * entry for the same `operationId` — the whole point of keying by the
+   * tuple rather than `operationId` alone.
+   */
+  delete(operationId: string, attemptToken: string): void {
+    const key = attemptKey(operationId, attemptToken);
+    const entry = this.#entries.get(key);
+    if (entry?.heartbeatTimer !== null && entry?.heartbeatTimer !== undefined) {
+      clearInterval(entry.heartbeatTimer);
+    }
+    this.#entries.delete(key);
+  }
+
+  /**
+   * Abort every tracked controller (with an optional reason), clear every
+   * tracked heartbeat interval, and clear the table.
+   */
   abortAll(reason?: unknown): void {
-    for (const controller of this.#entries.values()) {
-      controller.abort(reason);
+    for (const entry of this.#entries.values()) {
+      if (entry.heartbeatTimer !== null) {
+        clearInterval(entry.heartbeatTimer);
+      }
+      entry.controller.abort(reason);
     }
     this.#entries.clear();
   }

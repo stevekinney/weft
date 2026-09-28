@@ -19,6 +19,7 @@ import {
   executeValidate,
   executeVersion,
   executeVersionCheck,
+  executeWorkerVerify,
   executeWorkflow,
   findCliSubcommandName,
   HELP_TEXT,
@@ -30,6 +31,7 @@ import {
   TIMELINE_HELP_TEXT,
   VALIDATE_HELP_TEXT,
   VERSION_CHECK_HELP_TEXT,
+  WORKER_HELP_TEXT,
   WORKFLOW_HELP_TEXT,
   writeRunLockfile,
 } from './cli/index.ts';
@@ -158,6 +160,16 @@ if (parsedArguments.command === 'version') {
   }
 
   const result = await executeCodegen(parsedArguments);
+  if (result.stderr) process.stderr.write(`${result.stderr}\n`);
+  if (result.stdout) process.stdout.write(result.stdout + '\n');
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'worker') {
+  if (parsedArguments.help) {
+    process.stdout.write(`${WORKER_HELP_TEXT}\n`);
+    process.exit(0);
+  }
+
+  const result = await executeWorkerVerify(parsedArguments);
   if (result.stderr) process.stderr.write(`${result.stderr}\n`);
   if (result.stdout) process.stdout.write(result.stdout + '\n');
   process.exit(result.exitCode);

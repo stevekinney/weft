@@ -234,6 +234,12 @@ describe('runTaskLedgerRecovery — leased', () => {
     );
     expect(persisted?.state).toBe('queued');
     expect(persisted?.state === 'queued' && persisted.attempt).toBe(2);
+
+    // The requeue scheduled a backoff-delayed redispatch (~1s here) that this
+    // test has no reason to wait out; clear it rather than let it fire later
+    // in the process and (via enqueueTaskForLongPoll) arm a second, longer
+    // timer nothing in this test would ever clear either.
+    for (const timer of context.pendingTimers) clearTimeout(timer);
   });
 
   it('terminalizes an expired leased record with retryExhausted instead of restoring it', async () => {
@@ -282,6 +288,11 @@ describe('runTaskLedgerRecovery — queued', () => {
       intervalMs: 5,
       label: 'recovered queued task to reach the long-poll queue',
     });
+
+    // The redispatch armed a pending-task expiration timer (default TTL 5
+    // minutes) on context.taskQueue; this bare fixture has no server
+    // shutdown path to clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('schedules but does not immediately dispatch a queued record whose availableAt is in the future', async () => {
@@ -300,6 +311,10 @@ describe('runTaskLedgerRecovery — queued', () => {
 
     expect(context.taskQueue.isTracked(stored.operationId)).toBe(false);
     expect(context.pendingTimers.size).toBeGreaterThan(0);
+
+    // The assertion above needs the timer still armed; clear it now rather
+    // than let it fire later in the process with nothing left to clear it.
+    for (const timer of context.pendingTimers) clearTimeout(timer);
   });
 });
 
@@ -500,6 +515,11 @@ describe('runTaskLedgerRecovery — shutdown interlock', () => {
     // reached for it and no timer leaked past the disposer's clear.
     expect(context.taskQueue.isTracked(second.operationId)).toBe(false);
     expect(context.pendingTimers.size).toBe(0);
+
+    // The first record's redispatch armed a pending-task expiration timer
+    // (default TTL 5 minutes) on context.taskQueue; this bare fixture has no
+    // server shutdown path to clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('processes no records when context.stopping is already set before the scan starts', async () => {

@@ -13,6 +13,9 @@ import type { WorkflowCompatibilityVerdict } from '../contract/compatibility.ts'
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 
+/** Refresh activation is explicit: install and warm candidates without activation unless requested. */
+export type WorkflowCatalogActivationMode = 'never' | 'if-compatible';
+
 /**
  * One installed `(name, revision)` catalog entry. `definition` is populated
  * only when this process itself installed the entry (via

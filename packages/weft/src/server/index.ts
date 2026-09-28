@@ -231,6 +231,13 @@ export interface ServeOptions {
    * port is bound — so a foreign operation cannot shadow one of Weft's.
    */
   operations?: ReadonlyArray<RegistrableOperation>;
+  /**
+   * Signing authority for server-issued destructive worker start override
+   * previews. Configure this when exposing `weft.worker.startoverrides.preview`
+   * and when operation-backed starts should consume those previews atomically
+   * with terminal-run replacement.
+   */
+  workerStartOverrideSigningSecret?: string;
   port?: number;
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */

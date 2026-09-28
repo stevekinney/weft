@@ -12,6 +12,7 @@ export type SharedStartWorkflowRestFields = {
   readonly tags: unknown;
   readonly idempotencyKey: unknown;
   readonly searchAttributes: unknown;
+  readonly workerStartOverridePreview: unknown;
 };
 
 function isJsonObjectLikeRecord(value: unknown): value is Record<string, unknown> {
@@ -52,5 +53,6 @@ export function extractSharedStartWorkflowRestFields(
     tags: record['tags'],
     idempotencyKey: record['idempotencyKey'],
     searchAttributes: record['searchAttributes'],
+    workerStartOverridePreview: record['workerStartOverridePreview'],
   };
 }

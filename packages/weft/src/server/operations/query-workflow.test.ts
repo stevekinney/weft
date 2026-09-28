@@ -41,7 +41,7 @@ const bindings = [queryWorkflowRestBinding, queryWorkflowWithInputRestBinding];
 
 describe('weft.workflows.query', () => {
   it('returns the query result on the happy path', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-success' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -62,7 +62,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('passes POST query input to workflow query handlers', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-input' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -85,7 +85,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('passes undefined input for POST query requests with an empty body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     try {
       const handle = await engine.start('queryable', null, { id: 'query-workflow-empty-input' });
       await waitForWorkflowStatus(engine, handle.id, 'running');
@@ -110,7 +110,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('returns 400 for malformed POST query JSON', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-malformed-input' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -133,7 +133,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('returns 400 for non-object POST query JSON', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-array-input' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -156,7 +156,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('returns 501 with the canonical error body when queries are not supported', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalQuery = engine.query.bind(engine);
     engine.query = async () => {
       throw new Error('query not supported for this workflow');
@@ -183,7 +183,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('returns null when the query accessor does not exist', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-null' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -204,7 +204,7 @@ describe('weft.workflows.query', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const failingOperation = defineOperation({
       ...queryWorkflowOperation,
       invoke: async () => {

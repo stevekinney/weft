@@ -120,7 +120,7 @@ function buildPrincipalSpy(): {
 
 describe('handler pipeline — restBindings / operationRegistry pairing guard', () => {
   it('rejects restBindings supplied without operationRegistry (500)', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const { registry: _registry, bindings } = buildPrincipalSpy();
     const request = new Request('http://localhost/v1/test/principalspy/any-id', {
       method: 'GET',
@@ -139,7 +139,7 @@ describe('handler pipeline — restBindings / operationRegistry pairing guard', 
   });
 
   it('rejects operationRegistry supplied without restBindings (500)', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const { registry, bindings: _bindings } = buildPrincipalSpy();
     const request = new Request('http://localhost/v1/test/principalspy/any-id', {
       method: 'GET',
@@ -172,7 +172,7 @@ describe('handler pipeline — live worker infrastructure', () => {
   });
 
   it('uses HandlerOptions worker and queue state with the default REST bindings', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const workerRegistry = new WorkerRegistry();
     using taskQueue = new TaskQueue({ pendingTaskTimeToLive: Infinity });
     workerRegistry.register({
@@ -198,60 +198,52 @@ describe('handler pipeline — live worker infrastructure', () => {
       },
     };
 
-    try {
-      const workersResponse = await handleRequest(
-        new Request('http://localhost/v1/workers'),
-        engine,
-        options,
-      );
-      expect(workersResponse.status).toBe(200);
-      expect(await workersResponse.json()).toEqual(
-        expect.objectContaining({
-          items: [expect.objectContaining({ id: 'worker-729', queue: 'workers' })],
-        }),
-      );
+    const workersResponse = await handleRequest(
+      new Request('http://localhost/v1/workers'),
+      engine,
+      options,
+    );
+    expect(workersResponse.status).toBe(200);
+    expect(await workersResponse.json()).toEqual(
+      expect.objectContaining({
+        items: [expect.objectContaining({ id: 'worker-729', queue: 'workers' })],
+      }),
+    );
 
-      const queuesResponse = await handleRequest(
-        new Request('http://localhost/v1/task-queues'),
-        engine,
-        options,
-      );
-      expect(queuesResponse.status).toBe(200);
-      expect(await queuesResponse.json()).toEqual(
-        expect.objectContaining({
-          items: expect.arrayContaining([
-            expect.objectContaining({ queue: 'backlog', backlog: 1 }),
-            expect.objectContaining({ queue: 'workers', connectedWorkers: 1 }),
-          ]),
-        }),
-      );
-    } finally {
-      engine[Symbol.dispose]();
-    }
+    const queuesResponse = await handleRequest(
+      new Request('http://localhost/v1/task-queues'),
+      engine,
+      options,
+    );
+    expect(queuesResponse.status).toBe(200);
+    expect(await queuesResponse.json()).toEqual(
+      expect.objectContaining({
+        items: expect.arrayContaining([
+          expect.objectContaining({ queue: 'backlog', backlog: 1 }),
+          expect.objectContaining({ queue: 'workers', connectedWorkers: 1 }),
+        ]),
+      }),
+    );
   });
 
   it('keeps operation-catalog authorization in front of injected worker state', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const workerRegistry = new WorkerRegistry();
     using taskQueue = new TaskQueue();
 
-    try {
-      const response = await handleRequest(new Request('http://localhost/v1/workers'), engine, {
-        workerRegistry,
-        taskQueue,
-      });
+    const response = await handleRequest(new Request('http://localhost/v1/workers'), engine, {
+      workerRegistry,
+      taskQueue,
+    });
 
-      expect(response.status).toBe(401);
-      expect(await response.json()).toEqual(expect.objectContaining({ error: expect.any(String) }));
-    } finally {
-      engine[Symbol.dispose]();
-    }
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual(expect.objectContaining({ error: expect.any(String) }));
   });
 });
 
 describe('handler pipeline — direct-route failures', () => {
   it('returns 500 when a direct route executor throws unexpectedly', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const explodingRegistry = {
       get() {
         throw new Error('registry exploded');
@@ -282,7 +274,7 @@ describe('handler pipeline — direct-route failures', () => {
 
 describe('handler pipeline — streaming binding guard', () => {
   it('returns 500 when a streaming binding has no shapeSuccess', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -325,7 +317,7 @@ describe('handler pipeline — streaming binding guard', () => {
   });
 
   it('returns 400 when extractInput throws during via-execute-operation dispatch', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -367,7 +359,7 @@ describe('handler pipeline — streaming binding guard', () => {
   });
 
   it('returns 400 when RestBinding path decoding sees malformed percent encoding', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const registry = createOperationRegistry([
       defineOperation({
         name: 'weft.test.bindingdecode',
@@ -415,7 +407,7 @@ describe('handler pipeline — streaming binding guard', () => {
 
 describe('handler pipeline — authContextToPrincipal branches', () => {
   it('undefined authContext → anonymousPrincipal (method "unauthenticated")', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -433,7 +425,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('jwt authContext with claims → principalFromJwtClaims (method "jwt")', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -458,7 +450,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('api-key authContext → principalFromApiKey (method "api-key")', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -476,7 +468,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('jwt authContext without claims throws (authenticator contract violation)', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -506,7 +498,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
     // pipeline must use that forwarded principal directly — never
     // rebuild one from method+claims when the authenticator already
     // decided the answer.
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -545,7 +537,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('mtls authContext → principalFromMutualTls (method "mtls")', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -563,7 +555,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('public authContext is treated as anonymous', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 
@@ -582,7 +574,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('returns 400 when route matching sees malformed percent encoding', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       new Request('http://localhost/v1/workflows/%E0%A4%A', { method: 'GET' }),
@@ -594,7 +586,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
   });
 
   it('returns 400 when a matched RestBinding extractInput throws', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForRunning(engine, handle.id);
 

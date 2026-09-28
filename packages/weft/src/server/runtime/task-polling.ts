@@ -38,11 +38,11 @@ const TASK_RESULT_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
 const TASK_HEARTBEAT_RE = /^\/v1\/tasks\/([\w-]+)\/heartbeat$/;
 const TASK_DIAGNOSTICS_PATH = '/v1/tasks/diagnostics';
 
-const MAX_POLL_TIMEOUT = 60_000;
-const DEFAULT_POLL_TIMEOUT = 30_000;
+export const MAX_POLL_TIMEOUT = 60_000;
+export const DEFAULT_POLL_TIMEOUT = 30_000;
 const DEFAULT_VISIBILITY_TIMEOUT = 30_000;
 
-async function parseTaskResultBody(
+export async function parseTaskResultBody(
   request: Request,
   options?: RestBodyReadOptions,
 ): Promise<Record<string, unknown> | null | Response> {
@@ -67,13 +67,6 @@ function isPayloadTooLargeFault(value: unknown): value is { message: string } {
 
 type ValidatedTaskResult = {
   operationId: string;
-  /**
-   * `'cancelled'` (COR-230, acceptance criterion 13) is a long-poll worker's
-   * cooperative response to a heartbeat-piggybacked cancellation signal —
-   * the exact counterpart to the WebSocket transport's `taskResult(status:
-   * 'cancelled')`. `commitTaskLedgerCompletion` resolves it through the same
-   * dedicated `Cancelling --> Terminal` path either way.
-   */
   status: 'completed' | 'failed' | 'cancelled';
   workerId: string | undefined;
   value: unknown;
@@ -82,19 +75,13 @@ type ValidatedTaskResult = {
   workflowRevision: string | undefined;
 };
 
-function authorizeWorkerPrincipal(principal: Principal | undefined): Response | null {
+export function authorizeWorkerPrincipal(principal: Principal | undefined): Response | null {
   if (principal === undefined) return null;
   if (isAuthenticated(principal) && principal.hasScope('workers:write')) return null;
   return Response.json({ error: 'Forbidden' }, { status: 403 });
 }
 
-/**
- * Await startup task-ledger recovery (WFT-23) before a long-poll claim or
- * result submission touches the ledger or the in-memory indexes recovery
- * rebuilds. Returns a 503 with an actionable error if recovery itself
- * failed, else `null` to let the caller proceed.
- */
-async function awaitTaskLedgerRecovery(context: ServerContext): Promise<Response | null> {
+export async function awaitTaskLedgerRecovery(context: ServerContext): Promise<Response | null> {
   try {
     await context.taskLedgerRecovery.ready;
     return null;
@@ -274,6 +261,7 @@ async function applyTaskResult(
   context.deadlineTracker.remove(operationId);
   if (applied.disposition !== 'dead-lettered') {
     context.taskQueue.complete({ operationId, status, value, error });
+    context.registry?.completeTask(operationId);
     recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
   }
 
@@ -349,8 +337,8 @@ export async function markTaskClaimedByLongPollWorker(
   context: ServerContext,
   options: ServeOptions,
   task: PendingTask,
+  workerSessionId: string = `longpoll-${crypto.randomUUID().slice(0, 8)}`,
 ): Promise<LongPollClaim | null> {
-  const workerSessionId = `longpoll-${crypto.randomUUID().slice(0, 8)}`;
   const attemptToken = crypto.randomUUID();
   const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
   const attemptTokenDigest = digestAttemptToken(attemptToken);
@@ -408,6 +396,14 @@ export async function markTaskClaimedByLongPollWorker(
     lastDispatchedAt: Date.now(),
   });
   recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+  context.registry.assignTask(
+    workerSessionId,
+    task.operationId,
+    visibilityTimeout,
+    undefined,
+    attemptToken,
+    task.workflowRevision,
+  );
   // COR-198: attempt-by-attempt worker transition.
   options.engine.dispatchEvent(
     await buildTaskAttemptTransitionEvent(options.engine.storage, {

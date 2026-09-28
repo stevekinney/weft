@@ -31,6 +31,7 @@ import type {
   WorkerHealth,
   WorkerRegistry,
   WorkerSummary,
+  WorkerTransport,
 } from '../../worker/registry.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -50,6 +51,11 @@ const workerHealthSchema = z.enum([
   'drained',
 ]) satisfies z.ZodType<WorkerHealth>;
 
+const workerTransportSchema = z.enum([
+  'websocket',
+  'long-poll',
+]) satisfies z.ZodType<WorkerTransport>;
+
 const remoteWorkerJsonValueSchema: z.ZodType<RemoteWorkerJsonValue> = z.lazy(() =>
   z.union([
     z.null(),
@@ -64,6 +70,7 @@ const remoteWorkerJsonValueSchema: z.ZodType<RemoteWorkerJsonValue> = z.lazy(() 
 const workerSummarySchema = z.object({
   id: z.string(),
   queue: z.string(),
+  transport: workerTransportSchema,
   activities: z.array(z.string()),
   concurrency: z.number(),
   inFlight: z.number(),
@@ -83,6 +90,7 @@ const workerDeploymentSummarySchema = z.object({
   deploymentName: z.string().nullable(),
   buildId: z.string().nullable(),
   runtimeVersion: z.string().nullable(),
+  transports: z.array(workerTransportSchema),
   health: workerHealthSchema,
   workers: z.number(),
   activeWorkers: z.number(),

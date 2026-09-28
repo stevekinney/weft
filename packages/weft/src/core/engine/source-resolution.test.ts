@@ -147,6 +147,8 @@ describe('engine.resolveWorkflowSource()', () => {
     expect(call).rejects.toThrow('resolveWorkflowSource() aborted');
 
     deferred.resolve({ checkout: checkoutDefinition });
+
+    engine[Symbol.dispose]();
   });
 
   it('never invokes the loader when the signal is already aborted on the very first caller', async () => {

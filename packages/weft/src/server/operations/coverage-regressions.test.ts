@@ -270,8 +270,9 @@ describe('operation coverage regressions', () => {
   });
 
   it('rejects invalid filter tags in direct bulk-operation invokes', async () => {
+    const engine = createEngine();
     const context = {
-      engine: createEngine() as never,
+      engine: engine as never,
       principal: anonymousPrincipal(),
       transport: 'jsonRpcHttp' as const,
     };
@@ -317,6 +318,8 @@ describe('operation coverage regressions', () => {
         input: { tags: [''] },
       }),
     ).rejects.toMatchObject({ code: 'InvalidParams' });
+
+    engine[Symbol.dispose]();
   });
 
   it('rejects invalid filter objects in bulk delete, bulk signal, and bulk tag mutation routes', async () => {

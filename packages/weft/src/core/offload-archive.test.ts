@@ -14,7 +14,7 @@ import { workflow } from './types.ts';
 describe('offload, load, and archive', () => {
   it('round-trips data through offload and load', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const payload = { items: [1, 2, 3], nested: { flag: true } };
 
@@ -33,7 +33,7 @@ describe('offload, load, and archive', () => {
 
   it('returns correct sizeBytes on OffloadReference', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const payload = { message: 'hello world', numbers: [1, 2, 3, 4, 5] };
     const expectedSize = encode(payload).byteLength;
@@ -59,7 +59,7 @@ describe('offload, load, and archive', () => {
 
   it('throws when loading a reference with a missing key', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const testWorkflow3 = workflow({ name: 'test' }).execute(async function* (
       ctx: WorkflowContext,
@@ -121,7 +121,7 @@ describe('offload, load, and archive', () => {
 
   it('rejects malformed offload references with deterministic validation errors', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const testWorkflow4 = workflow({ name: 'test' }).execute(async function* (
       ctx: WorkflowContext,
@@ -145,7 +145,7 @@ describe('offload, load, and archive', () => {
 
   it('persists archived data to storage', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const archivePayload = { report: 'quarterly', values: [100, 200, 300] };
 
@@ -170,7 +170,7 @@ describe('offload, load, and archive', () => {
   });
 
   it('offloaded data survives engine recovery', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const payload = { large: 'data', count: 42 };
     let offloadRuns = 0;
@@ -194,7 +194,7 @@ describe('offload, load, and archive', () => {
     await sleepForTesting(10);
 
     // Recover engine (simulates process restart)
-    const recovered = engine.recover();
+    await using recovered = engine.recover();
 
     // Register same workflow on recovered engine
     const offloadStepWorkflow2 = workflow({ name: 'offload-step' }).execute(async function* (
@@ -219,7 +219,7 @@ describe('offload, load, and archive', () => {
 
   it('propagates errors from offload fn to the workflow', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const testWorkflow6 = workflow({ name: 'test' }).execute(async function* (
       ctx: WorkflowContext,
@@ -245,7 +245,7 @@ describe('offload, load, and archive', () => {
 describe('Engine.getOffload', () => {
   it('reads an offloaded value back after the workflow completes', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const payload = { report: 'quarterly', values: [100, 200, 300] };
 
@@ -266,7 +266,7 @@ describe('Engine.getOffload', () => {
 
   it('returns null for an unknown key', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const producer = workflow({ name: 'producer' }).execute(async function* (ctx: WorkflowContext) {
       const c = ctx;
@@ -284,7 +284,7 @@ describe('Engine.getOffload', () => {
 
   it('returns null after a terminated workflow sweeps its offloaded artifacts', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const producer = workflow({ name: 'producer' }).execute(async function* (ctx: WorkflowContext) {
       const c = ctx;

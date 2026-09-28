@@ -18,6 +18,7 @@ import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { reportActivityHeartbeatAppliedForTesting } from './activity-heartbeat-test-hooks.ts';
 import type { ServerContext } from './context.ts';
+import { drainLongPollQueueInBackground } from './long-poll-drain.ts';
 import { withRetry } from './retry.ts';
 import type { TaskLedgerCompletionInput } from './task-ledger-completion.ts';
 import { recordWorkerCapacitySaturationMetric } from './task-metrics.ts';
@@ -339,6 +340,9 @@ function onTaskResultMessage(
   context.deadlineTracker.remove(operationId);
   cleanupWorkflowIndex(operationId);
   recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
+  // The slot this result freed can take a task that fell back to the
+  // long-poll queue while this worker was at capacity.
+  drainLongPollQueueInBackground(context, options, ws.data.queue ?? 'default');
 
   void commitAndAcknowledgeTaskResult(context, options, ws, workerId, message).catch((error) => {
     console.error(

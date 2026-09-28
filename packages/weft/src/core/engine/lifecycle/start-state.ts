@@ -7,6 +7,9 @@
  * @module core/engine/lifecycle/start-state
  */
 
+import { inheritWorkflowWorkerBinding } from '../../../worker/binding-helpers.ts';
+import type { WorkflowWorkerBinding } from '../../../worker/versioning-policy.ts';
+import { resolveWorkflowWorkerStartBinding } from '../../../worker/versioning-policy.ts';
 import { createCheckpoint } from '../../checkpoint.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
@@ -16,7 +19,7 @@ import {
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import type { EngineInternals } from '../internals.ts';
-import { type LifecycleCallbacks } from './shared.ts';
+import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 
 export function parseStartOptionDuration(
   _internals: EngineInternals,
@@ -25,6 +28,70 @@ export function parseStartOptionDuration(
   _callbacks: LifecycleCallbacks,
 ): number {
   return parseStartWorkflowDuration(duration, fieldName);
+}
+
+export async function resolveStartWorkerBinding(
+  internals: EngineInternals,
+  registration: RegistrationEntry,
+  workflowId: string,
+  type: string,
+  revision: string,
+): Promise<WorkflowWorkerBinding | undefined> {
+  if (registration.workerVersioningPolicy === undefined) return undefined;
+  return resolveWorkflowWorkerStartBinding(internals.storage, {
+    workflowId,
+    workflowType: type,
+    workflowRevision: revision,
+    policy: registration.workerVersioningPolicy,
+    boundAt: internals.options.getNow(),
+    checkpointId: workflowId,
+  });
+}
+
+function shouldInheritParentWorkerBinding(
+  parentWorkerBinding: WorkflowWorkerBinding | undefined,
+  type: string,
+  revision: string,
+  options: StartOptions | undefined,
+): parentWorkerBinding is WorkflowWorkerBinding {
+  return (
+    parentWorkerBinding !== undefined &&
+    options?.workerStartOverridePreview === undefined &&
+    parentWorkerBinding.workflowType === type &&
+    parentWorkerBinding.workflowRevision === revision
+  );
+}
+
+export async function resolveInitialWorkerBinding(
+  internals: EngineInternals,
+  registration: RegistrationEntry,
+  workflowId: string,
+  type: string,
+  revision: string,
+  options: StartOptions | undefined,
+  terminalRunToPurge: WorkflowState | null,
+  parentWorkerBinding: WorkflowWorkerBinding | undefined,
+  submissionTime: number,
+): Promise<WorkflowWorkerBinding | undefined> {
+  if (registration.workerVersioningPolicy === undefined) return undefined;
+  if (
+    terminalRunToPurge?.workerBinding !== undefined &&
+    options?.workerStartOverridePreview === undefined
+  ) {
+    return inheritWorkflowWorkerBinding(terminalRunToPurge.workerBinding.current, {
+      workflowId,
+      boundAt: submissionTime,
+      checkpointId: workflowId,
+    });
+  }
+  if (shouldInheritParentWorkerBinding(parentWorkerBinding, type, revision, options)) {
+    return inheritWorkflowWorkerBinding(parentWorkerBinding, {
+      workflowId,
+      boundAt: submissionTime,
+      checkpointId: workflowId,
+    });
+  }
+  return resolveStartWorkerBinding(internals, registration, workflowId, type, revision);
 }
 
 function buildInitialIdentitySlice(
@@ -112,6 +179,8 @@ export function createInitialWorkflowState(
   callbacks: LifecycleCallbacks,
   /** See {@link buildInitialIdentitySlice}'s parameter of the same name (COR-75). */
   forcePendingWithoutTimer?: boolean,
+  registration?: RegistrationEntry,
+  workerBinding?: WorkflowWorkerBinding,
 ): WorkflowState {
   const now = internals.options.getNow();
   const state = buildInitialIdentitySlice(
@@ -139,6 +208,14 @@ export function createInitialWorkflowState(
     : resolveInitialExecutionDeadline(internals, options, delayedStartTimer, now, callbacks);
   if (executionDeadline !== undefined) {
     state.executionDeadline = executionDeadline;
+  }
+
+  if (registration?.workerVersioningPolicy !== undefined) {
+    state.workerVersioningPolicy = registration.workerVersioningPolicy;
+    if (workerBinding === undefined) {
+      throw new Error('Accepted worker deployment binding is required for versioned workflows.');
+    }
+    state.workerBinding = { current: workerBinding, history: [] };
   }
 
   return state;

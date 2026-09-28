@@ -890,11 +890,11 @@ describe('RemoteWorker durability — stale-session exclusion from routing durin
     // `excludeWorkerIds` must make `findWorker` see zero eligible workers,
     // forcing the dispatch through the long-poll fallback path instead of
     // failing outright or writing to the closed connection. The fallback
-    // path parks the task for an actual long-poll claim — a WebSocket
-    // reconnect alone does not pull it back out (`redispatchAvailableQueuedRecord`
-    // skips any operation `TaskQueue` still tracks as a long-poll waiter
-    // match, by design, to avoid double-dispatching) — so this proves
-    // exclusion by claiming it exactly the way a real long-poll worker would.
+    // path parks the task as a long-poll hint. No WebSocket worker
+    // re-registers in this test — one that did would take the hint through
+    // the registration drain (`server/runtime/long-poll-drain.ts`) — so this
+    // proves exclusion by claiming it exactly the way a real long-poll worker
+    // would.
     // `workerShutdownTimeoutMs` is small deliberately: this test leaves
     // worker-a's FIRST task (never completed — the worker was disconnected
     // mid-attempt on purpose) in flight, so `afterEach`'s `server.stop()`

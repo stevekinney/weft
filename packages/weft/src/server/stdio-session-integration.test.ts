@@ -165,6 +165,7 @@ describe('runStdioSession — engine-backed integration', () => {
 
   afterEach(() => {
     feed.dispose();
+    engine[Symbol.dispose]();
   });
 
   /**

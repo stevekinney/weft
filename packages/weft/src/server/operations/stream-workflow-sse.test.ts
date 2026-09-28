@@ -32,7 +32,7 @@ function request(method: string, path: string, headers?: Record<string, string>)
 
 describe('weft.workflows.streams.sse', () => {
   it('streams stored token chunks as SSE on the happy path', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse' });
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => [
@@ -66,7 +66,7 @@ describe('weft.workflows.streams.sse', () => {
   });
 
   it('returns 406 when Accept header lacks text/event-stream', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-406' });
 
     const response = await handleRequest(
@@ -82,7 +82,7 @@ describe('weft.workflows.streams.sse', () => {
   });
 
   it('returns 404 when the workflow does not exist', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('GET', '/v1/workflows/missing-wf/sse', { Accept: 'text/event-stream' }),
@@ -98,7 +98,7 @@ describe('weft.workflows.streams.sse', () => {
   });
 
   it('forwards a Last-Event-ID cursor to engine.getStreamChunks', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-resume' });
     const original = engine.getStreamChunks.bind(engine);
     let capturedAfter: number | undefined;
@@ -127,7 +127,7 @@ describe('weft.workflows.streams.sse', () => {
     // parsing `Last-Event-ID`, so a missing workflow with a bad cursor
     // returned 404, not 400. Pin this so a future refactor that re-orders
     // those checks (e.g. parsing the cursor in extractInput) breaks loudly.
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('GET', '/v1/workflows/missing-wf/sse', {
@@ -146,7 +146,7 @@ describe('weft.workflows.streams.sse', () => {
   });
 
   it('returns 400 for an invalid Last-Event-ID header', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-bad-cursor' });
 
     const response = await handleRequest(
@@ -168,7 +168,7 @@ describe('weft.workflows.streams.sse', () => {
     // Engine errors are masked before returning to the client. Pin that —
     // raw engine messages can contain SQL fragments, file paths, etc., and
     // must never reach a caller.
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-fail' });
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => {

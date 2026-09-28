@@ -65,4 +65,10 @@ describe('createLiveOperationRegistry', () => {
     expect(a.get('weft.workflows.get')).toBeDefined();
     expect(b.get('weft.workflows.get')).toBeDefined();
   });
+
+  it('registers start operations with worker override signing when configured', () => {
+    const registry = createLiveOperationRegistry({ workerStartOverrideSigningSecret: 'secret' });
+
+    expect(registry.get('weft.workflows.start')).toBeDefined();
+  });
 });

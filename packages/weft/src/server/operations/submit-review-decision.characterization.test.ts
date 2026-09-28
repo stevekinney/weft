@@ -57,7 +57,7 @@ function postRequest(reviewId: string, body: unknown): Request {
 describe('submit-review-decision — validation precedence', () => {
   // --- presence check fires first when decision is missing ---
   it('reports missing fields error when decision is absent', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(postRequest('rev-1', { reviewer: 'alice' }), engine, {
       operationRegistry: registry,
       restBindings: bindings,
@@ -70,7 +70,7 @@ describe('submit-review-decision — validation precedence', () => {
 
   // --- presence check fires first when reviewer is missing ---
   it('reports missing fields error when reviewer is absent', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(postRequest('rev-1', { decision: 'approved' }), engine, {
       operationRegistry: registry,
       restBindings: bindings,
@@ -84,7 +84,7 @@ describe('submit-review-decision — validation precedence', () => {
   // --- adjacent pair: presence before decision validity ---
   // Both missing reviewer AND invalid decision value → presence check wins.
   it('reports missing fields error before invalid-decision error', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(postRequest('rev-1', { decision: 'maybe' }), engine, {
       operationRegistry: registry,
       restBindings: bindings,
@@ -98,7 +98,7 @@ describe('submit-review-decision — validation precedence', () => {
   // --- adjacent pair: decision validity before feedback type ---
   // Invalid decision value AND non-string feedback → decision validity wins.
   it('reports invalid-decision error before feedback-type error', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(
       postRequest('rev-1', { decision: 'maybe', reviewer: 'alice', feedback: 42 }),
       engine,
@@ -112,7 +112,7 @@ describe('submit-review-decision — validation precedence', () => {
 
   // --- feedback-type error surfaces when decision and reviewer are valid ---
   it('reports feedback-type error when only feedback is invalid', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(
       postRequest('rev-1', { decision: 'approved', reviewer: 'alice', feedback: 42 }),
       engine,
@@ -126,7 +126,7 @@ describe('submit-review-decision — validation precedence', () => {
 
   // --- all-bad: presence check (earliest) wins ---
   it('reports missing fields error when all fields are invalid', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const response = await handleRequest(
       postRequest('rev-1', { decision: 'maybe', feedback: 42 }),
       engine,

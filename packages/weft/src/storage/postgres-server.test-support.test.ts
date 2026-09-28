@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 
 import {
   createPostgresTestServer,
+  openPostgresTestDatabase,
   postgresClientBinaries,
   postgresCommandEnvironment,
+  requireOpenedPostgresTestDatabase,
   selectPostgresTestDatabase,
 } from './postgres-server.test-support.ts';
 
@@ -11,8 +13,12 @@ import {
 // spawned while ignoring any supplied URL: a developer with `WEFT_TEST_POSTGRES_URL`
 // exported should still exercise the path the test is named after. A runner with
 // neither the binaries nor a URL skips, which is the behaviour weft's hermetic `test`
-// job depends on.
-const clusterSource = selectPostgresTestDatabase(undefined, postgresClientBinaries());
+// job depends on. The cluster starts at load, before any test or hook is timed — see
+// `openPostgresTestDatabase` — so the test below proves it accepts connections without
+// also racing the host to boot it.
+const cluster = await openPostgresTestDatabase(
+  selectPostgresTestDatabase(undefined, postgresClientBinaries()),
+);
 
 const ambient = {
   PATH: '/usr/local/bin:/usr/bin',
@@ -101,6 +107,16 @@ describe('choosing where the live suites get a database', () => {
     await expect(createPostgresTestServer(null)).rejects.toThrow('postgresTestDatabase');
   });
 
+  it('opens nothing at load, rather than throwing, when a runner has no database', async () => {
+    expect(await openPostgresTestDatabase(null)).toBeNull();
+  });
+
+  it('names the skip gate when a suite reads a database it never opened', () => {
+    expect(() => requireOpenedPostgresTestDatabase(null)).toThrow(
+      'describe.skipIf(database === null)',
+    );
+  });
+
   it('reads host and port off a supplied URL and never stops that server', async () => {
     // The runner owns the server's lifetime, so disposal is a no-op — stopping it here
     // would pull the database out from under the next file in the sweep.
@@ -140,9 +156,11 @@ describe('the disposable cluster failure path', () => {
   });
 });
 
-describe.skipIf(clusterSource === null)('the disposable PostgreSQL cluster', () => {
+describe.skipIf(cluster === null)('the disposable PostgreSQL cluster', () => {
+  afterAll(() => requireOpenedPostgresTestDatabase(cluster)[Symbol.asyncDispose]());
+
   it('starts a cluster that accepts connections', async () => {
-    await using server = await createPostgresTestServer(clusterSource);
+    const server = requireOpenedPostgresTestDatabase(cluster);
 
     expect(server.host).toBe('127.0.0.1');
     expect(server.port).toBeGreaterThan(0);

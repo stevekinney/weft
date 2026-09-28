@@ -34,7 +34,7 @@ describe('single-workflow tag mutation helper', () => {
       method: 'POST',
       operationName: 'weft.workflows.tags.test',
     });
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('POST', '/v1/workflows/workflow-1/tags', { tags: ['alpha', ' beta '] }),
@@ -62,7 +62,7 @@ describe('single-workflow tag mutation helper', () => {
       method: 'DELETE',
       operationName: 'weft.workflows.tags.test',
     });
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('DELETE', '/v1/workflows/workflow-1/tags', { tags: [''] }),
@@ -91,7 +91,7 @@ describe('single-workflow tag mutation helper', () => {
       method: 'POST',
       operationName: 'weft.workflows.tags.test',
     });
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('POST', '/v1/workflows/missing/tags', { tags: ['alpha'] }),
@@ -123,7 +123,7 @@ describe('single-workflow tag mutation helper', () => {
       method: 'DELETE',
       operationName: 'weft.workflows.tags.test',
     });
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('DELETE', '/v1/workflows/workflow-1/tags', { tags: ['alpha'] }),
@@ -150,7 +150,7 @@ describe('single-workflow tag mutation helper', () => {
       method: 'POST',
       operationName: 'weft.workflows.tags.test',
     });
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('PATCH', '/v1/workflows/bulk/tags', { operation: 'add', tags: ['alpha'] }),

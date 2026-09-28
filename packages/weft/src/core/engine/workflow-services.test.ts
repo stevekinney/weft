@@ -645,6 +645,8 @@ describe('ctx.services — terminal cleanup', () => {
     // Terminal cleanup must drop the per-run services, else a long-running engine
     // leaks one entry (and a credential-bearing closure) per completed run.
     expect(internals.workflowServices.has('cleanup-run')).toBe(false);
+
+    await engine[Symbol.asyncDispose]();
   });
 
   it('drops the durable "expects services" marker through the real completion path', async () => {

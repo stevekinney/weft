@@ -15,6 +15,7 @@ import type {
   StartOptions,
   StartOrSignalOptions,
 } from '../../core/types.ts';
+import type { WorkerStartOverridePreview } from '../../worker/start-override-preview.ts';
 
 /**
  * The raw, transport-supplied start-option fields shared by `weft.workflows.start`
@@ -30,6 +31,7 @@ export type SharedStartWorkflowOptionInput = {
   tags?: unknown;
   idempotencyKey?: unknown;
   searchAttributes?: unknown;
+  workerStartOverridePreview?: unknown;
 };
 
 export type StartOrSignalWorkflowOptionInput = SharedStartWorkflowOptionInput & {
@@ -85,10 +87,73 @@ export function buildSharedStartWorkflowOptions(
       searchAttributeSchema,
     );
   }
+  if (input.workerStartOverridePreview !== undefined) {
+    options.workerStartOverridePreview = coerceWorkerStartOverridePreview(
+      input.workerStartOverridePreview,
+      'Field "workerStartOverridePreview"',
+    );
+  }
 
   assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
 
   return options;
+}
+
+function coerceWorkerStartOverridePreview(
+  value: unknown,
+  fieldName: string,
+): WorkerStartOverridePreview {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new StartWorkflowValidationError(`${fieldName} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const preview = {
+    token: coercePreviewString(record['token'], `${fieldName}.token`),
+    scope: coercePreviewScope(record['scope'], `${fieldName}.scope`),
+    workflowId: coercePreviewString(record['workflowId'], `${fieldName}.workflowId`),
+    previousRoutingGeneration: coercePreviewInteger(
+      record['previousRoutingGeneration'],
+      `${fieldName}.previousRoutingGeneration`,
+    ),
+    targetRoutingGeneration: coercePreviewInteger(
+      record['targetRoutingGeneration'],
+      `${fieldName}.targetRoutingGeneration`,
+    ),
+    targetWorkflowContractHash: coercePreviewString(
+      record['targetWorkflowContractHash'],
+      `${fieldName}.targetWorkflowContractHash`,
+    ),
+    targetActivityContractsDigest: coercePreviewString(
+      record['targetActivityContractsDigest'],
+      `${fieldName}.targetActivityContractsDigest`,
+    ),
+    expiresAt: coercePreviewInteger(record['expiresAt'], `${fieldName}.expiresAt`),
+  } satisfies WorkerStartOverridePreview;
+  return preview;
+}
+
+function coercePreviewString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new StartWorkflowValidationError(`${fieldName} must be a non-empty string`);
+  }
+  return value;
+}
+
+function coercePreviewScope(
+  value: unknown,
+  fieldName: string,
+): WorkerStartOverridePreview['scope'] {
+  if (value === 'destructive:workflow-worker-version-binding') return value;
+  throw new StartWorkflowValidationError(
+    `${fieldName} must be "destructive:workflow-worker-version-binding"`,
+  );
+}
+
+function coercePreviewInteger(value: unknown, fieldName: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new StartWorkflowValidationError(`${fieldName} must be a non-negative integer`);
+  }
+  return value as number;
 }
 
 export function buildStartOrSignalWorkflowOptions(

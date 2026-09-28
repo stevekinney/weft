@@ -34,15 +34,51 @@ import {
 import { MAX_BUFFERED_TASK_RESULTS, TaskResultOutbox } from './task-result-outbox.ts';
 import type { RemoteWorkerActivityFunction } from './workflow-activity-binding.ts';
 
+export {
+  defineWorker,
+  implementWorkflow,
+  remoteActivity,
+  type ActivityImplementation,
+  type DefinedWorker,
+  type RemoteActivityDeclaration,
+  type WorkerImplementation,
+  type WorkflowActivityImplementations,
+} from './authoring.ts';
 export type { RemoteWorkerOptions } from './options.ts';
 export { isOutboxFull, MAX_BUFFERED_TASK_RESULTS } from './task-result-outbox.ts';
 
+export {
+  bindingFromExecution,
+  executionRequirementFromWorkflowWorkerBinding,
+  inheritWorkflowWorkerBinding,
+  selectWorkflowActivityBinding,
+} from './binding-helpers.ts';
 export { HeartbeatManager } from './heartbeat.ts';
 export { LongPollWorker } from './long-poll.ts';
 export type { LongPollWorkerOptions } from './long-poll.ts';
 export { WorkerRegistry } from './registry.ts';
 export type { InFlightTask, RoutingOptions, WorkerInfo } from './registry.ts';
 export type { RemoteActivityContext } from './remote-activity-context.ts';
+export {
+  consumeWorkflowWorkerStartOverridePreview,
+  issueWorkflowWorkerStartOverridePreview,
+  verifyWorkflowWorkerStartOverridePreview,
+} from './start-override-preview.ts';
+export type { WorkerStartOverridePreview } from './start-override-preview.ts';
+export {
+  bindWorkflowWorkerAtStart,
+  DEFAULT_WORKFLOW_WORKER_VERSIONING_POLICY,
+  evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint,
+  evaluateWorkflowWorkerUpgrade,
+  readWorkflowWorkerBinding,
+  recordWorkflowWorkerUpgrade,
+} from './versioning-policy.ts';
+export type {
+  WorkerUpgradeBlockedReason,
+  WorkerUpgradeEvaluation,
+  WorkflowWorkerBinding,
+  WorkflowWorkerBindingRecord,
+} from './versioning-policy.ts';
 export {
   buildQualifiedActivityTable,
   type RemoteWorkerActivityFunction,
@@ -679,9 +715,18 @@ export class RemoteWorker implements Disposable {
     // visibilityTimeout, mirroring LongPollWorker's identical per-attempt
     // heartbeat timer. Never sent once the activity settles — cleared in
     // `finally` below, exactly like LongPollWorker's own `heartbeatTimer`.
+    // Also registered with `#taskAbortControllers` so a task whose activity
+    // never settles (ignores the abort signal) still has this real timer
+    // cleared when the attempt is torn down out from under it — by
+    // `#abortAllTasks()` at drain/dispose time — instead of firing forever.
     const heartbeatTimer = setInterval(
       () => this.#sendActivityHeartbeat(task),
       activityHeartbeatIntervalMs(task.visibilityTimeout),
+    );
+    this.#taskAbortControllers.setHeartbeatTimer(
+      task.operationId,
+      task.attemptToken,
+      heartbeatTimer,
     );
 
     try {
@@ -693,11 +738,12 @@ export class RemoteWorker implements Disposable {
         (details) => this.#sendActivityHeartbeat(task, details),
       );
 
+      const value = normalizeWorkerJsonValue(result);
       this.#sendTaskResult({
         type: 'taskResult',
         operationId: task.operationId,
         status: 'completed',
-        value: normalizeWorkerJsonValue(result),
+        value,
         attemptToken: task.attemptToken,
       });
     } catch (error) {

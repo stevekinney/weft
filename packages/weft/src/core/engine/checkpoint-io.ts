@@ -1,5 +1,6 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
+import { evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint } from '../../worker/versioning-policy.ts';
 import {
   advanceCheckpoint,
   deserializeCheckpoint,
@@ -437,6 +438,12 @@ async function commitCheckpoint(
     payload: { step: commit.step },
   });
   callbacks.swallowPromiseRejection(callbacks.pruneCheckpointHistory(workflowId, commit.step));
+  await evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint(
+    internals.storage,
+    workflowId,
+    `checkpoint:${String(commit.step)}`,
+    () => internals.options.getNow(),
+  );
 
   // History circuit breaker: the breaching event has now committed durably and
   // participates in the event-log hash chain, so we never unwind it. Awaiting

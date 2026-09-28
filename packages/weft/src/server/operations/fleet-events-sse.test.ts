@@ -129,7 +129,7 @@ describe('weft.events.sse', () => {
       envelope(1, { workflowId: 'wf-b', kind: 'workflow:started' }),
       envelope(2, { workflowId: 'wf-a', kind: 'workflow:completed' }),
     ]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse?workflowId=wf-a&kind=workflow:completed'),
@@ -159,7 +159,7 @@ describe('weft.events.sse', () => {
       }),
       envelope(5, { workflowId: 'wf-a', kind: 'workflow:completed' }),
     ]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse?workflowId=wf-a&kind=workflow:completed'),
@@ -190,7 +190,7 @@ describe('weft.events.sse', () => {
 
   it('unsubscribes the fleet event feed when an SSE request is already aborted', async () => {
     const { feed, liveListeners } = listenerCountingFleetEventFeed();
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const controller = new AbortController();
     controller.abort();
 
@@ -207,7 +207,7 @@ describe('weft.events.sse', () => {
 
   it('emits a replay-complete ping after fleet SSE replay drains', async () => {
     const { feed, liveListeners } = listenerCountingFleetEventFeed();
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(request('/v1/events/sse'), engine, handlerOptions(feed));
 
@@ -240,7 +240,7 @@ describe('weft.events.sse', () => {
     });
     await fleetFeed.retain({ beforeSequence: 1 });
 
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const response = await handleRequest(
       request('/v1/events/sse?fromCursor=-1'),
       engine,
@@ -267,7 +267,7 @@ describe('weft.events.sse', () => {
 
   it('uses Last-Event-ID before fromCursor', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse?fromCursor=1', { 'Last-Event-ID': '6' }),
@@ -281,7 +281,7 @@ describe('weft.events.sse', () => {
 
   it('rejects invalid cursors before subscribing', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse?fromCursor=invalid'),
@@ -296,7 +296,7 @@ describe('weft.events.sse', () => {
 
   it('requires events:read access', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(request('/v1/events/sse'), engine, {
       authContext: {
@@ -314,7 +314,7 @@ describe('weft.events.sse', () => {
 
   it('allows anonymous SSE when the server explicitly has no authentication schemes', async () => {
     const feed = new RecordingFleetEventFeed([envelope(0)]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(request('/v1/events/sse'), engine, {
       operationRegistry: registry,
@@ -330,7 +330,7 @@ describe('weft.events.sse', () => {
 
   it('requires the Accept header to include text/event-stream', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse', { Accept: 'application/json' }),
@@ -344,7 +344,7 @@ describe('weft.events.sse', () => {
 
   it('accepts case-insensitive event-stream media types with parameters', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse', { Accept: 'TEXT/EVENT-STREAM; charset=utf-8' }),
@@ -358,7 +358,7 @@ describe('weft.events.sse', () => {
 
   it('rejects event-stream substring lookalikes', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse', { Accept: 'text/event-streamx' }),
@@ -372,7 +372,7 @@ describe('weft.events.sse', () => {
 
   it('returns UnsupportedTransport when the live fleet event feed is unavailable', async () => {
     const feed = new RecordingFleetEventFeed([]);
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const options = handlerOptions(feed);
     const { fleetEventFeed: omittedFleetEventFeed, ...optionsWithoutFleetEventFeed } = options;
     void omittedFleetEventFeed;
@@ -406,7 +406,7 @@ describe('weft.events.sse', () => {
   });
 
   it('returns a sanitized error when subscribe throws before streaming starts', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/events/sse'),

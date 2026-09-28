@@ -20,6 +20,7 @@ import type {
   WorkflowFunction,
   WorkflowTimelineEntry,
 } from '../types.ts';
+import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
 
 /**
  * The identity a running workflow instance was launched under, cached by
@@ -53,6 +54,7 @@ export interface RegistrationEntry {
    * survives per-workflow terminal cleanup; resolved at teardown by workflow type.
    */
   finalizer?: AnyActivityDefinition;
+  workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
 }
 
 export interface ResolvedOptions {
@@ -66,6 +68,8 @@ export interface ResolvedOptions {
   maxNestingDepth: number;
   /** Durable-timer scheduler poll interval (ms). */
   schedulerPollIntervalMs: number;
+  /** Server-side authority for destructive worker start override previews. */
+  workerStartOverrideSigningSecret: string | null;
   broadcastEvents: boolean;
   retention: NormalizedRetentionPolicy | null;
   retentionSweepIntervalMs: number;

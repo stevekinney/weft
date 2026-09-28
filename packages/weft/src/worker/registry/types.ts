@@ -2,11 +2,14 @@
 // Shared public types for the worker registry
 // ---------------------------------------------------------------------------
 
-import type { WorkerManifest } from '../manifest/types.ts';
+import type { WorkerExecutionRequirement, WorkerManifest } from '../manifest/types.ts';
 import type { RemoteWorkerCapabilities } from '../protocol.ts';
 
 /** Lifecycle health state of a connected worker. */
 export type WorkerHealth = 'active' | 'draining' | 'drained';
+
+/** Transport that owns a registered worker session. */
+export type WorkerTransport = 'websocket' | 'long-poll';
 
 /**
  * Identity of ONE worker-session — the connection-level lease (COR-230),
@@ -19,18 +22,15 @@ export type WorkerHealth = 'active' | 'draining' | 'drained';
  * same id — so a session that has been superseded (a fresh registration
  * landed after this one, whether inside or outside the reconnect grace
  * window) can be told apart from the one currently live, even though both
- * share `workerId`. `transport` is always `'websocket'` today:
- * `WorkerRegistry.register()` is only ever called for WebSocket workers — a
- * long-poll worker never registers (see `RemoteTaskLeased.executionIdentity`'s
- * doc comment in `task-ledger-types.ts`), so it has no `WorkerSessionIdentity`
- * at all, only the synthetic per-claim `workerSessionId` string
- * `markTaskClaimedByLongPollWorker` mints.
+ * share `workerId`. `transport` names the registered session transport that
+ * owns this identity; WebSocket and long-poll workers use the same registry
+ * and the same attempt-fenced task ledger.
  */
 export interface WorkerSessionIdentity {
   readonly workerId: string;
   readonly sessionGeneration: number;
   readonly manifestDigest: string;
-  readonly transport: 'websocket';
+  readonly transport: WorkerTransport;
 }
 
 /**
@@ -46,6 +46,7 @@ export interface WorkerSessionIdentity {
 export interface WorkerInfo {
   id: string;
   queue: string;
+  transport: WorkerTransport;
   activities: string[];
   concurrency: number;
   inFlight: number;
@@ -68,6 +69,7 @@ export interface WorkerInfo {
 export type WorkerRegistrationInfo = {
   id: string;
   queue: string;
+  transport?: WorkerTransport;
   activities: string[];
   concurrency: number;
   deploymentName?: string;
@@ -90,6 +92,7 @@ export type WorkerRegistrationInfo = {
 export type WorkerSummary = {
   id: string;
   queue: string;
+  transport: WorkerTransport;
   activities: string[];
   concurrency: number;
   inFlight: number;
@@ -156,6 +159,19 @@ export interface RoutingOptions {
    * land on a dead socket while peers are available.
    */
   excludeWorkerIds?: ReadonlySet<string>;
+  /** Durable routing generation selected before worker policy is applied. */
+  deploymentRouting?: {
+    deploymentName: string;
+    currentBuildId: string;
+    rampingBuildId?: string;
+    rampBasisPoints: number;
+    generation: number;
+    updatedAt: number;
+  };
+  /** Stable workflow/run identifier used for deterministic rollout bucketing. */
+  workflowId?: string;
+  /** Exact deployment/build/revision constraints captured by the task lease. */
+  executionRequirement?: WorkerExecutionRequirement;
 }
 
 export interface InFlightTask {

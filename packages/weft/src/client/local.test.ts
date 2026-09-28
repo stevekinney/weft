@@ -672,12 +672,17 @@ describe('LocalClient delegation surface', () => {
   });
 
   it('constructs and disposes the concrete local schedule handle', () => {
-    const client = new LocalClient(new Engine({ storage: new MemoryStorage() }));
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const client = new LocalClient(engine);
     const scheduleHandle = new LocalScheduleHandle('concrete-schedule', client);
 
     expect(scheduleHandle.id).toBe('concrete-schedule');
     scheduleHandle[Symbol.dispose]();
     scheduleHandle[Symbol.dispose]();
+    // No lease is held (in-memory storage, no ownership configured), so the
+    // synchronous path is safe here — otherwise this engine's undisposed 60s
+    // cleanup interval outlives the test.
+    engine[Symbol.dispose]();
   });
 
   it('forwards every method to the underlying engine and wraps handles', async () => {

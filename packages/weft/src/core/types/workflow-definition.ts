@@ -7,6 +7,7 @@
  */
 
 import type { ConstraintDefinition } from '../constraint.ts';
+import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
 import type { DefinitionSchema } from './definition-schema.ts';
 import type { RetentionPolicy } from './retry-retention.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
@@ -108,4 +109,6 @@ export interface WorkflowDefinition<
    * `try/finally`).
    */
   finalizer?: AnyActivityDefinition;
+  /** Per-workflow worker identity binding policy. */
+  workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
 }

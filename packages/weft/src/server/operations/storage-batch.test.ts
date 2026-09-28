@@ -25,7 +25,7 @@ describe('storage REST batch operations', () => {
   it('applies batch writes and deletes through the server route', async () => {
     const rawStorage = new MemoryStorage();
     await rawStorage.put('wf:delete', encode('old'));
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/-/batch', {
@@ -66,7 +66,7 @@ describe('storage REST batch operations', () => {
 
   it('rejects raw storage batches above MAX_BATCH_OPERATIONS before applying writes', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
     const operations = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, index) => ({
       type: 'delete' as const,
       key: `oversized:${index}`,
@@ -100,7 +100,7 @@ describe('storage REST batch operations', () => {
 
   it('evaluates conditional batch conditions against stored keys', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/-/conditional-batch', {
@@ -123,7 +123,7 @@ describe('storage REST batch operations', () => {
   it('denies conditional batches to callers with both narrower storage scopes', async () => {
     const rawStorage = new MemoryStorage();
     await rawStorage.put('wf:key', encode('existing'));
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/-/conditional-batch', {
@@ -147,7 +147,7 @@ describe('storage REST batch operations', () => {
   it('applies conditional batches atomically through the server route', async () => {
     const rawStorage = new MemoryStorage();
     await rawStorage.put('key', encode('old'));
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/-/conditional-batch', {
@@ -169,7 +169,7 @@ describe('storage REST batch operations', () => {
 
   it('rejects raw conditional batches above MAX_BATCH_OPERATIONS before adapter work', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
     const conditions = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, index) => ({
       key: `oversized:${index}`,
       expectedValue: null,
@@ -207,7 +207,7 @@ describe('storage REST batch operations', () => {
   it('allows empty byte values in batch conditions and operations', async () => {
     const rawStorage = new MemoryStorage();
     await rawStorage.put('empty', new Uint8Array());
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/-/conditional-batch', {
@@ -228,7 +228,7 @@ describe('storage REST batch operations', () => {
   });
 
   it('returns 400 when batch operation values are not valid base64', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/storage/-/batch', {
@@ -249,7 +249,7 @@ describe('storage REST batch operations', () => {
   });
 
   it('returns 400 when conditional batch expected values are not valid base64', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    using engine = new Engine({ storage: new MemoryStorage() });
 
     const response = await handleRequest(
       request('/v1/storage/-/conditional-batch', {

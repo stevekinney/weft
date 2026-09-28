@@ -2,6 +2,7 @@
 // In-memory task queue for HTTP long-poll workers
 // ---------------------------------------------------------------------------
 
+import { insertByPolicy } from './task-queue-ordering.ts';
 import type { TaskQueueSnapshot } from './task-queue-summary.ts';
 import { buildQueueSummaries } from './task-queue-summary.ts';
 import type {
@@ -10,6 +11,7 @@ import type {
   TaskQueueOptions,
   TaskQueueSummary,
   TaskResult,
+  WithdrawnPendingTask,
 } from './task-queue-types.ts';
 
 /** Callback invoked when a task completes, fails, or expires. Implementation-private. */
@@ -136,19 +138,7 @@ export class TaskQueue implements Disposable {
       this.#completionCallbacks.set(task.operationId, onComplete);
     }
 
-    const waiters = this.#waiters.get(queue);
-    if (waiters && waiters.length > 0) {
-      const index = waiters.findIndex((w) => w.activities.includes(task.activityName));
-
-      if (index !== -1) {
-        const waiter = waiters[index]!;
-        clearTimeout(waiter.timer);
-        waiters.splice(index, 1);
-        if (waiters.length === 0) this.#waiters.delete(queue);
-        waiter.resolve(task);
-        return true;
-      }
-    }
+    if (this.#handToWaiter(queue, task)) return true;
 
     const tasks = this.#pending.get(queue) ?? [];
     insertByPolicy(tasks, task, this.#schedulingPolicy);
@@ -156,6 +146,65 @@ export class TaskQueue implements Disposable {
 
     this.#scheduleExpiration(queue, task.operationId);
 
+    return true;
+  }
+
+  /**
+   * Remove the first unclaimed task in `queue`, in scheduling order, that
+   * `accept` approves, to hand it to a worker by another route. Never takes a
+   * task with a completion callback: {@link complete} reports its outcome, and a
+   * task dispatched elsewhere never reaches it. See {@link restorePending}.
+   */
+  withdrawPending(
+    queue: string,
+    accept: (task: PendingTask) => boolean,
+  ): WithdrawnPendingTask | undefined {
+    const tasks = this.#pending.get(queue);
+    if (!tasks) return undefined;
+    const index = tasks.findIndex(
+      (task) => !this.#completionCallbacks.has(task.operationId) && accept(task),
+    );
+    if (index === -1) return undefined;
+    const task = tasks.splice(index, 1)[0]!;
+    if (tasks.length === 0) this.#pending.delete(queue);
+    this.#cancelExpiration(task.operationId);
+    this.#dispatched.delete(task.operationId);
+    return { queue, task, index };
+  }
+
+  /**
+   * Put back a task {@link withdrawPending} removed: to a long-poll worker that
+   * parked meanwhile, or else to its former position with its remaining time
+   * to live. Returns `false`, doing nothing, when the operationId is tracked
+   * again — someone else re-queued or dispatched it meanwhile.
+   */
+  restorePending({ queue, task, index }: WithdrawnPendingTask): boolean {
+    if (this.#dispatched.has(task.operationId)) return false;
+    this.#dispatched.add(task.operationId);
+
+    if (this.#handToWaiter(queue, task)) return true;
+
+    const tasks = this.#pending.get(queue) ?? [];
+    tasks.splice(Math.min(index, tasks.length), 0, task);
+    this.#pending.set(queue, tasks);
+
+    const remaining = this.#pendingTaskTimeToLive - (Date.now() - (task.enqueuedAt ?? Date.now()));
+    this.#scheduleExpiration(queue, task.operationId, Math.max(0, remaining));
+    return true;
+  }
+
+  /** Resolve the first parked waiter in `queue` that can run `task`, if any. */
+  #handToWaiter(queue: string, task: PendingTask): boolean {
+    const waiters = this.#waiters.get(queue);
+    if (!waiters || waiters.length === 0) return false;
+    const index = waiters.findIndex((w) => w.activities.includes(task.activityName));
+    if (index === -1) return false;
+
+    const waiter = waiters[index]!;
+    clearTimeout(waiter.timer);
+    waiters.splice(index, 1);
+    if (waiters.length === 0) this.#waiters.delete(queue);
+    waiter.resolve(task);
     return true;
   }
 
@@ -324,11 +373,15 @@ export class TaskQueue implements Disposable {
    * removed from `#pending`, `#dispatched`, and `#completionCallbacks`, and the
    * completion callback (if any) is invoked with a timeout failure.
    */
-  #scheduleExpiration(queue: string, operationId: string): void {
+  #scheduleExpiration(
+    queue: string,
+    operationId: string,
+    delay = this.#pendingTaskTimeToLive,
+  ): void {
     const ttl = this.#pendingTaskTimeToLive;
     if (ttl <= 0 || !Number.isFinite(ttl)) return;
 
-    const timer = setTimeout(() => this.#expireTask(queue, operationId), ttl);
+    const timer = setTimeout(() => this.#expireTask(queue, operationId), delay);
     this.#expirationTimers.set(operationId, timer);
   }
 
@@ -441,37 +494,5 @@ export class TaskQueue implements Disposable {
     }
 
     return stale;
-  }
-}
-
-/**
- * Place `task` into `tasks` at the position prescribed by `policy`.
- *
- * Every policy keeps the property that {@link TaskQueue.poll} can simply
- * dequeue the first matching entry — the ordering logic lives here.
- */
-function insertByPolicy(tasks: PendingTask[], task: PendingTask, policy: SchedulingPolicy): void {
-  if (tasks.length === 0) {
-    tasks.push(task);
-    return;
-  }
-
-  switch (policy) {
-    case 'fifo':
-      tasks.push(task);
-      return;
-    case 'lifo':
-      tasks.unshift(task);
-      return;
-    case 'priority': {
-      const taskPriority = task.priority ?? 0;
-      const insertAt = tasks.findIndex((existing) => (existing.priority ?? 0) < taskPriority);
-      if (insertAt === -1) {
-        tasks.push(task);
-      } else {
-        tasks.splice(insertAt, 0, task);
-      }
-      return;
-    }
   }
 }

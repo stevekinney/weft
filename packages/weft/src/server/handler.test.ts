@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { decode, encode } from '../core/codec.ts';
-import { Engine } from '../core/engine.ts';
+import { Engine, ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING } from '../core/engine.ts';
 import { StartWorkflowValidationError } from '../core/start-workflow-validation.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
@@ -18,9 +18,15 @@ import { storeHistoricalReviewDecisionWithoutRequestMetadata } from './review-te
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Drain microtasks so fire-and-forget work completes. */
-async function flush(): Promise<void> {
-  await sleepForTesting(10);
+/**
+ * Await the result of every workflow the engine has started. Call it only
+ * where each started workflow runs to completion: `completeWorkflow` commits
+ * the terminal state before it settles the result, so reads that follow see
+ * that state.
+ */
+async function waitForStartedWorkflowsToComplete(engine: Engine): Promise<void> {
+  const { items } = await engine.list();
+  await Promise.all(items.map(({ id }) => engine.getHandle(id).result()));
 }
 
 /**
@@ -46,20 +52,6 @@ function reviewReadApiKeyAuth() {
       principal: principalFromApiKey({ subject: 'review-reader', scopes: ['reviews:read'] }),
     },
   };
-}
-
-async function waitForWorkflowStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-): Promise<void> {
-  await waitForCondition(
-    async () => {
-      const state = await engine.get(workflowId);
-      return state?.status === status;
-    },
-    { label: `workflow "${workflowId}" to reach ${status}`, timeoutMs: 500, intervalMs: 5 },
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +504,7 @@ describe('handleRequest', () => {
       engine,
     );
     const { id } = (await json(startResponse)) as { id: string };
-    await flush();
+    await engine.getHandle(id).result();
 
     const response = await handleRequest(request('GET', `/v1/workflows/${id}`), engine);
 
@@ -573,7 +565,7 @@ describe('handleRequest', () => {
     // Start two workflows
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows'), engine);
 
@@ -598,7 +590,7 @@ describe('handleRequest', () => {
 
     // Start a workflow that completes immediately
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?status=running'), engine);
 
@@ -624,7 +616,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 1, id: 'payment-1' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?id_prefix=order-'), engine);
 
@@ -651,7 +643,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 1, id: 'wf-x' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     // gte at 0 includes everything; gte at a huge future time excludes everything.
     const futureBound = Date.now() + 60 * 60 * 1000;
@@ -801,7 +793,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 'delete', id: 'purge-delete' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(
       request('POST', '/v1/workflows/purge', {
@@ -825,7 +817,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 'delete', id: 'purge-empty-body' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('POST', '/v1/workflows/purge'), engine);
 
@@ -840,7 +832,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 'delete', id: 'purge-no-filter' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const nonObjectBodyResponse = await handleRequest(
       new Request('http://localhost/v1/workflows/purge', {
@@ -880,7 +872,7 @@ describe('handleRequest', () => {
       request('POST', '/v1/workflows', { type: 'echo', input: 'other', id: 'purge-filter-3' }),
       engine,
     );
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
     await engine.setAttributes('purge-filter-1', { bucket: 'target' });
     await engine.setAttributes('purge-filter-2', { bucket: 'target' });
     await engine.setAttributes('purge-filter-3', { bucket: 'other' });
@@ -970,9 +962,9 @@ describe('handleRequest', () => {
       await engine.start('waiting', 'other', { id: 'bulk-route-cancel-other', tags: ['other'] });
 
       await Promise.all([
-        waitForWorkflowStatus(engine, 'bulk-route-cancel-a', 'running'),
-        waitForWorkflowStatus(engine, 'bulk-route-cancel-b', 'running'),
-        waitForWorkflowStatus(engine, 'bulk-route-cancel-other', 'running'),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING]('bulk-route-cancel-a'),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING]('bulk-route-cancel-b'),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING]('bulk-route-cancel-other'),
       ]);
 
       const previewResponse = await handleRequest(
@@ -1033,9 +1025,9 @@ describe('handleRequest', () => {
       });
 
       await Promise.all([
-        waitForWorkflowStatus(engine, firstHandle.id, 'running'),
-        waitForWorkflowStatus(engine, secondHandle.id, 'running'),
-        waitForWorkflowStatus(engine, untouchedHandle.id, 'running'),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](firstHandle.id),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](secondHandle.id),
+        engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](untouchedHandle.id),
       ]);
 
       const previewResponse = await handleRequest(
@@ -1071,8 +1063,8 @@ describe('handleRequest', () => {
           auditEvent: expect.objectContaining({ requestId: 'bulk-route-signal' }),
         }),
       );
-      expect(firstHandle.result()).resolves.toBe('first:released');
-      expect(secondHandle.result()).resolves.toBe('second:released');
+      expect(await firstHandle.result()).toBe('first:released');
+      expect(await secondHandle.result()).toBe('second:released');
       const untouchedState = await engine.get(untouchedHandle.id);
       expect(untouchedState?.status).toBe('running');
 
@@ -1094,7 +1086,7 @@ describe('handleRequest', () => {
         id: 'bulk-route-delete-running',
         tags: ['bulk-route-delete'],
       });
-      await waitForWorkflowStatus(engine, runningHandle.id, 'running');
+      await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](runningHandle.id);
 
       const response = await handleRequest(
         request('DELETE', '/v1/workflows/bulk', {
@@ -1341,7 +1333,7 @@ describe('handleRequest', () => {
 
     expect(response.status).toBe(201);
     const { id } = (await json(response)) as { id: string };
-    await flush();
+    await engine.getHandle(id).result();
 
     // Verify the workflow was created (state check)
     const stateResponse = await handleRequest(request('GET', `/v1/workflows/${id}`), engine);
@@ -1556,7 +1548,7 @@ describe('handleRequest', () => {
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 3 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?limit=2&offset=1'), engine);
 
@@ -1579,7 +1571,7 @@ describe('handleRequest', () => {
 
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?limit=-1'), engine);
 
@@ -1594,7 +1586,7 @@ describe('handleRequest', () => {
 
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?limit=0'), engine);
 
@@ -1609,7 +1601,7 @@ describe('handleRequest', () => {
 
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?limit=abc'), engine);
 
@@ -1636,7 +1628,7 @@ describe('handleRequest', () => {
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 3 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?limit=2.9'), engine);
 
@@ -1652,7 +1644,7 @@ describe('handleRequest', () => {
 
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 2 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?offset=-5'), engine);
 
@@ -1667,7 +1659,7 @@ describe('handleRequest', () => {
     engine = createEngine();
 
     await handleRequest(request('POST', '/v1/workflows', { type: 'echo', input: 1 }), engine);
-    await flush();
+    await waitForStartedWorkflowsToComplete(engine);
 
     const response = await handleRequest(request('GET', '/v1/workflows?type=echo'), engine);
 
@@ -1735,7 +1727,7 @@ describe('handleRequest', () => {
       engine,
     );
     const { id } = (await json(startResponse)) as { id: string };
-    await flush();
+    await engine.getHandle(id).result();
 
     const response = await handleRequest(request('GET', `/v1/workflows/${id}/result`), engine);
 
@@ -1972,7 +1964,6 @@ describe('handleRequest', () => {
     const handle = await engine.start('failing', null);
     // Wait for the failure to be recorded
     await handle.result().catch(() => {});
-    await flush();
 
     const response = await handleRequest(
       request('GET', `/v1/workflows/${handle.id}/result`),
@@ -1994,7 +1985,6 @@ describe('handleRequest', () => {
 
     const handle = await engine.start('failing-no-msg', null);
     await handle.result().catch(() => {});
-    await flush();
 
     // Manually update the stored state to remove the error field
     const bytes = await storage.get(KEYS.workflow(handle.id));
@@ -2022,11 +2012,10 @@ describe('handleRequest', () => {
 
     const handle = await engine.start('cancellable', null);
     const resultPromise = handle.result().catch(() => {});
-    await flush();
+    await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](handle.id);
 
     await engine.cancel(handle.id);
     await resultPromise;
-    await flush();
 
     const response = await handleRequest(
       request('GET', `/v1/workflows/${handle.id}/result`),
@@ -2048,7 +2037,6 @@ describe('handleRequest', () => {
       engine,
     );
     const { id } = (await json(startResponse)) as { id: string };
-    await flush();
 
     // Test the timeout path by making handle.result() reject with Timeout
     const originalGetHandle = engine.getHandle.bind(engine);
@@ -2079,7 +2067,6 @@ describe('handleRequest', () => {
       engine,
     );
     const { id } = (await json(startResponse)) as { id: string };
-    await flush();
 
     const originalGetHandle = engine.getHandle.bind(engine);
     engine.getHandle = (workflowId: string) => {
@@ -2810,7 +2797,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       // Insert events into storage using EventLog so they are written in the
       // correct WorkflowLogEntry format (with workflowId, sequence, prevHash).
@@ -3211,7 +3198,7 @@ describe('handleRequest', () => {
       engine.register(queryableWorkflow);
 
       const handle = await engine.start('queryable', null);
-      await flush();
+      await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](handle.id);
 
       const response = await handleRequest(
         request('GET', `/v1/workflows/${handle.id}/query/counter`),
@@ -3230,7 +3217,7 @@ describe('handleRequest', () => {
       engine.register(queryableSimpleWorkflow);
 
       const handle = await engine.start('queryable', null);
-      await flush();
+      await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](handle.id);
 
       const response = await handleRequest(
         request('GET', `/v1/workflows/${handle.id}/query/nonexistent`),
@@ -3321,7 +3308,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const response = await handleRequest(request('POST', `/v1/workflows/${id}/resume`), engine);
 
@@ -3396,7 +3383,7 @@ describe('handleRequest', () => {
 
       const handle = await engine.start('long-running', null);
       const resultPromise = handle.result().catch(() => {});
-      await flush();
+      await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](handle.id);
 
       const response = await handleRequest(
         request('POST', `/v1/workflows/${handle.id}/timeout`),
@@ -3405,7 +3392,6 @@ describe('handleRequest', () => {
 
       expect(response.status).toBe(204);
       await resultPromise;
-      await flush();
 
       // Verify the workflow is now timed-out
       const stateResponse = await handleRequest(
@@ -3590,7 +3576,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const response = await handleRequest(
         new Request(`http://localhost/v1/workflows/${id}/sse`, {
@@ -3625,7 +3611,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const response = await handleRequest(
         new Request(`http://localhost/v1/workflows/${id}/sse`, {
@@ -3649,7 +3635,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const response = await handleRequest(
         new Request(`http://localhost/v1/workflows/${id}/sse`, {
@@ -3673,7 +3659,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const originalGetStreamChunks = engine.getStreamChunks.bind(engine);
       let receivedAfter: number | undefined;
@@ -3717,7 +3703,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       for (const lastEventId of ['1abc', '0x10', '1e3']) {
         const response = await handleRequest(
@@ -3743,7 +3729,7 @@ describe('handleRequest', () => {
         engine,
       );
       const { id } = (await json(startResponse)) as { id: string };
-      await flush();
+      await engine.getHandle(id).result();
 
       const response = await handleRequest(
         new Request(`http://localhost/v1/workflows/${id}/sse`, {

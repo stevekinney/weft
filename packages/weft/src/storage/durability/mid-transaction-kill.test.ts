@@ -44,10 +44,24 @@ import {
   type OpenedAdapter,
 } from './adapter-spec.test-support.ts';
 
-function realSleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
+/**
+ * A `Promise.race` branch that resolves to `value` after `milliseconds` of
+ * real time. Returns the timer alongside the promise — every call site
+ * below races this against work that usually wins, and must clear the
+ * timer once the race settles; an inline
+ * `Promise.race([..., new Promise((resolve) => setTimeout(...))])` would
+ * leave that `setTimeout` alive for the rest of its duration whenever the
+ * OTHER branch wins, which the timer-leak guard reports as a leak.
+ */
+function realTimeoutBranch<T>(
+  milliseconds: number,
+  value: T,
+): { promise: Promise<T>; clear: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(value), milliseconds);
   });
+  return { promise, clear: () => clearTimeout(timer) };
 }
 
 const sqliteModuleUrl = import.meta.resolve('../bun-sql.ts');
@@ -59,10 +73,12 @@ type RunningChild = ReturnType<typeof Bun.spawn>;
 async function killAndWait(child: RunningChild): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGKILL');
+  const timeoutBranch = realTimeoutBranch(2000, 'timeout' as const);
   const winner = await Promise.race([
     child.exited.then(() => 'exited' as const),
-    realSleep(2000).then(() => 'timeout' as const),
+    timeoutBranch.promise,
   ]);
+  timeoutBranch.clear();
   if (winner === 'timeout') {
     throw new Error('Subprocess did not exit within 2s after SIGKILL — leak guard fired');
   }
@@ -114,13 +130,15 @@ async function drainReader(
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     const remaining = Math.max(0, deadline - Date.now());
+    const timeoutBranch = realTimeoutBranch(remaining, { kind: 'timeout' as const });
     const result = await Promise.race([
       reader.read().then(
         (readResult) => ({ kind: 'read' as const, readResult }),
         () => ({ kind: 'cancelled' as const }),
       ),
-      realSleep(remaining).then(() => ({ kind: 'timeout' as const })),
+      timeoutBranch.promise,
     ]);
+    timeoutBranch.clear();
     if (result.kind === 'timeout') break;
     if (result.kind === 'cancelled') break;
     if (result.readResult.done) {
@@ -209,11 +227,13 @@ async function readUntilMarkerOrExit(
   try {
     while (Date.now() < deadline) {
       const remaining = Math.max(0, deadline - Date.now());
+      const timeoutBranch = realTimeoutBranch<RaceResult>(remaining, { kind: 'timeout' });
       const result: RaceResult = await Promise.race<RaceResult>([
         enqueueRead(),
         child.exited.then((): RaceResult => ({ kind: 'exited' })),
-        realSleep(remaining).then((): RaceResult => ({ kind: 'timeout' })),
+        timeoutBranch.promise,
       ]);
+      timeoutBranch.clear();
       if (result.kind === 'exited') {
         earlyExit = true;
         break;

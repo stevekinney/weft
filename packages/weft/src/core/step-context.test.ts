@@ -15,7 +15,7 @@ import { workflow } from './types.ts';
 
 describe('step-context', () => {
   it('runs a simple step workflow', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const greetingWorkflow = workflow({ name: 'greeting' }).execute(
       compileStepWorkflow(async (ctx: StepWorkflowContext, input: unknown) => {
@@ -37,7 +37,7 @@ describe('step-context', () => {
   });
 
   it('executes multiple steps in sequence', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const callOrder: string[] = [];
 
     const sequentialWorkflow = workflow({ name: 'sequential' }).execute(
@@ -66,7 +66,7 @@ describe('step-context', () => {
   });
 
   it('handles async step functions', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const asyncStepsWorkflow = workflow({ name: 'async-steps' }).execute(
       compileStepWorkflow(async (ctx: StepWorkflowContext, _input: unknown) => {
@@ -90,7 +90,7 @@ describe('step-context', () => {
   });
 
   it('propagates step errors to the workflow', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     const errorStepWorkflow = workflow({ name: 'error-step' }).execute(
       compileStepWorkflow(async (ctx: StepWorkflowContext, _input: unknown) => {
@@ -107,7 +107,7 @@ describe('step-context', () => {
   });
 
   it('auto-detects step functions in register()', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     // Register a step-based workflow (plain async function)
     const stepBasedWorkflow = workflow({ name: 'step-based' }).execute(
@@ -126,7 +126,7 @@ describe('step-context', () => {
   });
 
   it('coexists with generator-based workflows on the same engine', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
 
     // Register a step-based workflow
     const stepWorkflowWorkflow = workflow({ name: 'step-workflow' }).execute(
@@ -172,7 +172,7 @@ describe('step-context', () => {
     expect(typeof compiled).toBe('function');
 
     // Use it through the engine to verify it works as a WorkflowFunction
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const compiledWorkflow = workflow({ name: 'compiled' }).execute(compiled);
     engine.register(compiledWorkflow);
 

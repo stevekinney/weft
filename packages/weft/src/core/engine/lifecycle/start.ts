@@ -1,4 +1,5 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
+import type { WorkflowWorkerBinding } from '../../../worker/versioning-policy.ts';
 import { serializeCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import {
@@ -11,10 +12,7 @@ import {
   releaseInFlightStart,
   resolveAndReserveExecutableRegistration,
 } from '../catalog-removal.ts';
-import {
-  forgetCommittedCheckpointBytes,
-  rememberCommittedCheckpointBytes,
-} from '../checkpoint-commit-snapshots.ts';
+import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { Engine } from '../index.ts';
@@ -42,11 +40,13 @@ import {
   resolveStartRevisionUncached,
 } from './start-revision-resolution.ts';
 import { resolveScheduledStartAt } from './start-schedule-timing.ts';
+import { assertServicesSupportedForMode } from './start-services.ts';
 import {
   applyRestartLineage,
   createInitialCheckpoint,
   createInitialWorkflowState,
   parseStartOptionDuration,
+  resolveInitialWorkerBinding,
 } from './start-state.ts';
 import {
   enforceReplayOnlyIdFence,
@@ -54,7 +54,12 @@ import {
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
 } from './start-terminal-conflict-purge.ts';
-
+import { rollbackTransientStartState } from './start-transient-state.ts';
+import {
+  mergeWorkerStartOverrideOperations,
+  prepareWorkerStartOverrideConsumption,
+  workerStartOverrideConditions,
+} from './start-worker-override.ts';
 export async function start(
   internals: EngineInternals,
   type: string,
@@ -72,6 +77,7 @@ type StartWorkflowPreparation = {
   executionStateOwnerId: string | undefined;
   parentWorkflowId: string | undefined;
   parentWorkflowExecutionToken: string | undefined;
+  parentWorkerBinding: WorkflowWorkerBinding | undefined;
   submissionTime: number;
   delayedStartTimer: TimerEntry | undefined;
   normalizedTags: string[] | undefined;
@@ -117,6 +123,8 @@ export function prepareStartWorkflow(
   internals.pendingParentWorkflowId = undefined;
   const parentWorkflowExecutionToken = internals.pendingParentWorkflowExecutionToken;
   internals.pendingParentWorkflowExecutionToken = undefined;
+  const parentWorkerBinding = internals.pendingParentWorkerBinding;
+  internals.pendingParentWorkerBinding = undefined;
   const submissionTime = internals.options.getNow();
   const scheduledStartAt = resolveScheduledStartAt(internals, options, submissionTime, callbacks);
   const normalizedTags = normalizeStartWorkflowTags(internals, options?.tags, undefined, callbacks);
@@ -135,19 +143,11 @@ export function prepareStartWorkflow(
     executionStateOwnerId,
     parentWorkflowId,
     parentWorkflowExecutionToken,
+    parentWorkerBinding,
     submissionTime,
     delayedStartTimer,
     normalizedTags,
   };
-}
-
-export function rollbackTransientStartState(internals: EngineInternals, workflowId: string): void {
-  forgetCommittedCheckpointBytes(internals, workflowId);
-  internals.checkpoints.delete(workflowId);
-  internals.workflowHeaders.delete(workflowId);
-  internals.workflowVersionTuples.delete(workflowId);
-  internals.workflowServices.delete(workflowId);
-  internals.workflowsNeedingTerminalCleanup.delete(workflowId);
 }
 
 /**
@@ -155,18 +155,6 @@ export function rollbackTransientStartState(internals: EngineInternals, workflow
  * It cannot cross to a Worker, so reject it early under worker execution mode
  * rather than stranding a persisted run that can never read its services.
  */
-export function assertServicesSupportedForMode(
-  internals: EngineInternals,
-  options: StartOptions | undefined,
-): void {
-  if (options?.services !== undefined && internals.inlineStrategy === null) {
-    throw new Error(
-      'options.services is only supported in inline execution mode; it cannot be ' +
-        'serialized to a Worker. Remove services or use workflowExecutionMode: "inline".',
-    );
-  }
-}
-
 /**
  * `startWorkflow`'s resolve-and-reserve dispatch — split out to keep that
  * function under the complexity ceiling. Deliberately NOT an `async`
@@ -298,6 +286,7 @@ export async function startWorkflow(
     executionStateOwnerId,
     parentWorkflowId,
     parentWorkflowExecutionToken,
+    parentWorkerBinding,
     delayedStartTimer,
   } = preparation;
 
@@ -343,6 +332,24 @@ export async function startWorkflow(
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 
+    const workerBinding = await resolveInitialWorkerBinding(
+      internals,
+      registration,
+      workflowId,
+      type,
+      revision,
+      options,
+      terminalRunToPurge,
+      parentWorkerBinding,
+      preparation.submissionTime,
+    );
+    const workerStartOverrideConsumption = prepareWorkerStartOverrideConsumption(
+      internals,
+      options,
+      workflowId,
+      terminalRunToPurge,
+      workerBinding,
+    );
     const state = createInitialWorkflowState(
       internals,
       workflowId,
@@ -357,6 +364,9 @@ export async function startWorkflow(
       parentWorkflowExecutionToken,
       delayedStartTimer,
       callbacks,
+      undefined,
+      registration,
+      workerBinding,
     );
     applyRestartLineage(state, terminalRunToPurge);
     const checkpoint = createInitialCheckpoint(
@@ -420,7 +430,11 @@ export async function startWorkflow(
         options,
         delayedStartTimer,
         persistedWorkflowStartHeaders,
-        additionalStartOperations,
+        additionalStartOperations: mergeWorkerStartOverrideOperations(
+          additionalStartOperations,
+          workerStartOverrideConsumption,
+        ),
+        additionalStartConditions: workerStartOverrideConditions(workerStartOverrideConsumption),
         buildWorkflowConcurrencyStartOperations:
           workflowConcurrency === undefined
             ? undefined

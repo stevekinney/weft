@@ -51,6 +51,7 @@ describe('prepareWorkflowClaimFold', () => {
     const engine = await Engine.create({ storage: new MemoryStorage() });
     const internals = getInternals(engine);
     expect(await prepareWorkflowClaimFold(internals, 'wf-1')).toBeUndefined();
+    await engine[Symbol.asyncDispose]();
   });
 
   it('returns undefined when no registry is constructed, so an unbootstrapped engine folds nothing', async () => {
@@ -68,16 +69,17 @@ describe('prepareWorkflowClaimFold', () => {
   });
 
   it('returns undefined when this engine already tracks a claim for the workflow id', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const registry = internals.workflowClaimRegistry!;
     const acquired = await registry.acquire('wf-already-held');
     expect(acquired.status).toBe('acquired');
 
     expect(await prepareWorkflowClaimFold(internals, 'wf-already-held')).toBeUndefined();
+    await engine[Symbol.asyncDispose]();
   });
 
   it('prepares a fold for a fresh workflow id', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const fold = await prepareWorkflowClaimFold(internals, 'wf-fresh');
     expect(fold).toBeDefined();
     expect(fold?.workflowId).toBe('wf-fresh');
@@ -85,12 +87,13 @@ describe('prepareWorkflowClaimFold', () => {
       { key: KEYS.workflowOwnerHolder('wf-fresh'), expectedValue: null },
       { key: KEYS.workflowOwnerEpoch('wf-fresh'), expectedValue: null },
     ]);
+    await engine[Symbol.asyncDispose]();
   });
 });
 
 describe('commitWithWorkflowClaimFold', () => {
   it('commits the fold merged with caller operations/conditions and records the claim', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const fold = await prepareWorkflowClaimFold(internals, 'wf-commit');
     if (fold === undefined) throw new Error('expected a fold');
 
@@ -105,10 +108,11 @@ describe('commitWithWorkflowClaimFold', () => {
     expect(result).toEqual({ status: 'committed' });
     expect(await internals.storage.get('caller-key')).toEqual(new Uint8Array([9]));
     expect(internals.workflowClaimRegistry?.currentEpoch('wf-commit')).toBe(1);
+    await engine[Symbol.asyncDispose]();
   });
 
   it('reports claimConflict: true when the fold itself lost the CAS', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const fold = await prepareWorkflowClaimFold(internals, 'wf-contested');
     if (fold === undefined) throw new Error('expected a fold');
 
@@ -127,10 +131,11 @@ describe('commitWithWorkflowClaimFold', () => {
     expect(result).toEqual({ status: 'lost-race', claimConflict: true });
     // A lost claim fold must never install tracking for a claim this engine does not hold.
     expect(internals.workflowClaimRegistry?.currentEpoch('wf-contested')).toBeNull();
+    await engine[Symbol.asyncDispose]();
   });
 
   it('reports claimConflict: false when an UNRELATED caller precondition lost the CAS', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const fold = await prepareWorkflowClaimFold(internals, 'wf-unrelated-conflict');
     if (fold === undefined) throw new Error('expected a fold');
 
@@ -156,12 +161,13 @@ describe('commitWithWorkflowClaimFold', () => {
     // reading the SAME never-incremented epoch (still absent).
     const retry = await prepareWorkflowClaimFold(internals, 'wf-unrelated-conflict');
     expect(retry?.preparation.epoch).toBe(1);
+    await engine[Symbol.asyncDispose]();
   });
 });
 
 describe('throwWorkflowClaimUnavailable', () => {
   it('raises WorkflowClaimUnavailableError carrying the current holder engineId', async () => {
-    const { internals } = await createTestEngine();
+    const { engine, internals } = await createTestEngine();
     const competitorRegistry = new WorkflowClaimRegistry({
       storage: internals.storage,
       engineId: 'holder-engine',
@@ -172,18 +178,23 @@ describe('throwWorkflowClaimUnavailable', () => {
     const holderAcquireResult = await competitorRegistry.acquire('wf-held');
     expect(holderAcquireResult.status).toBe('acquired');
 
-    expect(throwWorkflowClaimUnavailable(internals, 'wf-held')).rejects.toMatchObject({
+    // `await` here (fixed alongside the timer-leak cleanup below): without
+    // it the test function could return — and this engine get disposed —
+    // before the rejection assertion actually ran.
+    await expect(throwWorkflowClaimUnavailable(internals, 'wf-held')).rejects.toMatchObject({
       name: 'WorkflowClaimUnavailableError',
       workflowId: 'wf-held',
       heldBy: 'holder-engine',
     });
+    await engine[Symbol.asyncDispose]();
   });
 
   it('reports heldBy: null when the holder record is absent', async () => {
-    const { internals } = await createTestEngine();
-    expect(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')).rejects.toMatchObject({
+    const { engine, internals } = await createTestEngine();
+    await expect(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')).rejects.toMatchObject({
       workflowId: 'wf-no-holder',
       heldBy: null,
     });
+    await engine[Symbol.asyncDispose]();
   });
 });

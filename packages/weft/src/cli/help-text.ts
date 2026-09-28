@@ -12,6 +12,7 @@ Commands:
   version:check   Check workflow version compatibility
   validate        Lint workflow definitions for design-time anti-patterns
   codegen         Generate TypeScript declarations from a registry snapshot
+  worker          Verify generated worker manifests
   api             Inspect and invoke catalog operations on a running server
   server          Inspect a running server's health and operation surface
   workflow        List, inspect, start, signal, and cancel workflows on a server
@@ -28,6 +29,23 @@ Serve Options:
   -s, --storage <backend>     Storage backend: sqlite, lmdb, memory (default: sqlite)
   -w, --workflows <path>      Path to workflow module to register on startup
   -h, --help                  Show this help message
+`;
+
+export const WORKER_HELP_TEXT = `
+weft worker - Verify generated worker artifacts
+
+Usage:
+  weft worker verify --manifest <path> --from <registry.json> [options]
+
+Options:
+      --manifest <path>  Worker manifest JSON to verify
+      --from <path>      Registry snapshot JSON to compare against
+  -j, --json             Emit machine-readable JSON
+  -h, --help             Show this help message
+
+Exit codes:
+  0   Manifest matches the registry snapshot
+  1   Manifest, registry, or contract drift was detected
 `;
 
 export const API_HELP_TEXT = `
@@ -272,6 +290,7 @@ Options:
                          /api/v1/registry to whatever path you supply, so
                          http://host/base becomes http://host/base/api/v1/registry
       --from <path>      Read the registry snapshot from a local JSON file
+      --target <target>  registry (default) or worker
       --token <token>    Bearer token sent as Authorization header. Cannot be
                          combined with --from
   -o, --out <file>       Output .d.ts path. Parent directory must already exist

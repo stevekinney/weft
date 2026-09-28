@@ -203,7 +203,7 @@ export function assertManifestMatchesWorkflows(
 }
 
 /** Build the manifest this worker instance advertises at registration. */
-function buildManifest(options: RemoteWorkerOptions): WorkerManifest {
+export function buildWorkerManifest(options: RemoteWorkerOptions): WorkerManifest {
   if (options.manifest !== undefined) return options.manifest;
 
   const workflows: Record<string, WorkerWorkflowContract> = {};
@@ -250,7 +250,7 @@ export function buildRegisterMessage(
     type: 'register',
     protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     workerId,
-    manifest: buildManifest(options),
+    manifest: buildWorkerManifest(options),
     ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
     ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
     ...(resumeSessionGeneration !== undefined ? { resumeSessionGeneration } : {}),

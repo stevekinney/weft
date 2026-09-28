@@ -1425,6 +1425,7 @@ describe('WorkerRegistry', () => {
 
       expect(registry.getWorkerSummaries(1_778_608_001_000)[0]).toMatchObject({
         id: 'identity-worker',
+        transport: 'websocket',
         deploymentName: 'payments',
         buildId: 'build-1',
         runtimeVersion: 'bun-1.2.13',

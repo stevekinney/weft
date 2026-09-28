@@ -135,7 +135,7 @@ describe('COR-205 diagnostics-facing criteria', () => {
     const storage = new MemoryStorage();
     const options = minimalServeOptions(storage);
     const context = minimalServerContext();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     registerWorker(context, 'w-1', 'b1');
     const sent = attachSocket(context, 'w-1');
 
@@ -207,7 +207,7 @@ describe('COR-205 diagnostics-facing criteria', () => {
     const storage = new MemoryStorage();
     const options = minimalServeOptions(storage);
     const context = minimalServerContext();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     registerWorker(context, 'w-1', 'b1');
     attachSocket(context, 'w-1');
 

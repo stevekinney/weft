@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { RemoteWorkerCapabilities } from '../protocol.ts';
-import type { WorkerHealth, WorkerSummary } from './types.ts';
+import type { WorkerHealth, WorkerSummary, WorkerTransport } from './types.ts';
 
 /**
  * Minimal read-only snapshot of a single worker's state, as held by the
@@ -13,6 +13,7 @@ import type { WorkerHealth, WorkerSummary } from './types.ts';
 export type WorkerSnapshot = {
   id: string;
   queue: string;
+  transport: WorkerTransport;
   activities: readonly string[];
   concurrency: number;
   inFlight: number;
@@ -37,6 +38,7 @@ export function projectWorkerSummary(snapshot: WorkerSnapshot, now: number): Wor
   return {
     id: snapshot.id,
     queue: snapshot.queue,
+    transport: snapshot.transport,
     activities: [...snapshot.activities],
     concurrency,
     inFlight,
@@ -76,6 +78,7 @@ export type WorkerDeploymentSummary = {
   deploymentName: string | null;
   buildId: string | null;
   runtimeVersion: string | null;
+  transports: WorkerTransport[];
   health: WorkerHealth;
   workers: number;
   activeWorkers: number;
@@ -151,6 +154,7 @@ export function projectDeploymentSummary(
     deploymentName: first?.deploymentName ?? null,
     buildId: first?.buildId ?? null,
     runtimeVersion: first?.runtimeVersion ?? null,
+    transports: [...new Set(workers.map((worker) => worker.transport))].toSorted(),
     health: deploymentHealth(healthValues, drainActive),
     workers: workers.length,
     activeWorkers: healthCounts.active,

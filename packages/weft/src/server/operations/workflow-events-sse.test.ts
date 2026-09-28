@@ -159,7 +159,7 @@ function listenerCountingWorkflowEventFeed(): {
 describe('weft.workflows.events.sse', () => {
   it('streams workflow event envelopes as cursor-keyed SSE frames', async () => {
     const feed = new RecordingWorkflowEventFeed([envelope(0)]);
-    const engine = createEngine();
+    await using engine = createEngine();
     await engine.start('hold-sse', null, { id: 'wf-sse' });
 
     const response = await handleRequest(
@@ -197,7 +197,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('unsubscribes the workflow event feed when an SSE request is already aborted', async () => {
     const { feed, liveListeners } = listenerCountingWorkflowEventFeed();
-    const engine = createEngine();
+    await using engine = createEngine();
     const controller = new AbortController();
     controller.abort();
 
@@ -214,7 +214,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('emits a replay-complete ping after workflow SSE replay drains', async () => {
     const { feed, liveListeners } = listenerCountingWorkflowEventFeed();
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse'),
@@ -237,7 +237,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('returns MethodNotFound when the SSE binding is registered without the operation', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(request('/v1/workflows/wf-sse/events/sse'), engine, {
       ...handlerOptions(feed),
@@ -254,7 +254,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('uses Last-Event-ID before fromCursor when both are supplied', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse?fromCursor=3', { 'Last-Event-ID': '8' }),
@@ -272,7 +272,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('rejects invalid cursors before opening the stream', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse?fromCursor=bad-cursor'),
@@ -287,7 +287,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('requires the Accept header to include text/event-stream', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse', { Accept: 'application/json' }),
@@ -303,7 +303,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('accepts case-insensitive event-stream media types with parameters', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse', {
@@ -319,7 +319,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('rejects event-stream substring lookalikes', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse', { Accept: 'text/event-streamx' }),
@@ -333,7 +333,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('requires an authenticated principal before opening the stream', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(request('/v1/workflows/wf-sse/events/sse'), engine, {
       operationRegistry: registry,
@@ -348,7 +348,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('allows anonymous SSE when the server explicitly has no authentication schemes', async () => {
     const feed = new RecordingWorkflowEventFeed([envelope(0)]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(request('/v1/workflows/wf-sse/events/sse'), engine, {
       operationRegistry: registry,
@@ -386,7 +386,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('returns UnsupportedTransport when the live workflow event feed is unavailable', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
     const options = handlerOptions(feed, ['events:read']);
     const { workflowEventFeed: omittedWorkflowEventFeed, ...optionsWithoutWorkflowEventFeed } =
       options;
@@ -422,7 +422,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('requires events:read for events and streams:read for tokens', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const eventsResponse = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse'),
@@ -442,7 +442,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('rejects excess workflow SSE streams through the shared stream cap', async () => {
     const feed = new RecordingWorkflowEventFeed([]);
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/wf-sse/events/sse'),
@@ -463,7 +463,7 @@ describe('weft.workflows.events.sse', () => {
 
   it('releases a workflow stream lease when subscribe throws before streaming starts', async () => {
     const feed = new ThrowingWorkflowEventFeed();
-    const engine = createEngine();
+    await using engine = createEngine();
     let releaseCount = 0;
 
     const response = await handleRequest(

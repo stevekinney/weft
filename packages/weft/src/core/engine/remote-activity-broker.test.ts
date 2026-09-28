@@ -16,11 +16,12 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
 import type { RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
-import { taskLedgerKey } from '../task-ledger/task-ledger.ts';
+import { decodeRemoteTaskRecord, taskLedgerKey } from '../task-ledger/task-ledger.ts';
 import { EngineOwnedRemoteActivityBroker } from './remote-activity-broker.ts';
 
 function fixtureRequest(
@@ -96,5 +97,65 @@ describe('EngineOwnedRemoteActivityBroker malformed-record handling (COR-219)', 
     // error and not a second enqueue hint.
     await broker.enqueue(fixtureRequest({ operationId: 'op-replay-1' }));
     expect(enqueuedCount).toBe(1);
+  });
+
+  it('copies the persisted workflow worker binding into the queued task envelope', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.workflow('wf-bound'),
+      encode({
+        id: 'wf-bound',
+        type: 'checkout',
+        status: 'running',
+        input: null,
+        versionTuple: { workflowVersion: '1' },
+        revision: 'revision-1',
+        createdAt: 1,
+        updatedAt: 1,
+        workerBinding: {
+          current: {
+            workflowId: 'wf-bound',
+            workflowType: 'checkout',
+            deploymentName: 'billing',
+            buildId: 'build-1',
+            artifactDigest: 'sha256:artifact',
+            manifestDigest: 'sha256:manifest',
+            routingGeneration: 7,
+            workflowRevision: 'revision-1',
+            workflowContractHash: 'sha256:workflow',
+            activityContracts: {
+              charge: 'sha256:charge',
+              refund: 'sha256:refund',
+            },
+            activityName: 'charge',
+            activityContractHash: 'sha256:charge',
+            boundAt: 2,
+            checkpointId: 'checkpoint-1',
+          },
+          history: [],
+        },
+      }),
+    );
+    const broker = new EngineOwnedRemoteActivityBroker(storage, {}, () => {});
+
+    await broker.enqueue(
+      fixtureRequest({
+        operationId: 'op-bound-refund',
+        workflowId: 'wf-bound',
+        workflowType: 'checkout',
+        activityName: 'refund',
+      }),
+    );
+
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-bound-refund')));
+    expect(record?.state).toBe('queued');
+    expect(record?.workflowWorkerBinding?.routingGeneration).toBe(7);
+    expect(record?.executionRequirement).toEqual({
+      deploymentName: 'billing',
+      buildId: 'build-1',
+      artifactDigest: 'sha256:artifact',
+      workflowRevision: 'revision-1',
+      activityContractHash: 'sha256:refund',
+    });
   });
 });

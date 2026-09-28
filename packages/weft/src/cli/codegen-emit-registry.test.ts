@@ -21,11 +21,19 @@ function emit(activeWorkflows: Record<string, CodegenWorkflowEntry>): string {
 }
 
 function buildWorkflows(
-  workflows: Record<string, Omit<CodegenWorkflowEntry, 'revision' | 'workflowVersion'>> = {},
+  workflows: Record<
+    string,
+    Omit<CodegenWorkflowEntry, 'revision' | 'workflowVersion' | 'contractHash'>
+  > = {},
 ): Record<string, CodegenWorkflowEntry> {
   const result: Record<string, CodegenWorkflowEntry> = {};
   for (const [name, entry] of Object.entries(workflows)) {
-    result[name] = { revision: `sha256:${name}-revision`, workflowVersion: '1.0.0', ...entry };
+    result[name] = {
+      revision: `sha256:${name}-revision`,
+      workflowVersion: '1.0.0',
+      contractHash: `sha256:${name}-contract`,
+      ...entry,
+    };
   }
   return result;
 }
@@ -115,11 +123,13 @@ describe('emitRegistryDeclaration', () => {
       inputSchema: { type: 'string' },
       revision: 'sha256:a',
       workflowVersion: '1.0.0',
+      contractHash: 'sha256:a-contract',
     };
     workflows['valid'] = {
       inputSchema: { type: 'string' },
       revision: 'sha256:b',
       workflowVersion: '1.0.0',
+      contractHash: 'sha256:b-contract',
     };
     const output = emit(workflows);
     expect(output).toContain('"__proto__"');
@@ -144,7 +154,7 @@ describe('emitRegistryDeclaration', () => {
       }),
     );
     expect(output).toContain(
-      '"welcome": { input: string; output: string; revision: "sha256:welcome-revision"; workflowVersion: "1.0.0" };',
+      '"welcome": { input: string; output: string; revision: "sha256:welcome-revision"; workflowVersion: "1.0.0"; contractHash: "sha256:welcome-contract" };',
     );
   });
 
@@ -160,7 +170,7 @@ describe('emitRegistryDeclaration', () => {
     ];
     for (const hostile of hostileValues) {
       const workflows: Record<string, CodegenWorkflowEntry> = {
-        w: { revision: hostile, workflowVersion: '1.0.0' },
+        w: { revision: hostile, workflowVersion: '1.0.0', contractHash: 'sha256:w-contract' },
       };
       const output = emit(workflows);
       // The value must appear only inside a JSON.stringify-quoted literal —

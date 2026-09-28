@@ -57,8 +57,15 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
     const neverReleased = new Promise<never>(() => {});
     longPollWorker = new LongPollWorker({
       serverUrl: server.url,
-      activities: {
-        'lp-claim-workflow.slowActivity': async () => neverReleased,
+      deploymentName: 'long-poll-claim-test',
+      buildId: 'test-build',
+      workflows: {
+        'lp-claim-workflow': {
+          name: 'lp-claim-workflow',
+          activities: {
+            slowActivity: async () => neverReleased,
+          },
+        },
       },
       concurrency: 1,
       pollTimeout: 1_000,
@@ -111,10 +118,17 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
     const executedInputs: unknown[] = [];
     longPollWorker = new LongPollWorker({
       serverUrl: server.url,
-      activities: {
-        'lp-success-workflow.formatGreeting': async (input: unknown) => {
-          executedInputs.push(input);
-          return `Hello, ${(input as { name: string }).name}!`;
+      deploymentName: 'long-poll-success-test',
+      buildId: 'test-build',
+      workflows: {
+        'lp-success-workflow': {
+          name: 'lp-success-workflow',
+          activities: {
+            formatGreeting: async (input: unknown) => {
+              executedInputs.push(input);
+              return `Hello, ${(input as { name: string }).name}!`;
+            },
+          },
         },
       },
       concurrency: 1,
@@ -166,14 +180,21 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
     let abortSignalSeen: AbortSignal | undefined;
     longPollWorker = new LongPollWorker({
       serverUrl: server.url,
-      activities: {
-        'lp-cancel-workflow.slowActivity': (_input, context) => {
-          abortSignalSeen = context?.signal;
-          return new Promise((_resolve, reject) => {
-            context?.signal.addEventListener('abort', () => {
-              reject(new Error('activity observed cancellation'));
-            });
-          });
+      deploymentName: 'long-poll-cancel-test',
+      buildId: 'test-build',
+      workflows: {
+        'lp-cancel-workflow': {
+          name: 'lp-cancel-workflow',
+          activities: {
+            slowActivity: (_input, context) => {
+              abortSignalSeen = context?.signal;
+              return new Promise((_resolve, reject) => {
+                context?.signal.addEventListener('abort', () => {
+                  reject(new Error('activity observed cancellation'));
+                });
+              });
+            },
+          },
         },
       },
       concurrency: 1,

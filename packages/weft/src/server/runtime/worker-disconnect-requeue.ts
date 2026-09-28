@@ -28,6 +28,12 @@
  * attempt has its own try/catch, matching the original inline requeue loop's
  * error handling.
  *
+ * Server stop is the one exception to the durable reassignment: once
+ * `context.stopping` is set, the forfeit stays in memory and every lease
+ * stays durable for a restarted server to recover. `server.stop()` reaches
+ * this module through {@link endWorkerReconnectGracePeriods}, and through the
+ * close handler for sockets the stop itself closes.
+ *
  * @module server/runtime/worker-disconnect-requeue
  */
 
@@ -69,6 +75,14 @@ export async function runWorkerDisconnectRequeue(
     cleanupWorkflowIndex(task.operationId);
   }
 
+  // A stopping server leaves every lease durable, matching
+  // `ServerContext.stopping`'s no-durable-writes contract: it can no longer
+  // redispatch a requeued task, and a server restarted over the same storage
+  // may already have recovered — or re-leased — the record this would read.
+  // The lease expires on its own, and that server's startup recovery or
+  // visibility scan reclaims it.
+  if (context.stopping) return;
+
   // Requeue each in-flight task with incremented attempt, respecting retry policy.
   // The in-memory registry is the source of truth for *which* tasks to reassign.
   // Full task metadata (activityName, input, etc.) is read from storage.
@@ -79,7 +93,19 @@ export async function runWorkerDisconnectRequeue(
           await options.engine.storage.get(taskLedgerKey(task.operationId)),
         );
 
-        if (record !== null && record.state === 'leased') {
+        if (
+          record !== null &&
+          record.state === 'leased' &&
+          record.attemptToken !== task.attemptToken
+        ) {
+          // Forfeit only the attempt this worker held. A different attempt
+          // means another actor — a peer or restarted server sharing this
+          // storage — already requeued and re-leased the task, and that live
+          // attempt belongs to someone else's worker.
+          console.warn(
+            `[weft] Task "${task.operationId}" was re-leased to another attempt — skipping reassignment`,
+          );
+        } else if (record !== null && record.state === 'leased') {
           await reassignOrExpireTask(
             context,
             options,
@@ -102,4 +128,27 @@ export async function runWorkerDisconnectRequeue(
       }
     }),
   );
+}
+
+/**
+ * End every pending reconnect grace window when the server stops. A stopped
+ * server accepts no reconnect, so each window's deferred disconnect runs now
+ * rather than on a timer that must not outlive the server. Removing each
+ * worker's `workerSockets` entry is what lets `shutdownAllWorkers` skip a
+ * socket that already closed instead of waiting out its shutdown timeout.
+ *
+ * Call only once `context.stopping` is set: `runWorkerDisconnectRequeue`
+ * then does its in-memory cleanup synchronously and leaves every lease
+ * durable.
+ */
+export function endWorkerReconnectGracePeriods(
+  context: ServerContext,
+  options: ServeOptions,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): void {
+  for (const [workerId, timer] of context.pendingWorkerRequeues) {
+    clearTimeout(timer);
+    void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
+  }
+  context.pendingWorkerRequeues.clear();
 }

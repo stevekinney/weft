@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import {
@@ -17,11 +17,14 @@ import {
   checkoutInputSchema,
   checkoutWorkflowRegistration,
   createEngine,
+  disposeCreatedEngines,
   makeDefinitionSchema,
   type CheckoutInput,
   type WorkflowRegistrationFixture,
 } from './workflow-adapter.test-support.ts';
 import { catalogWorkflow } from './workflow-adapter.ts';
+
+afterEach(disposeCreatedEngines);
 
 describe('catalogWorkflow — registration and metadata', () => {
   it('uses workflow registration metadata as adapter defaults', async () => {
