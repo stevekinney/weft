@@ -82,20 +82,35 @@ function assertWellFormedSourceDescriptor(source: WorkflowSourceHandle): void {
  * `commitWorkflowDefinition`.
  */
 export function registerSource(internals: EngineInternals, source: WorkflowSourceHandle): void {
-  // Inline-only for now (WFT-15/16): a dynamically-loaded definition is
-  // resolved and wired into THIS process's in-memory `internals` maps
+  // Inline or revision-realm mode only (WFT-15/16, COR-249's engine
+  // integration): a dynamically-loaded definition is resolved and wired
+  // into THIS process's in-memory `internals` maps
   // (`activityRegistriesByWorkflow`, `workflowTypesByHandler`) — exactly
-  // what the inline execution strategy reads directly. A Worker realm has
-  // no mechanism this batch wires to receive that same loaded module or
-  // manifest, so registering a dynamic source under `workflowExecutionMode:
-  // 'worker'` would silently resolve a definition the worker thread could
-  // never actually execute. Fail loud at registration time rather than at
-  // a confusing later `start()` failure.
-  if (internals.inlineStrategy === null) {
+  // what the inline execution strategy reads directly. The generic Worker
+  // execution mode has no mechanism this batch wires to receive that same
+  // loaded module or manifest, so registering a dynamic source under
+  // `workflowExecutionMode: 'worker'` would silently resolve a definition
+  // the worker thread could never actually execute — fail loud at
+  // registration time rather than at a confusing later `start()` failure.
+  //
+  // Revision-realm mode is the one exception: it does not ship the loaded
+  // module anywhere. `resolveWorkflowSource()`'s load+install pipeline is
+  // reused unchanged, for the same reason `engine.register()`'s eager
+  // registration is reused unchanged (retention/concurrency/contract
+  // bookkeeping, and the multi-revision catalog machinery `registerSource()`
+  // alone provides) — `RevisionRealmExecutionStrategy` never reads
+  // `RegistrationEntry.handler`, so the resolved definition's handler is a
+  // metadata-only placeholder the host is guaranteed to never invoke. The
+  // realm's OWN worker bootstrap independently loads the real workflow
+  // implementation module, keyed by the same `(name, revision)` a realm
+  // config resolver maps to its `workerUrl` — see
+  // `EngineOptions.revisionRealmExecution` and its own doc for why weft
+  // cannot honestly derive that URL from `source.descriptor.location`.
+  if (internals.inlineStrategy === null && internals.revisionRealmRegistry === undefined) {
     throw new Error(
-      'registerSource() is only supported in inline execution mode; a dynamically-loaded ' +
-        'definition cannot be shipped to a Worker realm. Use workflowExecutionMode: "inline", ' +
-        'or register this workflow eagerly with engine.register() instead.',
+      'registerSource() is only supported in inline or "realm" execution mode; a dynamically-loaded ' +
+        'definition cannot be shipped to a generic Worker realm. Use workflowExecutionMode: "inline" ' +
+        'or "realm", or register this workflow eagerly with engine.register() instead.',
     );
   }
   assertWellFormedSourceDescriptor(source);

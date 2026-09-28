@@ -1,5 +1,6 @@
 import {
   buildClaimAttemptRecordWrite,
+  buildTaskAttemptTransitionEvent,
   digestAttemptToken,
 } from '../../core/task-ledger/task-attempt-runtime.ts';
 import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-runtime.ts';
@@ -315,6 +316,21 @@ async function selectAndReserveWorker(
     deadline: result.record.leaseDeadline,
   });
 
+  // COR-198: attempt-by-attempt worker transition, fired only after the
+  // durable claim above actually committed.
+  options.engine.dispatchEvent(
+    await buildTaskAttemptTransitionEvent(options.engine.storage, {
+      operationId: task.operationId,
+      workflowId: task.workflowId,
+      activityName: task.activityName,
+      attempt: result.record.attempt,
+      attemptTokenDigest,
+      workerSessionId: worker.id,
+      executionIdentity,
+      executionRequirement: result.record.executionRequirement,
+    }),
+  );
+
   ws.send(
     JSON.stringify({
       type: 'task',
@@ -328,6 +344,14 @@ async function selectAndReserveWorker(
       }),
       ...(task.workflowRevision !== undefined && { workflowRevision: task.workflowRevision }),
       ...(task.headers ? { headers: task.headers } : {}),
+      // COR-226: the basis for RemoteWorker's automatic per-attempt keepalive
+      // interval, mirroring the long-poll transport's identical field.
+      visibilityTimeout,
+      // COR-226: echoes a PRIOR attempt's recorded heartbeat details back to
+      // the worker executing this (possibly redispatched) attempt.
+      ...(result.record.lastHeartbeatDetails !== undefined && {
+        lastHeartbeatDetails: result.record.lastHeartbeatDetails,
+      }),
     }),
   );
 
@@ -602,8 +626,17 @@ export async function cancelTask(
   const task = context.registry.getTask(operationId);
   const ws = task !== undefined ? context.workerSockets.get(task.workerId) : undefined;
   if (ws !== undefined) {
+    // COR-223: `reason` echoes the durably recorded `cancellationReason`
+    // (`result.record` is the freshly committed `Cancelling` record) so the
+    // worker's aborted `AbortSignal.reason` and reported cancellation carry
+    // the real, operator-supplied reason instead of a generic literal.
     ws.send(
-      JSON.stringify({ type: 'cancel', operationId, attemptToken: result.record.attemptToken }),
+      JSON.stringify({
+        type: 'cancel',
+        operationId,
+        attemptToken: result.record.attemptToken,
+        reason: result.record.cancellationReason,
+      }),
     );
   }
 

@@ -33,7 +33,7 @@ An external state-machine protocol could also coordinate non-TypeScript workflow
 
 ## Verification
 
-The [worker protocol reference](../../reference/remote-worker-protocol.md) is checked against the exported message-schema catalog. Protocol v6 requires `register.protocolVersion: 6`; missing or unsupported versions receive `registerError`.
+The [worker protocol reference](../../reference/remote-worker-protocol.md) is checked against the exported message-schema catalog. Protocol v8 requires `register.protocolVersion: 8`; missing or unsupported versions receive `registerError`.
 
 From the repository root, run `bun packages/weft/src/cli-main.ts conformance --help` for the worker conformance command. The [remote-worker guide](../../guides/remote-workers.md) covers transport setup, and the [recovery guide](../../guides/remote-task-recovery.md) covers durable result ownership and adoption.
 

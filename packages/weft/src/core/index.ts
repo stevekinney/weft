@@ -93,6 +93,7 @@ export {
   SignalDeliveredEvent,
   SignalReceivedEvent,
   StorageSizeReportedEvent,
+  TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,

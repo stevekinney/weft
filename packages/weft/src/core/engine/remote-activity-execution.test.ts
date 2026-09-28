@@ -8,7 +8,7 @@
  * — `EngineOwnedRemoteActivityBroker` (the default broker) and a real
  * `serve()` + `RemoteWorker` are the only moving parts.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { serve, type WeftServer } from '../../server/index.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
@@ -77,11 +77,16 @@ describe('remote activity execution (COR-152)', () => {
       label: 'remote worker to register',
     });
 
+    // A spy, not just a throw: proves the local implementation was never
+    // INVOKED at all, not merely that invoking it would have thrown (COR-154)
+    // — a bug that called it and discarded the return value before adopting
+    // the remote result would not be caught by the throw alone.
+    const localFormatGreeting = mock(async (_input: { name: string }): Promise<string> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const formatGreeting = activity({
       name: 'formatGreeting',
-      execute: async (_input: { name: string }): Promise<string> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localFormatGreeting,
     });
 
     engine.register(
@@ -102,6 +107,7 @@ describe('remote activity execution (COR-152)', () => {
     // continuation — not just a bare "it eventually resolved."
     expect(await handle.result()).toBe('Hello, Ada!');
     expect(executedInputs).toEqual([{ name: 'Ada' }]);
+    expect(localFormatGreeting).toHaveBeenCalledTimes(0);
   });
 
   it('never falls back to local execution when no remote worker is available (criterion 9)', async () => {
@@ -157,12 +163,13 @@ describe('remote activity execution (COR-152)', () => {
       },
     });
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
       timeout: '15s',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
 
     engine.register(
@@ -197,9 +204,19 @@ describe('remote activity execution (COR-152)', () => {
     });
     // The per-call `timeout` overrides the broker's own configured default.
     expect(record.visibilityTimeoutMilliseconds).toBe(15_000);
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
-  it('reaches the durable envelope with headers and the workflow execution token (criterion 4)', async () => {
+  it('assembles headers and the workflow execution token onto the request handed to the broker (criterion 4)', async () => {
+    // This double proves what the LEAF EXECUTOR builds before handing off to
+    // whichever broker is configured — it never reaches
+    // `EngineOwnedRemoteActivityBroker` or the durable ledger, so it cannot
+    // by itself prove headers/the execution token "reach the durable
+    // envelope." That stronger claim (COR-154) is proven with the PRODUCTION
+    // broker in the "reads queue, retry, timeout, headers, workflow
+    // execution token, and attempt token off the durable ledger record" test
+    // below, and again end-to-end in
+    // `server/remote-activity-integration.test.ts`'s first test.
     const requests: RemoteActivityTaskRequest[] = [];
     const recordingBroker: RemoteActivityBroker = {
       async enqueue(request) {
@@ -217,11 +234,12 @@ describe('remote activity execution (COR-152)', () => {
     };
     engine.addInterceptor(traceHeaderInterceptor);
 
+    const localSendEmail = mock(async (_input: { to: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const sendEmail = activity({
       name: 'sendEmail',
-      execute: async (_input: { to: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localSendEmail,
     });
 
     engine.register(
@@ -251,5 +269,113 @@ describe('remote activity execution (COR-152)', () => {
     // Resolve the parked activity so the handle settles cleanly.
     await engine.completeAsyncActivity(request.operationId, 'sent');
     expect(await handle.result()).toBe('sent');
+    expect(localSendEmail).toHaveBeenCalledTimes(0);
+  });
+
+  it('constructs the engine with the production broker and reads queue, retry, timeout, headers, workflow execution token, and attempt token off the durable ledger record (COR-154)', async () => {
+    engine = new Engine({
+      activityExecution: {
+        mode: 'remote',
+        queue: 'billing',
+        retryPolicy: {
+          maxAttempts: 4,
+          initialBackoff: '1s',
+          backoffMultiplier: 2,
+          maxBackoff: '30s',
+        },
+      },
+    });
+    server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
+
+    const traceHeaderInterceptor: WorkflowInterceptor = {
+      *activity(interception, next) {
+        interception.headers.set('x-trace-id', 'production-broker-trace');
+        return yield* next(interception);
+      },
+    };
+    engine.addInterceptor(traceHeaderInterceptor);
+
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
+    const chargeCard = activity({
+      name: 'chargeCard',
+      timeout: '20s',
+      execute: localChargeCard,
+    });
+    engine.register(
+      workflow({ name: 'production-broker-workflow' })
+        .activities({ chargeCard })
+        .execute(async function* (context: WorkflowContext) {
+          return yield* context.run(chargeCard, { orderId: 'ord-production-broker-1' });
+        }),
+    );
+
+    // Hold the worker's implementation open until this test has read the
+    // `leased` record — the ONLY state in which `attemptToken` exists at
+    // all (`RemoteTaskQueued` has no attempt token; it is assigned at claim
+    // time). Releasing it afterward lets the workflow settle cleanly.
+    let releaseWorker: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    remoteWorker = new RemoteWorker({
+      // This engine's `activityExecution.queue` is "billing" — the worker
+      // must connect to that SAME queue's stream, not "default", or the
+      // task is durably queued but never dispatched to it.
+      serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/billing/stream`,
+      workerId: 'production-broker-worker',
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workflows: {
+        'production-broker-workflow': {
+          name: 'production-broker-workflow',
+          activities: {
+            chargeCard: async () => {
+              await gate;
+              return 'charged-by-production-broker';
+            },
+          },
+        },
+      },
+      concurrency: 1,
+    });
+    await remoteWorker.connect();
+    await waitForCondition(
+      () => server?.registry.getWorker('production-broker-worker') !== undefined,
+      { timeoutMs: 5_000, intervalMs: 25, label: 'remote worker to register' },
+    );
+
+    const handle = await engine.start('production-broker-workflow', null, {
+      id: 'production-broker-1',
+    });
+
+    await waitForCondition(
+      async () => {
+        const record = await readOnlyTaskLedgerRecord(engine!);
+        return record !== null && record.state === 'leased';
+      },
+      { timeoutMs: 5_000, intervalMs: 10, label: 'task to be claimed and leased' },
+    );
+
+    const leasedRecord = await readOnlyTaskLedgerRecord(engine);
+    if (leasedRecord === null || leasedRecord.state !== 'leased') {
+      throw new Error(`expected a leased record, got ${JSON.stringify(leasedRecord)}`);
+    }
+    expect(leasedRecord.queue).toBe('billing');
+    expect(leasedRecord.retryPolicy).toEqual({
+      maxAttempts: 4,
+      initialBackoff: '1s',
+      backoffMultiplier: 2,
+      maxBackoff: '30s',
+    });
+    expect(leasedRecord.visibilityTimeoutMilliseconds).toBe(20_000);
+    expect(leasedRecord.headers).toEqual({ 'x-trace-id': 'production-broker-trace' });
+    expect(leasedRecord.workflowExecutionToken).toBeString();
+    expect(leasedRecord.attemptToken).toBeString();
+
+    releaseWorker!();
+    expect(await handle.result()).toBe('charged-by-production-broker');
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 });

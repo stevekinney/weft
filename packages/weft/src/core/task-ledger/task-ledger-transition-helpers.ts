@@ -58,6 +58,9 @@ export function pickAttemptFields(record: RemoteTaskAttemptFields): RemoteTaskAt
     ...(record.lastRequeueReason !== undefined
       ? { lastRequeueReason: record.lastRequeueReason }
       : {}),
+    ...(record.lastHeartbeatDetails !== undefined
+      ? { lastHeartbeatDetails: record.lastHeartbeatDetails }
+      : {}),
   };
 }
 

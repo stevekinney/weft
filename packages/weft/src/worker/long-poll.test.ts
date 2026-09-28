@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { ActivityInterceptor } from '../core/interceptor.ts';
-import { createDeferred, withTimeout } from '../testing/fake-timers.test-support.ts';
+import {
+  createDeferred,
+  waitForCondition,
+  withTimeout,
+} from '../testing/fake-timers.test-support.ts';
 import { LongPollWorker } from './long-poll.ts';
 
 // ---------------------------------------------------------------------------
@@ -151,6 +155,15 @@ describe('LongPollWorker', () => {
           return new Response(null, { status: 204 });
         }
 
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          // COR-235: a bare `{ ok: true }` (no disposition) is not a real
+          // server response — LongPollResultDelivery treats it as
+          // unrecognized and retries indefinitely, which would leave this
+          // test's aborted-but-successful result "unacknowledged" at
+          // stop() for reasons unrelated to what this test actually checks.
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
         return Response.json({ ok: true });
       },
     });
@@ -294,7 +307,13 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          // COR-235: LongPollResultDelivery only acknowledges (and stops
+          // retrying) an applied/duplicate/dead-lettered disposition,
+          // matching the real server's actual response shape
+          // (handleTaskResultRequest always includes `disposition`) — a bare
+          // `{ ok: true }` with no disposition is treated as an unrecognized
+          // 2xx body and retried.
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -363,7 +382,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -455,7 +474,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -475,6 +494,15 @@ describe('LongPollWorker', () => {
       LONG_POLL_TEST_TIMEOUT_MS,
       'unknown activity completion',
     );
+    // taskCompleted resolves when the server RECEIVES the POST, before it
+    // has even sent a response — wait for the client to actually process
+    // that response and acknowledge (COR-235) before stopping, so stop()
+    // does not race a still-in-flight disposition read and report a
+    // spurious "still unacknowledged" warning for a result the server
+    // already durably applied.
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: LONG_POLL_TEST_TIMEOUT_MS,
+    });
     await worker.stop();
 
     // Should have reported the unknown activity as a failure
@@ -484,9 +512,17 @@ describe('LongPollWorker', () => {
     expect(unknownCompletion.error).toBe('Unknown activity: nonExistent');
   });
 
-  it('handles error completion fetch failure gracefully', async () => {
+  it('retries a failed-activity result after a transient completion-endpoint failure, instead of dropping it (COR-235)', async () => {
+    // Before COR-235 this test asserted the opposite: a failed completion
+    // POST was a one-shot best-effort attempt, silently and permanently
+    // dropped on any further failure ("handles error completion fetch
+    // failure gracefully" — normalizing data loss as acceptable behavior).
+    // LongPollResultDelivery retains a result until its disposition is
+    // actually read, retrying a transient failure instead.
     const activityAttempted = createDeferred();
+    const resultDelivered = createDeferred();
     let pollCount = 0;
+    let resultAttempts = 0;
 
     server = Bun.serve({
       port: 0,
@@ -497,17 +533,23 @@ describe('LongPollWorker', () => {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
-              operationId: 'op-double-fail',
+              operationId: 'op-transient-result-failure',
               activityName: 'failingActivity',
               input: null,
+              attemptToken: 'attempt-token-transient-result-failure',
             });
           }
           return new Response(null, { status: 204 });
         }
 
         if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
-          // Make the completion endpoint fail too
-          return new Response('Server Error', { status: 500 });
+          resultAttempts += 1;
+          if (resultAttempts === 1) {
+            // The first submission fails transiently.
+            return new Response('Server Error', { status: 500 });
+          }
+          resultDelivered.resolve();
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -516,6 +558,8 @@ describe('LongPollWorker', () => {
 
     const worker = new LongPollWorker({
       serverUrl: `http://localhost:${server.port}`,
+      resultRetryBaseDelayMs: 10,
+      resultRetryMaxDelayMs: 50,
       activities: {
         failingActivity: async () => {
           activityAttempted.resolve();
@@ -530,10 +574,190 @@ describe('LongPollWorker', () => {
       LONG_POLL_TEST_TIMEOUT_MS,
       'failing activity attempt',
     );
-    await worker.stop();
+    await withTimeout(
+      resultDelivered.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'retried result delivery reaching the server',
+    );
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: LONG_POLL_TEST_TIMEOUT_MS,
+    });
+    expect(resultAttempts).toBeGreaterThanOrEqual(2);
 
-    // Should not crash; worker should still stop cleanly
+    await worker.stop();
     expect(worker.running).toBe(false);
+  });
+
+  it('drops a buffered result on a correlated 403 and never resends it (COR-1271 identity)', async () => {
+    const activityAttempted = createDeferred();
+    const firstRejectionSent = createDeferred();
+    let pollCount = 0;
+    let resultAttempts = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-permanently-rejected-longpoll',
+              activityName: 'echoActivity',
+              input: 'hi',
+              attemptToken: 'attempt-token-permanently-rejected',
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          resultAttempts += 1;
+          const body = await request.json();
+          // Every attempt is permanently rejected, correlated to the exact
+          // submission — the server will never apply this result no matter
+          // how many times it is resent.
+          const response = Response.json(
+            {
+              error: 'Forbidden',
+              operationId: body.operationId,
+              attemptToken: body.attemptToken,
+              reason: 'unknown-operation',
+            },
+            { status: 403 },
+          );
+          firstRejectionSent.resolve();
+          return response;
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      resultRetryBaseDelayMs: 10,
+      resultRetryMaxDelayMs: 50,
+      activities: {
+        echoActivity: async (input) => {
+          activityAttempted.resolve();
+          return input;
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(
+      activityAttempted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'echo activity attempt',
+    );
+    await withTimeout(
+      firstRejectionSent.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'first correlated 403',
+    );
+
+    // The correlated-403 drop is an observed event: unacknowledgedResultCount
+    // reaching 0 after the server has already answered with the correlated
+    // rejection means the entry was actually DROPPED, not merely "not yet
+    // delivered" (which is what a 0 BEFORE any attempt would prove nothing).
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: LONG_POLL_TEST_TIMEOUT_MS,
+    });
+    const attemptsAtDrop = resultAttempts;
+
+    await worker.stop();
+    // No further attempts after stop() — confirms the entry was dropped
+    // rather than merely paused mid-retry.
+    expect(resultAttempts).toBe(attemptsAtDrop);
+  });
+
+  it('resumes delivery of an unacknowledged result on start() after stop() (COR-235)', async () => {
+    const activityAttempted = createDeferred();
+    const resultDelivered = createDeferred();
+    let pollCount = 0;
+    let resultAttempts = 0;
+    let serverHealthy = false;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-resume-on-restart',
+              activityName: 'echoActivity',
+              input: 'hi',
+              attemptToken: 'attempt-token-resume-on-restart',
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          resultAttempts += 1;
+          if (!serverHealthy) {
+            return new Response('Server Error', { status: 500 });
+          }
+          resultDelivered.resolve();
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      // Large enough that the retry timer, not a coincidental fire, could
+      // never explain a resend landing right after start() — only start()'s
+      // own flush() can produce it within this test's timeout.
+      resultRetryBaseDelayMs: 10_000,
+      resultRetryMaxDelayMs: 30_000,
+      activities: {
+        echoActivity: async (input) => {
+          activityAttempted.resolve();
+          return input;
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(
+      activityAttempted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'echo activity attempt',
+    );
+    // Wait for the first (failing) delivery attempt to land before stopping,
+    // so stop() observes a genuinely unacknowledged result rather than
+    // racing the very first send.
+    await waitForCondition(() => resultAttempts >= 1, { timeoutMs: LONG_POLL_TEST_TIMEOUT_MS });
+
+    const stopped = await worker.stop();
+    expect(stopped.unacknowledgedResults).toBe(1);
+    const attemptsAtStop = resultAttempts;
+
+    // The server recovers, and the worker restarts — start() must re-flush
+    // the still-buffered result immediately rather than waiting out the
+    // (intentionally huge) retry backoff.
+    serverHealthy = true;
+    worker.start();
+    await withTimeout(
+      resultDelivered.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'resumed result delivery',
+    );
+    await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
+      timeoutMs: LONG_POLL_TEST_TIMEOUT_MS,
+    });
+    expect(resultAttempts).toBeGreaterThan(attemptsAtStop);
+
+    await worker.stop();
   });
 
   it('handles non-Error throws in activities', async () => {
@@ -562,7 +786,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -649,7 +873,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -722,7 +946,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -785,7 +1009,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskCompleted.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -832,7 +1056,11 @@ describe('LongPollWorker', () => {
 
   it('sends periodic activityHeartbeat POSTs, naming operationId and attemptToken, for an in-flight activity (criteria 2, 5)', async () => {
     const heartbeatBodies: any[] = [];
-    const firstHeartbeatReceived = createDeferred();
+    // A barrier on the THIRD heartbeat, not the first — proves true
+    // interval-driven periodicity (the timer firing repeatedly) rather than
+    // merely an initial send that a broken interval could still produce
+    // once and never again.
+    const thirdHeartbeatReceived = createDeferred();
     const releaseActivity = createDeferred();
     let pollCount = 0;
 
@@ -859,12 +1087,12 @@ describe('LongPollWorker', () => {
         if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           heartbeatBodies.push(body);
-          firstHeartbeatReceived.resolve();
+          if (heartbeatBodies.length >= 3) thirdHeartbeatReceived.resolve();
           return Response.json({ ok: true, cancelled: false });
         }
 
         if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -883,16 +1111,27 @@ describe('LongPollWorker', () => {
     });
 
     worker.start();
-    await withTimeout(firstHeartbeatReceived.promise, LONG_POLL_TEST_TIMEOUT_MS, 'first heartbeat');
+    await withTimeout(
+      thirdHeartbeatReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'third interval-driven heartbeat',
+    );
     releaseActivity.resolve();
     await worker.stop();
 
-    expect(heartbeatBodies.length).toBeGreaterThanOrEqual(1);
+    expect(heartbeatBodies.length).toBeGreaterThanOrEqual(3);
     expect(heartbeatBodies[0]).toEqual({
       operationId: 'op-heartbeat-1',
       workerId: 'longpoll-worker-hb',
       attemptToken: 'attempt-token-hb',
     });
+    // Every observed heartbeat, not just the first, names the same
+    // (operationId, attemptToken) — proving the interval is renewing the
+    // SAME attempt repeatedly, not producing one-off or drifting sends.
+    for (const body of heartbeatBodies) {
+      expect(body.operationId).toBe('op-heartbeat-1');
+      expect(body.attemptToken).toBe('attempt-token-hb');
+    }
   });
 
   it('aborts the activity and reports status "cancelled" when a heartbeat response says cancelled: true (criteria 5, 13)', async () => {
@@ -935,7 +1174,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           taskResultReceived.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -971,6 +1210,164 @@ describe('LongPollWorker', () => {
     expect(taskResult).toBeDefined();
     expect(taskResult.status).toBe('cancelled');
     expect(taskResult.cancelled).toBe(true);
+  });
+
+  it('reports the durably recorded cancellation reason on a cancelled result instead of a generic literal (COR-223)', async () => {
+    const activityStarted = createDeferred();
+    const activityAborted = createDeferred();
+    const taskResultReceived = createDeferred();
+    const completedTasks: any[] = [];
+    let receivedSignalReason: unknown;
+    let pollCount = 0;
+    let heartbeatCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            return Response.json({
+              operationId: 'op-cancel-reason-lp',
+              workerId: 'longpoll-worker-cancel-reason',
+              activityName: 'cancellableActivity',
+              input: null,
+              attemptToken: 'attempt-token-cancel-reason',
+              visibilityTimeout: 30_000,
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          heartbeatCount++;
+          return Response.json({
+            ok: true,
+            cancelled: heartbeatCount >= 2,
+            ...(heartbeatCount >= 2 ? { reason: 'operator requested: customer refund' } : {}),
+          });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          completedTasks.push(body);
+          taskResultReceived.resolve();
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      heartbeatIntervalMs: 20,
+      activities: {
+        cancellableActivity: async (_input, context) => {
+          activityStarted.resolve();
+          context?.signal.addEventListener(
+            'abort',
+            () => {
+              receivedSignalReason = context.signal.reason;
+              activityAborted.resolve();
+            },
+            { once: true },
+          );
+          await activityAborted.promise;
+          throw new Error('Aborted');
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(activityStarted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'activity started');
+    await withTimeout(activityAborted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'activity aborted');
+    await withTimeout(
+      taskResultReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'task result received',
+    );
+    await worker.stop();
+
+    const taskResult = completedTasks.find((t) => t.operationId === 'op-cancel-reason-lp');
+    expect(taskResult).toBeDefined();
+    expect(taskResult.status).toBe('cancelled');
+    expect(taskResult.error).toBe('operator requested: customer refund');
+    expect(receivedSignalReason).toBe('operator requested: customer refund');
+  });
+
+  it("sends heartbeat details on demand and surfaces a prior attempt's lastHeartbeatDetails from the poll response (COR-226)", async () => {
+    const heartbeatBodies: any[] = [];
+    const detailsHeartbeatReceived = createDeferred();
+    let receivedLastHeartbeatDetails: unknown;
+    let pollCount = 0;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            // Simulates a redispatch: the server would normally derive this
+            // from the previous attempt's durably persisted
+            // lastHeartbeatDetails (see task-heartbeat.test.ts for the
+            // server-side ledger round trip); here the CLIENT's own wiring
+            // is what is under test.
+            return Response.json({
+              operationId: 'op-heartbeat-details-lp',
+              workerId: 'longpoll-worker-details',
+              activityName: 'detailsActivity',
+              input: null,
+              attemptToken: 'attempt-token-details',
+              visibilityTimeout: 30_000,
+              lastHeartbeatDetails: { progress: 0.5 },
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          heartbeatBodies.push(body);
+          if (body.details !== undefined) detailsHeartbeatReceived.resolve();
+          return Response.json({ ok: true, cancelled: false });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      heartbeatIntervalMs: 20,
+      activities: {
+        detailsActivity: async (_input, context) => {
+          receivedLastHeartbeatDetails = context?.lastHeartbeatDetails;
+          context?.heartbeat({ progress: 0.75 });
+          return 'done';
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(
+      detailsHeartbeatReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'on-demand heartbeat with details',
+    );
+    await worker.stop();
+
+    const detailsHeartbeat = heartbeatBodies.find((body) => body.details !== undefined);
+    expect(detailsHeartbeat.details).toEqual({ progress: 0.75 });
+    expect(receivedLastHeartbeatDetails).toEqual({ progress: 0.5 });
   });
 
   it('a cancellation signal for one operation does not abort a different concurrently in-flight operation (criterion 11)', async () => {
@@ -1030,7 +1427,7 @@ describe('LongPollWorker', () => {
           const body = await request.json();
           completedTasks.push(body);
           if (body.operationId === 'op-fenced-b') bResultReceived.resolve();
-          return Response.json({ ok: true });
+          return Response.json({ ok: true, disposition: 'applied' });
         }
 
         return new Response('not found', { status: 404 });
@@ -1086,5 +1483,128 @@ describe('LongPollWorker', () => {
     expect(bResult).toBeDefined();
     expect(bResult.status).toBe('completed');
     expect(bResult.value).toBe('b-completed-despite-a-cancellation');
+  });
+
+  it('a completed attempt cleanup does not delete a later, still-live attempt for the same operationId (COR-223, tuple-keyed abort controllers)', async () => {
+    const bothStarted = createDeferred();
+    const attempt2Aborted = createDeferred();
+    const attempt1ResultReceived = createDeferred();
+    let attempt1Started = false;
+    let attempt2Started = false;
+    let attempt1ResultPosted = false;
+    const completedTasks: any[] = [];
+    let pollCount = 0;
+
+    function checkBothStarted(): void {
+      if (attempt1Started && attempt2Started) bothStarted.resolve();
+    }
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollCount++;
+          if (pollCount === 1) {
+            // Same operationId, DIFFERENT attemptTokens — simulates a
+            // same-worker redispatch that lands back on this exact worker
+            // instance while an earlier attempt of the same operation is
+            // still executing.
+            return Response.json({
+              operationId: 'op-overlap-lp',
+              workerId: 'longpoll-worker-overlap',
+              activityName: 'overlapActivity',
+              input: 'attempt-1',
+              attemptToken: 'attempt-1',
+              visibilityTimeout: 30_000,
+            });
+          }
+          if (pollCount === 2) {
+            return Response.json({
+              operationId: 'op-overlap-lp',
+              workerId: 'longpoll-worker-overlap',
+              activityName: 'overlapActivity',
+              input: 'attempt-2',
+              attemptToken: 'attempt-2',
+              visibilityTimeout: 30_000,
+            });
+          }
+          return new Response(null, { status: 204 });
+        }
+
+        if (HEARTBEAT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = (await request.json()) as { attemptToken: string };
+          // attempt-1 is never told to cancel. attempt-2 is only told to
+          // cancel AFTER attempt-1's result has actually landed — the exact
+          // moment attempt-1's `finally` cleanup runs. If that cleanup wrongly
+          // deleted attempt-2's live table entry (the pre-COR-223 bug), this
+          // worker's own `#sendHeartbeat` lookup for attempt-2 finds nothing
+          // and silently never aborts it, so `attempt2Aborted` never resolves
+          // and the test times out below instead of falsely passing.
+          const cancelled = body.attemptToken === 'attempt-2' && attempt1ResultPosted;
+          return Response.json({ ok: true, cancelled });
+        }
+
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          const body = await request.json();
+          completedTasks.push(body);
+          if (body.attemptToken === 'attempt-1') {
+            attempt1ResultPosted = true;
+            attempt1ResultReceived.resolve();
+          }
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      concurrency: 2,
+      heartbeatIntervalMs: 20,
+      activities: {
+        overlapActivity: async (input, context) => {
+          if (input === 'attempt-1') {
+            attempt1Started = true;
+            checkBothStarted();
+            // Completes NORMALLY on its own — never cancelled — which is
+            // what triggers its `finally` cleanup.
+            return 'attempt-1-completed';
+          }
+          attempt2Started = true;
+          checkBothStarted();
+          context?.signal.addEventListener('abort', () => attempt2Aborted.resolve(), {
+            once: true,
+          });
+          // Never resolves on its own — only a heartbeat response naming
+          // THIS attempt's `cancelled: true` should ever settle it.
+          await attempt2Aborted.promise;
+          throw new Error('attempt-2 aborted');
+        },
+      },
+    });
+
+    worker.start();
+    await withTimeout(bothStarted.promise, LONG_POLL_TEST_TIMEOUT_MS, 'both attempts started');
+    await withTimeout(
+      attempt1ResultReceived.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'attempt-1 result received',
+    );
+    // Only now does the server start telling attempt-2's heartbeat to
+    // cancel — proving attempt-2's controller survived attempt-1's cleanup.
+    await withTimeout(
+      attempt2Aborted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'attempt-2 observed its own abort after attempt-1 completed and cleaned up',
+    );
+    await worker.stop();
+
+    const attempt2Result = completedTasks.find((t) => t.attemptToken === 'attempt-2');
+    expect(attempt2Result).toBeDefined();
+    expect(attempt2Result.status).toBe('cancelled');
+    expect(attempt2Result.cancelled).toBe(true);
   });
 });

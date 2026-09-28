@@ -13,7 +13,7 @@
  * polls an application-level loop: every wait is a `waitForCondition` on
  * durable or observable state (acceptance criterion 2).
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
 import type { WorkflowInterceptor } from '../core/interceptor.ts';
@@ -89,11 +89,12 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     };
     engine.addInterceptor(traceHeaderInterceptor);
 
+    const localFormatGreeting = mock(async (_input: { name: string }): Promise<string> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const formatGreeting = activity({
       name: 'formatGreeting',
-      execute: async (_input: { name: string }): Promise<string> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localFormatGreeting,
     });
 
     engine.register(
@@ -119,6 +120,7 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     const terminalRecord = await readOnlyTaskLedgerRecord(engine);
     expect(terminalRecord?.headers).toEqual({ 'x-trace-id': 'e2e-trace-1' });
     expect(terminalRecord?.workflowExecutionToken).toBeString();
+    expect(localFormatGreeting).toHaveBeenCalledTimes(0);
   });
 
   it('returns the real remote failure to ctx.run()', async () => {
@@ -149,11 +151,12 @@ describe('remote activity end-to-end integration (COR-152)', () => {
       label: 'remote worker to register',
     });
 
+    const localAlwaysFails = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const alwaysFails = activity({
       name: 'alwaysFails',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localAlwaysFails,
     });
     engine.register(
       workflow({ name: 'e2e-failure-workflow' })
@@ -172,6 +175,7 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain('remote activity intentionally failed');
+    expect(localAlwaysFails).toHaveBeenCalledTimes(0);
   });
 
   it('resumes ordinary workflow-level retry: a failed attempt is followed by a second dispatch that succeeds', async () => {
@@ -205,11 +209,12 @@ describe('remote activity end-to-end integration (COR-152)', () => {
       label: 'remote worker to register',
     });
 
+    const localFlaky = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const flaky = activity({
       name: 'flaky',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localFlaky,
     });
     engine.register(
       workflow({ name: 'e2e-retry-workflow' })
@@ -229,6 +234,7 @@ describe('remote activity end-to-end integration (COR-152)', () => {
 
     expect(await handle.result()).toBe('succeeded-on-retry');
     expect(callCount).toBe(2);
+    expect(localFlaky).toHaveBeenCalledTimes(0);
   });
 
   it('cancellation targets the current durable attempt and settles the local waiter', async () => {
@@ -262,11 +268,12 @@ describe('remote activity end-to-end integration (COR-152)', () => {
       label: 'remote worker to register',
     });
 
+    const localSlowActivity = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const slowActivity = activity({
       name: 'slowActivity',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localSlowActivity,
     });
     engine.register(
       workflow({ name: 'e2e-cancel-workflow' })
@@ -296,16 +303,18 @@ describe('remote activity end-to-end integration (COR-152)', () => {
       },
       { timeoutMs: 2_000, intervalMs: 10, label: 'the durable attempt to leave "leased"' },
     );
+    expect(localSlowActivity).toHaveBeenCalledTimes(0);
   });
 
   it('preserves and completes a remote task across a server restart and engine recovery', async () => {
     await using storage = new MemoryStorage();
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     const restartWorkflow = workflow({ name: 'e2e-restart-workflow' })
       .activities({ chargeCard })
@@ -409,5 +418,6 @@ describe('remote activity end-to-end integration (COR-152)', () => {
 
     const recoveredHandle = engine.getHandle(handle.id);
     expect(await recoveredHandle.result()).toBe('charged-after-recovery');
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 });

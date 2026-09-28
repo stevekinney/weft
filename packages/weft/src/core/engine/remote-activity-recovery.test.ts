@@ -21,7 +21,7 @@
  *   reloads the resolution record and delivers it when replay re-parks on
  *   the same deterministic token.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { serve, type WeftServer } from '../../server/index.ts';
 import { commitTaskLedgerCompletion } from '../../server/runtime/task-ledger-completion.ts';
@@ -61,11 +61,12 @@ describe('remote activity recovery (COR-152)', () => {
   it('leaves the task durably queued when no server exists at enqueue time (criterion 7)', async () => {
     engine = new Engine({ activityExecution: { mode: 'remote' } });
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     engine.register(
       workflow({ name: 'no-server-workflow' })
@@ -92,6 +93,7 @@ describe('remote activity recovery (COR-152)', () => {
     // back to the long-poll queue's in-memory hint is a separate, pre-existing
     // `reconcileOrphanedRecords`/`WorkerRegistry` interaction this test does
     // not exercise.
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
   it('never lets a result outrun pending-token registration, even an implausibly fast one (criterion 6)', async () => {
@@ -109,11 +111,12 @@ describe('remote activity recovery (COR-152)', () => {
 
     engine = new Engine({ activityExecution: { mode: 'remote', broker: instantResolveBroker } });
 
+    const localSendEmail = mock(async (_input: { to: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const sendEmail = activity({
       name: 'sendEmail',
-      execute: async (_input: { to: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localSendEmail,
     });
     engine.register(
       workflow({ name: 'instant-resolve-workflow' })
@@ -125,17 +128,19 @@ describe('remote activity recovery (COR-152)', () => {
 
     const handle = await engine.start('instant-resolve-workflow', null, { id: 'instant-1' });
     expect(await handle.result()).toBe('resolved-instantly');
+    expect(localSendEmail).toHaveBeenCalledTimes(0);
   });
 
   it('adopts the real value across a crash between the ledger commit and any bridge delivery (criterion 6)', async () => {
     engine = new Engine({ activityExecution: { mode: 'remote' } });
     const storage = engine.storage;
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     const crashWorkflow = workflow({ name: 'crash-before-bridge-workflow' })
       .activities({ chargeCard })
@@ -218,17 +223,19 @@ describe('remote activity recovery (COR-152)', () => {
 
     const recoveredHandle = recoveredEngine.getHandle(handle.id);
     expect(await recoveredHandle.result()).toBe('crash-survivor');
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
   it('settles the local waiter on disposal without deleting the durable task or pending token (criterion 11)', async () => {
     engine = new Engine({ activityExecution: { mode: 'remote' } });
     const storage = engine.storage;
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     engine.register(
       workflow({ name: 'disposal-workflow' })
@@ -273,6 +280,7 @@ describe('remote activity recovery (COR-152)', () => {
       if (!key.endsWith(':resolution')) pendingTokenRecordCount += 1;
     }
     expect(pendingTokenRecordCount).toBe(1);
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
   it('preserves leased work across a server stop and restart (criterion 8)', async () => {
@@ -324,11 +332,12 @@ describe('remote activity recovery (COR-152)', () => {
       label: 'remote worker to register',
     });
 
+    const localSlowActivity = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const slowActivity = activity({
       name: 'slowActivity',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localSlowActivity,
     });
     engine.register(
       workflow({ name: 'restart-workflow' })
@@ -382,5 +391,6 @@ describe('remote activity recovery (COR-152)', () => {
     await remoteWorker.connect();
 
     expect(await handle.result()).toBe('released-after-restart');
+    expect(localSlowActivity).toHaveBeenCalledTimes(0);
   });
 });

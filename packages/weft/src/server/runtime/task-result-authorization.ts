@@ -68,8 +68,32 @@ export interface CurrentAttempt {
   readonly attemptToken: string;
 }
 
+/**
+ * The full lookup a `taskResult` (or `activityHeartbeat`) submission is
+ * checked against: either a live/resolved {@link CurrentAttempt} identity, or
+ * one of two DISTINCT reasons no comparable identity exists at all (COR-237).
+ *
+ *   - `'unknown'` — no ledger record has EVER existed for this operation.
+ *     There is nothing to be stale relative to; the operation itself is
+ *     unrecognized.
+ *   - `'stale'` — a record exists, but it is not a comparable current
+ *     attempt: still `queued` (a previous attempt already timed out and the
+ *     task is back waiting for a new one), or a resolved record from before
+ *     `attemptToken` was tracked. Also the ephemeral `WorkerRegistry`
+ *     lookup's "nothing tracked" case ({@link currentAttemptFromInFlightTask}),
+ *     which has no ledger to consult and defaults to this reading — an
+ *     untracked in-flight entry almost always means "this WAS assigned and
+ *     no longer is," not "this was never known to exist."
+ *
+ * Before COR-237 these both collapsed into one `undefined` value and one
+ * `'no-current-attempt'` reason, so "a result for an unknown operation" and
+ * "a stale attempt on a live/queued record" were the same outward rejection
+ * with no way for a caller, log line, or diagnostic to tell them apart.
+ */
+export type CurrentAttemptLookup = CurrentAttempt | 'unknown' | 'stale';
+
 export type TaskResultAuthorizationFailure =
-  'no-current-attempt' | 'worker-mismatch' | 'attempt-token-mismatch';
+  'unknown-operation' | 'stale-attempt' | 'worker-mismatch' | 'attempt-token-mismatch';
 
 export type TaskResultAuthorizationResult =
   Readonly<{ ok: true }> | Readonly<{ ok: false; reason: TaskResultAuthorizationFailure }>;
@@ -78,11 +102,12 @@ export type TaskResultAuthorizationResult =
  * The shared decision: may a `taskResult` submission (`workerId` +
  * `attemptToken`) proceed to `applyWorkerTaskResult`?
  *
- *   - `current === undefined` — no attempt is currently held or was ever
- *     resolved under a recoverable identity (no record, or one still
- *     `queued`/`cancelling`). Rejected as `'no-current-attempt'` — COR-233
- *     item 2: a missing current attempt is a rejection, never a
- *     duplicate-tolerant no-op success.
+ *   - `current === 'unknown'` — no ledger record has ever existed for this
+ *     operation. Rejected as `'unknown-operation'`.
+ *   - `current === 'stale'` — a record exists (or existed in the ephemeral
+ *     registry) but is not the current attempt. Rejected as
+ *     `'stale-attempt'`. COR-233 item 2 covers both: a missing current
+ *     attempt is a rejection, never a duplicate-tolerant no-op success.
  *   - `current.workerSessionId` present — the attempt is still live. The
  *     submission's `workerId` must match it exactly before `attemptToken` is
  *     even compared, so a stale completion from a worker displaced by
@@ -97,12 +122,15 @@ export type TaskResultAuthorizationResult =
  *     to reach that comparison at all.
  */
 export function authorizeTaskResultForCurrentAttempt(
-  current: CurrentAttempt | undefined,
+  current: CurrentAttemptLookup,
   workerId: string | undefined,
   attemptToken: string,
 ): TaskResultAuthorizationResult {
-  if (current === undefined) {
-    return { ok: false, reason: 'no-current-attempt' };
+  if (current === 'unknown') {
+    return { ok: false, reason: 'unknown-operation' };
+  }
+  if (current === 'stale') {
+    return { ok: false, reason: 'stale-attempt' };
   }
   if (current.workerSessionId !== undefined) {
     if (workerId === undefined || current.workerSessionId !== workerId) {
@@ -115,37 +143,49 @@ export function authorizeTaskResultForCurrentAttempt(
   return { ok: true };
 }
 
-/** `CurrentAttempt` view of a `WorkerRegistry` in-flight entry — WebSocket's fast path. */
+/**
+ * `CurrentAttemptLookup` view of a `WorkerRegistry` in-flight entry —
+ * WebSocket's fast path. `task === undefined` maps to `'stale'`: this is an
+ * ephemeral, non-durable lookup with no ledger to consult, and in every live
+ * call site (`onActivityHeartbeatMessage`) an untracked operation means the
+ * registry forgot (or never held) this attempt specifically, not that the
+ * operation is unrecognized system-wide — `onTaskResultMessage`'s own
+ * `taskResult` path never actually reaches this branch (see this module's
+ * doc comment); it falls back to {@link currentAttemptFromLedgerRecord}
+ * first, which DOES distinguish `'unknown'` from `'stale'` from the
+ * authoritative ledger.
+ */
 export function currentAttemptFromInFlightTask(
   task: InFlightTask | undefined,
-): CurrentAttempt | undefined {
-  if (task === undefined) return undefined;
+): CurrentAttemptLookup {
+  if (task === undefined) return 'stale';
   return { workerSessionId: task.workerId, attemptToken: task.attemptToken };
 }
 
 /**
- * `CurrentAttempt` view of a durable ledger record — long-poll's only source
- * of truth, and WebSocket's fallback once `WorkerRegistry` has forgotten the
- * operation (see this module's doc comment). `queued` and `cancelling`
- * records have no resolvable "current attempt" (a `cancelling` record's
- * attempt is being torn down, not completed) and reduce to `undefined`
- * exactly like a missing record.
+ * `CurrentAttemptLookup` view of a durable ledger record — long-poll's only
+ * source of truth, and WebSocket's fallback once `WorkerRegistry` has
+ * forgotten the operation (see this module's doc comment). A `null` record
+ * (no ledger entry has ever existed for this `operationId`) is `'unknown'`;
+ * a `queued` record (a previous attempt already timed out and the task is
+ * back waiting to be leased again) is `'stale'` — a record genuinely exists,
+ * it just isn't a comparable current attempt.
  */
 export function currentAttemptFromLedgerRecord(
   record: RemoteTaskRecord | null,
-): CurrentAttempt | undefined {
-  if (record === null) return undefined;
+): CurrentAttemptLookup {
+  if (record === null) return 'unknown';
   // `cancelling` (COR-230) is a live attempt exactly like `leased`/
   // `completing` — the worker still holds the lease while cooperative
   // cancellation is pending, and its resulting `taskResult(status:
   // 'cancelled')` must reach `commitTaskLedgerCompletion`'s dedicated
-  // cancellation branch rather than being rejected here as
-  // 'no-current-attempt'.
+  // cancellation branch rather than being rejected here as `'stale'`.
   if (record.state === 'leased' || record.state === 'completing' || record.state === 'cancelling') {
     return { workerSessionId: record.workerSessionId, attemptToken: record.attemptToken };
   }
   if (record.state === 'terminal' || record.state === 'deadLettered') {
-    return record.attemptToken === undefined ? undefined : { attemptToken: record.attemptToken };
+    return record.attemptToken === undefined ? 'stale' : { attemptToken: record.attemptToken };
   }
-  return undefined;
+  // `queued`: a record genuinely exists, but no attempt is current.
+  return 'stale';
 }

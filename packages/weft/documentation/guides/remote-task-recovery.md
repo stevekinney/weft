@@ -56,6 +56,62 @@ Worker readiness also has an identity boundary. A socket opening is followed by 
 
 For production artifact identity, construct a manifest from registered workflows with `buildWorkerManifestFromRegistry()` and supply a digest of the executable artifact. The default `declared-shape:` digest describes declared names; it does not prove which executable bytes the worker loaded. The [worker API reference](../reference/api-workers.md#canonical-worker-manifest) covers parsing, canonical hashing, execution identity, and manifest construction. Apply `workerAdmissionPolicy` when the host needs additional admission restrictions after authentication and manifest validation.
 
+## Attempt history and provenance
+
+The task ledger's `RemoteTaskRecord` holds exactly one CURRENT state per `operationId`—every transition overwrites it in place. A separate, durable, append-only record—`TaskAttemptRecord`—retains every past attempt, keyed by `(operationId, attemptTokenDigest)`. It is written in the same conditional batch as the claim, heartbeat, cancellation, requeue, completion, and dead-letter transitions that touch it, so it never drifts from the ledger it describes: a lost compare-and-swap on the ledger leaves no orphaned attempt record, and a successful transition never leaves the ledger updated with stale attempt history.
+
+`server.getTaskResult()` (above) omits attempt history entirely—it is a public, session-free projection. Read attempt history through the `weft.tasks.get` operation (`GET /api/v1/tasks/detail/:operationId`) instead, whose response includes an `attempts` array, oldest first:
+
+```ts
+type TaskAttempt = {
+  attempt: number;
+  attemptTokenDigest: string; // sha256Hex(attemptToken)—never the raw token
+  sessionGeneration?: number;
+  executionIdentity?: WorkerExecutionIdentity; // the worker that ACTUALLY executed this attempt
+  executionRequirement?: WorkerExecutionRequirement; // the routing constraint the DISPATCH declared
+  claimedAt: number; // epoch ms
+  disposition: 'leased' | 'requeued' | 'retryExhausted' | 'resolved' | 'cancelled' | 'deadLettered';
+  dispositionAt: number; // epoch ms
+  dispositionReason?: string;
+  lastHeartbeatAt?: number; // epoch ms
+};
+```
+
+Keep `executionRequirement` and `executionIdentity` distinct, the same distinction the wire protocol draws for dispatch-time routing: `executionRequirement` is the constraint a task's dispatch declared (for example, "must run on deployment `checkout`"), while `executionIdentity` is the worker that actually claimed and ran that specific attempt. They usually agree; when a requirement is loose (or absent) a retry can land on a different build entirely, which is exactly what the `attempts` array's per-attempt `executionIdentity` lets a caller see. A long-poll attempt never has an `executionIdentity`—no registered manifest exists to build one from—and `attemptTokenDigest` is always a digest, never the fencing token itself, in every diagnostic and API surface that exposes attempt history.
+
+**Reading a cross-build retry.** Because `attempts` is ordered oldest first, comparing consecutive entries' `executionIdentity.buildId` (or `.artifactDigest`) tells you whether a retry moved to a different build:
+
+```ts
+const attempts = taskDetail.attempts;
+for (let i = 1; i < attempts.length; i++) {
+  const previous = attempts[i - 1]?.executionIdentity;
+  const current = attempts[i]?.executionIdentity;
+  if (previous && current && previous.buildId !== current.buildId) {
+    console.warn(`attempt ${attempts[i]!.attempt} retried onto a different build`);
+  }
+}
+```
+
+The engine reports the same comparison as it happens, live, through the `task:attempt-transition` event (`TaskAttemptTransitionEvent`)—fired once per successful claim, on both transports, after the durable write above lands:
+
+```ts
+import { Engine, TaskAttemptTransitionEvent } from '@lostgradient/weft';
+
+declare const engine: Engine;
+
+engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
+  if (event.crossBuildRetry) {
+    console.warn(
+      `${event.operationId} attempt ${event.attempt} retried from build ${event.previousExecutionIdentity?.buildId} to ${event.executionIdentity?.buildId}`,
+    );
+  }
+});
+```
+
+`weft.tasks.diagnostics` (the [worker API reference](../reference/api-workers.md#get-apiv1tasksdiagnostics)) exposes the same `executionIdentity` fields as bounded query filters—`deploymentName`, `buildId`, `artifactDigest`, `workerId`, and `workflowRevision`—for finding which in-flight or recent tasks touched a given build or worker without reconstructing the join yourself.
+
+**Retention.** Attempt records follow the same task-level retention as the ledger record they belong to: `serve({ taskRetentionWindowMs })` reaps an operation's ENTIRE attempt history in the same bounded delete as its adopted terminal ledger record—never independently, and never partially. There is no separate per-attempt retention setting. An unadopted terminal record's attempt history is retained for exactly as long as the terminal record itself is (see "Adoption and retention" below).
+
 ## Reading a result
 
 `server.getTaskResult(operationId)` returns a public projection of the ledger. It deliberately excludes worker session and attempt credentials.

@@ -25,6 +25,7 @@ import {
   type RemoteTaskRecord,
   type RemoteTaskTerminal,
 } from '../core/task-ledger/task-ledger.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import {
@@ -226,6 +227,78 @@ describe('COR-205 dead-letter, hostile decode, purge, and retention', () => {
 
     expect(await storage.get(taskLedgerKey('op-purge'))).toBeNull();
     expect(await listAttemptKeys(options, 'op-purge')).toHaveLength(0);
+  });
+
+  it('purge with several prior attempts: reaping removes every attempt record under the operationId atomically with the ledger record (COR-200 residual)', async () => {
+    class BatchRecordingStorage extends MemoryStorage {
+      readonly calls: BatchOperation[][] = [];
+
+      override async conditionalBatch(
+        conditions: ConditionalBatchCondition[],
+        operations: BatchOperation[],
+      ): Promise<boolean> {
+        this.calls.push(operations);
+        return super.conditionalBatch(conditions, operations);
+      }
+    }
+
+    const storage = new BatchRecordingStorage();
+    const context = minimalServerContext();
+    const options = { ...minimalServeOptions(storage), taskRetentionWindowMs: 1_000 };
+    const terminal = terminalFixture({
+      operationId: 'op-purge-multi',
+      attempt: 3,
+      attemptToken: 'attempt-token-3',
+      adopted: true,
+      adoptedAt: Date.now() - 5_000,
+    });
+    await putTerminalWithAttempt(storage, terminal);
+
+    // Seed two additional prior-attempt records under the same operationId —
+    // exactly what several retries of one operation would leave behind
+    // (COR-200: "attempt records follow the owning task ... bounded
+    // operations", proven here for N > 1, not just the single-attempt case
+    // above).
+    for (const [attempt, token] of [
+      [1, 'attempt-token-1'],
+      [2, 'attempt-token-2'],
+    ] as const) {
+      const digest = sha256HexSync(token);
+      await storage.put(
+        taskAttemptKey('op-purge-multi', digest),
+        encode({
+          recordVersion: 1,
+          operationId: 'op-purge-multi',
+          attempt,
+          attemptTokenDigest: digest,
+          workerSessionId: 'w-1',
+          claimedAt: terminal.terminalAt - 10_000,
+          disposition: 'requeued',
+          dispositionAt: terminal.terminalAt - 5_000,
+        }),
+      );
+    }
+    expect(await listAttemptKeys(options, 'op-purge-multi')).toHaveLength(3);
+
+    await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
+
+    expect(await storage.get(taskLedgerKey('op-purge-multi'))).toBeNull();
+    expect(await listAttemptKeys(options, 'op-purge-multi')).toHaveLength(0);
+
+    // Atomicity, not just eventual absence: exactly one `conditionalBatch`
+    // call deleted the ledger record together with all three attempt
+    // records — a single bounded operation, not three separate deletes that
+    // could partially land.
+    const purgeCall = storage.calls.find((operations) =>
+      operations.some((op) => op.type === 'delete' && op.key === taskLedgerKey('op-purge-multi')),
+    );
+    if (purgeCall === undefined) throw new Error('Expected a conditionalBatch call for the purge');
+    const deletedKeys = purgeCall.filter((op) => op.type === 'delete').map((op) => op.key);
+    expect(deletedKeys).toHaveLength(4);
+    expect(deletedKeys).toContain(taskLedgerKey('op-purge-multi'));
+    for (const token of ['attempt-token-1', 'attempt-token-2', 'attempt-token-3']) {
+      expect(deletedKeys).toContain(taskAttemptKey('op-purge-multi', sha256HexSync(token)));
+    }
   });
 
   it('retention: an adopted terminal record still inside its retention window keeps both the ledger record and its attempt history', async () => {

@@ -44,6 +44,23 @@ export type ObservabilityOperationTypes = {
     };
     readonly faults: never;
   };
+  'weft.realms.diagnostics': {
+    readonly input: {};
+    readonly output: {
+      readonly pools: ReadonlyArray<{
+        readonly name: string;
+        readonly realms: ReadonlyArray<{
+          readonly pendingTurnCount: number;
+          readonly realmGeneration: string | null;
+          readonly restartCount: number;
+          readonly state: 'warming' | 'ready' | 'active' | 'draining' | 'terminated' | 'crashed';
+        }>;
+        readonly revision: string;
+        readonly revisionActive: boolean;
+      }>;
+    };
+    readonly faults: never;
+  };
   'weft.system.metrics': {
     readonly input: {};
     readonly output: unknown;

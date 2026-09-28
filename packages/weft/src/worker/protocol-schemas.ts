@@ -79,6 +79,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       workerId: { type: 'string', minLength: 1 },
       operationId: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
+      details: jsonValueSchema,
     },
   },
   taskResult: {
@@ -139,6 +140,8 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       workflowExecutionToken: { type: 'string', minLength: 1 },
       workflowRevision: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
+      visibilityTimeout: { type: 'number', minimum: 0 },
+      lastHeartbeatDetails: jsonValueSchema,
     },
   },
   cancel: {
@@ -149,6 +152,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       type: { const: 'cancel' },
       operationId: { type: 'string', minLength: 1 },
       attemptToken: { type: 'string', minLength: 1 },
+      reason: { type: 'string' },
     },
   },
   shutdown: {
@@ -220,6 +224,13 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
         enum: ['invalid_json', 'invalid_message', 'unknown_message_type', 'registration_required'],
       },
       message: { type: 'string' },
+      // Protocol v7: present only for a rejected `taskResult` the server will
+      // never apply no matter how many times it is resent, so a worker can
+      // correlate the rejection against its outbox. Absent for `invalid_json`,
+      // `unknown_message_type`, `registration_required`, and any other
+      // malformed-frame rejection where no operation exists yet.
+      operationId: { type: 'string', minLength: 1 },
+      attemptToken: { type: 'string', minLength: 1 },
     },
   },
   taskResultAck: {

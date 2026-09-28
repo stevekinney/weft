@@ -17,10 +17,12 @@
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import { TaskAttemptTransitionEvent } from '../events/activity-events.ts';
 import {
   decodeTaskAttemptRecord,
   encodeTaskAttemptRecord,
   taskAttemptKey,
+  taskAttemptPrefix,
   type TaskAttemptDisposition,
   type TaskAttemptRecord,
 } from './task-attempt.ts';
@@ -186,4 +188,75 @@ export async function buildAttemptDispositionWriteForToken(
   const digest = digestAttemptToken(attemptToken);
   const write = await buildAttemptDispositionWrite(storage, operationId, digest, update);
   return write === undefined ? [] : [write];
+}
+
+/**
+ * The immediately-prior attempt's recorded `executionIdentity`, when this is
+ * not the first attempt — for `TaskAttemptTransitionEvent`'s
+ * `previousExecutionIdentity` and `crossBuildRetry` (COR-198). A bounded scan
+ * of `taskAttemptPrefix(operationId)`, the same per-operation prefix every
+ * other attempt-history read in this codebase already scans — never a second
+ * unbounded lookup, and never run for a first attempt (`currentAttempt <=
+ * 1`), which by construction has no predecessor.
+ */
+export async function findPreviousAttemptExecutionIdentity(
+  storage: Pick<Storage, 'scan'>,
+  operationId: string,
+  currentAttempt: number,
+): Promise<WorkerExecutionIdentity | undefined> {
+  if (currentAttempt <= 1) return undefined;
+  for await (const [, value] of storage.scan(taskAttemptPrefix(operationId))) {
+    const record = decodeTaskAttemptRecord(value);
+    if (record?.attempt === currentAttempt - 1) return record.executionIdentity;
+  }
+  return undefined;
+}
+
+/**
+ * Whether a retry crossed builds or artifacts — the specific comparison
+ * `TaskAttemptTransitionEvent.crossBuildRetry` reports (COR-198). `false`
+ * whenever either identity is absent (a long-poll claim on either side, or
+ * no predecessor at all), never treated as an unknown "maybe".
+ */
+export function isCrossBuildRetry(
+  previous: WorkerExecutionIdentity | undefined,
+  current: WorkerExecutionIdentity | undefined,
+): boolean {
+  if (previous === undefined || current === undefined) return false;
+  return previous.buildId !== current.buildId || previous.artifactDigest !== current.artifactDigest;
+}
+
+export type TaskAttemptTransitionEventInput = Readonly<{
+  operationId: string;
+  workflowId?: string | undefined;
+  activityName: string;
+  attempt: number;
+  attemptTokenDigest: string;
+  workerSessionId: string;
+  executionIdentity: WorkerExecutionIdentity | undefined;
+  executionRequirement: WorkerExecutionRequirementInput | undefined;
+}>;
+
+/**
+ * Build the `TaskAttemptTransitionEvent` for one successful claim (COR-198),
+ * shared by both claim transports so `crossBuildRetry`/
+ * `previousExecutionIdentity` are computed exactly once, the same way, in
+ * both places. Skips the previous-attempt lookup entirely when this claim
+ * has no `executionIdentity` of its own (every long-poll claim) — a retry
+ * indicator against an identity that does not exist is meaningless, and
+ * `isCrossBuildRetry` would report `false` for it regardless.
+ */
+export async function buildTaskAttemptTransitionEvent(
+  storage: Pick<Storage, 'scan'>,
+  input: TaskAttemptTransitionEventInput,
+): Promise<TaskAttemptTransitionEvent> {
+  const previousExecutionIdentity =
+    input.executionIdentity === undefined
+      ? undefined
+      : await findPreviousAttemptExecutionIdentity(storage, input.operationId, input.attempt);
+  return new TaskAttemptTransitionEvent({
+    ...input,
+    crossBuildRetry: isCrossBuildRetry(previousExecutionIdentity, input.executionIdentity),
+    previousExecutionIdentity,
+  });
 }

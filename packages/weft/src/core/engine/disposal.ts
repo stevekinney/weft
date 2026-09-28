@@ -12,6 +12,13 @@ function settleSleepResolverReadyWaitersForTesting(internals: EngineInternals): 
   internals.sleepResolverReadyWaitersForTesting?.clear();
 }
 
+function settleSignalWaiterReadyWaitersForTesting(internals: EngineInternals): void {
+  for (const waiters of internals.signalWaiterReadyWaitersForTesting?.values() ?? []) {
+    for (const notifyReady of waiters) notifyReady();
+  }
+  internals.signalWaiterReadyWaitersForTesting?.clear();
+}
+
 /**
  * Cancel every pending cross-engine result-poll timer — see
  * `pendingResultPollTimers`'s doc on `EngineInternals`. Split out of
@@ -111,6 +118,7 @@ export function disposeEngine(
   }
   internals.signalWaiters.clear();
   internals.signalWaitersByWorkflow.clear();
+  settleSignalWaiterReadyWaitersForTesting(internals);
   for (const resolveConditionWaiter of internals.conditionWaiters.values()) {
     resolveConditionWaiter();
   }

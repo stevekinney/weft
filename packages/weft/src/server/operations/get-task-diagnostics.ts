@@ -151,6 +151,30 @@ const getTaskDiagnosticsInput = z.object({
   operationId: z.string().min(1).optional(),
   workflowId: z.string().min(1).optional(),
   queue: z.string().min(1).optional(),
+  /**
+   * Execution-identity filters (COR-198), sourced from each matching task's
+   * MOST RECENT `TaskAttemptRecord.executionIdentity` — never the ledger's
+   * own routing requirement, which is the requested constraint, not the
+   * worker that actually executed it (see `task-attempt-identity-filter.ts`).
+   * A `queued` task (no attempt has yet claimed it) can never match any of
+   * these; that is a bounded per-operation lookup, not a second unbounded
+   * scan, so it only runs when at least one of these five is set.
+   */
+  deploymentName: z.string().min(1).optional(),
+  buildId: z.string().min(1).optional(),
+  artifactDigest: z.string().min(1).optional(),
+  /**
+   * The worker PROCESS identity that executed the attempt
+   * (`executionIdentity.workerId`) — distinct from the ledger's
+   * `workerSessionId` (the live connection/session), which a long-poll
+   * attempt always has but which no attempt without a registered manifest
+   * (every long-poll claim) ever has an `executionIdentity` for. A task
+   * claimed only by such a worker is unfilterable by this field, the same
+   * way it is already absent from `TaskAttemptRecord.executionIdentity`
+   * itself — this filter never falls back to `workerSessionId`.
+   */
+  workerId: z.string().min(1).optional(),
+  workflowRevision: z.string().min(1).optional(),
   staleQueuedAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_QUEUED_AFTER_MS),
   staleHeartbeatAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_HEARTBEAT_AFTER_MS),
   retryStormMinimumAttempts: z.number().int().min(1).default(DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS),
@@ -194,7 +218,9 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
     invoke: async ({ input, engine }): Promise<GetTaskDiagnosticsOutput> => {
       const currentTime = options.now?.() ?? Date.now();
-      const storage = requireOperationStorage(engine, ['scan']);
+      // 'get' is only ever used for the optional execution-identity filters'
+      // bounded per-operation attempt lookup — see `matchesTaskRecordFilter`.
+      const storage = requireOperationStorage(engine, ['scan', 'get']);
       return collectTaskDiagnostics({
         engine: { storage },
         input,
@@ -228,6 +254,11 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
     operationId: { kind: 'query', queryParam: 'operationId' },
     workflowId: { kind: 'query', queryParam: 'workflowId' },
     queue: { kind: 'query', queryParam: 'queue' },
+    deploymentName: { kind: 'query', queryParam: 'deploymentName' },
+    buildId: { kind: 'query', queryParam: 'buildId' },
+    artifactDigest: { kind: 'query', queryParam: 'artifactDigest' },
+    workerId: { kind: 'query', queryParam: 'workerId' },
+    workflowRevision: { kind: 'query', queryParam: 'workflowRevision' },
     staleQueuedAfterMs: { kind: 'query', queryParam: 'staleQueuedAfterMs' },
     staleHeartbeatAfterMs: { kind: 'query', queryParam: 'staleHeartbeatAfterMs' },
     retryStormMinimumAttempts: { kind: 'query', queryParam: 'retryStormMinimumAttempts' },
@@ -241,6 +272,11 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
       operationId: url.searchParams.get('operationId') ?? undefined,
       workflowId: url.searchParams.get('workflowId') ?? undefined,
       queue: url.searchParams.get('queue') ?? undefined,
+      deploymentName: url.searchParams.get('deploymentName') ?? undefined,
+      buildId: url.searchParams.get('buildId') ?? undefined,
+      artifactDigest: url.searchParams.get('artifactDigest') ?? undefined,
+      workerId: url.searchParams.get('workerId') ?? undefined,
+      workflowRevision: url.searchParams.get('workflowRevision') ?? undefined,
       staleQueuedAfterMs: parseOptionalNumber(url.searchParams.get('staleQueuedAfterMs')),
       staleHeartbeatAfterMs: parseOptionalNumber(url.searchParams.get('staleHeartbeatAfterMs')),
       retryStormMinimumAttempts: parseOptionalNumber(

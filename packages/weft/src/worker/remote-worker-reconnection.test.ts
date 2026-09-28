@@ -2,10 +2,10 @@
  * RemoteWorker WebSocket protocol durability tests.
  *
  * Four scenarios cover: visibility-timeout takeover (scanner path),
- * idempotent rejection of stale completions from displaced workers (covered
- * for the different-`workerId` takeover case only; same-`workerId`
- * reselection on a later attempt is documented as out-of-scope in
- * `onTaskResultMessage`'s ownership-guard comment), transient reconnect
+ * idempotent rejection of stale completions from displaced workers — both
+ * the different-`workerId` takeover case and, in a dedicated describe block
+ * below, the same-`workerId` reselection-on-a-later-attempt case the
+ * `(operationId, workerId)` guard alone cannot catch — transient reconnect
  * continuity, and server-restart-while-leased recovery. The fault-injecting helper at
  * `../testing/worker-fault-injection.test-support.ts` gives tests byte-level control of the
  * WebSocket so partition and abrupt-close behaviors are reproducible.
@@ -22,9 +22,15 @@ import {
   isRemoteTaskTerminalResolved,
   taskLedgerKey,
 } from '../core/task-ledger/task-ledger.ts';
-import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
+import { serve, type ServeOptions, type TaskDispatch, type WeftServer } from '../server/index.ts';
+import { useObservableActivityHeartbeatsForTesting } from '../server/runtime/activity-heartbeat-test-hooks.ts';
+import { useManualTaskReconciliationForTesting } from '../server/runtime/task-reconciliation.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
+import {
+  sleepForTesting,
+  waitForCondition,
+  waitForRealTimersForTesting,
+} from '../testing/fake-timers.test-support.ts';
 import {
   killAndReboot,
   spawnServerSubprocess,
@@ -89,6 +95,23 @@ type Setup = {
   engine: Engine;
   server: WeftServer;
   workerUrl: string;
+  /**
+   * The exact `ServeOptions` object passed to `serve()` — kept around so a
+   * test can register a test-only observability hook against it, for example
+   * `useObservableActivityHeartbeatsForTesting` (COR-235), without
+   * `createSetup` growing a dedicated opt-in flag for every hook a test might
+   * want.
+   */
+  serveOptions: ServeOptions;
+  /**
+   * Set only when `createSetup` is called with `manualTaskReconciliation:
+   * true` — disables the periodic visibility-timeout scanner in favor of an
+   * explicitly-triggered `scanAt`, so a test can force an expiry/redispatch
+   * deterministically instead of waiting on the real scanner's poll
+   * interval to notice within some wall-clock margin. See the same-worker
+   * stale-attempt test below for why that distinction matters under load.
+   */
+  manualReconciliation?: ReturnType<typeof useManualTaskReconciliationForTesting>;
 };
 
 const sockets: FaultInjectingWorker[] = [];
@@ -117,19 +140,37 @@ afterEach(async () => {
   }
 });
 
-function createSetup(overrides: Partial<Omit<ServeOptions, 'engine'>> = {}): Setup {
+function createSetup(
+  overrides: Partial<Omit<ServeOptions, 'engine'>> = {},
+  { manualTaskReconciliation = false }: { manualTaskReconciliation?: boolean } = {},
+): Setup {
   const storage = new MemoryStorage();
   const engine = new Engine({ storage });
-  const server = serve({
+  const serveOptions: ServeOptions = {
     engine,
     port: 0,
     routingPolicy: 'round-robin',
     visibilityPollIntervalMs: 20,
     workerReconnectGracePeriodMs: 50,
     ...overrides,
-  });
+  };
+  // `useManualTaskReconciliationForTesting` keys its one-shot registration
+  // off this exact `serveOptions` object reference (a `WeakMap`), so it must
+  // be called BEFORE `serve()`, against the SAME object passed to it — see
+  // that function's doc comment in `server/runtime/task-reconciliation.ts`
+  // and the reference usage in `server/index.test.ts`.
+  const manualReconciliation = manualTaskReconciliation
+    ? useManualTaskReconciliationForTesting(serveOptions)
+    : undefined;
+  const server = serve(serveOptions);
   const workerUrl = `${server.url.replace(/^http/, 'ws').replace(/\/?$/, '/')}v1/tasks/default/stream`;
-  const setup: Setup = { engine, server, workerUrl };
+  const setup: Setup = {
+    engine,
+    server,
+    workerUrl,
+    serveOptions,
+    ...(manualReconciliation !== undefined ? { manualReconciliation } : {}),
+  };
   activeSetup = setup;
   return setup;
 }
@@ -160,6 +201,51 @@ async function connectAndRegisterWorker(
 
 function isTask(message: ServerToWorkerMessage): message is TaskMessage {
   return message.type === 'task';
+}
+
+/**
+ * Dispatch a task and prove — via the dispatch's own completion signal, not
+ * a race against the frame-wait clock the caller applies next — that the
+ * WebSocket path (not a silent long-poll fallback) actually reserved it and
+ * sent the frame (COR-235 residual).
+ *
+ * `dispatchTask()` resolves only once `ws.send()` has already been called on
+ * the WebSocket path (see `selectAndReserveWorker` in
+ * `server/runtime/task-dispatch.ts`): the recovery-ready gate, the
+ * revision-fence storage read, and the ledger claim's own durable write all
+ * happen INSIDE that awaited promise, before the frame is ever written to
+ * the socket. Every call site this helper replaces used to fire the
+ * dispatch with `void setup.server.dispatchTask(...)` and immediately start
+ * a fixed-budget `nextServerMessage` wait for the resulting frame — so any
+ * latency inside that discarded promise's own async chain silently shared
+ * the SAME clock the wait below uses for the network round trip. Under
+ * contention, a slow dispatch (not a slow socket) could exhaust that budget
+ * with nothing to show for it but an opaque "nextServerMessage timed out"
+ * failure, with no signal pointing at the real cause.
+ *
+ * `dispatched === true` alone does not prove the WebSocket path was taken:
+ * `dispatchTaskImpl`'s long-poll fallback (`enqueueTaskForLongPoll`) also
+ * resolves `true` without ever touching the registry or sending a frame, so
+ * a caller expecting an immediate WebSocket dispatch would then time out
+ * waiting for a `task` frame that was never coming — the same opaque
+ * failure, a different cause. Assert `registry.isAssigned`, the same
+ * "reserved against a live WebSocket worker" signal this file already uses
+ * as its direct proof elsewhere (see the grace-window-exclusion fixture
+ * below), and include the durable ledger state in the failure message so a
+ * real regression fails loudly and diagnosably instead of as a bare
+ * timeout.
+ */
+async function dispatchAndConfirmWorkerSend(setup: Setup, task: TaskDispatch): Promise<void> {
+  const dispatched = await setup.server.dispatchTask(task);
+  const isAssignedToWorker = setup.server.registry.isAssigned(task.operationId);
+  if (!dispatched || !isAssignedToWorker) {
+    const record = await readLedgerRecord(setup.engine, task.operationId);
+    throw new Error(
+      `Expected dispatchTask("${task.operationId}") to reserve a connected WebSocket ` +
+        `worker and send the "task" frame, but dispatched=${String(dispatched)} ` +
+        `isAssigned=${String(isAssignedToWorker)} ledgerState=${record?.state ?? 'absent'}`,
+    );
+  }
 }
 
 /** Reads the durable ledger's terminal-resolved record, or `null` if the operation hasn't resolved yet. */
@@ -201,19 +287,17 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
     const workerB = await connectAndRegisterWorker(setup, 'worker-b');
 
     const operationId = 'scenario-1-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       activityName: 'test.echo',
       workflowType: 'test',
       input: { value: 'v' },
       // The visibilityTimeout governs BOTH worker-a's expiry (drives the
-      // takeover) and worker-b's expiry (after takeover B has this long to
-      // respond before another requeue). 250ms is short enough that the
-      // initial takeover happens within the test budget but borderline for
-      // B's response window under load. After we observe B's takeover
-      // dispatch, we set the engine's effective deadline-tracker entry to
-      // a long value below by sending a heartbeat from B before responding,
-      // so the test's resolved-state polling cannot race the scanner.
+      // takeover) and worker-b's expiry (after takeover, before B's own
+      // `activityHeartbeat` below durably extends it). 250ms is short enough
+      // that the initial takeover happens promptly; it no longer needs to
+      // outrace the scanner for B's own window, since B's heartbeat below is
+      // durably awaited (COR-235) before B's completion is ever sent.
       visibilityTimeout: 250,
     });
 
@@ -224,7 +308,11 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
 
     workerA.partition();
 
-    const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // The scanner's redispatch to B (COR-235): no wall-clock budget of its
+    // own — a redispatch that never arrives is a real hang the test runner's
+    // per-test timeout reports, not a race against a machine-load-dependent
+    // margin.
+    const dispatchToB = await workerB.nextServerMessage(isTask);
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);
     expect(dispatchToB.attempt ?? 1).toBe(2);
@@ -238,9 +326,39 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
     const allBMessages: ServerToWorkerMessage[] = [];
     workerB.onServerMessage((m) => allBMessages.push(m));
 
-    // Send a heartbeat to extend B's deadline — the test's wall-clock should
-    // not race the scanner.
-    workerB.send({ type: 'heartbeat', workerId: 'worker-b' });
+    // Extend B's own attempt-level visibility lease with a real
+    // `activityHeartbeat` before completing. A bare session `heartbeat` (as
+    // this test previously sent) renews only the worker-session lease and
+    // leaves an attempt's lease deadline completely untouched — only
+    // `activityHeartbeat` reaches `renewAttemptLease` (see
+    // `onActivityHeartbeatMessage`, `websocket-worker.ts`) — so it did
+    // nothing to protect against the scanner reassigning this task away from
+    // B before its completion landed. B's 250ms `visibilityTimeout` outracing
+    // the 20ms scanner poll was the ONLY thing preventing that reassignment:
+    // an unproven timing margin under load, the same defect class the
+    // same-worker stale-attempt test below hit twice (COR-235). Await the
+    // server's own durability report for this heartbeat instead, so the
+    // scanner is PROVABLY unable to reassign the task before B's completion
+    // is sent, with no wall-clock budget of its own on the wait.
+    const heartbeatApplied = useObservableActivityHeartbeatsForTesting(setup.serveOptions).next(
+      (event) =>
+        event.operationId === operationId && event.attemptToken === dispatchToB.attemptToken,
+    );
+    workerB.send({
+      type: 'activityHeartbeat',
+      workerId: 'worker-b',
+      operationId,
+      attemptToken: dispatchToB.attemptToken,
+    });
+    const heartbeatOutcome = await heartbeatApplied;
+    if (heartbeatOutcome.outcome !== 'committed') {
+      const reasonSuffix =
+        heartbeatOutcome.reason === undefined ? '' : ` (${heartbeatOutcome.reason})`;
+      throw new Error(
+        `expected worker-b's activityHeartbeat to durably extend its visibility lease before ` +
+          `completing, got outcome="${heartbeatOutcome.outcome}"${reasonSuffix}`,
+      );
+    }
 
     workerB.send({
       type: 'taskResult',
@@ -277,7 +395,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
     const workerB = await connectAndRegisterWorker(setup, 'worker-b');
 
     const operationId = 'scenario-2-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       activityName: 'test.echo',
       workflowType: 'test',
@@ -291,7 +409,9 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
 
     await workerA.hardClose();
 
-    const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // The disconnect-triggered redispatch to B (COR-235): no wall-clock
+    // budget of its own — see the scanner-driven takeover test above.
+    const dispatchToB = await workerB.nextServerMessage(isTask);
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);
 
@@ -366,24 +486,34 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     // workerId still matches. The per-dispatch attempt token is the only field
     // that distinguishes attempt 1 from attempt 2. We use exactly one worker so
     // re-dispatch deterministically reselects it.
-    const setup = createSetup();
+    //
+    // Attempt 1's own expiry/redispatch is forced with an EXPLICITLY
+    // triggered reconciliation scan (`useManualTaskReconciliationForTesting`),
+    // not the real periodic scanner racing a fixed client timeout (COR-235
+    // residual). The prior version of this test dispatched with a 500ms
+    // `visibilityTimeout` and then waited up to 5000ms of real time hoping
+    // the scanner's 20ms poll noticed the expiry before the client gave up —
+    // a wall-clock margin under contention, exactly the "margin, not proof"
+    // pattern this project's own audit history (COR-1264) already rejected
+    // once for the heartbeat wait later in this same test. Fake timers are
+    // not an option here — this test drives real WebSocket I/O throughout
+    // (dispatch frames, a real `activityHeartbeat`, real `taskResult`
+    // sends), and a faked clock does not advance real socket callbacks.
+    const setup = createSetup({}, { manualTaskReconciliation: true });
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
 
     const operationId = 'same-worker-stale-op';
-    void setup.server.dispatchTask({
+    // The minimum allowed visibility timeout. Its exact value no longer
+    // matters for timing — the expiry below is forced explicitly, and the
+    // explicit `waitForRealTimersForTesting` a few lines down guarantees
+    // real wall-clock time has passed it before that forced expiry runs, so
+    // this is not depended on to "just happen" to be short enough.
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       activityName: 'test.echo',
       workflowType: 'test',
       input: { value: 'v' },
-      // Short enough that attempt 1 expires and the scanner (20ms poll) re-
-      // dispatches to the only worker as attempt 2, but long enough that the
-      // attempt-2 window — which the heartbeat below extends by this same
-      // visibilityTimeout — comfortably outlasts the stale/fresh completion
-      // exchange. At 150ms a slow CI runner could let attempt 2 expire and
-      // re-dispatch as attempt 3 before the fresh completion lands, turning the
-      // fresh token stale and flaking the test; 500ms gives ample slack without
-      // changing the behavior under test.
-      visibilityTimeout: 500,
+      visibilityTimeout: 10,
     });
 
     const dispatch1 = await workerA.nextServerMessage(isTask, { timeoutMs: 2_000 });
@@ -392,9 +522,51 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     expect(dispatch1.attempt ?? 1).toBe(1);
     expect(dispatch1.attemptToken).toBeString();
 
-    // Do NOT complete attempt 1. Wait for the visibility timeout to re-dispatch
-    // the SAME operation to the SAME worker as attempt 2 with a fresh token.
-    const dispatch2 = await workerA.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // Do NOT complete attempt 1. Force its visibility-timeout expiry and the
+    // resulting redispatch deterministically instead of waiting on it.
+    if (setup.manualReconciliation === undefined) {
+      throw new Error('expected manual task reconciliation to be enabled for this test');
+    }
+    const attempt1Record = await readLedgerRecord(setup.engine, operationId);
+    if (attempt1Record === null || attempt1Record.state !== 'leased') {
+      throw new Error('expected attempt 1 to still be leased before forcing its expiry');
+    }
+    // `requeueExpiredAttempt`'s own precondition compares the ledger's real
+    // `leaseDeadline` against REAL wall-clock time at commit — not against
+    // `scanAt`'s synthetic `now` below, which only decides whether the
+    // deadline-tracker heap entry itself is due. Guarantee that precondition
+    // holds by construction, rather than by hoping the dispatch round trip
+    // already burned enough real time on its own: sleep exactly the
+    // (usually zero) remaining real time until the real deadline.
+    const remainingUntilExpiry = attempt1Record.leaseDeadline - Date.now();
+    if (remainingUntilExpiry > 0) {
+      await waitForRealTimersForTesting(remainingUntilExpiry);
+    }
+    // `scanAt` awaits `scanExpiredTasks` to full completion — an observed
+    // barrier, not a race against the scanner's poll interval — so by the
+    // time it resolves, the durable requeue commit has landed (or this
+    // throws/no-ops loudly, not silently) and the redispatch has been
+    // scheduled (see `reassignOrExpireTask`'s `scheduleDelayedDispatch`
+    // call, a real ~0ms timer since this dispatch carries no retry policy).
+    await setup.manualReconciliation.scanAt(
+      operationId,
+      attempt1Record.leaseDeadline,
+      attempt1Record.leaseDeadline,
+    );
+
+    // The scheduled redispatch above still runs on its own real timer/async
+    // chain (the same one `dispatchAndConfirmWorkerSend` proves for a fresh
+    // dispatch). `selectAndReserveWorker` (`server/runtime/task-dispatch.ts`)
+    // always commits the durable claim BEFORE sending the `task` frame, for
+    // a redispatch exactly as for a fresh dispatch — so the frame itself is
+    // already proof the claim landed durably; no separate ledger poll needs
+    // to run ahead of it. Wait for it with no wall-clock budget of its own:
+    // a redispatch that never happens is a real hang the test runner's own
+    // per-test timeout reports, not a race against a machine-load-dependent
+    // margin (COR-235) — a prior version of this test bounded this wait at a
+    // fixed 2000ms, which is a latency assertion in disguise once the
+    // machine is loaded enough to matter.
+    const dispatch2 = await workerA.nextServerMessage(isTask);
     if (!isTask(dispatch2)) throw new Error('expected re-dispatch');
     expect(dispatch2.operationId).toBe(operationId);
     expect(dispatch2.attempt ?? 1).toBe(2);
@@ -402,8 +574,51 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     // The token rotated even though the worker id did not.
     expect(dispatch2.attemptToken).not.toBe(dispatch1.attemptToken);
 
-    // Extend the deadline so the scanner cannot re-dispatch again mid-test.
-    workerA.send({ type: 'heartbeat', workerId: 'worker-a' });
+    // Extend attempt 2's own visibility lease with a real `activityHeartbeat`
+    // — a bare session `heartbeat` (as this test previously sent) renews only
+    // the worker-session lease and leaves an attempt's lease deadline
+    // completely untouched; only `activityHeartbeat` reaches
+    // `renewAttemptLease` (see `onActivityHeartbeatMessage`,
+    // `websocket-worker.ts`). Await the server's own durability report for
+    // THIS heartbeat (`activity-heartbeat-test-hooks.ts`, COR-235) instead of
+    // polling the ledger for a deadline change against a fixed wall-clock
+    // budget: this exact wait, bounded at a fixed 2000ms, is what produced
+    // the two `Timed out after 2000ms waiting for activityHeartbeat durably
+    // extends attempt 2 visibility lease` failures under heavy machine load
+    // (load averages 30-90 on 10 cores). The write's own precondition cannot
+    // explain that timeout — `renewAttemptLease` has no deadline check, and
+    // nothing re-expires attempt 2 in-memory while
+    // `manualTaskReconciliation` keeps the periodic scanner off — so the
+    // remaining explanation is event-loop contention delaying the
+    // fire-and-forget write (and the 1ms-interval poll reading it) past a
+    // budget picked without knowing the machine's load, not a hang. An even
+    // earlier version sent the no-op bare heartbeat above and relied on the
+    // 500ms `visibilityTimeout` outracing the 20ms scanner poll instead —
+    // both are timing margins this project's own audit history (COR-1264)
+    // already rejected elsewhere. The hook reports the ACTUAL outcome of the
+    // durable write (`committed`/`rejected`/`skipped`), so a genuine
+    // regression — the write never lands, or a precondition rejects it —
+    // fails with that reason instead of an opaque timeout, and the wait
+    // itself has no budget of its own: only the test runner's per-test
+    // timeout bounds it.
+    const heartbeatApplied = useObservableActivityHeartbeatsForTesting(setup.serveOptions).next(
+      (event) => event.operationId === operationId && event.attemptToken === dispatch2.attemptToken,
+    );
+    workerA.send({
+      type: 'activityHeartbeat',
+      workerId: 'worker-a',
+      operationId,
+      attemptToken: dispatch2.attemptToken,
+    });
+    const heartbeatOutcome = await heartbeatApplied;
+    if (heartbeatOutcome.outcome !== 'committed') {
+      const reasonSuffix =
+        heartbeatOutcome.reason === undefined ? '' : ` (${heartbeatOutcome.reason})`;
+      throw new Error(
+        `expected the activityHeartbeat for attempt 2 to durably extend its visibility ` +
+          `lease, got outcome="${heartbeatOutcome.outcome}"${reasonSuffix}`,
+      );
+    }
 
     // Stale completion: worker-a echoes attempt 1's token. Same workerId, so the
     // ownership guard passes — the attempt guard must reject it.
@@ -426,7 +641,17 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
     const resolvedAfterStale = await readResolvedRecord(setup.engine, operationId);
     expect(resolvedAfterStale === undefined || resolvedAfterStale === null).toBe(true);
 
-    // Fresh completion: worker-a echoes attempt 2's token — accepted.
+    // Fresh completion: worker-a echoes attempt 2's token — accepted. Await
+    // the server's own taskResultAck for THIS attempt token directly (a
+    // stronger observed event than polling storage) rather than sleeping and
+    // re-reading — it both proves acceptance and pins that the ack
+    // correlates to attempt 2 specifically, not some other disposition. No
+    // wall-clock budget of its own (COR-235): the applied ack is the event
+    // being waited for, and the test runner's per-test timeout is the only
+    // hang guard a real regression needs.
+    const ackPromise = workerA.nextServerMessage(
+      (m) => m.type === 'taskResultAck' && m.attemptToken === dispatch2.attemptToken,
+    );
     workerA.send({
       type: 'taskResult',
       operationId,
@@ -434,14 +659,11 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
       value: 'fresh-attempt-2',
       attemptToken: dispatch2.attemptToken,
     });
+    const ack = await ackPromise;
+    if (ack.type !== 'taskResultAck') throw new Error('expected taskResultAck');
+    expect(ack.disposition).toBe('applied');
 
-    let resolved: unknown;
-    const deadline = Date.now() + 2_000;
-    while (Date.now() < deadline) {
-      resolved = await readResolvedRecord(setup.engine, operationId);
-      if (resolved !== undefined && resolved !== null) break;
-      await sleepForTesting(10);
-    }
+    const resolved = await readResolvedRecord(setup.engine, operationId);
     expect(resolved !== undefined && resolved !== null).toBe(true);
     // The fresh attempt's value won; the rejected stale completion never wrote.
     // Terminal ledger records don't persist the value itself (see
@@ -513,7 +735,7 @@ describe('RemoteWorker durability — transient reconnect continuity (COR-220)',
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
 
     const operationId = 'proven-resume-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       activityName: 'test.echo',
       workflowType: 'test',
@@ -555,7 +777,9 @@ describe('RemoteWorker durability — transient reconnect continuity (COR-220)',
       value: 'v',
       attemptToken: dispatch.attemptToken,
     });
-    await workerAPrime.nextServerMessage((m) => m.type === 'taskResultAck', { timeoutMs: 2_000 });
+    // No wall-clock budget of its own (COR-235) — see the same-worker
+    // stale-attempt test's `ackPromise` for why.
+    await workerAPrime.nextServerMessage((m) => m.type === 'taskResultAck');
 
     const resolved = await readResolvedRecord(setup.engine, operationId);
     expect(resolved).not.toBeUndefined();
@@ -573,7 +797,7 @@ describe('RemoteWorker durability — transient reconnect continuity (COR-220)',
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
 
     const operationId = 'unproven-reconnect-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       activityName: 'test.echo',
       workflowType: 'test',
@@ -628,8 +852,9 @@ describe('RemoteWorker durability — transient reconnect continuity (COR-220)',
     expect(rejected.message).toContain(operationId);
 
     // Routing reselects worker-a — it is the only worker — for the
-    // redispatch, with a rotated attempt token.
-    const redispatch = await workerAPrime.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // redispatch, with a rotated attempt token. No wall-clock budget of its
+    // own (COR-235) — see the scanner-driven takeover test above.
+    const redispatch = await workerAPrime.nextServerMessage(isTask);
     if (!isTask(redispatch)) throw new Error('expected redispatch');
     expect(redispatch.operationId).toBe(operationId);
     expect(redispatch.attemptToken).not.toBe(staleAttemptToken);
@@ -682,7 +907,7 @@ describe('RemoteWorker durability — stale-session exclusion from routing durin
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
 
     const firstOperationId = 'grace-exclusion-first-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId: firstOperationId,
       activityName: 'test.echo',
       workflowType: 'test',
@@ -804,12 +1029,14 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
         },
       },
     });
-    const taskForB = workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // The inline backpressure redelivery to B (COR-235): no wall-clock
+    // budget of its own — see the scanner-driven takeover test above.
+    const taskForB = workerB.nextServerMessage(isTask);
 
     // Dispatch with A first in the round-robin order, so the first attempt
     // lands on A, which declines it (buffer full) and fails its socket.
     const operationId = 'backpressure-redelivery-op';
-    void setup.server.dispatchTask({
+    await dispatchAndConfirmWorkerSend(setup, {
       operationId,
       // The SDK worker advertises the qualified `orders.echo` name; the raw
       // worker-B below registers the same name so the redelivery routes to it.
@@ -833,7 +1060,34 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);
 
-    workerB.send({ type: 'heartbeat', workerId: 'worker-b' });
+    // A bare session `heartbeat` (as this test previously sent here) renews
+    // only the worker-session lease and leaves an attempt's lease deadline
+    // untouched — only `activityHeartbeat` reaches `renewAttemptLease` (see
+    // `onActivityHeartbeatMessage`, `websocket-worker.ts`). The 5000ms
+    // `visibilityTimeout` here gives a wide margin over the 20ms scanner poll
+    // even under load, but this is the same defect class the scanner-driven
+    // takeover and same-worker stale-attempt tests hit (COR-235): send a real
+    // `activityHeartbeat` and await its durable outcome instead of a no-op.
+    const heartbeatApplied = useObservableActivityHeartbeatsForTesting(setup.serveOptions).next(
+      (event) =>
+        event.operationId === operationId && event.attemptToken === dispatchToB.attemptToken,
+    );
+    workerB.send({
+      type: 'activityHeartbeat',
+      workerId: 'worker-b',
+      operationId,
+      attemptToken: dispatchToB.attemptToken,
+    });
+    const heartbeatOutcome = await heartbeatApplied;
+    if (heartbeatOutcome.outcome !== 'committed') {
+      const reasonSuffix =
+        heartbeatOutcome.reason === undefined ? '' : ` (${heartbeatOutcome.reason})`;
+      throw new Error(
+        `expected worker-b's activityHeartbeat to durably extend its visibility lease before ` +
+          `completing, got outcome="${heartbeatOutcome.outcome}"${reasonSuffix}`,
+      );
+    }
+
     workerB.send({
       type: 'taskResult',
       operationId,

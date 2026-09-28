@@ -6,6 +6,11 @@
 import { sleep } from '../runtime/portable.ts';
 import { normalizeWorkerJsonValue, resolveActivityTable } from './activity-table.ts';
 import {
+  AttemptControllerTable,
+  cancellationErrorMessage,
+  DEFAULT_CANCELLED_TASK_ERROR,
+} from './attempt-controllers.ts';
+import {
   buildComposedInterceptor,
   executeWithInterceptors,
   type ComposedInterceptor,
@@ -21,6 +26,7 @@ import {
 } from './options.ts';
 import {
   parseServerToWorkerMessage,
+  type ProtocolErrorMessage,
   type ServerToWorkerMessage,
   type TaskMessage,
   type TaskResultMessage,
@@ -52,6 +58,32 @@ const DEFAULT_CONCURRENCY = 10;
 const DEFAULT_QUEUE = 'default';
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_DISCONNECT_TIMEOUT_MS = 30_000;
+/**
+ * How many activity-heartbeat intervals fit inside one visibility timeout
+ * (COR-226) — the automatic per-attempt keepalive fires this many times per
+ * lease window, so an ordinary network hiccup (one missed heartbeat) still
+ * leaves margin before the lease actually expires and `scanExpiredTasks`
+ * reassigns the attempt to a second worker.
+ */
+const ACTIVITY_HEARTBEAT_INTERVAL_DIVISOR = 3;
+/** Floor on the derived activity-heartbeat interval, so a pathologically short `visibilityTimeout` cannot flood the server with heartbeats. */
+const MIN_ACTIVITY_HEARTBEAT_INTERVAL_MS = 1_000;
+
+/**
+ * Derive the automatic per-attempt `activityHeartbeat` interval from the
+ * dispatch's `visibilityTimeout` (COR-226, protocol v8) — a fraction of the
+ * lease window, floored so a very short synthetic timeout (as some tests use)
+ * cannot produce a runaway sub-millisecond timer. Falls back to the
+ * session-heartbeat default when a `task` frame omits `visibilityTimeout`
+ * (a hand-built message in a test, never a real server dispatch).
+ */
+function activityHeartbeatIntervalMs(visibilityTimeout: number | undefined): number {
+  if (visibilityTimeout === undefined) return HEARTBEAT_INTERVAL_MS;
+  return Math.max(
+    MIN_ACTIVITY_HEARTBEAT_INTERVAL_MS,
+    Math.floor(visibilityTimeout / ACTIVITY_HEARTBEAT_INTERVAL_DIVISOR),
+  );
+}
 
 type BunWebSocketConstructor = {
   new (url: string): WebSocket;
@@ -192,14 +224,17 @@ export class RemoteWorker implements Disposable {
   #heartbeat: HeartbeatManager;
   #shuttingDown: boolean;
   /**
-   * Keyed by `operationId`, but the abort decision is also fenced by
-   * `attemptToken` (COR-230, acceptance criterion 11) — a `cancel` control
-   * naming an attempt this worker has already superseded (e.g. it completed
-   * and was later redispatched the same `operationId` under a fresh
-   * attempt) matches nothing and is safely ignored, exactly like the
+   * Tuple-keyed by `(operationId, attemptToken)` (COR-223) — a `cancel`
+   * control naming an attempt this worker has already superseded (e.g. it
+   * completed and was later redispatched the same `operationId` under a
+   * fresh attempt) matches nothing and is safely ignored, exactly like the
    * server's own `taskResult`/`activityHeartbeat` attempt-token fencing.
+   * Keying by the full tuple (not `operationId` alone) also means an earlier
+   * attempt's `finally` block can only ever delete its OWN entry, never a
+   * later, still-live attempt's controller for the same operation — see
+   * `AttemptControllerTable`'s doc comment for the failure this prevents.
    */
-  #taskAbortControllers: Map<string, { controller: AbortController; attemptToken: string }>;
+  #taskAbortControllers: AttemptControllerTable;
   #composedInterceptor: ComposedInterceptor | null;
   #pendingRegistration: PendingRegistration | null;
   /**
@@ -248,7 +283,7 @@ export class RemoteWorker implements Disposable {
     this.#inFlight = 0;
     this.#abortController = new AbortController();
     this.#shuttingDown = false;
-    this.#taskAbortControllers = new Map();
+    this.#taskAbortControllers = new AttemptControllerTable();
     this.#composedInterceptor = buildComposedInterceptor(options.interceptors);
     this.#pendingRegistration = null;
     this.#taskResultOutbox = new TaskResultOutbox(
@@ -402,12 +437,9 @@ export class RemoteWorker implements Disposable {
   // Internal
   // ---------------------------------------------------------------------------
 
-  /** Abort all in-flight task controllers and clear the map. */
+  /** Abort all in-flight task controllers and clear the table. */
   #abortAllTasks(): void {
-    for (const { controller } of this.#taskAbortControllers.values()) {
-      controller.abort();
-    }
-    this.#taskAbortControllers.clear();
+    this.#taskAbortControllers.abortAll();
   }
 
   async #gracefulShutdown(): Promise<void> {
@@ -524,17 +556,50 @@ export class RemoteWorker implements Disposable {
   }
 
   /**
-   * Handle a server `cancel` control (COR-230, acceptance criterion 11).
-   * The lookup is fenced by `attemptToken`, not `operationId` alone — a
+   * Handle a server `cancel` control (COR-230, acceptance criterion 11;
+   * COR-223 tuple-keyed lookup; COR-223 `reason`). The lookup is keyed by the
+   * full `(operationId, attemptToken)` tuple, not `operationId` alone — a
    * `cancel` for an attempt this worker no longer holds (already completed,
    * or superseded by a later redispatch of the same `operationId`) matches
-   * nothing and is ignored rather than aborting whatever now runs under
-   * that operationId.
+   * nothing and is ignored rather than aborting whatever now runs under that
+   * operationId. `reason`, when present, is the durably recorded
+   * cancellation reason the server committed before sending this control —
+   * it becomes the aborted activity's `AbortSignal.reason` and, from there,
+   * its reported `taskResult` error (see `#executeTask`'s catch branch).
    */
-  #handleCancel(operationId: string, attemptToken: string): void {
-    const entry = this.#taskAbortControllers.get(operationId);
-    if (entry === undefined || entry.attemptToken !== attemptToken) return;
-    entry.controller.abort();
+  #handleCancel(operationId: string, attemptToken: string, reason: string | undefined): void {
+    const controller = this.#taskAbortControllers.get(operationId, attemptToken);
+    if (controller === undefined) return;
+    controller.abort(reason ?? DEFAULT_CANCELLED_TASK_ERROR);
+  }
+
+  /**
+   * Handle a `protocolError` from the server (protocol v7 for the
+   * correlated branch below).
+   *
+   * When `operationId`/`attemptToken` are present, this rejection names a
+   * specific `taskResult` the server will never apply no matter how many
+   * times it is resent — unknown operation, stale or foreign attempt, a
+   * workflow-revision mismatch, or conflicting content resubmitted under one
+   * attempt token. Resending that result forever is strictly worse than
+   * dropping it, so this drops the matching outbox entry immediately rather
+   * than waiting for a `taskResultAck` that will never come. Every other
+   * `protocolError` (malformed frame, no operation to correlate against) is
+   * reported exactly as before v7.
+   */
+  #handleProtocolError(data: ProtocolErrorMessage): void {
+    if (data.operationId === undefined || data.attemptToken === undefined) {
+      console.warn(`[weft] RemoteWorker protocol error from server: ${data.message}`);
+      return;
+    }
+
+    const dropped = this.#taskResultOutbox.reject(data.operationId, data.attemptToken);
+    console.warn(
+      `[weft] RemoteWorker taskResult for operation "${data.operationId}" (attempt "${data.attemptToken}") permanently rejected by server — ${data.message}` +
+        (dropped
+          ? '; dropping the buffered result, it will not be resent'
+          : '; no matching buffered result was found'),
+    );
   }
 
   async #handleMessage(event: MessageEvent): Promise<void> {
@@ -549,7 +614,7 @@ export class RemoteWorker implements Disposable {
         this.#handleRegisterError(data.message);
         break;
       case 'protocolError':
-        console.warn(`[weft] RemoteWorker protocol error from server: ${data.message}`);
+        this.#handleProtocolError(data);
         break;
       case 'task':
         if (!this.#shuttingDown) await this.#executeTask(data);
@@ -558,7 +623,7 @@ export class RemoteWorker implements Disposable {
         void this.#gracefulShutdown();
         break;
       case 'cancel':
-        this.#handleCancel(data.operationId, data.attemptToken);
+        this.#handleCancel(data.operationId, data.attemptToken, data.reason);
         break;
       case 'taskResultAck':
         // A dead-lettered disposition still drains the outbox entry — the
@@ -606,11 +671,18 @@ export class RemoteWorker implements Disposable {
     }
 
     const taskAbortController = new AbortController();
-    this.#taskAbortControllers.set(task.operationId, {
-      controller: taskAbortController,
-      attemptToken: task.attemptToken,
-    });
+    this.#taskAbortControllers.set(task.operationId, task.attemptToken, taskAbortController);
     this.#inFlight += 1;
+
+    // Automatic per-attempt keepalive (COR-226): send an attempt-fenced
+    // activityHeartbeat on an interval derived from this dispatch's
+    // visibilityTimeout, mirroring LongPollWorker's identical per-attempt
+    // heartbeat timer. Never sent once the activity settles — cleared in
+    // `finally` below, exactly like LongPollWorker's own `heartbeatTimer`.
+    const heartbeatTimer = setInterval(
+      () => this.#sendActivityHeartbeat(task),
+      activityHeartbeatIntervalMs(task.visibilityTimeout),
+    );
 
     try {
       const result = await executeWithInterceptors(
@@ -618,6 +690,7 @@ export class RemoteWorker implements Disposable {
         task,
         this.#composedInterceptor,
         taskAbortController.signal,
+        (details) => this.#sendActivityHeartbeat(task, details),
       );
 
       this.#sendTaskResult({
@@ -634,7 +707,7 @@ export class RemoteWorker implements Disposable {
           operationId: task.operationId,
           status: 'cancelled',
           cancelled: true,
-          error: 'Task cancelled',
+          error: cancellationErrorMessage(taskAbortController.signal),
           attemptToken: task.attemptToken,
         });
       } else {
@@ -647,9 +720,31 @@ export class RemoteWorker implements Disposable {
         });
       }
     } finally {
-      this.#taskAbortControllers.delete(task.operationId);
+      clearInterval(heartbeatTimer);
+      this.#taskAbortControllers.delete(task.operationId, task.attemptToken);
       this.#inFlight -= 1;
     }
+  }
+
+  /**
+   * Send one `activityHeartbeat` frame for `task` (COR-226), optionally
+   * carrying `details` — used both by the automatic per-attempt keepalive
+   * timer (no details) and by an activity's own on-demand
+   * `context.heartbeat(details)` call. Best-effort and silent when the
+   * socket is not currently ready (a reconnect in progress): a missed
+   * heartbeat is retried on the next interval tick exactly like a dropped
+   * session `heartbeat` would be, and this never fails or delays the
+   * activity itself.
+   */
+  #sendActivityHeartbeat(task: TaskMessage, details?: unknown): void {
+    const normalizedDetails = details === undefined ? undefined : normalizeWorkerJsonValue(details);
+    this.#sendMessage({
+      type: 'activityHeartbeat',
+      workerId: this.#workerId,
+      operationId: task.operationId,
+      attemptToken: task.attemptToken,
+      ...(normalizedDetails !== undefined ? { details: normalizedDetails } : {}),
+    });
   }
 
   /**

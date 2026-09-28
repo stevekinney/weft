@@ -15,7 +15,7 @@
  * `RemoteActivityCancellationRequestedEvent` bridge
  * (`server/runtime/remote-activity-event-bridges.ts`).
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { serve, type WeftServer } from '../../server/index.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
@@ -50,11 +50,12 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
   it('settles the local waiter even with no server to notify (queued-origin)', async () => {
     engine = new Engine({ activityExecution: { mode: 'remote' } });
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     engine.register(
       workflow({ name: 'cancel-no-server-workflow' })
@@ -79,17 +80,19 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
     await engine.cancel(handle.id);
 
     await expect(handle.result()).rejects.toThrow();
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
   it('targets the current durable attempt: a queued task resolves to a cancelled terminal record once a server is attached', async () => {
     engine = new Engine({ activityExecution: { mode: 'remote' } });
     server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
 
+    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const chargeCard = activity({
       name: 'chargeCard',
-      execute: async (_input: { orderId: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localChargeCard,
     });
     engine.register(
       workflow({ name: 'cancel-queued-workflow' })
@@ -119,6 +122,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
       },
       { timeoutMs: 2_000, intervalMs: 10, label: 'durable task to resolve as cancelled' },
     );
+    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
   it('targets the current durable attempt: a leased task moves through cancelling to a cancelled terminal record', async () => {
@@ -152,11 +156,12 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
       label: 'remote worker to register',
     });
 
+    const localSlowActivity = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const slowActivity = activity({
       name: 'slowActivity',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localSlowActivity,
     });
     engine.register(
       workflow({ name: 'cancel-leased-workflow' })
@@ -196,5 +201,6 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
       },
       { timeoutMs: 2_000, intervalMs: 10, label: 'durable task to record cancellation intent' },
     );
+    expect(localSlowActivity).toHaveBeenCalledTimes(0);
   });
 });

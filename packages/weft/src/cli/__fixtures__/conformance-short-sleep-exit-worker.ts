@@ -8,7 +8,6 @@ export type ConformanceShortSleepExitWorkerFixture = 'short-sleep-exit';
 const serverUrl = resolveFixtureEnvironment().workerUrl;
 const protocolVersion = resolveFixtureEnvironment().protocolVersion;
 const mode = resolveFixtureEnvironment().shortSleepExitMode;
-const launchStateFile = resolveFixtureEnvironment().shortSleepExitStateFile;
 const activities = resolveFixtureEnvironment().activities;
 const workerId = `short-sleep-worker-${crypto.randomUUID()}`;
 
@@ -17,16 +16,6 @@ if (serverUrl === undefined) {
   process.exit(2);
 }
 
-async function nextLaunchIndex(): Promise<number> {
-  if (launchStateFile === undefined) return 0;
-  const file = Bun.file(launchStateFile);
-  const previous = (await file.exists()) ? Number(await file.text()) : 0;
-  const next = Number.isFinite(previous) ? previous + 1 : 1;
-  await Bun.write(launchStateFile, String(next));
-  return next;
-}
-
-const launchIndex = await nextLaunchIndex();
 const socket = new WebSocket(serverUrl);
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 const taskTokens = new Map<string, string>();
@@ -74,26 +63,40 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
     return;
   }
 
-  const milliseconds = readMilliseconds(input);
-  if (mode === 'replacement-disconnect' && milliseconds > 100 && launchIndex === 1) {
-    setTimeout(() => {
-      send({
-        type: 'taskResult',
-        operationId,
-        attemptToken,
-        status: 'completed',
-        value: input ?? null,
-      });
-    }, milliseconds * 20);
-    return;
-  }
+  const isRecordInput = input !== null && typeof input === 'object' && !Array.isArray(input);
+  // mode 'ignore-hold' simulates a worker written against the pre-COR-235
+  // contract that has no idea `holdForReassignment` exists: it falls straight
+  // through to the plain-sleep branch below and resolves attempt 1 in place,
+  // exactly the non-conforming behavior the reconnect check must now catch.
+  const holdForReassignment =
+    mode !== 'ignore-hold' && isRecordInput && Reflect.get(input, 'holdForReassignment') === true;
 
-  setTimeout(() => {
-    if (mode === 'replacement-disconnect' && milliseconds > 100 && launchIndex > 1) {
+  if (holdForReassignment) {
+    const attempt = typeof parsed['attempt'] === 'number' ? parsed['attempt'] : 1;
+    if (attempt <= 1) {
+      // First attempt (COR-233/COR-235's reconnect check): hold indefinitely
+      // — this worker is killed before it can ever complete this task.
+      return;
+    }
+    if (mode === 'replacement-disconnect') {
+      // Simulate the REPLACEMENT itself disconnecting instead of resolving
+      // the reassigned attempt, so the harness's later idle wait observes a
+      // vanished worker rather than a completed task.
       socket.close();
       return;
     }
+    send({
+      type: 'taskResult',
+      operationId,
+      attemptToken,
+      status: 'completed',
+      value: input ?? null,
+    });
+    return;
+  }
 
+  const milliseconds = readMilliseconds(input);
+  setTimeout(() => {
     send({
       type: 'taskResult',
       operationId,

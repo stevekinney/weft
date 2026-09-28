@@ -1851,6 +1851,198 @@ describe('WorkerExecutionStrategy', () => {
       expect(poolDispose).toHaveBeenCalledTimes(1);
       expect(mockPool.acquire).toHaveBeenCalledTimes(acquireCallsBeforeDispose);
     });
+
+    // COR-113: repeated disposal or close signals must share one memoized
+    // promise rather than re-running teardown and re-disposing the pool.
+    it('memoizes concurrent asyncDispose calls into one shared promise, disposing the pool exactly once', async () => {
+      setup();
+      const poolAsyncDispose = mock(async () => {});
+      mockPool[Symbol.asyncDispose] = poolAsyncDispose;
+
+      const first = strategy[Symbol.asyncDispose]();
+      const second = strategy[Symbol.asyncDispose]();
+
+      // Both callers must observe the SAME in-flight disposal, proved by
+      // reference identity of the returned promise rather than by timing.
+      expect(first).toBe(second);
+
+      await Promise.all([first, second]);
+
+      expect(poolAsyncDispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-run teardown or re-dispose the pool on a repeated synchronous dispose', () => {
+      setup();
+      const poolDispose = mock(() => {});
+      mockPool[Symbol.dispose] = poolDispose;
+
+      strategy[Symbol.dispose]();
+      strategy[Symbol.dispose]();
+
+      expect(poolDispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('an asyncDispose after an already-completed synchronous dispose resolves without re-disposing the pool', async () => {
+      setup();
+      const poolDispose = mock(() => {});
+      const poolAsyncDispose = mock(async () => {});
+      mockPool[Symbol.dispose] = poolDispose;
+      mockPool[Symbol.asyncDispose] = poolAsyncDispose;
+
+      strategy[Symbol.dispose]();
+      await strategy[Symbol.asyncDispose]();
+
+      expect(poolDispose).toHaveBeenCalledTimes(1);
+      expect(poolAsyncDispose).not.toHaveBeenCalled();
+    });
+
+    it('a synchronous dispose after asyncDispose has started does not re-dispose the pool', async () => {
+      setup();
+      const poolDispose = mock(() => {});
+      const poolAsyncDispose = mock(async () => {});
+      mockPool[Symbol.dispose] = poolDispose;
+      mockPool[Symbol.asyncDispose] = poolAsyncDispose;
+
+      const asyncDisposal = strategy[Symbol.asyncDispose]();
+      // Fires synchronously, before the pool's own asyncDispose settles —
+      // `#teardown` already ran synchronously by this point (see
+      // implementation doc), so this must be a no-op rather than a second
+      // teardown/pool-dispose.
+      strategy[Symbol.dispose]();
+
+      await asyncDisposal;
+
+      expect(poolDispose).not.toHaveBeenCalled();
+      expect(poolAsyncDispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Fenced durable commit before acknowledgement (COR-113)
+  // -------------------------------------------------------------------------
+  //
+  // The message handler passed to `onMessage` IS the engine's fenced durable
+  // commit in production (`Engine#handleStrategyMessage` -> `completeWorkflow`
+  // -> `commitFencedEngineWrite`, which throws when a storage double's
+  // `conditionalBatch` loses the race). From this strategy's own point of
+  // view, "the fenced write failed" and "the handler's returned promise
+  // rejected" are the same event, so a rejecting handler here exercises
+  // exactly the contract COR-113 requires: a realm's `completed`/`failed`
+  // result must not be treated as accepted until that promise resolves.
+
+  describe('fenced durable commit before acknowledgement (COR-113)', () => {
+    it('discards the worker instead of releasing it when the durable commit for a completed turn is rejected', async () => {
+      setup();
+      // Simulates the engine's fenced write losing its CAS / throwing --
+      // see this describe block's doc.
+      strategy.onMessage(() => Promise.reject(new Error('fenced write lost the race')));
+
+      strategy.startWorkflow({
+        workflowId: 'wf-fenced-completion',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      const worker = firstWorker();
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            workflowId: 'wf-fenced-completion',
+            result: 'uncommitted',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      await sleepForTesting(10);
+
+      // The turn's outcome was never durably committed, so the worker must
+      // never be quietly returned to the pool as though the workflow had
+      // genuinely finished -- that would let a fresh workflow reuse it while
+      // this one silently vanishes, with nothing left to retry it.
+      expect(mockPool.release).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+    });
+
+    it('discards the worker instead of releasing it when the durable commit for a failed turn is rejected', async () => {
+      setup();
+      strategy.onMessage(() => Promise.reject(new Error('fenced write lost the race')));
+
+      strategy.startWorkflow({
+        workflowId: 'wf-fenced-failure',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      const worker = firstWorker();
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'failed',
+            workflowId: 'wf-fenced-failure',
+            error: 'workflow body threw',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      await sleepForTesting(10);
+
+      expect(mockPool.release).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+    });
+
+    it('re-emits the workflow as failed (existing retryable-failure semantics) when the completion commit is rejected', async () => {
+      setup();
+      let rejectNextCommit = true;
+      strategy.onMessage((message) => {
+        // Only the FIRST delivery of this workflow's completed result fails
+        // its commit -- `discardWorkerAndFailWorkflows` re-emits a synthetic
+        // `failed` message for the same workflow, whose own (successful)
+        // commit must be allowed through, or this test could not observe it.
+        if (rejectNextCommit && message.type === 'completed') {
+          rejectNextCommit = false;
+          return Promise.reject(new Error('fenced write lost the race'));
+        }
+        messages.push(message);
+        return undefined;
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-fenced-retry',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(10);
+
+      dispatchToMockWorker(
+        firstWorker(),
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            workflowId: 'wf-fenced-retry',
+            result: 'uncommitted',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      await sleepForTesting(10);
+
+      // "Settled as failed/retryable per existing engine semantics": the
+      // strategy's OWN reaction to an unprovable commit is the same
+      // synthesized `failed` message every other worker anomaly in this file
+      // produces (protocol violation, timeout, crash) -- never a silent
+      // `completed` the durable ledger never actually recorded.
+      const outcomes = messages.filter((message) => message.workflowId === 'wf-fenced-retry');
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ type: 'failed' });
+    });
   });
 
   // -------------------------------------------------------------------------

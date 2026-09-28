@@ -7,7 +7,7 @@ import { WeftError } from './weft-error.ts';
  * admission point rejected the value.
  */
 export type PayloadKind =
-  'workflow input' | 'signal payload' | 'activity result' | 'finalizer state';
+  'workflow input' | 'signal payload' | 'activity result' | 'finalizer state' | 'heartbeat details';
 
 /**
  * Thrown at admission when a payload's serialized (codec-encoded) size exceeds

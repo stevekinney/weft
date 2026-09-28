@@ -33,6 +33,10 @@ import { copyFinalizerMetadata } from './finalizer-metadata.ts';
 import { resolveBackgroundTaskMode, resolveOwnershipFields } from './ownership-options.ts';
 import { EngineOwnedRemoteActivityBroker } from './remote-activity-broker.ts';
 import {
+  buildRevisionRealmExecutionStrategyBundle,
+  resolveRevisionRealmExecutionForMode,
+} from './revision-realm-execution-construction.ts';
+import {
   normalizeHistoryPolicy,
   normalizePayloadSizePolicy,
   normalizeRetentionDuration,
@@ -319,6 +323,16 @@ export function normalizeWorkerExecutionConfiguration(
   options: EngineConstructorOptions | undefined,
 ): NormalizedWorkerExecutionConfiguration {
   const workflowExecutionMode = normalizeWorkflowExecutionMode(options?.workflowExecutionMode);
+  // Revision-realm mode is a third, disjoint strategy branch
+  // (`createExecutionStrategyBundle` returns before ever reaching this
+  // function for it) — never silently fall through to `inline` here, which
+  // would mask a real "realm" request as the unhardened default.
+  if (workflowExecutionMode === 'realm') {
+    throw new Error(
+      'normalizeWorkerExecutionConfiguration() does not handle workflowExecutionMode "realm"; ' +
+        'use resolveRevisionRealmExecutionForMode() / createExecutionStrategyBundle() instead',
+    );
+  }
   const workerExecution = resolveWorkerExecutionForMode(options, workflowExecutionMode);
   if (!workerExecution) {
     return { mode: 'inline', workerExecution: null };
@@ -330,10 +344,12 @@ export function normalizeWorkerExecutionConfiguration(
 function normalizeWorkflowExecutionMode(
   value: unknown,
 ): EngineConstructorOptions['workflowExecutionMode'] {
-  if (value === undefined || value === 'inline' || value === 'worker') {
+  if (value === undefined || value === 'inline' || value === 'worker' || value === 'realm') {
     return value;
   }
-  throw new Error('options.workflowExecutionMode must be "inline" or "worker" when provided');
+  throw new Error(
+    'options.workflowExecutionMode must be "inline", "worker", or "realm" when provided',
+  );
 }
 
 function resolveWorkerExecutionForMode(
@@ -354,6 +370,12 @@ function resolveWorkerExecutionForMode(
     }
     return options.workerExecution;
   }
+  // `workflowExecutionMode: 'realm'` never reaches here:
+  // `normalizeWorkerExecutionConfiguration()` throws before calling this
+  // function for that mode, and `createExecutionStrategyBundle()` routes
+  // realm mode through `buildRevisionRealmExecutionStrategyBundle()` (which
+  // calls `assertNoWorkerExecutionForRealmMode()` itself) instead of this
+  // one, so a `'realm'` branch here would be unreachable dead code.
   // Omitted mode defaults to inline. Worker execution is the hardened untrusted
   // posture and must be requested explicitly; providing workerExecution alone is
   // an error rather than a silent, weaker Worker selection.
@@ -427,6 +449,13 @@ export function createExecutionStrategyBundle(parameters: {
   recordFinalizerState?: (workflowId: string, value: unknown) => void;
   getWorkflowServices?: (workflowId: string) => unknown;
   getLogSink?: () => ((record: WorkflowLogRecord) => void) | undefined;
+  /**
+   * Synchronous accessor over `internals.workflowTypeByWorkflowId` (WFT-19) —
+   * the durable revision pin `RevisionRealmExecutionStrategy` falls back to
+   * when `startWorkflow()`'s own `revision` parameter is absent (a recovery
+   * re-launch). Unused outside `workflowExecutionMode: 'realm'`.
+   */
+  getWorkflowRevisionPin?: (workflowId: string) => string | undefined;
 }): ExecutionStrategyBundle {
   const {
     options,
@@ -442,7 +471,25 @@ export function createExecutionStrategyBundle(parameters: {
     recordFinalizerState,
     getWorkflowServices,
     getLogSink,
+    getWorkflowRevisionPin,
   } = parameters;
+  const workflowExecutionMode = normalizeWorkflowExecutionMode(options?.workflowExecutionMode);
+  // Validated unconditionally (not only for `'realm'` mode) so
+  // `options.revisionRealmExecution` provided alongside `'inline'`/`'worker'`/
+  // an omitted mode is rejected the same way `options.workerExecution`
+  // provided alongside the wrong mode already is, rather than being
+  // silently ignored.
+  const revisionRealmExecution = resolveRevisionRealmExecutionForMode(
+    options,
+    workflowExecutionMode,
+  );
+  const realmBundle = buildRevisionRealmExecutionStrategyBundle(
+    options,
+    workflowExecutionMode,
+    revisionRealmExecution,
+    getWorkflowRevisionPin,
+  );
+  if (realmBundle) return realmBundle;
   const workerExecutionConfiguration = normalizeWorkerExecutionConfiguration(options);
   if (workerExecutionConfiguration.mode === 'worker') {
     const pool = new WorkerPool({

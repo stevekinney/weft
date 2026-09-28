@@ -55,7 +55,15 @@ export type RealmReadyOutcome =
   | { ok: true; realmGeneration: string; manifestDigest: string }
   | { ok: false; error: string; failureCategory: FailureCategory };
 
-export interface WorkerRealmReadinessDependencies {
+/**
+ * Dependencies the `ready` message content check needs. A pure subset of
+ * {@link WorkerRealmReadinessDependencies} — no `timeoutMs`, because that
+ * only bounds how long {@link WorkerRealmReadiness.waitForReady} waits, not
+ * what the message itself must contain. Standalone so a caller with no
+ * `Worker` to key a `WorkerRealmReadiness` instance by — the deterministic
+ * fake realm (COR-117) chief among them — can still run the same check.
+ */
+export interface RealmReadyValidationDependencies {
   /**
    * Live accessor for the host's registered workflow types, called fresh on
    * every handshake rather than snapshotted at construction — the engine's
@@ -63,8 +71,116 @@ export interface WorkerRealmReadinessDependencies {
    * registration loop runs later in `Engine.create()`).
    */
   getExpectedWorkflowTypes: () => readonly string[];
-  timeoutMs: number;
   maxProtocolMessageBytes: number | undefined;
+  /**
+   * Opt-in revision-realm check (COR-117): when provided and it returns a
+   * digest, the realm's reported `manifest.deployment.artifactDigest` must
+   * equal it exactly or the handshake is rejected. Every default (`opt-out`)
+   * caller omits this or returns `undefined`, so the existing generic
+   * `workflowExecutionMode: 'worker'` path — whose realms are not pinned to
+   * one immutable artifact revision — is unaffected. A revision realm
+   * provides this so a realm cannot enter `Ready` or run user code on a
+   * build that disagrees with the expected artifact, even when its
+   * per-workflow-type contracts happen to still match (a same-type,
+   * different-build realm).
+   */
+  getExpectedArtifactDigest?: () => string | undefined;
+}
+
+export interface WorkerRealmReadinessDependencies extends RealmReadyValidationDependencies {
+  timeoutMs: number;
+}
+
+/**
+ * Whether a realm's reported artifact digest disagrees with what the host
+ * expects. `undefined` means "no digest expected" (the existing generic
+ * Worker path), which never mismatches. Broken out of
+ * {@link validateRealmReadyMessage} to keep that function's own cyclomatic
+ * complexity under this package's lint ceiling.
+ */
+function artifactDigestMismatch(
+  manifestArtifactDigest: string,
+  expectedArtifactDigest: string | undefined,
+): boolean {
+  return expectedArtifactDigest !== undefined && manifestArtifactDigest !== expectedArtifactDigest;
+}
+
+/**
+ * Validate an inbound `ready` message's content against `dependencies`.
+ * Extracted from {@link WorkerRealmReadiness} so it can be reused by
+ * anything that is not itself a `Map<Worker, ...>`-keyed pool — the fake
+ * realm chief among them.
+ */
+export async function validateRealmReadyMessage(
+  message: unknown,
+  dependencies: RealmReadyValidationDependencies,
+): Promise<RealmReadyOutcome> {
+  try {
+    assertWorkerProtocolMessageWithinLimit(message, dependencies.maxProtocolMessageBytes);
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      failureCategory: 'resource',
+    };
+  }
+
+  const record = message as Record<string, unknown>;
+  if (record['protocolVersion'] !== WORKER_PROTOCOL_VERSION) {
+    return {
+      ok: false,
+      error: `Worker realm ready message protocol version mismatch: expected ${WORKER_PROTOCOL_VERSION}, got ${String(record['protocolVersion'])}`,
+      failureCategory: 'system',
+    };
+  }
+
+  if (typeof record['realmGeneration'] !== 'string' || record['realmGeneration'].length === 0) {
+    return {
+      ok: false,
+      error: 'Worker realm ready message must include a non-empty realmGeneration string',
+      failureCategory: 'system',
+    };
+  }
+
+  const parsed = parseWorkerManifest(record['manifest']);
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: `Worker realm manifest rejected: ${parsed.message}`,
+      failureCategory: 'system',
+    };
+  }
+
+  const missing = dependencies
+    .getExpectedWorkflowTypes()
+    .filter((workflowType) => {
+      const reported = parsed.manifest.workflows[workflowType];
+      return (
+        !reported ||
+        !declaredWorkflowContractsMatch(reported, buildDeclaredWorkflowContract(workflowType))
+      );
+    })
+    .toSorted();
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      error: `Worker realm manifest is missing or disagrees on workflow type(s) the host expects: ${missing.join(', ')}`,
+      failureCategory: 'system',
+    };
+  }
+
+  const expectedArtifactDigest = dependencies.getExpectedArtifactDigest?.();
+  if (artifactDigestMismatch(parsed.manifest.deployment.artifactDigest, expectedArtifactDigest)) {
+    return {
+      ok: false,
+      error: `Worker realm manifest artifact digest mismatch: expected ${expectedArtifactDigest}, got ${parsed.manifest.deployment.artifactDigest}`,
+      failureCategory: 'system',
+    };
+  }
+
+  const manifestDigest = await computeWorkerManifestDigest(parsed.manifest);
+  return { ok: true, realmGeneration: record['realmGeneration'], manifestDigest };
 }
 
 /**
@@ -167,62 +283,6 @@ export class WorkerRealmReadiness {
   }
 
   async #validate(message: unknown): Promise<RealmReadyOutcome> {
-    try {
-      assertWorkerProtocolMessageWithinLimit(message, this.#dependencies.maxProtocolMessageBytes);
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        failureCategory: 'resource',
-      };
-    }
-
-    const record = message as Record<string, unknown>;
-    if (record['protocolVersion'] !== WORKER_PROTOCOL_VERSION) {
-      return {
-        ok: false,
-        error: `Worker realm ready message protocol version mismatch: expected ${WORKER_PROTOCOL_VERSION}, got ${String(record['protocolVersion'])}`,
-        failureCategory: 'system',
-      };
-    }
-
-    if (typeof record['realmGeneration'] !== 'string' || record['realmGeneration'].length === 0) {
-      return {
-        ok: false,
-        error: 'Worker realm ready message must include a non-empty realmGeneration string',
-        failureCategory: 'system',
-      };
-    }
-
-    const parsed = parseWorkerManifest(record['manifest']);
-    if (!parsed.ok) {
-      return {
-        ok: false,
-        error: `Worker realm manifest rejected: ${parsed.message}`,
-        failureCategory: 'system',
-      };
-    }
-
-    const missing = this.#dependencies
-      .getExpectedWorkflowTypes()
-      .filter((workflowType) => {
-        const reported = parsed.manifest.workflows[workflowType];
-        return (
-          !reported ||
-          !declaredWorkflowContractsMatch(reported, buildDeclaredWorkflowContract(workflowType))
-        );
-      })
-      .toSorted();
-
-    if (missing.length > 0) {
-      return {
-        ok: false,
-        error: `Worker realm manifest is missing or disagrees on workflow type(s) the host expects: ${missing.join(', ')}`,
-        failureCategory: 'system',
-      };
-    }
-
-    const manifestDigest = await computeWorkerManifestDigest(parsed.manifest);
-    return { ok: true, realmGeneration: record['realmGeneration'], manifestDigest };
+    return validateRealmReadyMessage(message, this.#dependencies);
   }
 }

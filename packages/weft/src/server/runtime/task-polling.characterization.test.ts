@@ -286,6 +286,10 @@ describe('handleTaskResultRequest', () => {
     );
 
     expect(response?.status).toBe(403);
+    // COR-237: a long-poll-specific precondition, distinct from the shared
+    // identity-authorization vocabulary.
+    const queueMismatchBody = await response?.json();
+    expect(queueMismatchBody?.reason).toBe('queue-mismatch');
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-queue-mismatch')));
     expect(record?.state).toBe('leased');
   });
@@ -549,7 +553,15 @@ describe('handleTaskResultRequest', () => {
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+    // COR-1271: a permanent rejection carries the correlated identity in the
+    // error body, mirroring the WebSocket transport's `protocolError`, so a
+    // caller can tell which submission was rejected instead of only that
+    // *something* was `403`.
+    expect(await response?.json()).toEqual({
+      error: 'Forbidden',
+      operationId: 'op-begin-completion-cas-loss',
+      attemptToken: 'attempt-token',
+    });
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining(
         'Failed to commit task result for "op-begin-completion-cas-loss" through the durable ledger:',
@@ -638,7 +650,20 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+    // Pins the correlated 403 body: an operation/attempt this transport will
+    // never apply carries the same identity a WebSocket worker would see on
+    // a correlated `protocolError` (protocol v7). This test drives
+    // `handleTaskResultRequest` directly, with no `LongPollResultDelivery`
+    // buffer in the loop to correlate this rejection against — that
+    // worker-side drop behavior is covered separately in
+    // `long-poll-result-delivery.test.ts`.
+    expect(await response?.json()).toEqual({
+      error: 'Forbidden',
+      operationId: 'op-revision-missing',
+      attemptToken: 'attempt-token',
+      // COR-237: this permanent rejection now carries a machine-distinguishable reason.
+      reason: 'revision-mismatch',
+    });
   });
 
   it('rejects with 403 when the POST body echoes the wrong workflowRevision', async () => {
@@ -666,7 +691,12 @@ describe('handleTaskResultRequest revision authorization (WFT-20)', () => {
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+    expect(await response?.json()).toEqual({
+      error: 'Forbidden',
+      operationId: 'op-revision-wrong',
+      attemptToken: 'attempt-token',
+      reason: 'revision-mismatch',
+    });
   });
 
   it('accepts a 200 when the POST body echoes the matching workflowRevision', async () => {
@@ -877,6 +907,10 @@ describe('handleTaskPollRequest', () => {
     );
 
     expect(rejected?.status).toBe(403);
+    // COR-237: a foreign workerId against a live attempt is worker-mismatch,
+    // machine-distinguishable from unknown-operation/stale-attempt.
+    const workerMismatchBody = await rejected?.json();
+    expect(workerMismatchBody?.reason).toBe('worker-mismatch');
 
     const accepted = await handleTaskResultRequest(
       context,
@@ -977,6 +1011,10 @@ describe('handleTaskPollRequest', () => {
       WORKER_PRINCIPAL,
     );
     expect(rejected?.status).toBe(403);
+    // COR-237: right worker, wrong token — attempt-token-mismatch, distinct
+    // from worker-mismatch even though both are 403s.
+    const attemptTokenMismatchBody = await rejected?.json();
+    expect(attemptTokenMismatchBody?.reason).toBe('attempt-token-mismatch');
 
     // The matching token is accepted.
     const accepted = await handleTaskResultRequest(
@@ -1114,6 +1152,11 @@ describe('handleTaskPollRequest', () => {
       WORKER_PRINCIPAL,
     );
     expect(response?.status).toBe(403);
+    // COR-237: no ledger record has ever existed for this operation —
+    // 'unknown-operation', distinct from 'stale-attempt' (see the next test,
+    // where a record genuinely exists but is not a current attempt).
+    const unknownOperationBody = await response?.json();
+    expect(unknownOperationBody?.reason).toBe('unknown-operation');
   });
 
   // COR-233 item 2: a `queued` record has no current attempt either — it was
@@ -1162,6 +1205,10 @@ describe('handleTaskPollRequest', () => {
       WORKER_PRINCIPAL,
     );
     expect(response?.status).toBe(403);
+    // COR-237: a record genuinely exists here (unlike the previous test) but
+    // is not a current attempt — 'stale-attempt', not 'unknown-operation'.
+    const staleAttemptBody = await response?.json();
+    expect(staleAttemptBody?.reason).toBe('stale-attempt');
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-queued')));
     expect(record?.state).toBe('queued');
   });
@@ -1203,5 +1250,60 @@ describe('handleTaskPollRequest', () => {
     const afterResend = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-resend')));
     expect(afterResend?.state).toBe('terminal');
     expect(afterResend?.generation).toBe(resolved.generation);
+  });
+
+  // Unlike the resend above, a DIFFERENT result under the SAME attempt token
+  // against an already-terminal record is `commitTaskLedgerCompletion`'s
+  // conflicting-content rejection — a hard `ok: false` this transport never
+  // turns into a 200. Before the correlated body, `applyTaskResult`'s
+  // failure only reached `console.error`; the caller could not tell a
+  // caller which operation/attempt was rejected from the response alone.
+  it('rejects conflicting content resubmitted under the same attempt token with a correlated 403 (protocol v7 semantics)', async () => {
+    const context = createMinimalContext();
+    const storage = new MemoryStorage();
+    const options = createMinimalOptions(storage);
+    await writeLeasedRecord(storage, { operationId: 'op-conflict' });
+
+    const first = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-conflict',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 42,
+      }),
+      makeUrl(),
+    );
+    expect(first?.status).toBe(200);
+    expect(await first?.json()).toEqual({ ok: true, disposition: 'applied' });
+    const resolved = await readResolvedTerminalRecord(storage, 'op-conflict');
+
+    // Same operation, same attempt token, but a genuinely different result.
+    const conflicting = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-conflict',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'completed',
+        value: 'a different value entirely',
+      }),
+      makeUrl(),
+    );
+    expect(conflicting?.status).toBe(403);
+    expect(await conflicting?.json()).toEqual({
+      error: 'Forbidden',
+      operationId: 'op-conflict',
+      attemptToken: 'attempt-token',
+      // COR-237: the one named ledger-commit outcome, not a generic rejection.
+      reason: 'conflicting-content',
+    });
+
+    // The original terminal record is untouched by the rejected resubmission.
+    const afterConflict = await readResolvedTerminalRecord(storage, 'op-conflict');
+    expect(afterConflict.generation).toBe(resolved.generation);
   });
 });

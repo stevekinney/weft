@@ -1,3 +1,6 @@
+import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import type { WorkerExecutionRequirementInput } from '../task-ledger/task-ledger-types.ts';
+
 /**
  * Fired on the {@link Engine} when an activity begins execution. Use to
  * trace activity scheduling latency. Read `e.operationId`, `e.workflowId`,
@@ -288,5 +291,81 @@ export class RemoteActivityCancellationRequestedEvent extends Event {
     super(RemoteActivityCancellationRequestedEvent.type);
     this.operationId = operationId;
     this.workflowId = workflowId;
+  }
+}
+
+/**
+ * Fired on the {@link Engine} whenever a worker successfully claims one
+ * attempt of a remote task (COR-198) — an attempt-by-attempt worker
+ * transition. Listening to a stream of these for one `operationId` traces
+ * exactly which worker executed each attempt, in order; `crossBuildRetry`
+ * flags the specific case operators care about most — a retry that landed on
+ * a different build or artifact than its predecessor, which
+ * `previousExecutionIdentity` (present only then) lets a listener compare
+ * directly against `executionIdentity`.
+ *
+ * `executionIdentity` reuses `WorkerExecutionIdentity` — the exact type
+ * `TaskAttemptRecord.executionIdentity` and the `weft.tasks.get` operation's
+ * `attempts[].executionIdentity` field already carry — so server operations,
+ * generated clients, and this event agree on one provenance shape (COR-205
+ * acceptance criterion 14). Absent for the same reason it is absent
+ * elsewhere: a long-poll claim has no registered manifest to build one from.
+ *
+ * Carries `attemptTokenDigest`, never the raw attempt token (criteria 8 and
+ * 10) — identical to every other provenance surface.
+ *
+ * @example
+ * ```ts
+ * import { Engine, TaskAttemptTransitionEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
+ *   if (event.crossBuildRetry) {
+ *     console.warn(
+ *       'retry crossed builds:',
+ *       event.previousExecutionIdentity?.buildId,
+ *       '->',
+ *       event.executionIdentity?.buildId,
+ *     );
+ *   }
+ * });
+ * ```
+ */
+export class TaskAttemptTransitionEvent extends Event {
+  static readonly type = 'task:attempt-transition' as const;
+  readonly operationId: string;
+  readonly workflowId: string | undefined;
+  readonly activityName: string;
+  readonly attempt: number;
+  readonly attemptTokenDigest: string;
+  readonly workerSessionId: string;
+  readonly executionIdentity: WorkerExecutionIdentity | undefined;
+  readonly executionRequirement: WorkerExecutionRequirementInput | undefined;
+  readonly crossBuildRetry: boolean;
+  readonly previousExecutionIdentity: WorkerExecutionIdentity | undefined;
+
+  constructor(input: {
+    operationId: string;
+    workflowId?: string | undefined;
+    activityName: string;
+    attempt: number;
+    attemptTokenDigest: string;
+    workerSessionId: string;
+    executionIdentity?: WorkerExecutionIdentity | undefined;
+    executionRequirement?: WorkerExecutionRequirementInput | undefined;
+    crossBuildRetry: boolean;
+    previousExecutionIdentity?: WorkerExecutionIdentity | undefined;
+  }) {
+    super(TaskAttemptTransitionEvent.type);
+    this.operationId = input.operationId;
+    this.workflowId = input.workflowId;
+    this.activityName = input.activityName;
+    this.attempt = input.attempt;
+    this.attemptTokenDigest = input.attemptTokenDigest;
+    this.workerSessionId = input.workerSessionId;
+    this.executionIdentity = input.executionIdentity;
+    this.executionRequirement = input.executionRequirement;
+    this.crossBuildRetry = input.crossBuildRetry;
+    this.previousExecutionIdentity = input.previousExecutionIdentity;
   }
 }

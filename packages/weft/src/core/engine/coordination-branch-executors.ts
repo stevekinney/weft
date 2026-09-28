@@ -4,8 +4,8 @@ import type { EngineInternals } from './internals.ts';
 import {
   consumeSignalWithAtomicWorkflowCommit,
   peekSignal,
+  registerSignalWaiter,
   releaseSignalWaiter,
-  trackWaiterKey,
 } from './signals.ts';
 
 /**
@@ -232,8 +232,7 @@ export function executeWaitSignalSubOperation(
         return;
       }
 
-      internals.signalWaiters.set(waiterKey, deliver);
-      trackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+      registerSignalWaiter(internals, workflowId, waiterKey, deliver);
       registered = true;
 
       const buffered = await peekSignal(internals, workflowId, signalName);

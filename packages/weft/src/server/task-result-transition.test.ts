@@ -191,6 +191,9 @@ describe('commitTaskLedgerCompletion — duplicate and dead-lettered idempotency
     if (conflicting.ok) throw new Error('expected conflicting content to be rejected');
     expect(conflicting.reason).toContain('conflicting content');
     expect(conflicting.reason).toContain(leased.attemptToken);
+    // COR-237: conflicting-duplicate is a structured, named outcome, not just
+    // free text a caller would have to pattern-match to recognize.
+    expect(conflicting.reasonCode).toBe('conflicting-content');
 
     // The original terminal record is untouched.
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(leased.operationId)));
@@ -231,6 +234,7 @@ describe('commitTaskLedgerCompletion — duplicate and dead-lettered idempotency
     expect(conflicting.ok).toBe(false);
     if (conflicting.ok) throw new Error('expected conflicting content to be rejected');
     expect(conflicting.reason).toContain('conflicting content');
+    expect(conflicting.reasonCode).toBe('conflicting-content');
   });
 });
 
@@ -276,6 +280,10 @@ describe('commitTaskLedgerCompletion — stale, unknown, and superseded attempts
     if (result.ok) throw new Error('expected the unknown operation to be rejected');
     expect(result.reason).toContain('leased');
     expect(result.deadLettered).toBeUndefined();
+    // COR-237: this is a generic CAS/precondition rejection from
+    // beginCompletion, not the named conflicting-content outcome — it must
+    // NOT carry that reasonCode.
+    expect(result.reasonCode).toBeUndefined();
 
     // No record was created at all — not resolved, not dead-lettered.
     const record = await storage.get(taskLedgerKey('op-never-dispatched'));

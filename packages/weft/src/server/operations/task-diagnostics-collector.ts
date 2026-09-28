@@ -17,6 +17,7 @@ import type {
   TaskDiagnosticKind,
   TaskDiagnosticsSummary,
 } from './get-task-diagnostics.ts';
+import { matchesExecutionIdentityFilter } from './task-attempt-identity-filter.ts';
 import { addCapacityDiagnostics } from './task-diagnostics-capacity.ts';
 
 export async function collectTaskDiagnostics({
@@ -26,7 +27,7 @@ export async function collectTaskDiagnostics({
   registry,
   taskQueue,
 }: {
-  engine: { storage: Pick<Storage, 'scan'> };
+  engine: { storage: Pick<Storage, 'scan' | 'get'> };
   input: GetTaskDiagnosticsInput;
   currentTime: number;
   registry?: WorkerRegistry | undefined;
@@ -55,6 +56,7 @@ export async function collectTaskDiagnostics({
     const decoded = decodeRemoteTaskRecord(value);
     if (decoded === null) continue;
     if (!matchesTaskRecordFilter(decoded, input)) continue;
+    if (!(await matchesExecutionIdentityFilter(engine.storage, decoded, input))) continue;
     relevantQueues.add(decoded.queue);
     addRecordDiagnostics(decoded, input, currentTime, addItem);
   }

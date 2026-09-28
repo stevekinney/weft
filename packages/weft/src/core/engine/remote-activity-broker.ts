@@ -10,6 +10,7 @@
 
 import type { Storage } from '../../storage/interface.ts';
 import { isJSONValue } from '../json.ts';
+import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
 import { commitTaskLedgerTransition } from '../task-ledger/task-ledger-runtime.ts';
 import { createQueued, type CreateQueuedInput } from '../task-ledger/task-ledger-transitions.ts';
@@ -17,6 +18,7 @@ import {
   decodeRemoteTaskRecord,
   REMOTE_TASK_RECORD_VERSION,
   taskLedgerKey,
+  type RemoteTaskRecord,
 } from '../task-ledger/task-ledger.ts';
 import type { RetryPolicy } from '../types.ts';
 
@@ -84,6 +86,28 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
     this.#onEnqueued = onEnqueued;
   }
 
+  /**
+   * Read the ledger record at `key`, distinguishing "no record" from "bytes
+   * present but undecodable" — `decodeRemoteTaskRecord` collapses both to
+   * `null`, which is safe for a read-only caller but not for `enqueue`'s
+   * create-if-absent logic: `commitTaskLedgerTransition` treats
+   * `current === null` as license to write a fresh `queued` record, and its
+   * CAS `expectedValue` is the exact bytes just read, so it would happily
+   * overwrite a malformed record rather than reject the write. Absence must
+   * keep meaning "safe to create"; a genuinely malformed record must not.
+   */
+  async #readExistingOrThrowIfMalformed(key: string): Promise<RemoteTaskRecord | null> {
+    const rawExisting = await this.#ledgerStorage.get(key);
+    if (rawExisting === null) return null;
+    const existing = decodeRemoteTaskRecord(rawExisting);
+    if (existing !== null) return existing;
+    console.error(
+      `[weft] Malformed task ledger record at "${key}" — refusing to enqueue a remote activity ` +
+        'over it (would silently discard the corrupt bytes).',
+    );
+    throw new PersistedDataCorruptError(key);
+  }
+
   async enqueue(request: RemoteActivityTaskRequest): Promise<void> {
     const key = taskLedgerKey(request.operationId);
 
@@ -91,8 +115,10 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
     // crash/recovery derives the SAME deterministic token
     // (`deriveAsyncActivityToken`) and calls `enqueue` again. The first
     // dispatch's ledger record is the truth; skip the write entirely rather
-    // than letting `createQueued`'s absent-key precondition reject it.
-    const existing = decodeRemoteTaskRecord(await this.#ledgerStorage.get(key));
+    // than letting `createQueued`'s absent-key precondition reject it. A
+    // malformed existing record (bytes present, undecodable) is neither
+    // absent nor a legitimate replay target — surface it instead.
+    const existing = await this.#readExistingOrThrowIfMalformed(key);
     if (existing !== null) return;
 
     // Matches `buildCreateQueuedInput`'s (`task-dispatch-envelope.ts`) own
@@ -145,8 +171,10 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
       // Lost a create race to a concurrent writer for this exact operationId
       // (another process, or a duplicate concurrent replay) — the record now
       // exists durably either way; treat it the same as the idempotent-replay
-      // guard above rather than failing the activity attempt.
-      const raced = decodeRemoteTaskRecord(await this.#ledgerStorage.get(key));
+      // guard above rather than failing the activity attempt. Same malformed
+      // distinction applies here: a corrupt record must surface, not vanish
+      // into a generic CAS-loss message.
+      const raced = await this.#readExistingOrThrowIfMalformed(key);
       if (raced !== null) return;
       throw new Error(
         `Failed to durably enqueue remote activity task "${request.operationId}": ${result.reason}`,

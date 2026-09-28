@@ -202,9 +202,10 @@ function parseHeartbeatMessage(
 
 // prettier-ignore
 const ACTIVITY_HEARTBEAT_FIELD_SPECS: readonly FieldSpec[] = [
-  ['workerId',     true, isNonEmptyString, 'activityHeartbeat.workerId must be a non-empty string'],
-  ['operationId',  true, isNonEmptyString, 'activityHeartbeat.operationId must be a non-empty string'],
-  ['attemptToken', true, isNonEmptyString, 'activityHeartbeat.attemptToken must be a non-empty string'],
+  ['workerId',     true,  isNonEmptyString,        'activityHeartbeat.workerId must be a non-empty string'],
+  ['operationId',  true,  isNonEmptyString,        'activityHeartbeat.operationId must be a non-empty string'],
+  ['attemptToken', true,  isNonEmptyString,        'activityHeartbeat.attemptToken must be a non-empty string'],
+  ['details',      false, isRemoteWorkerJsonValue, 'activityHeartbeat.details must be valid JSON when present'],
 ];
 
 function parseActivityHeartbeatMessage(
@@ -235,6 +236,13 @@ const TASK_FIELD_SPECS: readonly FieldSpec[] = [
   ],
   ['workflowRevision', false, isNonEmptyString, 'task.workflowRevision must be a non-empty string'],
   ['attemptToken', true, isNonEmptyString, 'task.attemptToken must be a non-empty string'],
+  ['visibilityTimeout', false, isFiniteNumber, 'task.visibilityTimeout must be a finite number'],
+  [
+    'lastHeartbeatDetails',
+    false,
+    isRemoteWorkerJsonValue,
+    'task.lastHeartbeatDetails must be valid JSON when present',
+  ],
 ];
 
 function parseTaskMessage(
@@ -250,8 +258,9 @@ function parseTaskMessage(
 
 // prettier-ignore
 const CANCEL_FIELD_SPECS: readonly FieldSpec[] = [
-  ['operationId',  true, isNonEmptyString, 'cancel.operationId must be a non-empty string'],
-  ['attemptToken', true, isNonEmptyString, 'cancel.attemptToken must be a non-empty string'],
+  ['operationId',  true,  isNonEmptyString, 'cancel.operationId must be a non-empty string'],
+  ['attemptToken', true,  isNonEmptyString, 'cancel.attemptToken must be a non-empty string'],
+  ['reason',       false, isNonEmptyString, 'cancel.reason must be a non-empty string when present'],
 ];
 
 function parseCancelMessage(
@@ -392,7 +401,35 @@ function parseProtocolErrorMessage(
     return protocolFailure('invalid_message', 'protocolError.message must be a string');
   }
 
-  return { ok: true, message: { type: 'protocolError', code, message } };
+  // Protocol v7: present only for a rejected `taskResult` the server will
+  // never apply, so the worker can correlate it against its outbox — absent
+  // for every other protocolError. Both are optional, but if present at all
+  // must be non-empty strings, matching every other identity field on the wire.
+  const operationId = record['operationId'];
+  if (operationId !== undefined && !isNonEmptyString(operationId)) {
+    return protocolFailure(
+      'invalid_message',
+      'protocolError.operationId must be a non-empty string when present',
+    );
+  }
+  const attemptToken = record['attemptToken'];
+  if (attemptToken !== undefined && !isNonEmptyString(attemptToken)) {
+    return protocolFailure(
+      'invalid_message',
+      'protocolError.attemptToken must be a non-empty string when present',
+    );
+  }
+
+  return {
+    ok: true,
+    message: {
+      type: 'protocolError',
+      code,
+      message,
+      ...(operationId !== undefined ? { operationId } : {}),
+      ...(attemptToken !== undefined ? { attemptToken } : {}),
+    },
+  };
 }
 
 function isTaskResultAckDisposition(value: unknown): value is TaskResultAckMessage['disposition'] {

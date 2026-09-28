@@ -115,6 +115,18 @@ export type TaskLedgerCompletionInput = Readonly<{
 /** How the durable ledger resolved a submitted task result (COR-240). Mirrors `TaskResultAckMessage.disposition`. */
 export type TaskResultDisposition = 'applied' | 'duplicate' | 'dead-lettered';
 
+/**
+ * A named, machine-distinguishable failure classification (COR-237) for the
+ * one `commitTaskLedgerCompletion` rejection that used to be identifiable
+ * only by pattern-matching its free-text `reason` string: a resubmission
+ * under an attempt token that already resolved this operation once, carrying
+ * DIFFERENT content than what was recorded. Every other `ok: false` here
+ * (CAS/precondition failures surfaced by `commitTaskLedgerTransition`) has no
+ * `reasonCode` — they are generic infrastructure-level failures, not a named
+ * business-logic outcome.
+ */
+export type TaskLedgerCompletionFailureReason = 'conflicting-content';
+
 export type TaskLedgerCompletionResult =
   | Readonly<{
       ok: true;
@@ -126,7 +138,13 @@ export type TaskLedgerCompletionResult =
       /** Present only when `disposition` is `'dead-lettered'`. */
       deadLettered?: RemoteTaskDeadLettered;
     }>
-  | Readonly<{ ok: false; reason: string; deadLettered?: RemoteTaskDeadLettered }>;
+  | Readonly<{
+      ok: false;
+      reason: string;
+      /** Present only for the `matchIdempotentResubmission` conflict branch — see {@link TaskLedgerCompletionFailureReason}. */
+      reasonCode?: TaskLedgerCompletionFailureReason;
+      deadLettered?: RemoteTaskDeadLettered;
+    }>;
 
 /** Content digest of the pending result — computed once and proven to match by `commitTerminalResult`. */
 async function pendingResultDigest(input: TaskLedgerCompletionInput): Promise<string> {
@@ -353,6 +371,7 @@ function matchIdempotentResubmission(
 
   const conflict = {
     ok: false,
+    reasonCode: 'conflicting-content',
     reason: `conflicting content resubmitted for operation "${input.operationId}" under attempt token "${input.attemptToken}"`,
   } as const;
 

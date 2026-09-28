@@ -154,9 +154,9 @@ export function releaseInFlightStart(
  * (a terminal-but-unpurged `WorkflowState`) rides the same `wf:` scan
  * `nonTerminalRuns` already pays for — see
  * {@link countWorkflowStateRevisionsByStatus}, which returns both buckets
- * from one pass. The remaining two fields of
- * {@link WorkflowRevisionReferenceCounts} stay `0` — the dispatch ledger
- * and execution realms are out of this batch's scope.
+ * from one pass. `activeExecutionRealms` (COR-249) reads the opt-in
+ * `internals.revisionRealmRegistry`, `0` by default; `pendingDispatches`
+ * always stays `0` — the dispatch ledger is out of this batch's scope.
  */
 export async function countWorkflowRevisionReferences(
   engine: Engine,
@@ -177,7 +177,7 @@ export async function countWorkflowRevisionReferences(
     nonTerminalRuns,
     pinnedSchedules,
     pendingDispatches: 0,
-    activeExecutionRealms: 0,
+    activeExecutionRealms: internals.revisionRealmRegistry?.activeRealmCount(name, revision) ?? 0,
     retainedRecoveryRecords: terminalRuns + deadLetters,
   };
 }

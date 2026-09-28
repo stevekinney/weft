@@ -18,6 +18,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { TaskAttemptTransitionEvent } from '../core/events/activity-events.ts';
 import {
   decodeTaskAttemptRecord,
   taskAttemptKey,
@@ -29,13 +30,16 @@ import {
   taskLedgerKey,
   type RemoteTaskLeased,
 } from '../core/task-ledger/task-ledger.ts';
+import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import {
   manifestForActivities,
   TEST_ACCEPTED_MANIFEST_DIGEST,
 } from '../worker/registry-fixtures.test-support.ts';
+import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { createEngine, runGetTaskDetail } from './operations/get-task-detail.test-support.ts';
+import { useObservableActivityHeartbeatsForTesting } from './runtime/activity-heartbeat-test-hooks.ts';
 import {
   minimalServeOptions,
   minimalServerContext,
@@ -48,12 +52,45 @@ import {
   reassignOrExpireTask,
   taskDispatchFromLedgerRecord,
 } from './runtime/task-reconciliation.ts';
+import { handleWorkerWebSocketMessage } from './runtime/websocket-worker.ts';
 import { runWorkerDisconnectRequeue } from './runtime/worker-disconnect-requeue.ts';
 
 import type { ServeOptions } from './index.ts';
 import type { ServerContext } from './runtime/context.ts';
 
 const NOOP_CLEANUP = (_operationId: string) => {};
+
+/**
+ * A worker-connection stand-in for `activityHeartbeat` message handling —
+ * unlike {@link attachSocket}'s minimal `{ send }` stub (which only ever
+ * needs to record OUTBOUND frames dispatch sends), this also carries the
+ * `ws.data` fields `handleWorkerWebSocketMessage` reads to authorize an
+ * INBOUND worker message: `workerId` and `workerRegistered`. Set directly
+ * rather than driven through a real `register` handshake — nothing here
+ * exercises registration itself, only the already-registered path.
+ */
+function attachWorkerConnection(
+  context: ServerContext,
+  workerId: string,
+): { sent: string[]; ws: { data: WebSocketData; send(msg: string): void } } {
+  const sent: string[] = [];
+  const ws = {
+    data: {
+      pathname: '/v1/tasks/default/stream',
+      connectionType: 'worker' as const,
+      queue: 'default',
+      workerId,
+      workerRegistered: true,
+    },
+    readyState: WebSocket.OPEN,
+    send: (msg: string) => sent.push(msg),
+    close() {},
+    unsubscribe() {},
+    terminate() {},
+  };
+  context.workerSockets.set(workerId, ws as never);
+  return { sent, ws };
+}
 
 /** Read one attempt record by its raw (never-persisted) attempt token. */
 async function readAttempt(options: ServeOptions, operationId: string, attemptToken: string) {
@@ -342,6 +379,78 @@ describe('COR-205 durable attempt provenance', () => {
     expect(serialized).not.toContain(secondAttemptToken);
   });
 
+  it('workflow event: attempt-by-attempt worker transitions report a cross-build retry indicator (COR-198)', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    // A real `Engine` in place of `minimalServeOptions`'s no-op
+    // `dispatchEvent` stub — everything else `dispatchTaskImpl` reads off
+    // `options.engine` (just `.storage`) behaves identically.
+    const options = { engine, port: 0 } as unknown as ServeOptions;
+    const context = minimalServerContext();
+
+    const transitions: TaskAttemptTransitionEvent[] = [];
+    engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
+      transitions.push(event);
+    });
+
+    registerWorker(context, 'w-1', 'test.charge', {
+      deployment: { name: 'checkout', buildId: 'b1', artifactDigest: 'sha256:b1' },
+    });
+    attachSocket(context, 'w-1');
+
+    await dispatchTaskImpl(context, options, {
+      operationId: 'op-cross-build-event',
+      workflowType: 'test',
+      workflowId: 'wf-cross-build-event',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+    });
+
+    const leased = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-cross-build-event')));
+    if (leased?.state !== 'leased') throw new Error('Expected a leased record');
+    await reassignOrExpireTask(
+      context,
+      options,
+      'op-cross-build-event',
+      leased,
+      'worker-disconnect',
+    );
+    const requeued = decodeRemoteTaskRecord(
+      await storage.get(taskLedgerKey('op-cross-build-event')),
+    );
+    if (requeued?.state !== 'queued') throw new Error('Expected a requeued record');
+
+    context.registry.unregister('w-1');
+    context.workerSockets.delete('w-1');
+    registerWorker(context, 'w-2', 'test.charge', {
+      deployment: { name: 'checkout', buildId: 'b2', artifactDigest: 'sha256:b2' },
+    });
+    const sentToW2 = attachSocket(context, 'w-2');
+    context.registry.releaseReservation('op-cross-build-event');
+    await dispatchTaskImpl(context, options, taskDispatchFromLedgerRecord(requeued), {
+      redispatch: true,
+    });
+
+    expect(transitions).toHaveLength(2);
+    const [first, second] = transitions;
+    expect(first?.attempt).toBe(1);
+    expect(first?.workerSessionId).toBe('w-1');
+    expect(first?.crossBuildRetry).toBe(false);
+    expect(first?.previousExecutionIdentity).toBeUndefined();
+    expect(first?.executionIdentity?.buildId).toBe('b1');
+
+    expect(second?.attempt).toBe(2);
+    expect(second?.workerSessionId).toBe('w-2');
+    expect(second?.crossBuildRetry).toBe(true);
+    expect(second?.previousExecutionIdentity?.buildId).toBe('b1');
+    expect(second?.executionIdentity?.buildId).toBe('b2');
+
+    // Never the raw attempt token (criteria 8 and 10) — only its digest.
+    expect(second?.attemptTokenDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(second?.attemptTokenDigest).toBe(sha256HexSync(extractAttemptToken(sentToW2)));
+  });
+
   it('disconnect: worker-disconnect requeue marks the forfeited attempt requeued and releases capacity', async () => {
     const storage = new MemoryStorage();
     const options = minimalServeOptions(storage);
@@ -559,5 +668,228 @@ describe('COR-205 durable attempt provenance', () => {
     if (attempt === null) throw new Error('Expected the resolved attempt to remain durable');
     expect(attempt.disposition).toBe('resolved');
     expect(JSON.stringify(attempt)).not.toContain(attemptToken);
+  });
+
+  it('WS heartbeat: a committed activityHeartbeat durably updates the TaskAttemptRecord (COR-202 residual)', async () => {
+    const storage = new MemoryStorage();
+    const options = minimalServeOptions(storage);
+    const context = minimalServerContext();
+    registerWorker(context, 'w-1', 'test.charge');
+    const { sent, ws } = attachWorkerConnection(context, 'w-1');
+
+    await dispatchTaskImpl(context, options, {
+      operationId: 'op-ws-heartbeat',
+      workflowType: 'test',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+    });
+    const attemptToken = extractAttemptToken(sent);
+
+    const beforeAttempt = await readAttempt(options, 'op-ws-heartbeat', attemptToken);
+    expect(beforeAttempt?.lastHeartbeatAt).toBeUndefined();
+
+    // Test-only observability seam (COR-235): the durable write below is
+    // fire-and-forget from the message handler's own perspective, so this
+    // is the one production signal a test can await instead of polling the
+    // ledger against a fixed wall-clock budget.
+    const applied = useObservableActivityHeartbeatsForTesting(options).next(
+      (event) => event.operationId === 'op-ws-heartbeat',
+    );
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-1',
+        operationId: 'op-ws-heartbeat',
+        attemptToken,
+      }),
+      NOOP_CLEANUP,
+    );
+    const event = await applied;
+    expect(event.outcome).toBe('committed');
+
+    // `TaskAttemptRecord` carries no heartbeat `details` field (only the
+    // ledger's `lastHeartbeatDetails` does) — this asserts exactly what
+    // COR-205's attempt record actually persists on a heartbeat: the
+    // renewal timestamp, not the payload.
+    const afterAttempt = await readAttempt(options, 'op-ws-heartbeat', attemptToken);
+    expect(typeof afterAttempt?.lastHeartbeatAt).toBe('number');
+    expect(afterAttempt?.disposition).toBe('leased');
+  });
+
+  it('WS heartbeat: a stale attempt token is rejected and never reaches the durable write', async () => {
+    const storage = new MemoryStorage();
+    const options = minimalServeOptions(storage);
+    const context = minimalServerContext();
+    registerWorker(context, 'w-1', 'test.charge');
+    const { sent, ws } = attachWorkerConnection(context, 'w-1');
+
+    await dispatchTaskImpl(context, options, {
+      operationId: 'op-ws-heartbeat-stale',
+      workflowType: 'test',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+    });
+    extractAttemptToken(sent);
+
+    const applied = useObservableActivityHeartbeatsForTesting(options).next(
+      (event) => event.operationId === 'op-ws-heartbeat-stale',
+    );
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      ws as never,
+      JSON.stringify({
+        type: 'activityHeartbeat',
+        workerId: 'w-1',
+        operationId: 'op-ws-heartbeat-stale',
+        attemptToken: 'not-the-real-token',
+      }),
+      NOOP_CLEANUP,
+    );
+    const event = await applied;
+    expect(event.outcome).toBe('skipped');
+  });
+
+  it('retry exhaustion: requeuing past the retry limit marks the retiring attempt "retryExhausted", not "requeued"', async () => {
+    const storage = new MemoryStorage();
+    const options = minimalServeOptions(storage);
+    const context = minimalServerContext();
+    registerWorker(context, 'w-1', 'test.charge');
+    const sent = attachSocket(context, 'w-1');
+
+    await dispatchTaskImpl(context, options, {
+      operationId: 'op-retry-exhausted',
+      workflowType: 'test',
+      workflowId: 'wf-retry-exhausted',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+      retryPolicy: {
+        maxAttempts: 1,
+        initialBackoff: 1_000,
+        backoffMultiplier: 2,
+        maxBackoff: 30_000,
+      },
+    });
+    const attemptToken = extractAttemptToken(sent);
+
+    const leased = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-retry-exhausted')));
+    if (leased?.state !== 'leased') throw new Error('Expected a leased record');
+    const expiredLeased: typeof leased = { ...leased, leaseDeadline: Date.now() - 1_000 };
+    await storage.put(taskLedgerKey('op-retry-exhausted'), encodeRemoteTaskRecord(expiredLeased));
+
+    // A single attempt already exhausts `maxAttempts: 1` — the next
+    // requeue attempt (2) exceeds the policy, so `requeueExpiredAttempt`
+    // terminates the task instead of requeuing it.
+    await reassignOrExpireTask(
+      context,
+      options,
+      'op-retry-exhausted',
+      expiredLeased,
+      'visibility-timeout',
+    );
+
+    const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-retry-exhausted')));
+    if (record?.state !== 'terminal')
+      throw new Error('Expected retry exhaustion to terminate the task');
+    expect(record.disposition).toBe('retryExhausted');
+
+    const attempt = await readAttempt(options, 'op-retry-exhausted', attemptToken);
+    if (attempt === null) throw new Error('Expected the exhausted attempt to remain durable');
+    expect(attempt.disposition).toBe('retryExhausted');
+    expect(attempt.dispositionReason).toBe('visibility-timeout');
+  });
+
+  it('ordering barrier: a claim whose conditional write fails sends zero frames, and a successful one sends its frame only after the write commits', async () => {
+    class ObservedOrderStorage extends MemoryStorage {
+      sentLengthAtCommit: number | undefined;
+      #sentRef: readonly string[];
+
+      constructor(sentRef: readonly string[]) {
+        super();
+        this.#sentRef = sentRef;
+      }
+
+      override async conditionalBatch(
+        conditions: ConditionalBatchCondition[],
+        operations: BatchOperation[],
+      ): Promise<boolean> {
+        // Observed from INSIDE the commit, before it resolves — proves the
+        // frame had not been sent yet at the moment the durable write
+        // actually lands, rather than merely inferring order from
+        // post-hoc, already-awaited state (the gap the criterion 1 test
+        // above cannot close by itself).
+        this.sentLengthAtCommit = this.#sentRef.length;
+        return super.conditionalBatch(conditions, operations);
+      }
+    }
+
+    class FailingClaimStorage extends MemoryStorage {
+      override async conditionalBatch(
+        conditions: ConditionalBatchCondition[],
+        operations: BatchOperation[],
+      ): Promise<boolean> {
+        const targetsClaim = operations.some((operation) => {
+          if (operation.type !== 'put' || !operation.key.startsWith('task-ledger:')) return false;
+          const record = decodeRemoteTaskRecord(operation.value);
+          return record?.state === 'leased';
+        });
+        if (targetsClaim) return false;
+        return super.conditionalBatch(conditions, operations);
+      }
+    }
+
+    // Half 1: the durable claim write fails its conditional batch. Overall
+    // dispatch still succeeds — `dispatchTaskImpl` falls back to the
+    // long-poll queue when the WebSocket claim's own commit loses — but the
+    // WS claim path's frame must never have been sent, and no attempt
+    // record is left behind for an attempt that was never durably claimed.
+    const failingStorage = new FailingClaimStorage();
+    const failingOptions = minimalServeOptions(failingStorage);
+    const failingContext = minimalServerContext();
+    registerWorker(failingContext, 'w-1', 'test.charge');
+    const failedSent = attachSocket(failingContext, 'w-1');
+
+    const dispatched = await dispatchTaskImpl(failingContext, failingOptions, {
+      operationId: 'op-claim-write-fails',
+      workflowType: 'test',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+    });
+    expect(dispatched).toBe(true);
+    expect(failedSent).toHaveLength(0);
+    expect(await listAttemptKeys(failingOptions, 'op-claim-write-fails')).toHaveLength(0);
+    const fallbackRecord = decodeRemoteTaskRecord(
+      await failingStorage.get(taskLedgerKey('op-claim-write-fails')),
+    );
+    expect(fallbackRecord?.state).toBe('queued');
+
+    // Half 2: on the SUCCESS path, the frame is observably sent only after
+    // the durable commit — snapshotting `sent.length` from inside the
+    // storage call itself is an event observed at commit time, not a
+    // timing margin.
+    const sent: string[] = [];
+    const observedStorage = new ObservedOrderStorage(sent);
+    const observedOptions = minimalServeOptions(observedStorage);
+    const observedContext = minimalServerContext();
+    registerWorker(observedContext, 'w-1', 'test.charge');
+    observedContext.workerSockets.set('w-1', { send: (msg: string) => sent.push(msg) } as never);
+
+    const succeeded = await dispatchTaskImpl(observedContext, observedOptions, {
+      operationId: 'op-claim-write-succeeds',
+      workflowType: 'test',
+      activityName: 'test.charge',
+      queue: 'default',
+      input: null,
+    });
+    expect(succeeded).toBe(true);
+    expect(observedStorage.sentLengthAtCommit).toBe(0);
+    expect(sent).toHaveLength(1);
   });
 });

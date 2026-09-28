@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { serve, type WeftServer } from '../../server/index.ts';
@@ -168,11 +168,12 @@ describe('durable state, remote worker, and testing-harness parity', () => {
       label: 'remote worker to register',
     });
 
+    const localFormatGreeting = mock(async (_input: { name: string }): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const formatGreeting = activity({
       name: 'formatGreeting',
-      execute: async (_input: { name: string }): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localFormatGreeting,
     });
     const remoteSuccessWorkflow = workflow({ name: 'parity-remote-success' })
       .activities({ formatGreeting })
@@ -181,11 +182,12 @@ describe('durable state, remote worker, and testing-harness parity', () => {
       });
     engine.register(remoteSuccessWorkflow);
 
+    const localFailGreeting = mock(async (): Promise<never> => {
+      throw new Error('local execution must never run in remote mode');
+    });
     const failGreeting = activity({
       name: 'failGreeting',
-      execute: async (): Promise<never> => {
-        throw new Error('local execution must never run in remote mode');
-      },
+      execute: localFailGreeting,
     });
     const remoteFailureWorkflow = workflow({ name: 'parity-remote-failure' })
       .activities({ failGreeting })
@@ -236,6 +238,8 @@ describe('durable state, remote worker, and testing-harness parity', () => {
       workflowId: 'parity-remote-failure-1',
     });
     expect(server.registry.getWorker('parity-remote-worker')?.inFlight).toBe(0);
+    expect(localFormatGreeting).toHaveBeenCalledTimes(0);
+    expect(localFailGreeting).toHaveBeenCalledTimes(0);
   });
 
   it('uses TestEngine time skip and activity mocking in one readable workflow test', async () => {

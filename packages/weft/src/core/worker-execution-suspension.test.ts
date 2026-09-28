@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForCondition, withTimeout } from '../testing/fake-timers.test-support.ts';
+import { withTimeout } from '../testing/fake-timers.test-support.ts';
 
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -8,6 +8,7 @@ import {
   Engine,
   ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING,
   type WorkflowHandle,
 } from './engine.ts';
 import { hydrateCheckpointReplayState } from './engine/checkpoint-replay.ts';
@@ -18,6 +19,26 @@ import { workflow } from './types/workflow-function.ts';
 
 const workerUrl = new URL('../workers/test-browser-worker.ts', import.meta.url);
 const LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS = 5_000;
+
+/**
+ * Wait for `workflowId` to park on its signal, as an event rather than a
+ * polled budget. Reaching the park means a real Bun Worker booting, importing
+ * `test-browser-worker.ts` and running a turn — work whose duration tracks
+ * host load, not correctness — so a fixed budget made every such wait a
+ * latency assertion (COR-1330). A workflow that never parks is a real hang,
+ * reported by the test runner's own per-test timeout.
+ *
+ * Results that a Worker message settles are asserted as
+ * `expect(await promise)`, not `expect(promise).resolves`: with no timer
+ * pending, Bun's `.resolves` wait was observed never to deliver the host-side
+ * Worker `message` event, so the assertion hung until the per-test timeout.
+ * The `withTimeout` wrappers these assertions used to carry kept a timer
+ * pending, which masked that.
+ */
+async function waitForSignalWaiter(engine: Engine, workflowId: string): Promise<void> {
+  await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
+  expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(1);
+}
 
 const waitSignalThenCompleteWorkflow = workflow({ name: 'wait-signal-then-complete' }).execute(
   async function* (_ctx: WorkflowContext) {
@@ -97,12 +118,6 @@ describe('worker execution signal suspension', () => {
     ).toThrow('Worker turn timeout resolver is only available in Worker execution mode');
   });
 
-  async function waitForSignalWaiter(workerEngine: Engine): Promise<void> {
-    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
-      label: 'worker-mode signal waiter',
-    });
-  }
-
   it('releases a worker while parked, runs another workflow, then resumes exactly once', async () => {
     const workerEngine = createWorkerEngine();
     const completedWorkflowIds: string[] = [];
@@ -117,14 +132,14 @@ describe('worker execution signal suspension', () => {
     );
     const parkedResult = parkedHandle.result();
 
-    await waitForSignalWaiter(workerEngine);
+    await waitForSignalWaiter(workerEngine, 'worker-parked');
 
     const secondHandle = await workerEngine.start(
       'simple',
       { label: 'second' },
       { id: 'worker-second' },
     );
-    expect(withTimeout(secondHandle.result(), 1000, 'second workflow')).resolves.toEqual({
+    expect(await secondHandle.result()).toEqual({
       input: { label: 'second' },
       computed: 42,
     });
@@ -133,7 +148,7 @@ describe('worker execution signal suspension', () => {
 
     await workerEngine.signal('worker-parked', 'resume', { status: 'ready' });
 
-    expect(withTimeout(parkedResult, 1000, 'parked workflow')).resolves.toEqual({
+    expect(await parkedResult).toEqual({
       input: { signalName: 'resume', label: 'first' },
       payload: { status: 'ready' },
       workflowId: 'worker-parked',
@@ -154,13 +169,13 @@ describe('worker execution signal suspension', () => {
     );
     const result = handle.result();
 
-    await waitForSignalWaiter(workerEngine);
+    await waitForSignalWaiter(workerEngine, 'worker-cancelled');
     await handle.cancel();
 
-    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
-      label: 'cancelled worker-mode signal waiter cleanup',
-    });
-    expect(result).rejects.toThrow('Workflow cancelled');
+    // `cancel()` awaits `terminateWorkflow`, whose terminal cleanup drops the
+    // workflow's signal waiters before it resolves.
+    expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(result).rejects.toThrow('Workflow cancelled');
 
     await workerEngine.signal('worker-cancelled', 'resume', { status: 'late' });
     expect(await countStoredSignals(storage, 'worker-cancelled', 'resume')).toBe(0);
@@ -174,7 +189,7 @@ describe('worker execution signal suspension', () => {
       { signalName: 'resume' },
       { id: 'worker-disposed' },
     );
-    await waitForSignalWaiter(workerEngine);
+    await waitForSignalWaiter(workerEngine, 'worker-disposed');
 
     workerEngine[Symbol.dispose]();
 
@@ -204,7 +219,7 @@ describe('worker execution signal suspension', () => {
       { label: 'after-loop' },
       { id: 'worker-after-loop' },
     );
-    expect(simpleHandle.result()).resolves.toEqual({
+    expect(await simpleHandle.result()).toEqual({
       input: { label: 'after-loop' },
       computed: 42,
     });
@@ -266,22 +281,18 @@ describe('worker execution signal suspension', () => {
     );
     firstHandle.result().catch(() => {});
 
-    await waitForCondition(
-      async () => {
-        const checkpointBytes = await storage.get(KEYS.checkpoint('worker-failed-activity-replay'));
-        if (checkpointBytes === null) return false;
-        const checkpoint = await hydrateCheckpointReplayState(
-          storage,
-          'worker-failed-activity-replay',
-          deserializeCheckpoint(checkpointBytes),
-        );
-        return checkpoint.workerReplayFailures?.length === 1;
-      },
-      {
-        label: 'worker failed activity checkpoint side table',
-      },
+    // The engine awaits the checkpoint's persistence before it processes the
+    // `wait-signal` operation that registers the waiter, so once the workflow
+    // has parked, the checkpoint carrying the replay failure is durable.
+    await waitForSignalWaiter(firstEngine, 'worker-failed-activity-replay');
+    const checkpointBytes = await storage.get(KEYS.checkpoint('worker-failed-activity-replay'));
+    if (checkpointBytes === null) throw new Error('parked workflow has no checkpoint');
+    const checkpoint = await hydrateCheckpointReplayState(
+      storage,
+      'worker-failed-activity-replay',
+      deserializeCheckpoint(checkpointBytes),
     );
-    await waitForSignalWaiter(firstEngine);
+    expect(checkpoint.workerReplayFailures).toHaveLength(1);
     expect(activityCalls).toBe(1);
 
     firstEngine[Symbol.dispose]();
@@ -294,9 +305,7 @@ describe('worker execution signal suspension', () => {
 
     await recoveredEngine.signal('worker-failed-activity-replay', 'continue', { status: 'ready' });
 
-    expect(
-      withTimeout(recoveredHandles[0]!.result(), 1000, 'recovered worker failed activity replay'),
-    ).resolves.toEqual({
+    expect(await recoveredHandles[0]!.result()).toEqual({
       caughtError: 'planned activity failure',
       payload: { status: 'ready' },
       workflowId: 'worker-failed-activity-replay',
@@ -366,11 +375,9 @@ describe('worker execution isolation boundary', () => {
       { id: 'boundary-resume' },
     );
     const parkedResult = parkedHandle.result();
-    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
-      label: 'boundary signal waiter',
-    });
+    await waitForSignalWaiter(workerEngine, 'boundary-resume');
     await workerEngine.signal('boundary-resume', 'resume', { status: 'ready' });
-    expect(withTimeout(parkedResult, 1000, 'boundary resume workflow')).resolves.toEqual({
+    expect(await parkedResult).toEqual({
       input: { signalName: 'resume', label: 'boundary' },
       payload: { status: 'ready' },
       workflowId: 'boundary-resume',
@@ -384,7 +391,7 @@ describe('worker execution isolation boundary', () => {
       { label: 'boundary' },
       { id: 'boundary-simple' },
     );
-    expect(withTimeout(simpleHandle.result(), 1000, 'boundary simple workflow')).resolves.toEqual({
+    expect(await simpleHandle.result()).toEqual({
       input: { label: 'boundary' },
       computed: 42,
     });
@@ -398,17 +405,13 @@ describe('worker execution isolation boundary', () => {
       { id: 'boundary-cancel' },
     );
     const cancelResult = cancelHandle.result();
-    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
-      label: 'boundary cancel signal waiter',
-    });
+    await waitForSignalWaiter(workerEngine, 'boundary-cancel');
     await cancelHandle.cancel();
-    // Wait for the signal waiter to be torn down before asserting rejection, so
-    // a left-alive waiter cannot be silently cleaned up by the afterEach dispose
-    // and mask a stuck workflow (mirrors the existing cancel test above).
-    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
-      label: 'boundary cancel waiter cleanup',
-    });
-    expect(cancelResult).rejects.toThrow('Workflow cancelled');
+    // Assert the signal waiter is already torn down before asserting rejection,
+    // so a left-alive waiter cannot be silently cleaned up by the afterEach
+    // dispose and mask a stuck workflow (mirrors the existing cancel test above).
+    expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+    await expect(cancelResult).rejects.toThrow('Workflow cancelled');
 
     // The invariant: across start, resume, and cancel, neither engine-side
     // handler ever stepped in the engine isolate.

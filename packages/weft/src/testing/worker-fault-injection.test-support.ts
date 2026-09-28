@@ -45,13 +45,23 @@ export type ConnectOptions = {
 /** Predicate used by `nextServerMessage` / `expectNoServerMessage`. */
 export type ServerMessagePredicate = (m: ServerToWorkerMessage) => boolean;
 
+/**
+ * Wait options for `nextServerMessage`. Omitting `timeoutMs` installs no
+ * timer at all — the wait resolves whenever the matching frame arrives, and
+ * a frame that never arrives is a real hang the test runner's own per-test
+ * timeout reports, not a race against a wall-clock margin picked without
+ * knowing the machine's load (COR-235). Pass an explicit `timeoutMs` only
+ * for a wait whose absence genuinely needs its own tighter bound.
+ */
+export type NextServerMessageOptions = { timeoutMs?: number };
+
 /** Fault-injecting WebSocket worker stream. See {@link connectFaultInjectingWorker}. */
 export type FaultInjectingWorker = {
   send(payload: WorkerToServerMessage): void;
   onServerMessage(handler: ServerToWorkerHandler): () => void;
   nextServerMessage(
     predicate: ServerMessagePredicate,
-    options?: { timeoutMs?: number },
+    options?: NextServerMessageOptions,
   ): Promise<ServerToWorkerMessage>;
   expectNoServerMessage(
     predicate: ServerMessagePredicate,
@@ -229,7 +239,7 @@ function buildHandle(
       return () => state.messageHandlers.delete(handler);
     },
     nextServerMessage(predicate, opt) {
-      return waitForServerMessage(state, predicate, opt?.timeoutMs ?? 1_000);
+      return waitForServerMessage(state, predicate, opt?.timeoutMs);
     },
     expectNoServerMessage(predicate, opt) {
       return waitForNoServerMessage(state, predicate, opt.timeoutMs, closed);
@@ -263,7 +273,7 @@ function buildHandle(
 function waitForServerMessage(
   state: ClientState,
   predicate: ServerMessagePredicate,
-  timeoutMs: number,
+  timeoutMs: number | undefined,
 ): Promise<ServerToWorkerMessage> {
   // Drain the buffer first so a message that arrived between two awaits is
   // not lost. The buffer is consumed left-to-right; non-matching entries
@@ -278,7 +288,7 @@ function waitForServerMessage(
   return new Promise<ServerToWorkerMessage>((resolve, reject) => {
     const listener: ServerToWorkerHandler = (m) => {
       if (!predicate(m)) return;
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       state.messageHandlers.delete(listener);
       // Remove the matched message from the buffer so a later waiter does
       // not also try to consume it.
@@ -286,10 +296,16 @@ function waitForServerMessage(
       if (bufferIndex !== -1) state.inboundBuffer.splice(bufferIndex, 1);
       resolve(m);
     };
-    const timer = setTimeout(() => {
-      state.messageHandlers.delete(listener);
-      reject(new Error(`nextServerMessage timed out after ${String(timeoutMs)}ms`));
-    }, timeoutMs);
+    // `timeoutMs === undefined` installs no timer at all — see
+    // `NextServerMessageOptions`'s doc comment for why an omitted budget is
+    // the intended "wait for the real event" mode, not a bug.
+    const timer =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            state.messageHandlers.delete(listener);
+            reject(new Error(`nextServerMessage timed out after ${String(timeoutMs)}ms`));
+          }, timeoutMs);
     state.messageHandlers.add(listener);
   });
 }

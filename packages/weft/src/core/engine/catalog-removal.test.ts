@@ -10,6 +10,7 @@ import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { WorkflowRevisionRemovedEvent } from '../events/catalog-events.ts';
+import { RevisionRealmRegistry } from '../realm/revision-realm-registry.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
 import { workflowSource } from '../source/index.ts';
 import {
@@ -779,13 +780,16 @@ describe('countWorkflowRevisionReferences', () => {
     const references = await countWorkflowRevisionReferences(engine, 'checkout', revision);
 
     // `nonTerminalRuns` is 0: the run completed above. `pendingDispatches`
-    // and `activeExecutionRealms` stay structurally present but always 0 —
-    // each awaits revision identity in a different, later-owned subsystem
-    // (see `reference-counts.ts`'s field docs). `retainedRecoveryRecords`
-    // (WFT-21) is 1, NOT 0: the completed run's own `WorkflowState` is
-    // still present (unpurged) and pinned to this exact revision — a
-    // completed run is forkable against its original revision, so it is a
-    // genuine durable reference until purge or retention releases it.
+    // stays structurally present but always 0 — it awaits revision identity
+    // in a different, later-owned subsystem (see `reference-counts.ts`'s
+    // field docs). `activeExecutionRealms` is 0 here because this engine
+    // never opted into revision realms (`EngineInternals.revisionRealmRegistry`
+    // is `undefined`, the default) — see the dedicated test below for the
+    // opted-in case. `retainedRecoveryRecords` (WFT-21) is 1, NOT 0: the
+    // completed run's own `WorkflowState` is still present (unpurged) and
+    // pinned to this exact revision — a completed run is forkable against
+    // its original revision, so it is a genuine durable reference until
+    // purge or retention releases it.
     expect(references.nonTerminalRuns).toBe(0);
     expect(references.pinnedSchedules).toBe(0);
     expect(references.pendingDispatches).toBe(0);
@@ -802,6 +806,41 @@ describe('countWorkflowRevisionReferences', () => {
       revision,
     );
     expect(referencesAfterPurge.retainedRecoveryRecords).toBe(0);
+  });
+
+  it('activeExecutionRealms (COR-249) reads a real Worker realm mid-execution once the engine opts into revision realms', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('checkout'));
+    await ensureWorkflowCatalogReady(engine);
+    const revision = getWorkflowCatalog(engine).resolveActive('checkout')?.revision ?? '';
+
+    // Every default engine leaves this field `undefined` — no construction
+    // path sets it. Setting it directly on `EngineInternals` is exactly the
+    // seam a future opt-in `workflowExecutionMode` wiring would use.
+    const registry = new RevisionRealmRegistry();
+    getInternals(engine).revisionRealmRegistry = registry;
+    registry.ensurePool('checkout', revision, {
+      workerUrl: new URL('../realm/__fixtures__/revision-realm-worker-entry.ts', import.meta.url),
+      expectedWorkflowTypes: ['order-workflow'],
+      expectedArtifactDigest: 'digest-a',
+      workerName: 'digest-a',
+    });
+
+    const beforeAcquire = await countWorkflowRevisionReferences(engine, 'checkout', revision);
+    expect(beforeAcquire.activeExecutionRealms).toBe(0);
+
+    const acquired = await registry.acquireForExecution('checkout', revision, 'execution-1');
+    if (!acquired.ok) throw new Error('unreachable');
+
+    const whileActive = await countWorkflowRevisionReferences(engine, 'checkout', revision);
+    expect(whileActive.activeExecutionRealms).toBe(1);
+
+    registry.releaseAfterExecution('checkout', revision, acquired.realm);
+    const afterRelease = await countWorkflowRevisionReferences(engine, 'checkout', revision);
+    expect(afterRelease.activeExecutionRealms).toBe(0);
+
+    registry.dispose();
   });
 
   it('counts a genuinely non-terminal run pinned to the exact revision, and only that revision', async () => {

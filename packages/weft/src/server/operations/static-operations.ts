@@ -20,6 +20,7 @@ import { getActiveWorkflowRevisionOperation } from './get-active-workflow-revisi
 import { getCatalogDiagnosticsOperation } from './get-catalog-diagnostics.ts';
 import { getCheckpointAtOperation } from './get-checkpoint-at.ts';
 import { getPrincipalOperation } from './get-principal.ts';
+import { getRealmDiagnosticsOperation } from './get-realm-diagnostics.ts';
 import { getRegistryOperation } from './get-registry.ts';
 import { getRetentionOverviewOperation } from './get-retention-overview.ts';
 import { getReviewOperation } from './get-review.ts';
@@ -95,6 +96,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   bulkMutateWorkflowTagsOperation,
   listCatalogSourcesOperation,
   getCatalogDiagnosticsOperation,
+  getRealmDiagnosticsOperation,
   getWorkflowOperation,
   cancelWorkflowOperation,
   getWorkflowResultOperation,

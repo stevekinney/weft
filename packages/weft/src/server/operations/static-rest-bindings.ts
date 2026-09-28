@@ -19,6 +19,7 @@ import { getActiveWorkflowRevisionRestBinding } from './get-active-workflow-revi
 import { getCatalogDiagnosticsRestBinding } from './get-catalog-diagnostics.ts';
 import { getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
 import { getPrincipalRestBinding } from './get-principal.ts';
+import { getRealmDiagnosticsRestBinding } from './get-realm-diagnostics.ts';
 import { getRegistryRestBinding } from './get-registry.ts';
 import { getRetentionOverviewRestBinding } from './get-retention-overview.ts';
 import { getReviewRestBinding } from './get-review.ts';
@@ -94,6 +95,7 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   bulkMutateWorkflowTagsRestBinding,
   listCatalogSourcesRestBinding,
   getCatalogDiagnosticsRestBinding,
+  getRealmDiagnosticsRestBinding,
   getWorkflowRestBinding,
   cancelWorkflowRestBinding,
   getWorkflowResultRestBinding,

@@ -3,24 +3,25 @@
  * `(name, revision)` removal decision is gated on (WFT-12).
  *
  * Seven fields, all always present so a consumer never has to special-case
- * an "unknown" reference kind. Five are wired to real in-process/durable
- * signals: `registeredDefinitions` and `inFlightStarts` from WFT-12,
+ * an "unknown" reference kind. Six are wired to real signals:
+ * `registeredDefinitions` and `inFlightStarts` from WFT-12,
  * `nonTerminalRuns` from WFT-17 (a bounded storage scan of persisted
  * `WorkflowState.revision` pins — see {@link countNonTerminalRunsForRevision}),
  * `pinnedSchedules` from WFT-20 (a bounded storage scan of persisted
  * `revisionPolicy: 'pinned'` schedules — see
  * {@link import('../engine/pinned-schedule-revision-count.ts').countPinnedSchedulesForRevision}),
- * and `retainedRecoveryRecords` from WFT-21 (a terminal-but-unpurged
+ * `retainedRecoveryRecords` from WFT-21 (a terminal-but-unpurged
  * `WorkflowState` plus a `TeardownDeadLetterRecord`, both pinned to the
  * revision — see {@link import('../engine/nonterminal-revision-count.ts').countWorkflowStateRevisionsByStatus}'s
- * `terminalRuns` and {@link import('../engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}).
- * The remaining two (`pendingDispatches`, `activeExecutionRealms`) stay
- * structurally present but always `0` — each awaits revision identity in a
- * different, later-owned subsystem (the dispatch ledger and execution
- * realms — not yet scheduled) — see each field's own doc for its specific
- * dependency. This mirrors `workflow-catalog.ts`'s own precedent of
- * describing a forward dependency in prose rather than leaving a
- * `TODO`/`FIXME` marker.
+ * `terminalRuns` and {@link import('../engine/retained-recovery-record-count.ts').countTeardownDeadLettersForRevision}),
+ * and `activeExecutionRealms` from COR-249 — process-local, in-process
+ * signal, `0` unless the host opted into revision realms (see the field's
+ * own doc). The remaining one (`pendingDispatches`) stays structurally
+ * present but always `0` — it awaits revision identity in the dispatch
+ * ledger, a different, later-owned subsystem not yet scheduled — see its
+ * own doc for the dependency. This mirrors `workflow-catalog.ts`'s own
+ * precedent of describing a forward dependency in prose rather than leaving
+ * a `TODO`/`FIXME` marker.
  *
  * Keyed by structured `(name, revision)` throughout — nested
  * `Map<string, Map<string, number>>`, never a delimiter-joined string — so a
@@ -94,9 +95,14 @@ export type WorkflowRevisionReferenceCounts = Readonly<{
    */
   pendingDispatches: number;
   /**
-   * Active execution realms (remote worker sessions) currently running
-   * exactly this revision. Always `0` until a later batch gives a realm's
-   * advertised contract a revision this accounting can compare against.
+   * Real Worker-backed revision realms (COR-249) currently mid-execution
+   * for exactly this `(name, revision)` — see
+   * {@link import('../realm/revision-realm-pool.ts').RevisionRealmPool.activeRealmCount}.
+   * `0` when the host never opted into revision realms
+   * (`EngineInternals.revisionRealmRegistry` is `undefined`, the default),
+   * matching every default engine's existing behavior byte for byte, and
+   * `0` for a `(name, revision)` the registry has never pooled even when
+   * revision realms ARE enabled.
    */
   activeExecutionRealms: number;
   /**
