@@ -260,6 +260,9 @@ describe('atomic workflow commit side effects', () => {
         completeOperation: (_workflowId, value) => {
           completedPayload = value;
         },
+        failOperation: (_workflowId, _operation, error) => {
+          throw error;
+        },
       },
     );
 

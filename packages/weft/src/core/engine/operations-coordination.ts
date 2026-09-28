@@ -27,6 +27,7 @@ import {
   consumeSignalWithAtomicWorkflowCommit,
   peekSignal,
   registerSignalWaiter,
+  releaseSignalWaiter,
   untrackWaiterKey,
 } from './signals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
@@ -77,6 +78,7 @@ export function assertSupportedSignalBranches(
 
 export type CoordinationOperationCallbacks = {
   completeOperation: (workflowId: string, value: unknown) => void;
+  failOperation: (workflowId: string, operation: OperationWithCallerStack, error: unknown) => void;
   runOperationWithResult: (
     workflowId: string,
     operation: OperationWithCallerStack,
@@ -95,54 +97,68 @@ export async function processWaitSignalOperation(
   internals: EngineInternals,
   workflowId: string,
   operation: WaitSignalOperation,
-  callbacks: Pick<CoordinationOperationCallbacks, 'completeOperation'>,
+  callbacks: Pick<CoordinationOperationCallbacks, 'completeOperation' | 'failOperation'>,
 ): Promise<void> {
   const abortSignal = internals.abortController.signal;
   const waiterKey = `${workflowId}:${operation.signalName}`;
+  // The waiter this loop registered and no signal has consumed yet. If a
+  // buffered-signal scan then throws, the waiter must be released here, or it
+  // outlives the failed operation and keeps the workflow looking waited-on.
+  let pendingWaiterResolve: (() => void) | undefined;
 
-  while (true) {
-    if (abortSignal.aborted) {
-      return;
-    }
+  try {
+    while (true) {
+      if (abortSignal.aborted) {
+        return;
+      }
 
-    const existingPayload = await consumeSignalWithAtomicWorkflowCommit(
-      internals,
-      workflowId,
-      operation.signalName,
-    );
-    if (existingPayload.found) {
-      callbacks.completeOperation(workflowId, existingPayload.payload);
-      return;
-    }
+      const existingPayload = await consumeSignalWithAtomicWorkflowCommit(
+        internals,
+        workflowId,
+        operation.signalName,
+      );
+      if (existingPayload.found) {
+        callbacks.completeOperation(workflowId, existingPayload.payload);
+        return;
+      }
 
-    const { promise, resolve } = Promise.withResolvers<void>();
-    registerSignalWaiter(internals, workflowId, waiterKey, resolve);
+      const { promise, resolve } = Promise.withResolvers<void>();
+      registerSignalWaiter(internals, workflowId, waiterKey, resolve);
+      pendingWaiterResolve = resolve;
 
-    if (abortSignal.aborted) {
-      internals.signalWaiters.delete(waiterKey);
-      untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
-      return;
-    }
-
-    const bufferedPayload = await consumeSignalWithAtomicWorkflowCommit(
-      internals,
-      workflowId,
-      operation.signalName,
-    );
-    if (bufferedPayload.found) {
-      if (internals.signalWaiters.get(waiterKey) === resolve) {
+      if (abortSignal.aborted) {
         internals.signalWaiters.delete(waiterKey);
         untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+        return;
       }
-      callbacks.completeOperation(workflowId, bufferedPayload.payload);
-      return;
-    }
 
-    await promise;
+      const bufferedPayload = await consumeSignalWithAtomicWorkflowCommit(
+        internals,
+        workflowId,
+        operation.signalName,
+      );
+      if (bufferedPayload.found) {
+        if (internals.signalWaiters.get(waiterKey) === resolve) {
+          internals.signalWaiters.delete(waiterKey);
+          untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+        }
+        callbacks.completeOperation(workflowId, bufferedPayload.payload);
+        return;
+      }
 
-    if (abortSignal.aborted) {
-      return;
+      await promise;
+      // Delivery removed the waiter before resolving it.
+      pendingWaiterResolve = undefined;
+
+      if (abortSignal.aborted) {
+        return;
+      }
     }
+  } catch (error) {
+    if (pendingWaiterResolve !== undefined) {
+      releaseSignalWaiter(internals, workflowId, waiterKey, pendingWaiterResolve);
+    }
+    callbacks.failOperation(workflowId, operation, error);
   }
 }
 

@@ -1967,25 +1967,28 @@ describe('Engine', () => {
     const engine = new Engine({ storage });
     engine.register(
       workflow({ name: 'signal-waiter-cleanup' }).execute(async function* (ctx: WorkflowContext) {
+        // An exposed accessor keeps the run resident, so this wait registers
+        // a signal waiter instead of parking inline.
+        ctx.expose({ phase: () => 'waiting' });
         yield* ctx.waitForSignal('approval');
         return 'unreached';
       }),
     );
 
     const handle = await engine.start('signal-waiter-cleanup', null, { id: workflowId });
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (approvalScanCount === 2) {
-        break;
-      }
+    // The failed scan fails the wait-signal operation, which fails the
+    // workflow; the result settling is the event this test waits on.
+    const failure = await handle.result().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
-      await flush();
-    }
-
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('simulated signal scan failure');
     expect(approvalScanCount).toBe(2);
     expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
-    const resultPromise = handle.result().catch(() => undefined);
-    await engine.cancel(handle.id);
-    await resultPromise;
+    const workflowState = await engine.get(handle.id);
+    expect(workflowState?.status).toBe('failed');
 
     engine[Symbol.dispose]();
   });
@@ -2862,21 +2865,19 @@ describe('Engine', () => {
       }),
     );
 
+    // Wait on the completion event, not result(), so the first result() call
+    // really does come after the workflow completed.
+    const completed = Promise.withResolvers<void>();
+    engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
+      if (event.workflowId === 'late-result-id') completed.resolve();
+    });
+
     const handle = await engine.start('completed-before-result', null, { id: 'late-result-id' });
-    let completedBeforeSubscription = false;
+    await completed.promise;
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const state = await engine.get(handle.id);
-      if (state?.status === 'completed') {
-        completedBeforeSubscription = true;
-        break;
-      }
-
-      await flush();
-    }
-
-    expect(completedBeforeSubscription).toBe(true);
-    expect(handle.result()).resolves.toBe('late-result');
+    const workflowState = await engine.get(handle.id);
+    expect(workflowState?.status).toBe('completed');
+    expect(await handle.result()).toBe('late-result');
     engine[Symbol.dispose]();
   });
 

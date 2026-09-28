@@ -340,6 +340,9 @@ describe('partial-failure preservation worker-mode boundary', () => {
         completeOperation: () => {
           throw new Error('should not complete');
         },
+        failOperation: (_workflowId, _operation, error) => {
+          throw error;
+        },
       },
     );
 
@@ -367,10 +370,55 @@ describe('partial-failure preservation worker-mode boundary', () => {
       },
       {
         completeOperation: completed,
+        failOperation: (_workflowId, _operation, error) => {
+          throw error;
+        },
       },
     );
 
     expect(completed).toHaveBeenCalledWith('workflow-id', payload);
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.size).toBe(0);
+  });
+
+  it('releases the waiter and fails the operation when the buffered-signal scan after registration throws', async () => {
+    // The second scan runs after the waiter is registered. If it throws and the
+    // waiter stays registered, it outlives the failed operation (COR-1357).
+    const scanFailure = new Error('simulated signal scan failure');
+    let scanCount = 0;
+    const storage = {
+      async delete() {},
+      scan() {
+        scanCount += 1;
+        return (async function* () {
+          if (scanCount === 2) {
+            throw scanFailure;
+          }
+        })();
+      },
+    };
+    const internals = createSignalInternals(storage as never);
+    const failed = mock((_workflowId: string, _operation: unknown, _error: unknown) => {});
+
+    await processWaitSignalOperation(
+      internals,
+      'workflow-id',
+      {
+        type: 'wait-signal',
+        operationId: 'wait:scan-failure',
+        signalName: 'release',
+      },
+      {
+        completeOperation: () => {
+          throw new Error('should not complete');
+        },
+        failOperation: failed,
+      },
+    );
+
+    expect(scanCount).toBe(2);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0]?.[2]).toBe(scanFailure);
     expect(internals.signalWaiters.size).toBe(0);
     expect(internals.signalWaitersByWorkflow.size).toBe(0);
   });
@@ -393,6 +441,9 @@ describe('partial-failure preservation worker-mode boundary', () => {
       {
         completeOperation: () => {
           throw new Error('should not complete');
+        },
+        failOperation: (_workflowId, _operation, error) => {
+          throw error;
         },
       },
     );

@@ -119,6 +119,8 @@ export function createCoordinationOperationCallbacks<
 >(engine: Engine<TWorkflows, TActivities>): CoordinationOperationCallbacks {
   return {
     completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    failOperation: (workflowId, operation, error) =>
+      failOperationForEngine(engine, workflowId, operation, error),
     runOperationWithResult: (workflowId, operation, execute) =>
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
     executeSubOperation: (workflowId, operation, signal, speculativeState) =>

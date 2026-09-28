@@ -118,10 +118,11 @@ jobs:
           import * as module28 from '@lostgradient/weft/storage/web-extension';
           import * as module29 from '@lostgradient/weft/testing';
           import * as module30 from '@lostgradient/weft/worker-protocol';
-          const loaded = [module0, module1, module2, module3, module4, module5, module6, module7, module8, module9, module10, module11, module12, module13, module14, module15, module16, module17, module18, module19, module20, module21, module22, module23, module24, module25, module26, module27, module28, module29, module30];
+          import * as module31 from '@lostgradient/weft/worker/generated-authoring';
+          const loaded = [module0, module1, module2, module3, module4, module5, module6, module7, module8, module9, module10, module11, module12, module13, module14, module15, module16, module17, module18, module19, module20, module21, module22, module23, module24, module25, module26, module27, module28, module29, module30, module31];
           for (const [index, module] of loaded.entries()) {
             if (typeof module !== 'object' || module === null) {
-              throw new Error(`${["@lostgradient/weft","@lostgradient/weft/client","@lostgradient/weft/client/local","@lostgradient/weft/json-schema","@lostgradient/weft/mcp","@lostgradient/weft/observability","@lostgradient/weft/server","@lostgradient/weft/server/handler","@lostgradient/weft/service-worker","@lostgradient/weft/storage","@lostgradient/weft/storage/auto","@lostgradient/weft/storage/cloudflare","@lostgradient/weft/storage/compressed","@lostgradient/weft/storage/http","@lostgradient/weft/storage/indexeddb","@lostgradient/weft/storage/interface","@lostgradient/weft/storage/lmdb","@lostgradient/weft/storage/memory","@lostgradient/weft/storage/neon","@lostgradient/weft/storage/postgres","@lostgradient/weft/storage/resolve","@lostgradient/weft/storage/sqlite","@lostgradient/weft/storage/sqlite/bun","@lostgradient/weft/storage/sqlite/node","@lostgradient/weft/storage/testing","@lostgradient/weft/storage/text-value-import","@lostgradient/weft/storage/text-value-store","@lostgradient/weft/storage/turso","@lostgradient/weft/storage/web-extension","@lostgradient/weft/testing","@lostgradient/weft/worker-protocol"][index]} did not resolve to a module`);
+              throw new Error(`${["@lostgradient/weft","@lostgradient/weft/client","@lostgradient/weft/client/local","@lostgradient/weft/json-schema","@lostgradient/weft/mcp","@lostgradient/weft/observability","@lostgradient/weft/server","@lostgradient/weft/server/handler","@lostgradient/weft/service-worker","@lostgradient/weft/storage","@lostgradient/weft/storage/auto","@lostgradient/weft/storage/cloudflare","@lostgradient/weft/storage/compressed","@lostgradient/weft/storage/http","@lostgradient/weft/storage/indexeddb","@lostgradient/weft/storage/interface","@lostgradient/weft/storage/lmdb","@lostgradient/weft/storage/memory","@lostgradient/weft/storage/neon","@lostgradient/weft/storage/postgres","@lostgradient/weft/storage/resolve","@lostgradient/weft/storage/sqlite","@lostgradient/weft/storage/sqlite/bun","@lostgradient/weft/storage/sqlite/node","@lostgradient/weft/storage/testing","@lostgradient/weft/storage/text-value-import","@lostgradient/weft/storage/text-value-store","@lostgradient/weft/storage/turso","@lostgradient/weft/storage/web-extension","@lostgradient/weft/testing","@lostgradient/weft/worker-protocol","@lostgradient/weft/worker/generated-authoring"][index]} did not resolve to a module`);
             }
           }
           MIRROR_VERIFY_EOF
@@ -155,10 +156,11 @@ jobs:
           import * as module26 from '@lostgradient/weft/storage/web-extension';
           import * as module27 from '@lostgradient/weft/testing';
           import * as module28 from '@lostgradient/weft/worker-protocol';
-          const loaded = [module0, module1, module2, module3, module4, module5, module6, module7, module8, module9, module10, module11, module12, module13, module14, module15, module16, module17, module18, module19, module20, module21, module22, module23, module24, module25, module26, module27, module28];
+          import * as module29 from '@lostgradient/weft/worker/generated-authoring';
+          const loaded = [module0, module1, module2, module3, module4, module5, module6, module7, module8, module9, module10, module11, module12, module13, module14, module15, module16, module17, module18, module19, module20, module21, module22, module23, module24, module25, module26, module27, module28, module29];
           for (const [index, module] of loaded.entries()) {
             if (typeof module !== 'object' || module === null) {
-              throw new Error(`${["@lostgradient/weft","@lostgradient/weft/client","@lostgradient/weft/client/local","@lostgradient/weft/json-schema","@lostgradient/weft/mcp","@lostgradient/weft/observability","@lostgradient/weft/server","@lostgradient/weft/server/handler","@lostgradient/weft/service-worker","@lostgradient/weft/storage","@lostgradient/weft/storage/auto","@lostgradient/weft/storage/cloudflare","@lostgradient/weft/storage/compressed","@lostgradient/weft/storage/http","@lostgradient/weft/storage/indexeddb","@lostgradient/weft/storage/interface","@lostgradient/weft/storage/lmdb","@lostgradient/weft/storage/memory","@lostgradient/weft/storage/neon","@lostgradient/weft/storage/postgres","@lostgradient/weft/storage/resolve","@lostgradient/weft/storage/sqlite","@lostgradient/weft/storage/sqlite/node","@lostgradient/weft/storage/text-value-import","@lostgradient/weft/storage/text-value-store","@lostgradient/weft/storage/turso","@lostgradient/weft/storage/web-extension","@lostgradient/weft/testing","@lostgradient/weft/worker-protocol"][index]} did not resolve to a module`);
+              throw new Error(`${["@lostgradient/weft","@lostgradient/weft/client","@lostgradient/weft/client/local","@lostgradient/weft/json-schema","@lostgradient/weft/mcp","@lostgradient/weft/observability","@lostgradient/weft/server","@lostgradient/weft/server/handler","@lostgradient/weft/service-worker","@lostgradient/weft/storage","@lostgradient/weft/storage/auto","@lostgradient/weft/storage/cloudflare","@lostgradient/weft/storage/compressed","@lostgradient/weft/storage/http","@lostgradient/weft/storage/indexeddb","@lostgradient/weft/storage/interface","@lostgradient/weft/storage/lmdb","@lostgradient/weft/storage/memory","@lostgradient/weft/storage/neon","@lostgradient/weft/storage/postgres","@lostgradient/weft/storage/resolve","@lostgradient/weft/storage/sqlite","@lostgradient/weft/storage/sqlite/node","@lostgradient/weft/storage/text-value-import","@lostgradient/weft/storage/text-value-store","@lostgradient/weft/storage/turso","@lostgradient/weft/storage/web-extension","@lostgradient/weft/testing","@lostgradient/weft/worker-protocol","@lostgradient/weft/worker/generated-authoring"][index]} did not resolve to a module`);
             }
           }
           MIRROR_VERIFY_EOF
@@ -168,12 +170,12 @@ jobs:
         run: |
           bun install --linker=isolated
 
-      - name: import 31 specifier(s) from the packed tarballs
+      - name: import 32 specifier(s) from the packed tarballs
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
         run: |
           bun run smoke.mjs
 
-      - name: import 29 specifier(s) from the packed tarballs under node
+      - name: import 30 specifier(s) from the packed tarballs under node
         working-directory: ${{ runner.temp }}/mirror-verify/consumer
         run: |
           node smoke-node.mjs
