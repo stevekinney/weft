@@ -1473,6 +1473,12 @@ describe('MCP Streamable HTTP transport', () => {
 });
 
 describe('MCP anonymous session continuation token (#525)', () => {
+  afterEach(() => {
+    for (const engine of enginesToDispose.splice(0)) {
+      engine[Symbol.dispose]();
+    }
+  });
+
   // Initialize an anonymous session via the direct handler and return its id + token.
   async function initAnonymous(
     engine: Engine,

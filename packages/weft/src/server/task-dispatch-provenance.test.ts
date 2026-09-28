@@ -377,6 +377,8 @@ describe('COR-205 durable attempt provenance', () => {
     const serialized = JSON.stringify(result.value);
     expect(serialized).not.toContain(firstAttemptToken);
     expect(serialized).not.toContain(secondAttemptToken);
+
+    engine[Symbol.dispose]();
   });
 
   it('workflow event: attempt-by-attempt worker transitions report a cross-build retry indicator (COR-198)', async () => {
@@ -449,6 +451,8 @@ describe('COR-205 durable attempt provenance', () => {
     // Never the raw attempt token (criteria 8 and 10) — only its digest.
     expect(second?.attemptTokenDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(second?.attemptTokenDigest).toBe(sha256HexSync(extractAttemptToken(sentToW2)));
+
+    engine[Symbol.dispose]();
   });
 
   it('disconnect: worker-disconnect requeue marks the forfeited attempt requeued and releases capacity', async () => {
@@ -477,6 +481,15 @@ describe('COR-205 durable attempt provenance', () => {
 
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-disconnect')));
     expect(record?.state).toBe('queued');
+
+    // The disconnect requeue schedules a delayed redispatch — with no worker
+    // left registered, once it fires it falls back to the long-poll queue,
+    // arming a pending-task expiration timer (default TTL 5 minutes) on
+    // context.taskQueue. Clear the delayed-dispatch timer (in case it
+    // hasn't fired yet) and dispose the queue (in case it has) — this bare
+    // fixture has no server shutdown path to do either on its own.
+    for (const timer of context.pendingTimers) clearTimeout(timer);
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('restart: a still-valid lease stays attributable to its original attempt after recovery; an expired one is requeued with the old attempt intact', async () => {
@@ -534,6 +547,14 @@ describe('COR-205 durable attempt provenance', () => {
       await storage.get(taskLedgerKey('op-restart-expired')),
     );
     expect(requeuedRecord?.state).toBe('queued');
+
+    // Recovery's requeue of the expired lease schedules a delayed redispatch
+    // against `freshContext`, which has no registered workers, so once it
+    // fires it falls back to the long-poll queue and arms a pending-task
+    // expiration timer there. Clear the delayed-dispatch timer (in case it
+    // hasn't fired yet) and dispose the queue (in case it has).
+    for (const timer of freshContext.pendingTimers) clearTimeout(timer);
+    freshContext.taskQueue[Symbol.dispose]();
   });
 
   it('heartbeat: a current-attempt heartbeat renews the lease and records evidence; a stale one touches neither', async () => {
@@ -634,6 +655,12 @@ describe('COR-205 durable attempt provenance', () => {
     const cancelledQueued = await cancelTask(context, options, 'op-cancel-queued', 'never started');
     expect(cancelledQueued).toBe(true);
     expect(await listAttemptKeys(options, 'op-cancel-queued')).toHaveLength(0);
+
+    // The unmatched-activity dispatch fell back to the long-poll queue,
+    // arming a pending-task expiration timer (default TTL 5 minutes) on
+    // context.taskQueue; this bare fixture has no server shutdown path to
+    // clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('terminal result: a resolved completion marks its attempt resolved, remaining attributable independent of the registry', async () => {
@@ -869,6 +896,11 @@ describe('COR-205 durable attempt provenance', () => {
       await failingStorage.get(taskLedgerKey('op-claim-write-fails')),
     );
     expect(fallbackRecord?.state).toBe('queued');
+
+    // The lost-claim fallback armed a pending-task expiration timer (default
+    // TTL 5 minutes) on failingContext.taskQueue; this bare fixture has no
+    // server shutdown path to clear it on its own.
+    failingContext.taskQueue[Symbol.dispose]();
 
     // Half 2: on the SUCCESS path, the frame is observably sent only after
     // the durable commit — snapshotting `sent.length` from inside the

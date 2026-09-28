@@ -18,6 +18,7 @@
  */
 
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import type { WorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import type { JSONValue } from '../json.ts';
 import type { RetryPolicy } from '../types.ts';
 
@@ -75,6 +76,14 @@ export type RemoteTaskBase = Readonly<{
   retryPolicy?: RetryPolicy;
   scheduleToCloseDeadline?: number;
   executionRequirement?: WorkerExecutionRequirementInput;
+  /**
+   * Authoritative workflow worker binding captured from the persisted workflow
+   * state when a versioned workflow dispatches an activity. Public task
+   * dispatch callers never provide this; engine-owned dispatch derives it
+   * from storage so retries, takeover, heartbeat, timeout, and cancellation
+   * carry the same worker-version fact as the workflow run.
+   */
+  workflowWorkerBinding?: WorkflowWorkerBinding;
   createdAt: number;
   /** Monotonic counter incremented on every transition. Diagnostic/provenance surface — `conditionalBatch`'s whole-record byte equality is what actually enforces the CAS, but the precondition functions still check `generation` explicitly because it is the documented contract. */
   generation: number;

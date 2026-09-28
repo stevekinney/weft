@@ -9,6 +9,8 @@
  */
 
 import type { Storage } from '../../storage/interface.ts';
+import { executionRequirementFromWorkflowWorkerBinding } from '../../worker/binding-helpers.ts';
+import { readWorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import { isJSONValue } from '../json.ts';
 import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
@@ -135,6 +137,11 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
 
     const queue = request.queue ?? this.#defaults.queue ?? 'default';
     const retryPolicy = request.retryPolicy ?? this.#defaults.retryPolicy;
+    const workflowWorkerBindingRecord = await readWorkflowWorkerBinding(
+      this.#ledgerStorage,
+      request.workflowId,
+    );
+    const workflowWorkerBinding = workflowWorkerBindingRecord?.current;
     const createInput: CreateQueuedInput = {
       recordVersion: REMOTE_TASK_RECORD_VERSION,
       operationId: request.operationId,
@@ -154,6 +161,15 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
         : {}),
       ...(request.workflowRevision !== undefined
         ? { workflowRevision: request.workflowRevision }
+        : {}),
+      ...(workflowWorkerBinding !== undefined
+        ? {
+            workflowWorkerBinding,
+            executionRequirement: executionRequirementFromWorkflowWorkerBinding(
+              workflowWorkerBinding,
+              request.activityName,
+            ),
+          }
         : {}),
       ...(retryPolicy !== undefined ? { retryPolicy } : {}),
       ...(request.scheduleToCloseDeadline !== undefined

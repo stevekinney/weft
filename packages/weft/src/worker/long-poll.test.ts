@@ -5,16 +5,65 @@ import {
   waitForCondition,
   withTimeout,
 } from '../testing/fake-timers.test-support.ts';
-import { LongPollWorker } from './long-poll.ts';
+import { LongPollWorker, type LongPollWorkerOptions } from './long-poll.ts';
+import type { RemoteWorkerActivityFunction } from './workflow-activity-binding.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const POLL_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)$/;
-const RESULT_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)\/result$/;
-const HEARTBEAT_PATH_RE = /^\/api\/v1\/tasks\/([\w-]+)\/heartbeat$/;
+const POLL_PATH_RE = /^\/api\/v1\/worker-sessions\/([^/]+)\/tasks$/;
+const RESULT_PATH_RE = /^\/api\/v1\/worker-sessions\/([^/]+)\/results$/;
+const HEARTBEAT_PATH_RE = /^\/api\/v1\/worker-sessions\/([^/]+)\/heartbeat$/;
+const SESSION_POLL_PATH_RE = /^\/api\/v1\/worker-sessions\/([^/]+)\/tasks$/;
+const SESSION_RESULT_PATH_RE = /^\/api\/v1\/worker-sessions\/([^/]+)\/results$/;
 const LONG_POLL_TEST_TIMEOUT_MS = 2_000;
+const DEFAULT_TEST_SESSION_ID = 'session-test';
+const DEFAULT_TEST_SESSION_TOKEN =
+  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+const WORKER_SESSION_CREDENTIAL_HEADER = 'Weft-Worker-Session-Token';
+const TEST_WORKFLOW = 'test';
+
+type LongPollWorkerTestOptions =
+  | LongPollWorkerOptions
+  | (Omit<LongPollWorkerOptions, 'buildId' | 'deploymentName' | 'workflows'> & {
+      activities: Record<string, RemoteWorkerActivityFunction>;
+      buildId?: string;
+      deploymentName?: string;
+    });
+
+function createLongPollWorkerForTesting(options: LongPollWorkerTestOptions): LongPollWorker {
+  if (!('activities' in options)) return new LongPollWorker(options);
+  const { activities, buildId, deploymentName, ...remainingOptions } = options;
+  return new LongPollWorker({
+    ...remainingOptions,
+    deploymentName: deploymentName ?? 'long-poll-test-worker',
+    buildId: buildId ?? 'long-poll-test-build',
+    workflows: {
+      [TEST_WORKFLOW]: {
+        name: TEST_WORKFLOW,
+        activities,
+      },
+    },
+  });
+}
+
+function handleDefaultSessionLifecycleForTesting(request: Request, url: URL): Response | undefined {
+  if (url.pathname === '/api/v1/worker-sessions' && request.method === 'POST') {
+    return Response.json({
+      ok: true,
+      sessionId: DEFAULT_TEST_SESSION_ID,
+      sessionToken: DEFAULT_TEST_SESSION_TOKEN,
+    });
+  }
+  if (
+    url.pathname === `/api/v1/worker-sessions/${DEFAULT_TEST_SESSION_ID}` &&
+    request.method === 'DELETE'
+  ) {
+    return Response.json({ ok: true });
+  }
+  return undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -31,10 +80,17 @@ describe('LongPollWorker', () => {
   });
 
   it('constructor stores options with defaults', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
-      activities: {
-        processOrder: async (input) => input,
+      deploymentName: 'constructor-test-worker',
+      buildId: 'constructor-test-build',
+      workflows: {
+        orders: {
+          name: 'orders',
+          activities: {
+            processOrder: async (input) => input,
+          },
+        },
       },
     });
 
@@ -43,8 +99,93 @@ describe('LongPollWorker', () => {
     worker[Symbol.dispose]();
   });
 
+  it('registers a canonical session before polling and sends results through the session endpoint', async () => {
+    const taskCompleted = createDeferred<{
+      operationId?: string;
+      status?: string;
+      value?: unknown;
+    }>();
+    const seenPaths: string[] = [];
+    let registerBody: Record<string, unknown> | undefined;
+
+    server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        seenPaths.push(url.pathname);
+
+        if (url.pathname === '/api/v1/worker-sessions' && request.method === 'POST') {
+          registerBody = (await request.json()) as Record<string, unknown>;
+          return Response.json({
+            ok: true,
+            sessionId: 'session-1',
+            sessionToken: 'token-session-1',
+          });
+        }
+
+        if (SESSION_POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          expect(request.headers.get(WORKER_SESSION_CREDENTIAL_HEADER)).toBe('token-session-1');
+          return Response.json({
+            operationId: 'op-session-1',
+            workerId: 'session-1',
+            activityName: 'orders.charge',
+            input: 'amount',
+            attemptToken: 'attempt-token-session-1',
+          });
+        }
+
+        if (SESSION_RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
+          expect(request.headers.get(WORKER_SESSION_CREDENTIAL_HEADER)).toBe('token-session-1');
+          taskCompleted.resolve(await request.json());
+          return Response.json({ ok: true, disposition: 'applied' });
+        }
+
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const worker = createLongPollWorkerForTesting({
+      serverUrl: `http://localhost:${server.port}`,
+      deploymentName: 'orders-worker',
+      buildId: 'build-session',
+      workflows: {
+        orders: {
+          name: 'orders',
+          activities: {
+            charge: async (input) => `charged:${String(input)}`,
+          },
+        },
+      },
+      pollTimeout: 50,
+    });
+
+    expect(worker.ready).toBe(false);
+    worker.start();
+    const result = await withTimeout(
+      taskCompleted.promise,
+      LONG_POLL_TEST_TIMEOUT_MS,
+      'session result delivery',
+    );
+    expect(worker.ready).toBe(true);
+    await worker.stop();
+    expect(worker.ready).toBe(false);
+
+    expect(registerBody?.['queue']).toBe('default');
+    const registeredManifest = registerBody?.['manifest'] as
+      { deployment?: { name?: string } } | undefined;
+    expect(registeredManifest?.deployment?.name).toBe('orders-worker');
+    expect(seenPaths).toContain('/api/v1/worker-sessions');
+    expect(seenPaths).toContain('/api/v1/worker-sessions/session-1/tasks');
+    expect(seenPaths).toContain('/api/v1/worker-sessions/session-1/results');
+    expect(result).toMatchObject({
+      operationId: 'op-session-1',
+      status: 'completed',
+      value: 'charged:amount',
+    });
+  });
+
   it('running is false initially', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -57,7 +198,7 @@ describe('LongPollWorker', () => {
   });
 
   it('inFlight starts at 0', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -70,7 +211,7 @@ describe('LongPollWorker', () => {
   });
 
   it('[Symbol.dispose] stops polling', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -86,7 +227,7 @@ describe('LongPollWorker', () => {
   });
 
   it('[Symbol.dispose] is idempotent', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -98,7 +239,7 @@ describe('LongPollWorker', () => {
   });
 
   it('start() sets running to true and is idempotent', () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -116,7 +257,7 @@ describe('LongPollWorker', () => {
   });
 
   it('stop() sets running to false and aborts in-progress polls', async () => {
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:8080',
       activities: {
         processOrder: async (input) => input,
@@ -139,6 +280,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -146,7 +289,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-abort-1',
               workerId: 'longpoll-abort-worker',
-              activityName: 'abortableActivity',
+              activityName: 'test.abortableActivity',
               input: null,
               workflowExecutionToken: 'workflow-token-abort',
               attemptToken: 'attempt-token-abort',
@@ -168,7 +311,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         abortableActivity: async (_input, context) => {
@@ -212,6 +355,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -219,7 +364,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-non-cooperative-1',
               workerId: 'longpoll-non-cooperative-worker',
-              activityName: 'nonCooperativeActivity',
+              activityName: 'test.nonCooperativeActivity',
               input: null,
               attemptToken: 'attempt-token-non-cooperative',
             });
@@ -231,7 +376,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       disconnectTimeoutMs: 100,
       activities: {
@@ -271,7 +416,7 @@ describe('LongPollWorker', () => {
     neverResolves.resolve();
   });
 
-  it('polls GET /api/v1/tasks/:queue for tasks and executes them', async () => {
+  it('polls the accepted worker session for tasks and executes them', async () => {
     const completedTasks: any[] = [];
     const taskCompleted = createDeferred();
     let pollCount = 0;
@@ -281,12 +426,14 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
         observedAuthorizationHeaders.push(request.headers.get('authorization'));
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
-          // Verify query parameters
-          expect(url.searchParams.getAll('activity')).toContain('processOrder');
+          // Activity filtering is derived from the accepted session manifest, not query parameters.
+          expect(url.searchParams.getAll('activity')).toEqual([]);
           expect(url.searchParams.get('timeout')).toBeDefined();
 
           // Return a task on the first poll, null on subsequent polls
@@ -294,7 +441,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-1',
               workerId: 'longpoll-worker-1',
-              activityName: 'processOrder',
+              activityName: 'test.processOrder',
               input: { orderId: 42 },
               workflowExecutionToken: 'workflow-token-long-poll',
               attemptToken: 'attempt-token-long-poll',
@@ -320,7 +467,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       headers: { Authorization: 'Bearer worker-key' },
       activities: {
@@ -355,7 +502,7 @@ describe('LongPollWorker', () => {
     expect(observedAuthorizationHeaders).toContain('Bearer worker-key');
   });
 
-  it('sends completion to POST /api/v1/tasks/:queue/result when activity throws', async () => {
+  it('sends completion to the worker session result endpoint when activity throws', async () => {
     const completedTasks: any[] = [];
     const taskCompleted = createDeferred();
     let pollCount = 0;
@@ -364,6 +511,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -371,7 +520,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-err-1',
               workerId: 'longpoll-err-worker',
-              activityName: 'failingActivity',
+              activityName: 'test.failingActivity',
               input: null,
             });
           }
@@ -389,7 +538,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         failingActivity: async () => {
@@ -422,6 +571,8 @@ describe('LongPollWorker', () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname)) {
           pollCount++;
@@ -433,7 +584,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         processOrder: async (input) => input,
@@ -457,13 +608,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-unknown',
-              activityName: 'nonExistent',
+              activityName: 'test.nonExistent',
               input: null,
             });
           }
@@ -481,7 +634,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         processOrder: async (input) => input,
@@ -509,7 +662,7 @@ describe('LongPollWorker', () => {
     const unknownCompletion = completedTasks.find((t) => t.operationId === 'op-unknown');
     expect(unknownCompletion).toBeDefined();
     expect(unknownCompletion.status).toBe('failed');
-    expect(unknownCompletion.error).toBe('Unknown activity: nonExistent');
+    expect(unknownCompletion.error).toBe('Unknown activity: test.nonExistent');
   });
 
   it('retries a failed-activity result after a transient completion-endpoint failure, instead of dropping it (COR-235)', async () => {
@@ -528,13 +681,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-transient-result-failure',
-              activityName: 'failingActivity',
+              activityName: 'test.failingActivity',
               input: null,
               attemptToken: 'attempt-token-transient-result-failure',
             });
@@ -556,7 +711,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       resultRetryBaseDelayMs: 10,
       resultRetryMaxDelayMs: 50,
@@ -598,13 +753,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-permanently-rejected-longpoll',
-              activityName: 'echoActivity',
+              activityName: 'test.echoActivity',
               input: 'hi',
               attemptToken: 'attempt-token-permanently-rejected',
             });
@@ -635,7 +792,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       resultRetryBaseDelayMs: 10,
       resultRetryMaxDelayMs: 50,
@@ -685,13 +842,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-resume-on-restart',
-              activityName: 'echoActivity',
+              activityName: 'test.echoActivity',
               input: 'hi',
               attemptToken: 'attempt-token-resume-on-restart',
             });
@@ -712,7 +871,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       // Large enough that the retry timer, not a coincidental fire, could
       // never explain a resend landing right after start() — only start()'s
@@ -769,13 +928,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-string-throw',
-              activityName: 'stringThrow',
+              activityName: 'test.stringThrow',
               input: null,
             });
           }
@@ -793,7 +954,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         stringThrow: async () => {
@@ -812,21 +973,33 @@ describe('LongPollWorker', () => {
     expect(errorCompletion.error).toBe('string error value');
   });
 
-  it('includes the queue name in the poll URL path', async () => {
+  it('sends the authoritative queue name in session registration', async () => {
     const pollObserved = createDeferred();
-    let capturedPath = '';
+    let registeredQueue: unknown;
 
     server = Bun.serve({
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         const url = new URL(request.url);
-        capturedPath = url.pathname;
-        pollObserved.resolve();
+        if (url.pathname === '/api/v1/worker-sessions' && request.method === 'POST') {
+          const body = (await request.json()) as { queue?: unknown };
+          registeredQueue = body.queue;
+          return Response.json({
+            ok: true,
+            sessionId: DEFAULT_TEST_SESSION_ID,
+            sessionToken: DEFAULT_TEST_SESSION_TOKEN,
+          });
+        }
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
+          pollObserved.resolve();
+        }
         return new Response(null, { status: 204 });
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       queue: 'billing',
       activities: {
@@ -838,7 +1011,7 @@ describe('LongPollWorker', () => {
     await withTimeout(pollObserved.promise, LONG_POLL_TEST_TIMEOUT_MS, 'billing queue poll');
     await worker.stop();
 
-    expect(capturedPath).toBe('/api/v1/tasks/billing');
+    expect(registeredQueue).toBe('billing');
   });
 
   // ---------------------------------------------------------------------------
@@ -856,13 +1029,15 @@ describe('LongPollWorker', () => {
       async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
         const request = new Request(input, init);
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-lp-intercepted',
-              activityName: 'processOrder',
+              activityName: 'test.processOrder',
               input: { orderId: 55 },
             });
           }
@@ -891,7 +1066,7 @@ describe('LongPollWorker', () => {
       },
     };
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: 'http://localhost:12345',
       activities: {
         processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
@@ -912,7 +1087,7 @@ describe('LongPollWorker', () => {
       globalThis.fetch = originalFetch;
     }
 
-    expect(interceptorOrder).toEqual(['before:processOrder', 'after:processOrder']);
+    expect(interceptorOrder).toEqual(['before:test.processOrder', 'after:test.processOrder']);
 
     const taskCompletion = completedTasks.find((t) => t.operationId === 'op-lp-intercepted');
     expect(taskCompletion).toBeDefined();
@@ -929,13 +1104,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-lp-modify',
-              activityName: 'echo',
+              activityName: 'test.echo',
               input: 'original',
             });
           }
@@ -959,7 +1136,7 @@ describe('LongPollWorker', () => {
       },
     };
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         echo: async (input: any) => input,
@@ -991,13 +1168,15 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-lp-headers',
-              activityName: 'echo',
+              activityName: 'test.echo',
               input: 'hi',
               headers: { 'x-trace-id': 'trace-lp-1', 'x-env': 'staging' },
             });
@@ -1023,7 +1202,7 @@ describe('LongPollWorker', () => {
       },
     };
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       activities: {
         echo: async (input: any) => input,
@@ -1068,6 +1247,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1075,7 +1256,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-heartbeat-1',
               workerId: 'longpoll-worker-hb',
-              activityName: 'longRunningActivity',
+              activityName: 'test.longRunningActivity',
               input: null,
               attemptToken: 'attempt-token-hb',
               visibilityTimeout: 30_000,
@@ -1099,7 +1280,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       heartbeatIntervalMs: 20,
       activities: {
@@ -1146,6 +1327,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1153,7 +1336,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-cancel-via-heartbeat',
               workerId: 'longpoll-worker-cancel',
-              activityName: 'cancellableActivity',
+              activityName: 'test.cancellableActivity',
               input: null,
               attemptToken: 'attempt-token-cancel',
               visibilityTimeout: 30_000,
@@ -1181,7 +1364,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       heartbeatIntervalMs: 20,
       activities: {
@@ -1225,6 +1408,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1232,7 +1417,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-cancel-reason-lp',
               workerId: 'longpoll-worker-cancel-reason',
-              activityName: 'cancellableActivity',
+              activityName: 'test.cancellableActivity',
               input: null,
               attemptToken: 'attempt-token-cancel-reason',
               visibilityTimeout: 30_000,
@@ -1261,7 +1446,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       heartbeatIntervalMs: 20,
       activities: {
@@ -1308,6 +1493,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1320,7 +1507,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-heartbeat-details-lp',
               workerId: 'longpoll-worker-details',
-              activityName: 'detailsActivity',
+              activityName: 'test.detailsActivity',
               input: null,
               attemptToken: 'attempt-token-details',
               visibilityTimeout: 30_000,
@@ -1345,7 +1532,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       heartbeatIntervalMs: 20,
       activities: {
@@ -1388,6 +1575,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1395,7 +1584,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-fenced-a',
               workerId: 'longpoll-worker-fenced',
-              activityName: 'fencedActivity',
+              activityName: 'test.fencedActivity',
               input: 'a',
               attemptToken: 'attempt-token-a',
               visibilityTimeout: 30_000,
@@ -1405,7 +1594,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-fenced-b',
               workerId: 'longpoll-worker-fenced',
-              activityName: 'fencedActivity',
+              activityName: 'test.fencedActivity',
               input: 'b',
               attemptToken: 'attempt-token-b',
               visibilityTimeout: 30_000,
@@ -1434,7 +1623,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       concurrency: 2,
       heartbeatIntervalMs: 20,
@@ -1503,6 +1692,8 @@ describe('LongPollWorker', () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        const sessionLifecycleResponse = handleDefaultSessionLifecycleForTesting(request, url);
+        if (sessionLifecycleResponse !== undefined) return sessionLifecycleResponse;
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -1514,7 +1705,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-overlap-lp',
               workerId: 'longpoll-worker-overlap',
-              activityName: 'overlapActivity',
+              activityName: 'test.overlapActivity',
               input: 'attempt-1',
               attemptToken: 'attempt-1',
               visibilityTimeout: 30_000,
@@ -1524,7 +1715,7 @@ describe('LongPollWorker', () => {
             return Response.json({
               operationId: 'op-overlap-lp',
               workerId: 'longpoll-worker-overlap',
-              activityName: 'overlapActivity',
+              activityName: 'test.overlapActivity',
               input: 'attempt-2',
               attemptToken: 'attempt-2',
               visibilityTimeout: 30_000,
@@ -1560,7 +1751,7 @@ describe('LongPollWorker', () => {
       },
     });
 
-    const worker = new LongPollWorker({
+    const worker = createLongPollWorkerForTesting({
       serverUrl: `http://localhost:${server.port}`,
       concurrency: 2,
       heartbeatIntervalMs: 20,

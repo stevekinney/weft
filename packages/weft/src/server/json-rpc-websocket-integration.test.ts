@@ -4,7 +4,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
  * the JSON-RPC WebSocket session adapter.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
 import { WorkflowSuspendedEvent } from '../core/events.ts';
@@ -136,13 +136,10 @@ describe('serve() — WebSocket /jsonrpc', () => {
   let server: WeftServer | undefined;
   let engine: Engine | undefined;
 
-  beforeEach(() => {
-    engine = createHoldEngine();
-  });
-
   afterEach(async () => {
     await server?.stop();
     server = undefined;
+    engine?.[Symbol.dispose]();
     engine = undefined;
   });
 

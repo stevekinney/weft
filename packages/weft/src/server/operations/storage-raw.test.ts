@@ -80,7 +80,7 @@ describe('storage REST raw operations', () => {
 
   it('reads and writes bytes through admin storage', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const putResponse = await handleRequest(
       request('/v1/storage/workflow-key', { method: 'PUT', body: encode('stored value') }),
@@ -116,7 +116,7 @@ describe('storage REST raw operations', () => {
   });
 
   it('requires storage admin scope for raw access', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    using engine = new Engine({ storage: new MemoryStorage() });
     const response = await handleRequest(
       request('/v1/storage/workflow-key', { method: 'GET' }),
       engine,
@@ -136,7 +136,7 @@ describe('storage REST raw operations', () => {
 
   it('denies raw storage writes without storage admin scope', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage/acme:data', { method: 'PUT', body: encode('value') }),
@@ -153,7 +153,7 @@ describe('storage REST raw operations', () => {
     await rawStorage.put('wf:a', encode('a'));
     await rawStorage.put('wf:b', encode('b'));
     await rawStorage.put('other:c', encode('c'));
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage?prefix=wf:', { method: 'GET' }),
@@ -230,7 +230,7 @@ describe('storage REST raw operations', () => {
 
   it('rejects raw storage scans above MAX_SCAN_LIMIT', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request(`/v1/storage?prefix=wf:&limit=${MAX_SCAN_LIMIT + 1}`, { method: 'GET' }),
@@ -255,7 +255,7 @@ describe('storage REST raw operations', () => {
 
   it('does not pull scan entries until the NDJSON response body is read', async () => {
     const rawStorage = new TrackingScanStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage?prefix=wf:', { method: 'GET' }),
@@ -289,7 +289,7 @@ describe('storage REST raw operations', () => {
 
   it('keeps storage control routes outside the user key namespace', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    using engine = new Engine({ storage: rawStorage });
 
     const keyResponse = await handleRequest(
       request('/v1/storage/batch', { method: 'PUT', body: encode('literal key') }),

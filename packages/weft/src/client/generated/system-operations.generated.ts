@@ -2,6 +2,8 @@
 import type {
   SharedAffectedWorkersDeploymen_e4c61ae8,
   SharedAffectedWorkersHealthInF_c3f6ebcc,
+  SharedCurrentBuildIdDeployment_a9512ca3,
+  SharedCurrentBuildIdDeployment_d4467560,
 } from './shared-operation-types.generated.ts';
 export type SystemOperationTypes = {
   'weft.recover.all': {
@@ -87,10 +89,25 @@ export type SystemOperationTypes = {
     };
     readonly faults: never;
   };
+  'weft.worker.deployments.diagnostics': {
+    readonly input: { readonly deploymentName?: string };
+    readonly output: { readonly routing: unknown; readonly versions: ReadonlyArray<unknown> };
+    readonly faults: never;
+  };
   'weft.worker.deployments.drain': {
     readonly input: { readonly deploymentName: string; readonly reason?: string };
     readonly output:
       SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
+    readonly faults: never;
+  };
+  'weft.worker.deployments.preview': {
+    readonly input: SharedCurrentBuildIdDeployment_a9512ca3;
+    readonly output: { readonly message: string; readonly valid: boolean };
+    readonly faults: never;
+  };
+  'weft.worker.deployments.promote': {
+    readonly input: { readonly buildId: string; readonly deploymentName: string };
+    readonly output: SharedCurrentBuildIdDeployment_d4467560;
     readonly faults: never;
   };
   'weft.worker.deployments.resume': {
@@ -98,6 +115,39 @@ export type SystemOperationTypes = {
     readonly output:
       SharedAffectedWorkersHealthInF_c3f6ebcc | SharedAffectedWorkersDeploymen_e4c61ae8;
     readonly faults: never;
+  };
+  'weft.worker.deployments.rollback': {
+    readonly input: { readonly buildId: string; readonly deploymentName: string };
+    readonly output: SharedCurrentBuildIdDeployment_d4467560;
+    readonly faults: never;
+  };
+  'weft.worker.deployments.setrouting': {
+    readonly input: SharedCurrentBuildIdDeployment_a9512ca3;
+    readonly output: {
+      readonly currentBuildId: string;
+      readonly deploymentName: string;
+      readonly generation: number;
+      readonly rampBasisPoints: number;
+      readonly rampingBuildId?: string;
+      readonly updatedAt: number;
+    };
+    readonly faults: never;
+  };
+  'weft.worker.startoverrides.preview': {
+    readonly input: { readonly ttlMs?: number; readonly workflowId: string };
+    readonly output: {
+      readonly preview: {
+        readonly expiresAt: number;
+        readonly previousRoutingGeneration: number;
+        readonly scope: 'destructive:workflow-worker-version-binding';
+        readonly targetActivityContractsDigest: string;
+        readonly targetRoutingGeneration: number;
+        readonly targetWorkflowContractHash: string;
+        readonly token: string;
+        readonly workflowId: string;
+      };
+    };
+    readonly faults: 'InvalidParams';
   };
   'weft.workers.drain': {
     readonly input: { readonly reason?: string; readonly workerId: string };
@@ -118,6 +168,7 @@ export type SystemOperationTypes = {
         readonly inFlight: number;
         readonly oldestStartedAt: number | null;
         readonly runtimeVersion: string | null;
+        readonly transports: ReadonlyArray<'websocket' | 'long-poll'>;
         readonly workers: number;
       }>;
       readonly items: ReadonlyArray<{
@@ -136,6 +187,7 @@ export type SystemOperationTypes = {
         readonly queue: string;
         readonly runtimeVersion?: string;
         readonly startedAt: number;
+        readonly transport: 'websocket' | 'long-poll';
       }>;
       readonly routingPolicy: 'least-loaded' | 'round-robin' | 'fair-share';
     };

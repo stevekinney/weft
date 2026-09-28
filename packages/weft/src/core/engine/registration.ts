@@ -152,6 +152,9 @@ function applyOptionalRegistrationFields(
     // host via runFinalizerActivity (see #564).
     entry.finalizer = registration.finalizer;
   }
+  if (registration.workerVersioningPolicy !== undefined) {
+    entry.workerVersioningPolicy = registration.workerVersioningPolicy;
+  }
 }
 
 /**

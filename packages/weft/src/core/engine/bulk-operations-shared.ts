@@ -24,9 +24,11 @@ import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
+  EngineDisposedError,
 } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStateBatches } from './listing.ts';
+import { trackPurgeWrite } from './purge-write-tracking.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 
 export const BULK_OPERATION_SAMPLE_LIMIT = 20;
@@ -322,9 +324,16 @@ async function persistBulkOperationAuditEvent(
     confirmationToken: preparation.confirmationToken,
   };
 
-  await internals.storage.put(
-    KEYS.bulkOperationAudit(timestamp, requestId, preparation.confirmationToken),
-    encode(auditEvent),
+  // A disposed engine issues no new writes: the bulk operation's own writes
+  // already landed, and skipping the record matches a bulk operation that fails
+  // part-way. One already issued is tracked so async disposal lets it land.
+  if (internals.disposed) throw new EngineDisposedError();
+  await trackPurgeWrite(
+    internals,
+    internals.storage.put(
+      KEYS.bulkOperationAudit(timestamp, requestId, preparation.confirmationToken),
+      encode(auditEvent),
+    ),
   );
   return auditEvent;
 }

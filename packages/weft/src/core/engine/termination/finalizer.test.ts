@@ -25,12 +25,14 @@ import { workflowSource } from '../../source/index.ts';
 import type { WorkflowContext, WorkflowDefinition, WorkflowState } from '../../types.ts';
 import { activity, workflow } from '../../types.ts';
 import { copyWorkflowDefinition } from '../construction.ts';
+import { EngineDisposedError } from '../errors.ts';
 import { recordFinalizerState } from '../finalizer-state.ts';
 import { getInternals } from '../internals.ts';
 import { buildRegistrationEntry } from '../registration.ts';
 import { createTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
 import { runFinalizerActivity } from './finalizer-activity.ts';
 import type { TeardownDeadLetterRecord } from './finalizer-claim.ts';
+import { resolveFinalizerRegistration } from './finalizer-registration.ts';
 import { runWorkflowFinalizer, type FinalizerDriveCallbacks } from './finalizer.ts';
 
 function terminalState(id: string, type: string, revision?: string): WorkflowState {
@@ -676,6 +678,50 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
     expect(await teardownTimerCount(internals)).toBe(1);
     engine[Symbol.dispose]();
+  });
+
+  it('rejects with EngineDisposedError, not "rearm", when disposal lands while the pinned revision is still loading (COR-1338)', async () => {
+    // `resolveFinalizerRegistration()`'s catch maps only a load failure and an
+    // unresolvable pin to `undefined` (rearm); anything else is rethrown.
+    // Disposal is the one error the source loader passes through unwrapped:
+    // it aborts every in-flight load with an `EngineDisposedError`. Holding
+    // the loader open until disposal has landed reaches that rethrow
+    // deterministically, instead of only when a teardown drive happens to race
+    // a synchronous dispose elsewhere in the suite.
+    const type = 'disposed-mid-load-teardown';
+    const definition = workflow({ name: type }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    const entry = buildRegistrationEntry(type, definition);
+    const manifest = await buildWorkflowManifestFromDefinition(
+      copyWorkflowDefinition(type, entry),
+      new ActivityRegistry().listDefinitions(),
+    );
+    const loaderStarted = Promise.withResolvers<void>();
+    const releaseLoader = Promise.withResolvers<void>();
+    const engine = new Engine({ backgroundTasks: 'manual' });
+    engine.registerSource(
+      workflowSource(
+        {
+          name: type,
+          location: './pinned.ts',
+          exportName: 'pinned',
+          revision: manifest.revision,
+        },
+        async () => {
+          loaderStarted.resolve();
+          await releaseLoader.promise;
+          return { pinned: definition };
+        },
+      ),
+    );
+
+    const resolution = resolveFinalizerRegistration(getInternals(engine), type, manifest.revision);
+    await loaderStarted.promise;
+    engine[Symbol.dispose]();
+    releaseLoader.resolve();
+
+    await expect(resolution).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('dead-letters (not clears) when the registration exists but no finalizer state was recorded', async () => {

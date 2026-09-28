@@ -133,7 +133,7 @@ describe('COR-205 dead-letter, hostile decode, purge, and retention', () => {
     const storage = new MemoryStorage();
     const options = minimalServeOptions(storage);
     const context = minimalServerContext();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     registerWorker(context, 'w-1');
     const sent = attachSocket(context, 'w-1');
 

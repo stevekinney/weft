@@ -25,12 +25,12 @@
  * overloads key off this interface, so emitting one declaration narrows
  * both engine and client call sites — there is no separate client-specific
  * emission, and skipping codegen leaves both usable with plain string
- * names. Every entry also carries `revision`/`workflowVersion` as
+ * names. Every entry also carries `revision`/`workflowVersion`/`contractHash` as
  * string-literal fields for compile-time introspection; neither is
  * required by `engine.start`/`WeftClient.start`/`.schedule()`, which read
  * only `input`/`output` structurally (`WorkflowInput`/`WorkflowOutput` in
  * `core/types/workflow-registries.ts`) — an ordinary start needs no
- * caller-supplied revision.
+ * caller-supplied revision or hash.
  *
  * Activity names are no longer emitted as a global `ActivityTypes` module
  * augmentation — that interface was removed when the chained workflow
@@ -92,7 +92,7 @@ const packageNamePattern = /^(?:@[a-z0-9\-._~]+\/)?[a-z0-9\-._~]+$/;
 
 /**
  * One active workflow's codegen-relevant metadata: its input/output
- * schemas plus the `revision`/`workflowVersion` identity fields every
+ * schemas plus the `revision`/`workflowVersion`/`contractHash` identity fields every
  * generated entry now carries. Deliberately narrower than, and separate
  * from, `core/registry-workflow-manifest.ts`'s `RegistryWorkflowEntry` —
  * that type also describes the full registration-time shape fed into
@@ -109,10 +109,17 @@ const packageNamePattern = /^(?:@[a-z0-9\-._~]+\/)?[a-z0-9\-._~]+$/;
 export type CodegenWorkflowEntry = {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
+  activities?: Readonly<Record<string, CodegenActivityContract>>;
   description?: string;
   tags?: ReadonlyArray<string>;
   revision: string;
   workflowVersion: string;
+  contractHash: string;
+};
+
+export type CodegenActivityContract = {
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 };
 
 function sortedWorkflowEntries(
@@ -181,9 +188,10 @@ function emitWorkflowEntry(
   const output = schemaTypeReference(outputType, aliasTable);
   const revision = emitStringLiteral(entry.revision);
   const workflowVersion = emitStringLiteral(entry.workflowVersion);
+  const contractHash = emitStringLiteral(entry.contractHash);
   return (
     `    ${emitPropertyKey(name)}: { input: ${input}; output: ${output}; ` +
-    `revision: ${revision}; workflowVersion: ${workflowVersion} };`
+    `revision: ${revision}; workflowVersion: ${workflowVersion}; contractHash: ${contractHash} };`
   );
 }
 

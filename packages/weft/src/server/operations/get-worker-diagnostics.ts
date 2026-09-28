@@ -18,12 +18,13 @@
 
 import { z } from 'zod';
 
-import type { WorkerHealth, WorkerRegistry } from '../../worker/registry.ts';
+import type { WorkerHealth, WorkerRegistry, WorkerTransport } from '../../worker/registry.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const workerHealthSchema = z.enum(['active', 'draining', 'drained']) as z.ZodType<WorkerHealth>;
+const workerTransportSchema = z.enum(['websocket', 'long-poll']) as z.ZodType<WorkerTransport>;
 
 const workerActivityContractSchema = z
   .object({
@@ -45,6 +46,7 @@ const workerInstanceIdentitySchema = z
   .object({
     workerId: z.string(),
     queue: z.string(),
+    transport: workerTransportSchema,
     health: workerHealthSchema,
     connectedAt: z.number(),
     startedAt: z.number(),
@@ -125,6 +127,7 @@ function projectWorkerDiagnostics(
     instance: {
       workerId: worker.id,
       queue: worker.queue,
+      transport: worker.transport,
       health: summary.health,
       connectedAt: worker.connectedAt,
       startedAt: worker.startedAt,

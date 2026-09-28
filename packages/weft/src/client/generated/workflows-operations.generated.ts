@@ -140,6 +140,7 @@ export type WorkflowsOperationTypes = {
       readonly startAt?: unknown;
       readonly tags?: unknown;
       readonly type: unknown;
+      readonly workerStartOverridePreview?: unknown;
     };
     readonly output: { readonly id: string };
     readonly faults: 'Conflict';

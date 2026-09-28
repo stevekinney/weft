@@ -11,7 +11,7 @@ import { workflow } from './types/workflow-function.ts';
 
 describe('ctx.suspendUntil', () => {
   it('pauses a workflow and resumes when a matching signal arrives', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const token = 'resume-token-abc';
 
     const awaitWebhook = workflow({ name: 'await-webhook' }).execute(async function* (
@@ -39,7 +39,7 @@ describe('ctx.suspendUntil', () => {
   });
 
   it('multiple suspensions in the same workflow use distinct tokens', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const multiSuspend = workflow({ name: 'multi-suspend' }).execute(async function* (
       ctx: WorkflowContext,

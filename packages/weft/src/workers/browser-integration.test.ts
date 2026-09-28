@@ -31,10 +31,15 @@ function waitForMessage(
       const found = messages.find(predicate);
       if (found) {
         clearInterval(interval);
+        // Clear the overall timeout too — leaving it armed after a match is
+        // found keeps a real timer alive for the rest of its
+        // `timeoutMilliseconds`, which the timer-leak guard reports as a
+        // leak.
+        clearTimeout(timeout);
         resolve(found);
       }
     }, 5);
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       clearInterval(interval);
       reject(new Error(`Timed out after ${timeoutMilliseconds}ms waiting for matching message`));
     }, timeoutMilliseconds);

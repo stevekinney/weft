@@ -72,6 +72,15 @@ export function assertLeaseHeldForEngineWork(internals: EngineInternals): void {
 type FencedCommitResult = 'committed' | 'lost-race';
 
 /**
+ * Wraps the one storage write a fenced commit issues (`batch` or
+ * `conditionalBatch`) and returns it, so a caller can follow that write alone
+ * without also waiting on the epoch re-read that disambiguates a failed CAS.
+ */
+export type FencedWriteTracker = <T>(write: Promise<T>) => Promise<T>;
+
+const untrackedWrite: FencedWriteTracker = (write) => write;
+
+/**
  * Core fenced-commit: the single place that resolves the applicable epoch,
  * assembles conditions, runs the batch/conditionalBatch, and resolves a
  * `false` result. Both public entry points are thin wrappers over this so the
@@ -91,9 +100,10 @@ async function fencedCommit(
   workflowId: string | null,
   operations: BatchOperation[],
   baseConditions: ConditionalBatchCondition[],
+  trackWrite: FencedWriteTracker = untrackedWrite,
 ): Promise<FencedCommitResult> {
   if (internals.options.ownershipMode === 'workflow-lease' && workflowId !== null) {
-    return fencedCommitForWorkflow(internals, workflowId, operations, baseConditions);
+    return fencedCommitForWorkflow(internals, workflowId, operations, baseConditions, trackWrite);
   }
 
   const epochBytes = resolveFenceEpochOrHalt(internals);
@@ -103,10 +113,12 @@ async function fencedCommit(
     // byte-for-byte the pre-ADR shape — plain batch when there are no base
     // conditions, conditionalBatch otherwise. No epoch condition.
     if (baseConditions.length === 0) {
-      await internals.storage.batch(operations);
+      await trackWrite(internals.storage.batch(operations));
       return 'committed';
     }
-    const committed = await storageConditionalBatch(internals.storage, baseConditions, operations);
+    const committed = await trackWrite(
+      storageConditionalBatch(internals.storage, baseConditions, operations),
+    );
     return committed ? 'committed' : 'lost-race';
   }
 
@@ -114,7 +126,9 @@ async function fencedCommit(
     ...baseConditions,
     { key: KEYS.leaseEpoch(), expectedValue: epochBytes },
   ];
-  const committed = await storageConditionalBatch(internals.storage, conditions, operations);
+  const committed = await trackWrite(
+    storageConditionalBatch(internals.storage, conditions, operations),
+  );
   if (committed) return 'committed';
 
   // A `false` in lease mode is ambiguous: a base-precondition conflict
@@ -184,6 +198,7 @@ async function fencedCommitForWorkflow(
   workflowId: string,
   operations: BatchOperation[],
   baseConditions: ConditionalBatchCondition[],
+  trackWrite: FencedWriteTracker,
 ): Promise<FencedCommitResult> {
   const epochBytes = internals.workflowClaimRegistry?.currentEpochBytes(workflowId) ?? null;
   if (epochBytes === null) {
@@ -194,7 +209,9 @@ async function fencedCommitForWorkflow(
     ...baseConditions,
     { key: KEYS.workflowOwnerEpoch(workflowId), expectedValue: epochBytes },
   ];
-  const committed = await storageConditionalBatch(internals.storage, conditions, operations);
+  const committed = await trackWrite(
+    storageConditionalBatch(internals.storage, conditions, operations),
+  );
   if (committed) return 'committed';
 
   // A `false` is ambiguous the same way global lease mode's is: a
@@ -243,6 +260,8 @@ function haltWorkflowClaim(workflowId: string): never {
  * @param operations - the durable operations to commit atomically
  * @param baseConditions - CAS conditions the caller already requires (may be empty)
  * @param onLostRace - builds the error thrown on a same-epoch lost CAS race
+ * @param trackWrite - wraps the storage write itself (see {@link FencedWriteTracker});
+ *   omitted, the write is not followed separately
  */
 export async function commitFencedEngineWrite(
   internals: EngineInternals,
@@ -250,8 +269,10 @@ export async function commitFencedEngineWrite(
   operations: BatchOperation[],
   baseConditions: ConditionalBatchCondition[],
   onLostRace: () => Error,
+  trackWrite?: FencedWriteTracker,
 ): Promise<void> {
-  if ((await fencedCommit(internals, workflowId, operations, baseConditions)) === 'lost-race') {
+  const result = await fencedCommit(internals, workflowId, operations, baseConditions, trackWrite);
+  if (result === 'lost-race') {
     throw onLostRace();
   }
 }

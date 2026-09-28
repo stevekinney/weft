@@ -32,6 +32,7 @@ const startWorkflowInput = z.object({
   tags: z.unknown().optional(),
   idempotencyKey: z.unknown().optional(),
   searchAttributes: z.unknown().optional(),
+  workerStartOverridePreview: z.unknown().optional(),
 });
 
 const startWorkflowOutput = z.object({
@@ -40,6 +41,7 @@ const startWorkflowOutput = z.object({
 
 export type StartWorkflowInput = z.infer<typeof startWorkflowInput>;
 export type StartWorkflowOutput = z.infer<typeof startWorkflowOutput>;
+type StartWorkflowOperationOptions = Readonly<{ workerStartOverrideSigningSecret?: string }>;
 
 /**
  * Validate the `type` field and build `StartOptions` from the operation input.
@@ -114,49 +116,59 @@ function resolveStartWorkflowAccess(error: unknown): never {
   throw fault;
 }
 
-export const startWorkflowOperation = defineOperation({
-  name: 'weft.workflows.start',
-  mcpExposable: false,
-  summary: 'Start a new workflow',
-  description:
-    'Start a new workflow execution of a registered type. Requires `type` (the registered ' +
-    'workflow type name) and accepts an optional `input` payload plus start options: `id` ' +
-    '(client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually ' +
-    'exclusive scheduling), `tags`, `idempotencyKey` (at-most-once dedup: a repeated key ' +
-    'returns the existing run instead of starting a second), and `searchAttributes`. Returns ' +
-    'the workflow `id`. Faults with InvalidParams for an unregistered type or malformed ' +
-    'options, and Conflict when a workflow with the same id already exists or the supplied ' +
-    '`idempotencyKey` has been spent (its run was purged or swept by retention).',
-  destructive: false,
-  tags: ['Workflows'],
-  inputSchema: startWorkflowInput,
-  outputSchema: startWorkflowOutput,
-  access: { kind: 'public' },
-  producibleFaults: ['Conflict'],
-  transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
-  unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
-    const typedEngine = runtimeWorkflowEngine(engine);
+export function createStartWorkflowOperation(configuration: StartWorkflowOperationOptions = {}) {
+  return defineOperation({
+    name: 'weft.workflows.start',
+    mcpExposable: false,
+    summary: 'Start a new workflow',
+    description:
+      'Start a new workflow execution of a registered type. Requires `type` (the registered ' +
+      'workflow type name) and accepts an optional `input` payload plus start options: `id` ' +
+      '(client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually ' +
+      'exclusive scheduling), `tags`, `idempotencyKey` (at-most-once dedup: a repeated key ' +
+      'returns the existing run instead of starting a second), and `searchAttributes`. Returns ' +
+      'the workflow `id`. Faults with InvalidParams for an unregistered type or malformed ' +
+      'options, and Conflict when a workflow with the same id already exists or the supplied ' +
+      '`idempotencyKey` has been spent (its run was purged or swept by retention).',
+    destructive: false,
+    tags: ['Workflows'],
+    inputSchema: startWorkflowInput,
+    outputSchema: startWorkflowOutput,
+    access: { kind: 'public' },
+    producibleFaults: ['Conflict'],
+    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+    unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+    invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
+      const typedEngine = runtimeWorkflowEngine(engine);
 
-    // The validator checks `input.type` first and only then calls the
-    // schema-lookup callback, so an invalid type rejects without invoking
-    // engine logic on an empty string.
-    const { type, options } = validateStartWorkflowInput(input, (validType) => {
-      return typedEngine.getWorkflowDefinition(validType)?.searchAttributes;
-    });
+      // The validator checks `input.type` first and only then calls the
+      // schema-lookup callback, so an invalid type rejects without invoking
+      // engine logic on an empty string.
+      const { type, options } = validateStartWorkflowInput(input, (validType) => {
+        return typedEngine.getWorkflowDefinition(validType)?.searchAttributes;
+      });
 
-    try {
-      const handle = await typedEngine.start(type, input.input, options);
-      return { id: handle.id };
-    } catch (error) {
-      // Typed engine errors first; the engine throws these for the
-      // canonical failure modes (workflow type not registered, workflow
-      // ID collision). String-matching the message would silently
-      // misclassify the fault if the message text is ever changed.
-      return resolveStartWorkflowAccess(error);
-    }
-  },
-});
+      try {
+        const handle = await typedEngine.start(type, input.input, {
+          ...options,
+          ...(options.workerStartOverridePreview === undefined ||
+          configuration.workerStartOverrideSigningSecret === undefined
+            ? {}
+            : { workerStartOverrideSigningSecret: configuration.workerStartOverrideSigningSecret }),
+        });
+        return { id: handle.id };
+      } catch (error) {
+        // Typed engine errors first; the engine throws these for the
+        // canonical failure modes (workflow type not registered, workflow
+        // ID collision). String-matching the message would silently
+        // misclassify the fault if the message text is ever changed.
+        return resolveStartWorkflowAccess(error);
+      }
+    },
+  });
+}
+
+export const startWorkflowOperation = createStartWorkflowOperation();
 
 export const startWorkflowRestBinding: UnknownRestBinding = {
   method: 'POST',
@@ -173,6 +185,7 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
     tags: { kind: 'body-field', bodyField: 'tags' },
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
+    workerStartOverridePreview: { kind: 'body-field', bodyField: 'workerStartOverridePreview' },
   },
   extractInput: async (request, _pathParams, context) => {
     return extractSharedStartWorkflowRestFields(

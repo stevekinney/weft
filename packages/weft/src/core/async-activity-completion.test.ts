@@ -383,7 +383,7 @@ describe('async activity completion', () => {
 
   it('skips undecodable and internally inconsistent pending records', async () => {
     await using storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     const workflowId = 'pending-corrupt-records';
     const record = (token: string, step: number) => ({
       version: 1,

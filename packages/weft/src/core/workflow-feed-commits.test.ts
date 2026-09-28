@@ -247,6 +247,7 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
     expect(sink.length).toBeGreaterThan(0);
     unsubscribeThrower();
     unsubscribeSink();
+    engine[Symbol.dispose]();
   });
 
   it('does not surface unhandled rejections when a listener is async and rejects', async () => {
@@ -287,6 +288,7 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
       process.off('unhandledRejection', handler);
       unsubscribeThrower();
       unsubscribeSink();
+      engine[Symbol.dispose]();
     }
 
     expect(detected).toBeNull();
@@ -360,5 +362,6 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
     // no late listener would ever execute its body and the test
     // would pass vacuously — this assertion guards against that.
     expect(lateSequences.length).toBeGreaterThan(0);
+    engine[Symbol.dispose]();
   });
 });

@@ -231,7 +231,7 @@ type RemoteActivityContext = {
 
 ### `LongPollWorker`
 
-HTTP long-poll fallback for environments without WebSocket support. Polls `/api/v1/tasks/:queue` for tasks and reports results through `/api/v1/tasks/:queue/result`. Implements `Disposable`.
+HTTP long-poll fallback for environments without WebSocket support. Registers the same canonical worker manifest as the WebSocket transport, receives a server-issued session token, then polls `/api/v1/worker-sessions/:sessionId/tasks` and reports durable results through `/api/v1/worker-sessions/:sessionId/results` with `Weft-Worker-Session-Token` on every continuation request. Implements `Disposable`.
 
 ```ts partial
 class LongPollWorker implements Disposable {
@@ -259,17 +259,19 @@ class LongPollWorker implements Disposable {
 
 ### `LongPollWorkerOptions`
 
-| Field                    | Type                                                   | Default     | Description                                                                                                                                                                                                                                  |
-| ------------------------ | ------------------------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`              | `string`                                               | --          | Base HTTP URL of the Weft server                                                                                                                                                                                                             |
-| `activities`             | `Record<string, (input: unknown) => Promise<unknown>>` | --          | Activity functions                                                                                                                                                                                                                           |
-| `concurrency`            | `number`                                               | `10`        | Maximum concurrent tasks                                                                                                                                                                                                                     |
-| `queue`                  | `string`                                               | `'default'` | Task queue                                                                                                                                                                                                                                   |
-| `pollTimeout`            | `number`                                               | `30_000`    | Long-poll timeout in ms                                                                                                                                                                                                                      |
-| `heartbeatIntervalMs`    | `number`                                               | `10_000`    | Per-activity heartbeat interval (COR-230) — see [Long-poll fallback](../guides/remote-workers.md#long-poll-fallback).                                                                                                                        |
-| `disconnectTimeoutMs`    | `number`                                               | `30_000`    | Bound on how long `stop()` waits for in-flight activities to finish after aborting them (COR-220) — matches `RemoteWorker`'s identical bound. A non-cooperative activity that ignores its `AbortSignal` cannot hold `stop()` open past this. |
-| `resultRetryBaseDelayMs` | `number`                                               | `1_000`     | Delay before the first retry of a result POST that failed or was transiently rejected (COR-235) — see [Result delivery and acknowledgement](../guides/remote-workers.md#result-delivery-and-acknowledgement).                                |
-| `resultRetryMaxDelayMs`  | `number`                                               | `30_000`    | Upper bound the result-retry delay backs off to (COR-235).                                                                                                                                                                                   |
+| Field                    | Type                                                                                                                                  | Default     | Description                                                                                                                                                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`              | `string`                                                                                                                              | --          | Base HTTP URL of the Weft server                                                                                                                                                                                                             |
+| `workflows`              | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | --          | Required workflow map used to derive the canonical worker manifest and qualified activity names                                                                                                                                              |
+| `deploymentName`         | `string`                                                                                                                              | --          | Logical deployment advertised in the worker manifest                                                                                                                                                                                         |
+| `buildId`                | `string`                                                                                                                              | --          | Operator-visible build advertised in the worker manifest                                                                                                                                                                                     |
+| `concurrency`            | `number`                                                                                                                              | `10`        | Maximum concurrent tasks                                                                                                                                                                                                                     |
+| `queue`                  | `string`                                                                                                                              | `'default'` | Task queue                                                                                                                                                                                                                                   |
+| `pollTimeout`            | `number`                                                                                                                              | `30_000`    | Long-poll timeout in ms                                                                                                                                                                                                                      |
+| `heartbeatIntervalMs`    | `number`                                                                                                                              | `10_000`    | Per-activity heartbeat interval (COR-230) — see [Long-poll fallback](../guides/remote-workers.md#long-poll-fallback).                                                                                                                        |
+| `disconnectTimeoutMs`    | `number`                                                                                                                              | `30_000`    | Bound on how long `stop()` waits for in-flight activities to finish after aborting them (COR-220) — matches `RemoteWorker`'s identical bound. A non-cooperative activity that ignores its `AbortSignal` cannot hold `stop()` open past this. |
+| `resultRetryBaseDelayMs` | `number`                                                                                                                              | `1_000`     | Delay before the first retry of a result POST that failed or was transiently rejected (COR-235) — see [Result delivery and acknowledgement](../guides/remote-workers.md#result-delivery-and-acknowledgement).                                |
+| `resultRetryMaxDelayMs`  | `number`                                                                                                                              | `30_000`    | Upper bound the result-retry delay backs off to (COR-235).                                                                                                                                                                                   |
 
 **Example:**
 
@@ -278,9 +280,16 @@ import { LongPollWorker } from '@lostgradient/weft';
 
 const worker = new LongPollWorker({
   serverUrl: 'http://localhost:7233',
-  activities: {
-    sendEmail: async (input) => {
-      /* ... */
+  deploymentName: 'notifications-worker',
+  buildId: '2026-09-28',
+  workflows: {
+    notifications: {
+      name: 'notifications',
+      activities: {
+        sendEmail: async (input) => {
+          /* ... */
+        },
+      },
     },
   },
 });
@@ -627,7 +636,7 @@ Marks a connected worker as draining. Requires `system:admin`. The optional JSON
 
 Response:
 
-```ts
+```ts partial
 type WorkerDrainResponse = {
   target: 'worker';
   workerId: string;
@@ -651,7 +660,7 @@ Marks every current and future worker that reports `deploymentName` as draining.
 
 Response:
 
-```ts
+```ts partial
 type DeploymentDrainResponse = {
   target: 'deployment';
   deploymentName: string;
@@ -675,7 +684,7 @@ Bounded instance and deployment-version diagnostics for one connected worker (WF
 
 The response splits into two structurally distinct parts, mirroring the manifest's own split between "which process" and "which build":
 
-```ts
+```ts partial
 type WorkerDiagnosticsResponse = {
   worker: {
     instance: {
@@ -807,3 +816,22 @@ type ListTaskQueuesResponse = {
 ```
 
 Queues are sorted by `queue` ascending.
+
+## Revision-aware deployment routing
+
+`WorkerDeploymentCatalog` stores immutable `(deploymentName, buildId)` versions and a conditional routing pointer in the configured storage backend. A version records its artifact and manifest digests, accepted manifest, lifecycle state, first-seen time, and execution references. Re-registering a build with different digests is rejected. Routing pointers carry a monotonically increasing generation, a current build, an optional ramping build, and an integer `rampBasisPoints` value from `0` through `10_000`; stale expected generations are rejected.
+
+`selectWorkerDeployment` resolves a task to one exact build before applying worker policy. A pinned `buildId`, `artifactDigest`, `workflowRevision`, or activity contract never falls forward to another build. Unpinned traffic chooses the ramping build when the deterministic `worker-rollout-v1` bucket for `(deploymentName, workflowId, generation)` is below `rampBasisPoints`, otherwise it chooses the current build. Candidate workers are then filtered for the requested workflow/activity, capacity, and drain state, and ties are ordered by worker ID.
+
+Deployment versions remain reachable while their execution-reference count is non-zero. Calling `markDraining` with references present leaves the version ready; after references are released it may transition to draining. Diagnostic failures distinguish revision incompatibility from unavailable capacity so an unavailable build does not hide runnable work on another version. The catalog is durable, but connected worker sessions and in-flight leases remain live registry state and must be recovered through the normal task-ledger recovery path.
+
+The operational surface is scoped to `system:admin` for mutations and `system:read` for diagnostics. Use `POST /v1/worker-deployments/preview` to validate both target builds before changing state, then `POST /v1/worker-deployments/routing` to advance the conditional generation. `POST /v1/worker-deployments/promote` moves a validated build to current traffic; `POST /v1/worker-deployments/rollback` does the same for a previously registered build. `GET /v1/worker-deployments/diagnostics` returns bounded version records and the selected routing pointer. The equivalent JSON-RPC operation names are `weft.worker.deployments.preview`, `weft.worker.deployments.setrouting`, `weft.worker.deployments.promote`, `weft.worker.deployments.rollback`, and `weft.worker.deployments.diagnostics`.
+
+```bash
+curl -sS -X POST http://127.0.0.1:7233/v1/worker-deployments/preview \
+  -H 'Authorization: Bearer '$API_KEY \
+  -H 'Content-Type: application/json' \
+  -d '{"deploymentName":"billing","currentBuildId":"build-a","rampingBuildId":"build-b","rampBasisPoints":1000}'
+```
+
+Preview and mutation reject unknown or removed versions, malformed persisted identities, stale routing generations, and invalid ramp values before writing. Exact execution requirements never fall forward; an unavailable build reports a version-specific failure, allowing another revision partition to run without head-of-line blocking. Rollback affects only new unpinned selection—existing task and schedule bindings retain their pinned build. Drain and removal are conditional on execution references, so a concurrent lease cannot be lost. Terminal task records are retention data and do not keep a deployment reachable; reachability comes from active pinned runs and schedules, pending requirements, attempts, realms, and recovery preload authorities. Routing metrics use deployment/build identity only in bounded diagnostics and do not create unbounded workflow-label series. Discovery exposes the same generated operation catalog and client types as the REST and JSON-RPC surfaces.

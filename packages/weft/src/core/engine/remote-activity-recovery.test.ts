@@ -21,11 +21,16 @@
  *   reloads the resolution record and delivers it when replay re-parks on
  *   the same deterministic token.
  */
-import { afterEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, mock, setSystemTime } from 'bun:test';
 
-import { serve, type WeftServer } from '../../server/index.ts';
+import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { commitTaskLedgerCompletion } from '../../server/runtime/task-ledger-completion.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
+import {
+  createDeferred,
+  waitForCondition,
+  waitForever,
+} from '../../testing/fake-timers.test-support.ts';
 import { RemoteWorker } from '../../worker/index.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import { commitTaskLedgerTransition } from '../task-ledger/task-ledger-runtime.ts';
@@ -48,10 +53,16 @@ describe('remote activity recovery (COR-152)', () => {
   let engine: Engine | undefined;
   let server: WeftServer | undefined;
   let remoteWorker: RemoteWorker | undefined;
+  let originalWorker: RemoteWorker | undefined;
 
   afterEach(async () => {
+    // Real time first: `RemoteWorker#disconnect` drains in-flight work
+    // against a `Date.now()` deadline, which a frozen clock never reaches.
+    setSystemTime();
     await remoteWorker?.disconnect();
     remoteWorker = undefined;
+    await originalWorker?.disconnect();
+    originalWorker = undefined;
     await server?.stop();
     server = undefined;
     engine?.[Symbol.dispose]();
@@ -89,10 +100,9 @@ describe('remote activity recovery (COR-152)', () => {
     // "Durably queued" is not a dead end once infrastructure DOES appear —
     // proven end-to-end (server and worker both already present at enqueue
     // time) by `remote-activity-execution.test.ts`'s criterion-1 test. A
-    // worker that connects strictly AFTER this exact record already fell
-    // back to the long-poll queue's in-memory hint is a separate, pre-existing
-    // `reconcileOrphanedRecords`/`WorkerRegistry` interaction this test does
-    // not exercise.
+    // WebSocket worker that connects only AFTER the record already fell back
+    // to the long-poll queue's in-memory hint receives it through the
+    // registration drain, covered by `server/runtime/long-poll-drain.test.ts`.
     expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 
@@ -284,29 +294,38 @@ describe('remote activity recovery (COR-152)', () => {
   });
 
   it('preserves leased work across a server stop and restart (criterion 8)', async () => {
-    // A short visibility timeout means the lease this test's FIRST server
-    // grants expires quickly once that server (and its in-memory
-    // WorkerRegistry) is gone — the mechanism, not a sleep, that lets the
-    // SECOND server's own scan reclaim and redispatch the leased record
-    // within the test's wait window.
+    // Nothing here waits on a wall-clock budget. The lease outlives the test
+    // in real time, and neither server runs a periodic visibility scanner, so
+    // the lease cannot expire — and startup recovery cannot find it expired —
+    // until this test moves the clock. The one expiry is an explicit scan run
+    // only after the replacement worker has registered, so the redispatch
+    // lands on it directly. (A lease that expired before any worker
+    // registered would fall back to the long-poll queue and reach the
+    // replacement worker through the registration drain instead — see
+    // `server/runtime/long-poll-drain.test.ts`.) The lease stays well
+    // under the engine's 30s workflow-claim TTL, so jumping the clock past it
+    // never expires the engine's own claim on the run.
     engine = new Engine({
-      activityExecution: { mode: 'remote', visibilityTimeoutMilliseconds: 200 },
+      activityExecution: { mode: 'remote', visibilityTimeoutMilliseconds: 10_000 },
     });
-    server = serve({
+
+    const firstServerOptions = {
       engine,
       port: 0,
       unauthenticatedAccess: 'allow',
-      visibilityPollIntervalMs: 50,
       // This test simulates an ABRUPT restart (the process disappears with
       // work in flight), not a graceful drain — a short shutdown timeout
       // keeps `server.stop()` from waiting out its full 30s default for a
       // worker that (by design, via `neverReleased` below) never returns a
       // cooperative result.
       workerShutdownTimeoutMs: 50,
-    });
+    } satisfies ServeOptions;
+    useManualTaskReconciliationForTesting(firstServerOptions);
+    server = serve(firstServerOptions);
 
-    const neverReleased = new Promise<never>(() => {});
-    remoteWorker = new RemoteWorker({
+    const leased = createDeferred();
+    const neverReleased = waitForever();
+    originalWorker = new RemoteWorker({
       serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/default/stream`,
       workerId: 'restart-worker',
       deploymentName: 'test-deployment',
@@ -316,7 +335,12 @@ describe('remote activity recovery (COR-152)', () => {
           name: 'restart-workflow',
           // Never resolves — this worker only proves the task got LEASED to
           // it before the server stops. It never gets a chance to answer.
-          activities: { slowActivity: async () => neverReleased },
+          activities: {
+            slowActivity: async () => {
+              leased.resolve();
+              return neverReleased;
+            },
+          },
         },
       },
       concurrency: 1,
@@ -325,12 +349,10 @@ describe('remote activity recovery (COR-152)', () => {
       // its 30s default.
       disconnectTimeoutMs: 50,
     });
-    await remoteWorker.connect();
-    await waitForCondition(() => server?.registry.getWorker('restart-worker') !== undefined, {
-      timeoutMs: 5_000,
-      intervalMs: 25,
-      label: 'remote worker to register',
-    });
+    // `connect()` resolves on `registerAck`, which the server sends only
+    // after inserting the worker into its registry.
+    await originalWorker.connect();
+    expect(server.registry.getWorker('restart-worker')).toBeDefined();
 
     const localSlowActivity = mock(async (): Promise<never> => {
       throw new Error('local execution must never run in remote mode');
@@ -349,33 +371,36 @@ describe('remote activity recovery (COR-152)', () => {
 
     const handle = await engine.start('restart-workflow', null, { id: 'restart-1' });
 
-    await waitForCondition(
-      async () => {
-        const record = await readOnlyTaskLedgerRecord(engine!);
-        return record !== null && record.state === 'leased';
-      },
-      { timeoutMs: 5_000, intervalMs: 25, label: 'task to be leased' },
-    );
+    // The worker runs the activity only after the server durably committed
+    // the lease and sent it the task.
+    await leased.promise;
+    const leasedBeforeStop = await readOnlyTaskLedgerRecord(engine);
+    if (leasedBeforeStop?.state !== 'leased') {
+      throw new Error(`expected a leased record, got ${JSON.stringify(leasedBeforeStop)}`);
+    }
 
     await server.stop();
     server = undefined;
 
     // Stopping the server does not touch the durable ledger — the leased
-    // record survives exactly as it was.
-    const leasedRecord = await readOnlyTaskLedgerRecord(engine);
-    expect(leasedRecord?.state).toBe('leased');
+    // record survives exactly as it was. The original worker stays connected
+    // to nothing until teardown: disconnecting it here would only exercise
+    // the stopped server's socket bookkeeping, which is not this criterion.
+    expect(await readOnlyTaskLedgerRecord(engine)).toEqual(leasedBeforeStop);
 
-    server = serve({
+    const secondServerOptions = {
       engine,
       port: 0,
       unauthenticatedAccess: 'allow',
-      visibilityPollIntervalMs: 50,
-    });
+    } satisfies ServeOptions;
+    const secondServerReconciliation = useManualTaskReconciliationForTesting(secondServerOptions);
+    server = serve(secondServerOptions);
+    // Startup task-ledger recovery has rehydrated the live lease.
     await server.ready;
-    await remoteWorker.disconnect();
+
     remoteWorker = new RemoteWorker({
       serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/default/stream`,
-      workerId: 'restart-worker',
+      workerId: 'replacement-worker',
       deploymentName: 'test-deployment',
       buildId: 'test-build',
       workflows: {
@@ -389,8 +414,38 @@ describe('remote activity recovery (COR-152)', () => {
       concurrency: 1,
     });
     await remoteWorker.connect();
+    expect(server.registry.getWorker('replacement-worker')).toBeDefined();
+
+    // The restart itself still leaves the lease untouched.
+    expect(await readOnlyTaskLedgerRecord(engine)).toEqual(leasedBeforeStop);
+
+    // Expire the lease the original worker can never renew. Every ledger
+    // transition reads `Date.now()`, so the frozen clock is what lets the
+    // requeue — and the replacement worker's claim of the next attempt —
+    // see the deadline as passed. It stays frozen until the result lands.
+    const expiredAt = leasedBeforeStop.leaseDeadline + 1;
+    setSystemTime(expiredAt);
+    await secondServerReconciliation.scanAt(
+      leasedBeforeStop.operationId,
+      leasedBeforeStop.leaseDeadline,
+      expiredAt,
+    );
 
     expect(await handle.result()).toBe('released-after-restart');
     expect(localSlowActivity).toHaveBeenCalledTimes(0);
+
+    // The result came from a second attempt of the same durable task, not a
+    // new task: the preserved lease was requeued and redispatched.
+    const settled = await readOnlyTaskLedgerRecord(engine);
+    if (settled?.state !== 'terminal') {
+      throw new Error(`expected a terminal record, got ${JSON.stringify(settled)}`);
+    }
+    expect(settled).toMatchObject({
+      operationId: leasedBeforeStop.operationId,
+      state: 'terminal',
+      disposition: 'resolved',
+      attempt: leasedBeforeStop.attempt + 1,
+    });
+    expect(settled.attemptToken).not.toBe(leasedBeforeStop.attemptToken);
   });
 });

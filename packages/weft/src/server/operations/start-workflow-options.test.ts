@@ -9,6 +9,16 @@ import {
 } from './start-workflow-options.ts';
 
 const FIELD = 'Field "searchAttributes"';
+const VALID_PREVIEW = {
+  token: 'token',
+  scope: 'destructive:workflow-worker-version-binding',
+  workflowId: 'wf-1',
+  previousRoutingGeneration: 1,
+  targetRoutingGeneration: 2,
+  targetWorkflowContractHash: 'sha256:workflow',
+  targetActivityContractsDigest: 'sha256:activities',
+  expiresAt: 1_000,
+} as const;
 
 describe('buildSharedStartWorkflowOptions', () => {
   it('returns an empty options object when no fields are supplied', () => {
@@ -52,6 +62,41 @@ describe('buildSharedStartWorkflowOptions', () => {
     );
 
     expect(options.searchAttributes).toEqual({ customerId: 'acme' });
+  });
+
+  it('coerces a worker start override preview from transport input', () => {
+    const options = buildSharedStartWorkflowOptions(
+      { workerStartOverridePreview: VALID_PREVIEW },
+      undefined,
+    );
+
+    expect(options.workerStartOverridePreview).toEqual(VALID_PREVIEW);
+  });
+
+  it('rejects malformed worker start override previews at the transport boundary', () => {
+    expect(() =>
+      buildSharedStartWorkflowOptions({ workerStartOverridePreview: 'nope' }, undefined),
+    ).toThrow('Field "workerStartOverridePreview" must be an object');
+    expect(() =>
+      buildSharedStartWorkflowOptions(
+        { workerStartOverridePreview: { ...VALID_PREVIEW, scope: 'wrong' } },
+        undefined,
+      ),
+    ).toThrow(
+      'Field "workerStartOverridePreview".scope must be "destructive:workflow-worker-version-binding"',
+    );
+    expect(() =>
+      buildSharedStartWorkflowOptions(
+        { workerStartOverridePreview: { ...VALID_PREVIEW, expiresAt: -1 } },
+        undefined,
+      ),
+    ).toThrow('Field "workerStartOverridePreview".expiresAt must be a non-negative integer');
+    expect(() =>
+      buildSharedStartWorkflowOptions(
+        { workerStartOverridePreview: { ...VALID_PREVIEW, token: '' } },
+        undefined,
+      ),
+    ).toThrow('Field "workerStartOverridePreview".token must be a non-empty string');
   });
 
   it('ignores onTerminalConflict — it is not part of the shared transport surface', () => {

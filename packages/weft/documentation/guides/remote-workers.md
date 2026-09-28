@@ -233,7 +233,7 @@ Renewal is capped by the attempt's absolute deadline — a fixed ceiling on tota
 
 An activity can attach progress details to its heartbeat, exactly the way an inline (in-process) activity uses `ActivityContext.heartbeat()` — this is the same public surface, not a second heartbeat API:
 
-```typescript
+```typescript partial
 const worker = new RemoteWorker({
   /* ... */
   workflows: {
@@ -262,7 +262,7 @@ The server can request cancellation of an in-flight remote activity — for exam
 
 An activity observes cancellation the same way on both transports:
 
-```typescript
+```typescript partial
 const worker = new RemoteWorker({
   /* ... */
   workflows: {
@@ -347,9 +347,16 @@ import { LongPollWorker } from '@lostgradient/weft';
 
 const worker = new LongPollWorker({
   serverUrl: 'http://weft-server:7233',
-  activities: {
-    transcribe: async (input) => {
-      /* ... */
+  deploymentName: 'gpu-transcription-worker',
+  buildId: '2026-09-28',
+  workflows: {
+    transcription: {
+      name: 'transcription',
+      activities: {
+        transcribe: async (input) => {
+          /* ... */
+        },
+      },
     },
   },
   concurrency: 5,
@@ -360,11 +367,11 @@ const worker = new LongPollWorker({
 worker.start();
 ```
 
-The long-poll worker runs a loop: it `GET`s `/api/v1/tasks/:queue?activity=<name>&timeout=<milliseconds>` with one repeated `activity` query parameter per registered activity, blocks for up to `pollTimeout` milliseconds waiting for a task, executes it, and `POST`s the result to `/api/v1/tasks/:queue/result`. It respects the concurrency limit by pausing the poll loop when all slots are in use.
+The long-poll worker first `POST`s its canonical manifest to `/api/v1/worker-sessions`. The server accepts the registration, assigns an opaque `sessionId`, returns a one-time `sessionToken`, and records the authoritative queue from the registration body. After that, the worker sends `Weft-Worker-Session-Token: <sessionToken>` while it `GET`s `/api/v1/worker-sessions/:sessionId/tasks?timeout=<milliseconds>`, blocks for up to `pollTimeout` milliseconds waiting for a task whose activity is allowed by the accepted manifest, executes it, and `POST`s the result to `/api/v1/worker-sessions/:sessionId/results`. It respects the concurrency limit by pausing the poll loop when all slots are in use. `stop()` sends `DELETE /api/v1/worker-sessions/:sessionId` after aborting local work and suspending result retries.
 
 The poll response includes a synthetic `workerId` and per-claim `attemptToken`. The result body echoes both fields so the server can reject stale completions after a visibility timeout or re-claim. The protocol details live in the [HTTP long-poll transport reference](../reference/remote-worker-protocol.md#http-long-poll-transport).
 
-For each in-flight activity, `LongPollWorker` also `POST`s a heartbeat to `/api/v1/tasks/:queue/heartbeat` on a `heartbeatIntervalMs` interval (default 10 seconds, matching `HeartbeatManager`'s WebSocket-transport default) — COR-230's long-poll counterpart to the WebSocket transport's `activityHeartbeat`, renewing the same attempt-fenced visibility deadline through the identical server-side `renewAttemptLease` transition. Long-poll has no server-to-worker push channel, so a server-initiated cancellation (`WeftServer.cancelTask`) is signaled back on the heartbeat response's `cancelled` field instead of a pushed control message; `LongPollWorker` aborts that activity's own `AbortController` — keyed by `(operationId, attemptToken)`, exactly like `RemoteWorker`'s — and reports `status: "cancelled"` on its next result.
+For each in-flight activity, `LongPollWorker` also `POST`s a heartbeat to `/api/v1/worker-sessions/:sessionId/heartbeat` on a `heartbeatIntervalMs` interval (default 10 seconds, matching `HeartbeatManager`'s WebSocket-transport default) — COR-230's long-poll counterpart to the WebSocket transport's `activityHeartbeat`, renewing the same attempt-fenced visibility deadline through the identical server-side `renewAttemptLease` transition. Long-poll has no server-to-worker push channel, so a server-initiated cancellation (`WeftServer.cancelTask`) is signaled back on the heartbeat response's `cancelled` field instead of a pushed control message; `LongPollWorker` aborts that activity's own `AbortController` — keyed by `(operationId, attemptToken)`, exactly like `RemoteWorker`'s — and reports `status: "cancelled"` on its next result.
 
 Error handling for polling is built in—network failures trigger a 1-second backoff, abort errors during shutdown are suppressed, and a missed heartbeat is simply retried on the next interval tick. Result _delivery_ has its own, separate durability story — see the next section.
 

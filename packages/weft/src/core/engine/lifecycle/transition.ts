@@ -14,6 +14,7 @@ import { loadWorkflowState } from '../storage-io.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
 import {
+  applyForkWorkerBindingInheritance,
   buildForkBatchOperations,
   buildForkCatalogEntryCondition,
   buildForkCheckpoint,
@@ -420,6 +421,11 @@ export async function fork(
       callbacks,
       persistedRevision,
     );
+    applyForkWorkerBindingInheritance(forkState, sourceState, {
+      persistedRevision,
+      forkedAt,
+      checkpointId: `fork:${sourceWorkflowId}:${String(sourceCheckpoint.step)}`,
+    });
     const forkCheckpoint = buildForkCheckpoint(
       internals,
       workflowId,
@@ -443,9 +449,7 @@ export async function fork(
     let forkStarted = false;
     try {
       const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
-      // Fork plants a new workflow run from an existing checkpoint — engine-generated
-      // workflow state. Fence it on the lease epoch (issue #470 Step 2) so a deposed
-      // engine cannot create a phantom forked run in the successor's store.
+      // Fence fork creation so a deposed engine cannot create a phantom run.
       await commitFencedEngineWrite(
         internals,
         workflowId,

@@ -26,6 +26,7 @@ export type WorkerDiagnosticsOperationTypes = {
           readonly queue: string;
           readonly sessionGeneration: number;
           readonly startedAt: number;
+          readonly transport: 'websocket' | 'long-poll';
           readonly workerId: string;
         };
       } | null;

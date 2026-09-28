@@ -1400,9 +1400,10 @@ describe('crash recovery', () => {
     await engine1.start('sqlite-resume', null, { id: 'wf-sqlite' });
     await flush();
 
-    // Clear in-memory state (simulate crash) without disposing storage
-    // We can't dispose engine1 because it would try to close storage
-    // Instead, create engine2 with the same storage directly
+    // Simulate the crash: dispose engine1's in-memory state (disposal never
+    // touches storage — the caller owns `storage`'s lifecycle) and create
+    // engine2 against the same storage directly.
+    engine1[Symbol.dispose]();
     const engine2 = new Engine({ storage });
     engine2.register(makeWorkflow());
 
@@ -1413,6 +1414,8 @@ describe('crash recovery', () => {
     await engine2.signal('wf-sqlite', 'go', null);
     const result = await handles[0]!.result();
     expect(result).toBe('sqlite-recovered');
+
+    engine2[Symbol.dispose]();
   });
 
   it('Engine.create recovers by default against durable storage and resumes a parked workflow', async () => {

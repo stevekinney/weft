@@ -6,6 +6,7 @@
  */
 
 import type { ConstraintDefinition } from '../constraint.ts';
+import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
 import { WeftError } from '../weft-error.ts';
 import type { ActivityDefinition, ActivityFunction } from './activity.ts';
 import { clonePlain } from './clone-plain.ts';
@@ -102,6 +103,7 @@ export interface WorkflowBuilderOptions<
   finalizer?: AnyActivityDefinition;
   inputSchema?: DefinitionSchema<unknown, unknown>;
   outputSchema?: DefinitionSchema<unknown, unknown>;
+  workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
   /**
    * Explicitly forbidden: `workflow({ name }).execute(handler)` is the only
    * way to attach a handler. The builder rejects an in-options `handler`
@@ -269,6 +271,7 @@ export class WorkflowBuilderImpl<TName extends string> {
       ...(this.#options.outputSchema !== undefined
         ? { outputSchema: this.#options.outputSchema }
         : {}),
+      ...workerVersioningPolicyField(this.#options.workerVersioningPolicy),
     };
 
     return Object.freeze(built);
@@ -300,6 +303,12 @@ function freezeRecord<T extends object>(
 
 function isFunction(value: unknown): value is (...arguments_: unknown[]) => unknown {
   return typeof value === 'function';
+}
+
+function workerVersioningPolicyField(policy: WorkflowWorkerVersioningPolicy | undefined): {
+  workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
+} {
+  return policy === undefined ? {} : { workerVersioningPolicy: policy };
 }
 
 function hasExecuteProperty(

@@ -39,7 +39,7 @@ const bindings = [getWorkflowRestBinding];
 
 describe('weft.workflows.get', () => {
   it('returns the workflow state on the happy path', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', { hello: 'world' }, {});
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -55,7 +55,7 @@ describe('weft.workflows.get', () => {
   });
 
   it('returns 404 with the error-message body when the workflow does not exist', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const request = new Request('http://localhost/v1/workflows/does-not-exist', { method: 'GET' });
     const response = await handleRequest(request, engine, {
@@ -71,7 +71,7 @@ describe('weft.workflows.get', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForWorkflowStatus(engine, handle.id, 'running');
 

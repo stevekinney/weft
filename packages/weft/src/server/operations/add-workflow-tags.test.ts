@@ -23,7 +23,7 @@ const bindings = [addWorkflowTagsRestBinding];
 
 describe('weft.workflows.tags.add', () => {
   it('adds tags to a workflow and returns the ok response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('echo', 'payload', { id: 'add-tags-success' });
     await handle.result();
 
@@ -43,7 +43,7 @@ describe('weft.workflows.tags.add', () => {
   });
 
   it('returns 400 when tag validation fails in invoke', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('echo', 'payload', { id: 'add-tags-invalid' });
     await handle.result();
 
@@ -61,7 +61,7 @@ describe('weft.workflows.tags.add', () => {
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalAddTags = engine.addTags.bind(engine);
     engine.addTags = async () => {
       throw new Error('workflow not found');
@@ -88,7 +88,7 @@ describe('weft.workflows.tags.add', () => {
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalAddTags = engine.addTags.bind(engine);
     engine.addTags = async () => {
       throw new Error('boom');

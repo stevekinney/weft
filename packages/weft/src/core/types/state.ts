@@ -1,4 +1,6 @@
+import type { WorkflowWorkerBindingRecord } from '../../worker/versioning-policy.ts';
 import type { AtomicStateOptions } from '../atomic-state.ts';
+import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { ActivityCallOptions } from './activity.ts';
 import type { CheckpointState } from './checkpoint.ts';
@@ -101,6 +103,9 @@ export interface WorkflowState {
   forkedFrom?: ForkLineage;
   /** Immediate terminal run displaced when this run was created with `start-new`. */
   restartedFrom?: RestartLineage;
+  /** Durable worker binding and bounded upgrade history for this run. */
+  workerBinding?: WorkflowWorkerBindingRecord;
+  workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
 }
 
 /**

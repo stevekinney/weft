@@ -128,7 +128,18 @@ export function registerSignalWaiter(
 ): void {
   internals.signalWaiters.set(waiterKey, resolve);
   trackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
+  notifySignalWaitReadyForTesting(internals, workflowId);
+}
 
+/**
+ * Wake every test waiting on `ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING` for
+ * `workflowId`. Called when the workflow registers a signal waiter and when an
+ * inline workflow parks on a signal wait, the two ways it can start waiting.
+ */
+export function notifySignalWaitReadyForTesting(
+  internals: EngineInternals,
+  workflowId: string,
+): void {
   const readinessWaiters = internals.signalWaiterReadyWaitersForTesting?.get(workflowId);
   if (readinessWaiters !== undefined) {
     internals.signalWaiterReadyWaitersForTesting?.delete(workflowId);

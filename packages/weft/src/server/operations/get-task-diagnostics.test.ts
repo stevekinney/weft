@@ -21,9 +21,9 @@ import {
 describe('weft.tasks.diagnostics', () => {
   it('identifies stuck queued tasks, stale inflight tasks, retry storms, and capacity saturation', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    using engine = createEngine(storage);
     const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await putLedgerRecord(
       storage,
@@ -136,9 +136,9 @@ describe('weft.tasks.diagnostics', () => {
 
   it('lists task-result dead letters (the ledger has no separate guarded inflight record to conflict with)', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    using engine = createEngine(storage);
     const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await putLedgerRecord(
       storage,
@@ -186,9 +186,9 @@ describe('weft.tasks.diagnostics', () => {
 
   it('reports no diagnostics for a terminal record — no attempt-count history survives resolution', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    using engine = createEngine(storage);
     const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await putLedgerRecord(storage, terminalFixture({ operationId: 'resolved-op' }));
 
@@ -216,9 +216,9 @@ describe('weft.tasks.diagnostics', () => {
 
   it('skips a queued record whose availableAt is still in the future — scheduled, not stuck', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    using engine = createEngine(storage);
     const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await putLedgerRecord(
       storage,
@@ -245,9 +245,9 @@ describe('weft.tasks.diagnostics', () => {
 
   it('includes expected delayed tasks only when requested and uses a strict availability boundary', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    using engine = createEngine(storage);
     const registry = new WorkerRegistry();
-    const taskQueue = new TaskQueue();
+    using taskQueue = new TaskQueue();
 
     await putLedgerRecord(
       storage,

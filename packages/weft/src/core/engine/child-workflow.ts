@@ -1,3 +1,4 @@
+import type { WorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import {
@@ -96,6 +97,7 @@ type PendingChildExecutionContext = {
   pendingExecutionStateOwnerId: string | null;
   pendingParentWorkflowId: string;
   pendingParentWorkflowExecutionToken: string | undefined;
+  pendingParentWorkerBinding: WorkflowWorkerBinding | undefined;
 };
 
 function applyPendingChildExecutionContext(
@@ -107,6 +109,7 @@ function applyPendingChildExecutionContext(
   internals.pendingExecutionStateOwnerId = context.pendingExecutionStateOwnerId;
   internals.pendingParentWorkflowId = context.pendingParentWorkflowId;
   internals.pendingParentWorkflowExecutionToken = context.pendingParentWorkflowExecutionToken;
+  internals.pendingParentWorkerBinding = context.pendingParentWorkerBinding;
 }
 
 function clearPendingChildExecutionContext(
@@ -129,6 +132,9 @@ function clearPendingChildExecutionContext(
     internals.pendingParentWorkflowExecutionToken === context.pendingParentWorkflowExecutionToken
   ) {
     internals.pendingParentWorkflowExecutionToken = undefined;
+  }
+  if (internals.pendingParentWorkerBinding === context.pendingParentWorkerBinding) {
+    internals.pendingParentWorkerBinding = undefined;
   }
 }
 
@@ -338,6 +344,7 @@ export async function executeChildWorkflow(
       pendingExecutionStateOwnerId: executionStateOwnerId,
       pendingParentWorkflowId: workflowId,
       pendingParentWorkflowExecutionToken: parentState?.workflowExecutionToken,
+      pendingParentWorkerBinding: parentState?.workerBinding?.current,
     };
     const childHandle = await dispatchChildWorkflowStart(
       internals,

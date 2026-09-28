@@ -25,7 +25,7 @@ const bindings = [cancelWorkflowRestBinding];
 
 describe('weft.workflows.cancel', () => {
   it('cancels a workflow and returns 204', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'cancel-success' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
 
@@ -45,7 +45,7 @@ describe('weft.workflows.cancel', () => {
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalCancel = engine.cancel.bind(engine);
     engine.cancel = async () => {
       throw new Error('workflow not found');
@@ -72,7 +72,7 @@ describe('weft.workflows.cancel', () => {
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalCancel = engine.cancel.bind(engine);
     engine.cancel = async () => {
       throw new Error('cancel failed internally');

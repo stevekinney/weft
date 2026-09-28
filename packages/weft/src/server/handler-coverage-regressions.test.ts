@@ -47,7 +47,7 @@ function apiKeyAuth() {
 
 describe('handleRequest coverage regressions', () => {
   it('keeps direct meta routes reserved when a REST binding also matches', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const bindingOperation = defineOperation({
       name: 'weft.test.routeshadow',
       mcpExposable: false,
@@ -80,7 +80,7 @@ describe('handleRequest coverage regressions', () => {
   });
 
   it('returns 400 when a conflicting REST binding path parameter cannot be decoded', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const bindingOperation = defineOperation({
       name: 'weft.test.badroute',
       mcpExposable: false,
@@ -117,7 +117,7 @@ describe('handleRequest coverage regressions', () => {
   });
 
   it('maps malformed fault-like throws to internal server errors', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const bindingOperation = defineOperation({
       name: 'weft.test.malformedfault',
       mcpExposable: false,
@@ -152,7 +152,7 @@ describe('handleRequest coverage regressions', () => {
   });
 
   it('maps schedule error messages to their canonical HTTP fault statuses', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     engine.getSchedule = async () => {
       throw new Error('Schedule "missing" not found');

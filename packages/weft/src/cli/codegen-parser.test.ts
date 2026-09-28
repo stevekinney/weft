@@ -82,6 +82,12 @@ describe('codegen parser', () => {
     expect(parsed.json).toBe(false);
   });
 
+  it('rejects unknown codegen targets', () => {
+    expect(() =>
+      parseCliArguments(['codegen', '--from', 'r.json', '--out', 'o.d.ts', '--target', 'schema']),
+    ).toThrow(/--target must be "registry" or "worker"/);
+  });
+
   it('captures --from, --out, --server, --token in the parsed command', () => {
     const parsed = parseCliArguments([
       'codegen',

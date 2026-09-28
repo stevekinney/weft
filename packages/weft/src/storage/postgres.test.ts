@@ -1,8 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import {
-  createPostgresTestServer,
-  postgresTestDatabase,
-  type PostgresTestDatabase,
+  openPostgresTestDatabase,
+  requireOpenedPostgresTestDatabase,
 } from './postgres-server.test-support.ts';
 
 import { createPGliteTestFixture } from './pglite.test-support.ts';
@@ -163,25 +162,23 @@ describe('PostgresStorage', () => {
   });
 });
 
-// Skip only when no database is obtainable at all — neither a supplied
-// `WEFT_TEST_POSTGRES_URL` nor the client binaries to spawn a disposable cluster.
-// Where a database exists this suite must run: it is the only place the real `pg`
-// wire protocol is exercised end to end.
-describe.skipIf(postgresTestDatabase === null)('PostgresStorage (live pg)', () => {
-  let database: PostgresTestDatabase;
-  beforeAll(async () => {
-    database = await createPostgresTestServer();
-  });
-  afterAll(async () => {
-    if (database) await database[Symbol.asyncDispose]();
-  });
+// Opened at load, before any hook is timed — see `openPostgresTestDatabase`. Skip only
+// when no database is obtainable at all — neither a supplied `WEFT_TEST_POSTGRES_URL`
+// nor the client binaries to spawn a disposable cluster. Where a database exists this
+// suite must run: it is the only place the real `pg` wire protocol is exercised end to
+// end.
+const database = await openPostgresTestDatabase();
+
+describe.skipIf(database === null)('PostgresStorage (live pg)', () => {
+  const live = () => requireOpenedPostgresTestDatabase(database);
+  afterAll(() => live()[Symbol.asyncDispose]());
   // A dedicated table so a mistakenly-supplied production URL can't be wiped by the
   // reset below — and so the live suite exercises the `table` option over the real
   // driver for free.
   const LIVE_TABLE = 'weft_test_kv';
 
   async function createLivePostgresStorage(): Promise<PostgresStorage> {
-    const storage = new PostgresStorage({ url: database.url, table: LIVE_TABLE });
+    const storage = new PostgresStorage({ url: live().url, table: LIVE_TABLE });
     // Reset only this suite's table so each case starts from an empty store.
     await storage.put('__reset__', new Uint8Array([0]));
     await storage.deletePrefix('');

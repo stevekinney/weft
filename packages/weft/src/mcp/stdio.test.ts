@@ -127,11 +127,12 @@ async function expectRejectedStartupTokenAdmission({
 }): Promise<void> {
   const input = controllableInput();
   const output = collectingOutput();
+  const engine = createEngine();
 
   const options = {
     input: input.stream,
     output: output.stream,
-    engine: createEngine(),
+    engine,
     admission: { kind: 'startup-token', token: 'secret-token' },
   } as const;
   const session = runMcpStdioSession(
@@ -147,14 +148,16 @@ async function expectRejectedStartupTokenAdmission({
   const line = await waitForLine(output, (candidate) => candidate.error !== undefined);
   expect(line).toMatchObject(expectedLine);
   expect(await session).toEqual({ exitCode: 2, reason: expectedReason });
+  engine[Symbol.dispose]();
 }
 
 describe('runMcpStdioSession', () => {
   it('rejects empty startup-token admission before reading frames', async () => {
+    const engine = createEngine();
     const result = await runMcpStdioSession({
       input: controllableInput().stream,
       output: collectingOutput().stream,
-      engine: createEngine(),
+      engine,
       admission: { kind: 'startup-token', token: '   ' },
     });
 
@@ -162,6 +165,7 @@ describe('runMcpStdioSession', () => {
       exitCode: 2,
       reason: 'MCP stdio startup token must be non-empty',
     });
+    engine[Symbol.dispose]();
   });
 
   it('accepts startup-token admission and then runs the MCP initialize handshake', async () => {
@@ -198,6 +202,7 @@ describe('runMcpStdioSession', () => {
 
     input.close();
     expect(await session).toEqual({ exitCode: 0 });
+    engine[Symbol.dispose]();
   });
 
   it('emits tools/list_changed and lists dynamically registered workflow tools after session start', async () => {
@@ -255,6 +260,7 @@ describe('runMcpStdioSession', () => {
 
     input.close();
     expect(await session).toEqual({ exitCode: 0 });
+    engine[Symbol.dispose]();
   });
 
   it('rejects startup-token admission for mismatch, malformed JSON, missing token, and oversize frames', async () => {
@@ -335,6 +341,7 @@ describe('runMcpStdioSession', () => {
 
     input.close();
     expect(await session).toEqual({ exitCode: 0 });
+    engine[Symbol.dispose]();
   });
 
   it('rejects regular MCP traffic until initialize and notifications/initialized complete', async () => {
@@ -379,6 +386,7 @@ describe('runMcpStdioSession', () => {
 
     input.close();
     expect(await session).toEqual({ exitCode: 0 });
+    engine[Symbol.dispose]();
   });
 
   it('initializes, lists tools, calls workflow tools, and exits cleanly', async () => {
@@ -428,6 +436,7 @@ describe('runMcpStdioSession', () => {
     input.close();
     const result = await session;
     expect(result.exitCode).toBe(0);
+    engine[Symbol.dispose]();
   });
 
   it('keeps resource subscriptions alive after the idle timeout when stdio is active', async () => {
@@ -491,6 +500,7 @@ describe('runMcpStdioSession', () => {
     input.close();
     const result = await session;
     expect(result.exitCode).toBe(0);
+    engine[Symbol.dispose]();
   });
 
   it('processes cancellation notifications while a workflow tool call is in flight', async () => {
@@ -555,16 +565,18 @@ describe('runMcpStdioSession', () => {
     input.close();
     const result = await session;
     expect(result.exitCode).toBe(0);
+    engine[Symbol.dispose]();
   });
 
   it('ignores invalid cancellation notifications and keeps the stdio session alive', async () => {
     const input = controllableInput();
     const output = collectingOutput();
+    const engine = createEngine();
 
     const session = runMcpStdioSession({
       input: input.stream,
       output: output.stream,
-      engine: createEngine(),
+      engine,
       admission: { kind: 'allow-unauthenticated-local-admin' },
     });
 
@@ -593,5 +605,6 @@ describe('runMcpStdioSession', () => {
 
     input.close();
     expect(await session).toEqual({ exitCode: 0 });
+    engine[Symbol.dispose]();
   });
 });

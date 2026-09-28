@@ -278,6 +278,11 @@ describe('reconcileOrphanedRecords — queued redispatch', () => {
       intervalMs: 10,
       label: 'orphaned queued task to reach the long-poll queue',
     });
+
+    // The redispatch armed a pending-task expiration timer (default TTL 5
+    // minutes) on context.taskQueue; this bare fixture has no server
+    // shutdown path to clear it on its own.
+    context.taskQueue[Symbol.dispose]();
   });
 
   it('skips a queued record already tracked in-memory instead of redispatching it again', async () => {
@@ -303,6 +308,10 @@ describe('reconcileOrphanedRecords — queued redispatch', () => {
     // No redispatch scheduled — scheduleDelayedDispatch always registers a
     // pendingTimers entry, so an empty set proves the early return fired.
     expect(context.pendingTimers.size).toBe(0);
+
+    // The manually-enqueued task above armed a pending-task expiration timer
+    // (default TTL 5 minutes) on context.taskQueue.
+    context.taskQueue[Symbol.dispose]();
   });
 });
 

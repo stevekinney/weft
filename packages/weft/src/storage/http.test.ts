@@ -286,7 +286,7 @@ describe('HTTPStorage', () => {
 
   it('talks to the real storage REST handlers end to end', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    await using engine = new Engine({ storage: rawStorage });
     const restoreFetch = installFetch((input, init) =>
       handleRequest(new Request(input, init), engine, adminStorageOptions()),
     );
@@ -323,7 +323,7 @@ describe('HTTPStorage', () => {
 
   it('derives has/keys/count/deletePrefix/deleteRange from scan and batch end to end', async () => {
     const rawStorage = new MemoryStorage();
-    const engine = new Engine({ storage: rawStorage });
+    await using engine = new Engine({ storage: rawStorage });
     const restoreFetch = installFetch((input, init) =>
       handleRequest(new Request(input, init), engine, adminStorageOptions()),
     );
@@ -371,7 +371,7 @@ describe('HTTPStorage', () => {
   });
 
   it('surfaces 403 for unscoped non-admin REST storage access', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    await using engine = new Engine({ storage: new MemoryStorage() });
     const restoreFetch = installFetch((input, init) =>
       handleRequest(new Request(input, init), engine, {
         authContext: {

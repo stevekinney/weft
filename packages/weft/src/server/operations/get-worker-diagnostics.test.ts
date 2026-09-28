@@ -85,6 +85,7 @@ describe('weft.workers.diagnostics — REST GET /v1/workers/:workerId/diagnostic
     expect(body.worker.instance).toEqual({
       workerId: 'worker-1',
       queue: 'payments',
+      transport: 'websocket',
       health: 'active',
       connectedAt: expect.any(Number),
       startedAt: expect.any(Number),

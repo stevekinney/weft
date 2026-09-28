@@ -52,7 +52,7 @@ const bindings = [signalWorkflowRestBinding];
 
 describe('weft.workflows.signal', () => {
   it('signals a workflow and returns the ok response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-success' });
     await waitForStatus(engine, handle.id, 'running');
 
@@ -75,7 +75,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('deduplicates REST signalId retries and returns the accepted response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('two-signal', null, { id: 'signal-idempotent-rest' });
     await waitForStatus(engine, handle.id, 'running');
 
@@ -121,7 +121,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('rejects malformed REST signalId values instead of falling back to non-idempotent delivery', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-invalid-signal-id' });
     await waitForStatus(engine, handle.id, 'running');
 
@@ -142,7 +142,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('rejects oversize REST signalId values before delivery', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-oversize-signal-id' });
     await waitForStatus(engine, handle.id, 'running');
 
@@ -163,7 +163,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('tolerates an invalid or missing JSON body and treats the payload as optional', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-invalid-json' });
     await waitForStatus(engine, handle.id, 'running');
 
@@ -186,7 +186,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalSignal = engine.signal.bind(engine);
     engine.signal = async () => {
       throw new Error('Workflow not found');
@@ -213,7 +213,7 @@ describe('weft.workflows.signal', () => {
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalSignal = engine.signal.bind(engine);
     engine.signal = async () => {
       throw new Error('unexpected signal error');

@@ -79,7 +79,11 @@ describe('TaskQueue scheduling policies', () => {
     });
 
     it('peekPending reflects the LIFO ordering', () => {
-      const queue = new TaskQueue({ schedulingPolicy: 'lifo' });
+      // Unlike the other scheduling tests, none of these enqueued tasks are
+      // ever polled/claimed, so their pending-task expiration timers are
+      // never cancelled by poll()'s own #cancelExpiration call. `using`
+      // disposes the queue at the end of the test instead, clearing them.
+      using queue = new TaskQueue({ schedulingPolicy: 'lifo' });
       queue.enqueue('default', makeTask('a'));
       queue.enqueue('default', makeTask('b'));
       queue.enqueue('default', makeTask('c'));

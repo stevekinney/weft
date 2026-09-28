@@ -22,7 +22,7 @@ const exclaimStage = workflow({ name: 'exclaim-stage' }).execute(exclaimStageFn)
 
 describe('workflow composition operators', () => {
   it('Track 7c: ctx.pipe runs a 3-stage pipeline using registered workflow functions', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     engine.register(trimStage);
     engine.register(upperStage);
@@ -43,7 +43,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.pipe preserves completed stages across recovery and allows compensation after a middle-stage failure', async () => {
-    const engine = new TestEngine({ startTime: 0 });
+    await using engine = new TestEngine({ startTime: 0 });
 
     let firstStageRuns = 0;
     let secondStageRuns = 0;
@@ -101,7 +101,7 @@ describe('workflow composition operators', () => {
     const originalHandle = await engine.start('pipeline-failure-parent', 'order-123');
     await engine.advanceTime(0);
 
-    const recovered = engine.recover();
+    await using recovered = engine.recover();
     recovered.register(firstStage);
     recovered.register(secondStage);
     recovered.register(unreachableStage);
@@ -118,7 +118,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.map returns results in input order', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const doubleStage = workflow({ name: 'double-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -140,7 +140,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: user-provided child workflow ids fail fast when the existing child does not match the requested input', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const echoStage = workflow({ name: 'echo-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -171,7 +171,7 @@ describe('workflow composition operators', () => {
   });
 
   it('child workflow reuse does not cross execution-state owners', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const echoStage = workflow({ name: 'echo-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -206,7 +206,7 @@ describe('workflow composition operators', () => {
   });
 
   it('child workflow id collisions do not leak nesting depth into later workflow starts', async () => {
-    const engine = new Engine({ maxNestingDepth: 1 });
+    await using engine = new Engine({ maxNestingDepth: 1 });
 
     const echoStage = workflow({ name: 'echo-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -254,7 +254,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.map honors the concurrency limit for admitted child workflows', async () => {
-    const engine = new TestEngine({ startTime: 0 });
+    await using engine = new TestEngine({ startTime: 0 });
 
     const delayedStage = workflow({ name: 'delayed-stage' }).execute(async function* (
       ctx: WorkflowContext,
@@ -282,12 +282,10 @@ describe('workflow composition operators', () => {
       .toSorted();
 
     expect(admittedChildIds).toEqual(['concurrency-parent:map:0:0', 'concurrency-parent:map:0:1']);
-
-    engine[Symbol.dispose]();
   });
 
   it('Track 7c: ctx.map recovery preserves later step indices when batching by concurrency', async () => {
-    const engine = new TestEngine({ startTime: 0 });
+    await using engine = new TestEngine({ startTime: 0 });
 
     const childRuns: number[] = [];
 
@@ -319,7 +317,7 @@ describe('workflow composition operators', () => {
     await engine.advanceTime('1s');
     await engine.advanceTime('1s');
 
-    const recovered = engine.recover();
+    await using recovered = engine.recover();
     recovered.register(delayedStage);
     recovered.register(mapRecoveryParent);
 
@@ -332,7 +330,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.map still enforces child-workflow nesting depth inside parallel sub-operations', async () => {
-    const engine = new Engine({ maxNestingDepth: 2 });
+    await using engine = new Engine({ maxNestingDepth: 2 });
 
     engine.register(
       workflow({ name: 'recursive-map' }).execute(async function* (
@@ -354,7 +352,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.reduce folds sequentially and handles an empty array', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     engine.register(
       workflow({ name: 'fold-stage' }).execute(async function* (
@@ -382,7 +380,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: nested composition works with ctx.pipe inside ctx.map', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const incrementStage = workflow({ name: 'increment-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -420,7 +418,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: ctx.pipe rejects unregistered workflow functions even when the function name matches a registered type', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const registeredStage = workflow({ name: 'registered-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -457,7 +455,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: empty ctx.map and ctx.reduce are side-effect free even for unregistered workflow functions', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const registeredStage = workflow({ name: 'registered-stage' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -492,7 +490,7 @@ describe('workflow composition operators', () => {
   });
 
   it('Track 7c: child workflow reuse ignores plain-object key ordering in inputs', async () => {
-    const engine = new TestEngine();
+    await using engine = new TestEngine();
 
     const echoStage = workflow({ name: 'echo-stage' }).execute(async function* (
       _ctx: WorkflowContext,

@@ -45,6 +45,7 @@ function createInternals(
     eventLogHeads: new Map(),
     handleCache: new Map(),
     heartbeatDetails: new Map(),
+    inFlightPurgeWrites: new Set(),
     lastHeartbeatDetailsByStep: new Map(),
     leaseManager: null,
     workflowClaimRegistry: null,

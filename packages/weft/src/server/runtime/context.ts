@@ -2,6 +2,7 @@ import type { ServerWebSocket } from 'bun';
 
 import type { McpSessionManager } from '../../mcp/session.ts';
 import type { MetricsCollector } from '../../observability/metrics.ts';
+import type { WorkerManifest } from '../../worker/manifest/index.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
 import type { Authenticator, RateLimiter } from '../authentication.ts';
 import type { DeadlineTracker } from '../deadline-tracker.ts';
@@ -10,6 +11,7 @@ import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import type { JsonRpcWebSocketSession } from '../json-rpc-websocket.ts';
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
+import type { Principal } from '../principal.ts';
 import type { createLiveOperationRegistry, createLiveRestBindings } from '../rest-bindings.ts';
 import type { TaskQueue } from '../task-queue.ts';
 import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
@@ -27,6 +29,20 @@ import type { ResolvedCorsPolicy } from './cors.ts';
  */
 export type TaskLedgerRecoveryGate = Readonly<{ ready: Promise<void> }>;
 
+export type LongPollWorkerSession = Readonly<{
+  sessionId: string;
+  credential: string;
+  principal: Principal | undefined;
+  queue: string;
+  activities: readonly string[];
+  concurrency: number;
+  manifest: WorkerManifest;
+  acceptedManifestDigest: string;
+  sessionGeneration: number;
+  createdAt: number;
+  lastHeartbeatAt: number;
+}>;
+
 /**
  * Internal closure state for a single `serve()` invocation.
  *
@@ -35,6 +51,7 @@ export type TaskLedgerRecoveryGate = Readonly<{ ready: Promise<void> }>;
  */
 export interface ServerContext {
   readonly registry: WorkerRegistry;
+  readonly longPollWorkerSessions: Map<string, LongPollWorkerSession>;
   readonly taskQueue: TaskQueue;
   readonly workerSockets: Map<string, ServerWebSocket<WebSocketData>>;
   readonly streamSockets: Map<string, Set<ServerWebSocket<WebSocketData>>>;
@@ -93,14 +110,22 @@ export interface ServerContext {
   readonly processingOperations: Set<string>;
   /** Mutex: prevents concurrent reconciliation scans from running simultaneously. */
   reconciliationRunning: boolean;
+  /**
+   * Long-poll queues a drain is currently moving onto WebSocket workers, each
+   * with a flag a trigger sets when it arrives mid-drain — see
+   * `drainLongPollQueue` in `long-poll-drain.ts`.
+   */
+  readonly longPollDrains: Map<string, { rerun: boolean }>;
   /** Startup task-ledger recovery gate — see {@link TaskLedgerRecoveryGate}. */
   readonly taskLedgerRecovery: TaskLedgerRecoveryGate;
   /**
    * Set once `server.stop()`'s timer-clearing disposer has run. Startup
-   * recovery's scan loop and `scheduleDelayedDispatch` both check this before
-   * doing further work so a still-running recovery scan (or a reconciliation
-   * pass racing shutdown) cannot arm a new timer or issue a durable write
-   * after `pendingTimers` has already been cleared.
+   * recovery's scan loop, `scheduleDelayedDispatch`, the worker socket close
+   * handler, and `runWorkerDisconnectRequeue` all check this before doing
+   * further work so a still-running recovery scan, a reconciliation pass
+   * racing shutdown, or a worker socket closed by the stop itself cannot arm
+   * a new timer or issue a durable write after `pendingTimers` has already
+   * been cleared.
    */
   stopping: boolean;
 }

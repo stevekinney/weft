@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from 'bun:test';
+import { afterAll, describe, expect, it, spyOn } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -11,6 +11,10 @@ import {
 
 describe('json-rpc transport helpers', () => {
   const engine = new Engine({ storage: new MemoryStorage() });
+
+  afterAll(() => {
+    engine[Symbol.dispose]();
+  });
 
   it('returns undefined when the websocket upgrade succeeds', () => {
     const response = finalizeWebSocketUpgrade(

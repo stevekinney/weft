@@ -45,7 +45,7 @@ const bindings = [purgeWorkflowsRestBinding];
 
 describe('weft.workflows.purge', () => {
   it('purges terminal workflows that match the provided filter', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const firstHandle = await engine.start('echo', 'first', { id: 'purge-selected-a' });
     const secondHandle = await engine.start('echo', 'second', { id: 'purge-selected-b' });
@@ -80,7 +80,7 @@ describe('weft.workflows.purge', () => {
   });
 
   it('treats an omitted filter as unfiltered', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const handle = await engine.start('echo', 'delete-me', { id: 'purge-unfiltered' });
     await handle.result();
@@ -97,7 +97,7 @@ describe('weft.workflows.purge', () => {
   });
 
   it('returns 400 for invalid filter bodies', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     let response = await handleRequest(
       request({
@@ -129,7 +129,7 @@ describe('weft.workflows.purge', () => {
   });
 
   it('maps EngineFailure faults to a 500 response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const failingOperation = defineOperation({
       ...purgeWorkflowsOperation,
       invoke: async () => {

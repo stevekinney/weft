@@ -43,6 +43,7 @@
  */
 
 import { KEYS } from '../../../storage/interface.ts';
+import { resolveWorkflowWorkerStartBinding } from '../../../worker/versioning-policy.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
@@ -79,6 +80,7 @@ import {
   resolveCachedStartRevision,
   resolveStartRevisionUncached,
 } from './start-revision-resolution.ts';
+import { assertServicesSupportedForMode } from './start-services.ts';
 import {
   applyRestartLineage,
   createInitialCheckpoint,
@@ -91,12 +93,8 @@ import {
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
 } from './start-terminal-conflict-purge.ts';
-import {
-  assertServicesSupportedForMode,
-  prepareStartWorkflow,
-  resolveAndReserveStartRegistration,
-  rollbackTransientStartState,
-} from './start.ts';
+import { rollbackTransientStartState } from './start-transient-state.ts';
+import { prepareStartWorkflow, resolveAndReserveStartRegistration } from './start.ts';
 
 /**
  * Everything `launchPreparedWorkflow`/`abandonPreparedWorkflow` need to act
@@ -212,6 +210,16 @@ export async function prepareWorkflow(
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 
+    const workerBinding = registration.workerVersioningPolicy
+      ? await resolveWorkflowWorkerStartBinding(internals.storage, {
+          workflowId,
+          workflowType: type,
+          workflowRevision: revision,
+          policy: registration.workerVersioningPolicy,
+          boundAt: internals.options.getNow(),
+          checkpointId: workflowId,
+        })
+      : undefined;
     const state = createInitialWorkflowState(
       internals,
       workflowId,
@@ -227,6 +235,8 @@ export async function prepareWorkflow(
       undefined,
       callbacks,
       true,
+      registration,
+      workerBinding,
     );
     applyRestartLineage(state, terminalRunToPurge);
     const checkpoint = createInitialCheckpoint(
@@ -273,6 +283,7 @@ export async function prepareWorkflow(
         delayedStartTimer: undefined,
         persistedWorkflowStartHeaders,
         additionalStartOperations: undefined,
+        additionalStartConditions: undefined,
         buildWorkflowConcurrencyStartOperations:
           workflowConcurrency === undefined
             ? undefined

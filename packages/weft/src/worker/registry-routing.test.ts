@@ -2,9 +2,12 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
+  manifestForActivities,
   testWorkerManifest,
 } from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
+import { workerMatchesRequirement } from './registry/routing.ts';
+import type { WorkerInfo } from './registry/types.ts';
 
 /**
  * Register `count` workers on the default queue, all capable of handling
@@ -97,7 +100,7 @@ describe('WorkerRegistry routing policies', () => {
     it('keeps independent cursors per queue', () => {
       const registry = new WorkerRegistry({ policy: 'round-robin' });
       registry.register({
-        manifest: testWorkerManifest(),
+        manifest: manifestForActivities(['sendEmail']),
         acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'a-0',
         queue: 'a',
@@ -105,7 +108,7 @@ describe('WorkerRegistry routing policies', () => {
         concurrency: 10,
       });
       registry.register({
-        manifest: testWorkerManifest(),
+        manifest: manifestForActivities(['sendEmail']),
         acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
         id: 'a-1',
         queue: 'a',
@@ -386,6 +389,87 @@ describe('WorkerRegistry routing policies', () => {
 
       expect(registry.findWorker('welcome.formatGreeting')?.id).toBe('worker-welcome');
       expect(registry.findWorker('other.formatGreeting')?.id).toBe('worker-other');
+    });
+    it('applies exact deployment requirements before activity routing', () => {
+      const worker: WorkerInfo = {
+        id: 'worker',
+        queue: 'default',
+        transport: 'websocket' as const,
+        activities: ['sendEmail'],
+        concurrency: 1,
+        inFlight: 0,
+        connectedAt: 1,
+        lastHeartbeat: 1,
+        startedAt: 1,
+        sessionGeneration: 1,
+        capabilities: {},
+        manifest: manifestForActivities(['sendEmail']),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      };
+      expect(workerMatchesRequirement(worker, {}, 'sendEmail')).toBe(true);
+      expect(workerMatchesRequirement(worker, { deploymentName: 'missing' }, 'sendEmail')).toBe(
+        false,
+      );
+      expect(workerMatchesRequirement(worker, { artifactDigest: 'missing' }, 'sendEmail')).toBe(
+        false,
+      );
+      expect(workerMatchesRequirement(worker, { workflowRevision: 'missing' }, 'sendEmail')).toBe(
+        false,
+      );
+      expect(
+        workerMatchesRequirement(worker, { activityContractHash: 'missing' }, 'sendEmail'),
+      ).toBe(false);
+    });
+  });
+  describe('hasEligibleWorker', () => {
+    it('answers without advancing the round-robin cursor', () => {
+      const { registry, workerIds } = makeRegistryWithWorkers(3, 'sendEmail', {
+        policy: 'round-robin',
+      });
+
+      for (let index = 0; index < 4; index += 1) {
+        expect(registry.hasEligibleWorker('sendEmail', { queue: 'default' })).toBe(true);
+      }
+
+      expect(registry.findWorker('sendEmail')?.id).toBe(workerIds[0]);
+    });
+
+    it('applies capacity, queue, activity, exclusion, and the caller filter', () => {
+      const registry = new WorkerRegistry();
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'busy',
+        queue: 'default',
+        activities: ['sendEmail'],
+        concurrency: 1,
+      });
+      registry.taskAssigned('busy');
+      registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: 'free',
+        queue: 'default',
+        activities: ['sendEmail'],
+        concurrency: 1,
+      });
+
+      expect(registry.hasEligibleWorker('sendEmail', { queue: 'default' })).toBe(true);
+      expect(registry.hasEligibleWorker('sendEmail', { queue: 'other' })).toBe(false);
+      expect(registry.hasEligibleWorker('chargeCard', { queue: 'default' })).toBe(false);
+      expect(
+        registry.hasEligibleWorker('sendEmail', {
+          queue: 'default',
+          excludeWorkerIds: new Set(['free']),
+        }),
+      ).toBe(false);
+      expect(
+        registry.hasEligibleWorker(
+          'sendEmail',
+          { queue: 'default' },
+          (worker) => worker.id !== 'free',
+        ),
+      ).toBe(false);
     });
   });
 });

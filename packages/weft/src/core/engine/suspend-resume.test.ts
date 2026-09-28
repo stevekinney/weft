@@ -12,6 +12,7 @@ import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
   ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING,
   Engine,
 } from './index.ts';
 import { TERMINAL_WORKFLOW_STATUSES } from './termination.ts';
@@ -285,9 +286,7 @@ describe('suspend/resume', () => {
 
     const handle = await engine.start('waits', null, { id: 'sus-waiter' });
     // Parked on waitForSignal('go') → exactly one parked inline workflow.
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
 
     await handle.suspend();
     // Suspend evicted the park marker (and any signal waiter): no wake path left.
@@ -314,9 +313,7 @@ describe('suspend/resume', () => {
     engine.register(queryableWaiter);
 
     const handle = await engine.start('queryable-waits', null, { id: 'sus-query' });
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
 
     // While signal-parked, the query handler resolves (the retained context).
     expect(await engine.query('sus-query', 'phase')).toBe('waiting');
@@ -329,9 +326,7 @@ describe('suspend/resume', () => {
 
     // Resume re-drives from storage; the handler is callable again, then completes.
     await handle.resume();
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow re-parked on waitForSignal after resume',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
     expect(await engine.query('sus-query', 'phase')).toBe('waiting');
 
     await engine.signal('sus-query', 'go');
@@ -353,9 +348,7 @@ describe('suspend/resume', () => {
     engine.register(waiter);
 
     const handle = await engine.start('waits', null, { id: 'sus-race' });
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
 
     let settled = false;
     void handle.result().then(

@@ -4883,7 +4883,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 // Long-poll HTTP endpoints
 // ---------------------------------------------------------------------------
 
-describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/result)', () => {
+describe('task queue leasing endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/result)', () => {
   let engine: Engine;
   let server: WeftServer;
 
@@ -5232,9 +5232,16 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
     const worker = new LongPollWorker({
       serverUrl: server.url,
-      activities: {
-        greet: async (input: unknown) => `Hello, ${String(input)}!`,
+      workflows: {
+        testWorkflow: {
+          name: 'testWorkflow',
+          activities: {
+            greet: async (input: unknown) => `Hello, ${String(input)}!`,
+          },
+        },
       },
+      deploymentName: 'long-poll-end-to-end-test',
+      buildId: 'test-build',
       concurrency: 3,
       pollTimeout: 5000,
     });
@@ -5245,7 +5252,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     // Dispatch a task — no WebSocket workers, so it goes to the queue
     await server.dispatchTask({
       operationId: 'e2e-lp-1',
-      activityName: 'greet',
+      activityName: 'testWorkflow.greet',
       workflowType: 'testWorkflow',
       input: 'World',
     });

@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'bun:test';
+import { afterEach, describe, expect, expectTypeOf, it } from 'bun:test';
 import { z } from 'zod';
 
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
@@ -9,11 +9,14 @@ import {
   catalogUnknownKeyPolicy,
   checkoutInputSchema,
   createEngine,
+  disposeCreatedEngines,
   looseWorkflowWorkflow,
   parsedStartHandle,
   registerCheckoutWorkflow,
 } from './workflow-adapter.test-support.ts';
 import { catalogWorkflow } from './workflow-adapter.ts';
+
+afterEach(disposeCreatedEngines);
 
 describe('catalogWorkflow — execution', () => {
   it('derives authorization input from the explicit Zod schema', () => {

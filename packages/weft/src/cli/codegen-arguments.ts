@@ -26,6 +26,7 @@ type CodegenParsedValues = {
   from?: string;
   token?: string;
   out?: string;
+  target?: string;
   timeout?: string;
   help?: boolean;
   json?: boolean;
@@ -44,9 +45,14 @@ function validateCodegenFlags(values: CodegenParsedValues): void {
 }
 
 function buildCodegenCommand(values: CodegenParsedValues, help: boolean): CliCommand {
+  const target = values.target ?? 'registry';
+  if (target !== 'registry' && target !== 'worker') {
+    throw new Error(`codegen: --target must be "registry" or "worker" (got '${target}')`);
+  }
   return {
     command: 'codegen',
     out: values.out ?? '',
+    target,
     timeoutMs: help ? CODEGEN_DEFAULT_TIMEOUT_MS : parseCodegenTimeout(values.timeout),
     help,
     json: values.json ?? false,
@@ -65,6 +71,7 @@ export function parseCodegenArguments(args: string[]): CliCommand {
       from: { type: 'string' },
       token: { type: 'string' },
       out: { type: 'string', short: 'o' },
+      target: { type: 'string' },
       timeout: { type: 'string' },
       json: { type: 'boolean', short: 'j', default: false },
       help: { type: 'boolean', short: 'h', default: false },

@@ -308,6 +308,7 @@ export function resolveEngineOptions(
     getNow,
     resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
     onLog: options?.onLog ?? null,
+    workerStartOverrideSigningSecret: options?.workerStartOverrideSigningSecret ?? null,
     backgroundTaskMode: resolveBackgroundTaskMode(options),
     inlineLaunchSchedulingMode: resolveInlineLaunchSchedulingMode(options),
     ...resolveBooleanDefaults(options),

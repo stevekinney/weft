@@ -29,6 +29,14 @@ export interface PendingTask extends TaskLifecycleFields {
   priority?: number | undefined;
 }
 
+/** A task `TaskQueue.withdrawPending` removed, with what restoring it needs. */
+export type WithdrawnPendingTask = {
+  readonly queue: string;
+  readonly task: PendingTask;
+  /** The task's position in its queue when it was withdrawn. */
+  readonly index: number;
+};
+
 /** Result reported by a long-poll worker after executing a task. */
 export interface TaskResult {
   operationId: string;

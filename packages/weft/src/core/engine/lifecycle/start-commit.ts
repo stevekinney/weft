@@ -48,6 +48,7 @@ type TaggedStartCondition = {
     | 'start-precondition'
     | 'duplicate-id'
     | 'duplicate-id-generation'
+    | 'worker-start-override'
     | 'catalog-entry';
   condition: ConditionalBatchCondition;
 };
@@ -316,18 +317,21 @@ function tagWorkflowConcurrencyConditions(
   }));
 }
 
-/** Concatenate caller-supplied and idempotency-derived create-batch operations. */
+function tagWorkerStartOverrideConditions(
+  conditions: ConditionalBatchCondition[] | undefined,
+): TaggedStartCondition[] {
+  return (conditions ?? []).map((condition) => ({ source: 'worker-start-override', condition }));
+}
+
 function mergeAdditionalStartOperations(
   additional: BatchOperation[] | undefined,
   idempotent: BatchOperation[] | undefined,
 ): BatchOperation[] | undefined {
-  if (idempotent === undefined || idempotent.length === 0) {
-    return additional;
-  }
-  return [...(additional ?? []), ...idempotent];
+  return idempotent === undefined || idempotent.length === 0
+    ? additional
+    : [...(additional ?? []), ...idempotent];
 }
 
-/** Everything {@link buildAndCommitStartBatch} needs to assemble the start batch. */
 export type StartBatchContext = {
   internals: EngineInternals;
   workflowId: string;
@@ -338,15 +342,11 @@ export type StartBatchContext = {
   delayedStartTimer: TimerEntry | undefined;
   persistedWorkflowStartHeaders: Map<string, string> | undefined;
   additionalStartOperations: BatchOperation[] | undefined;
+  additionalStartConditions: ConditionalBatchCondition[] | undefined;
   buildWorkflowConcurrencyStartOperations:
     (() => Promise<WorkflowConcurrencyStartOperations | undefined>) | undefined;
   callbacks: LifecycleCallbacks;
-  /**
-   * Storage deletes for a prior terminal run being displaced by an
-   * `onTerminalConflict: 'start-new'` restart. Prepended ahead of the create puts
-   * so purge-and-recreate commit as one atomic batch (see
-   * {@link buildStartBatchOperations}). Undefined for an ordinary start.
-   */
+  /** Terminal replacement deletes, prepended so purge-and-create stay atomic. */
   purgeDeleteOperations: BatchOperation[] | undefined;
   /**
    * Compare-and-swap precondition making the caller-supplied-id duplicate check
@@ -422,6 +422,7 @@ export async function buildAndCommitStartBatch(
         context.duplicateIdGenerationCondition,
       ),
       ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
+      ...tagWorkerStartOverrideConditions(context.additionalStartConditions),
       ...(catalogEntryPrecondition === undefined ? [] : [catalogEntryPrecondition]),
     ];
     // ADR 0002 row `startWorkflow`/`buildAndCommitStartBatch`: claim-acquiring for

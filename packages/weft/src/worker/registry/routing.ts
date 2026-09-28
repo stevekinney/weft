@@ -4,8 +4,33 @@
 // all worker-selection logic lives here rather than inline in the registry.
 // ---------------------------------------------------------------------------
 
+import type { WorkerExecutionRequirement } from '../manifest/types.ts';
 import { compareScores, type FairShareCounters, scoreWorker } from './fair-share.ts';
 import type { WorkerInfo } from './types.ts';
+
+export function workerMatchesRequirement(
+  worker: WorkerInfo,
+  requirement: WorkerExecutionRequirement,
+  activityName: string,
+): boolean {
+  const deployment = worker.manifest.deployment;
+  if (requirement.deploymentName !== undefined && deployment.name !== requirement.deploymentName)
+    return false;
+  if (requirement.buildId !== undefined && deployment.buildId !== requirement.buildId) return false;
+  if (
+    requirement.artifactDigest !== undefined &&
+    deployment.artifactDigest !== requirement.artifactDigest
+  )
+    return false;
+  return Object.values(worker.manifest.workflows).some(
+    (workflow) =>
+      (requirement.workflowRevision === undefined ||
+        workflow.workflowRevision === requirement.workflowRevision) &&
+      workflow.activities[activityName] !== undefined &&
+      (requirement.activityContractHash === undefined ||
+        workflow.activities[activityName]?.contractHash === requirement.activityContractHash),
+  );
+}
 
 /**
  * Return `true` when `worker` is eligible for the given `activityName` and

@@ -3,7 +3,7 @@ import type { ActivityContext, WorkflowContext } from '../core/types.ts';
 import { activity, signal } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { isWeftFault } from '../core/weft-error.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
 
 type ClientContractWorkflowTypes = {
@@ -245,21 +245,10 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await handle.signal('continue', 'done');
 
       // The tail must terminate on its own when the workflow completes; if it
-      // hangs, this race rejects so the test fails instead of timing out.
-      await Promise.race([
-        consume,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `client.tail did not terminate on completion; seen=${JSON.stringify(seen)}`,
-                ),
-              ),
-            2000,
-          ),
-        ),
-      ]);
+      // hangs, this rejects so the test fails instead of hanging.
+      // `withTimeout` always clears its timer, so a passing `consume` never
+      // leaves a real timeout alive for the guard to flag.
+      await withTimeout(consume, 2000, 'client.tail to terminate on completion');
 
       expect(seen).toContain('workflow:completed');
       expect(await handle.result()).toBe('tail:done');
@@ -284,15 +273,8 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       await tail.whenConnected();
       await handle.signal('continue', 'done');
-      await Promise.race([
-        consume,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(
-            () => reject(new Error(`handle.tail did not terminate; seen=${JSON.stringify(seen)}`)),
-            2000,
-          ),
-        ),
-      ]);
+      // See the `withTimeout` note on the `client.tail` variant above.
+      await withTimeout(consume, 2000, 'handle.tail to terminate');
 
       expect(seen).toContain('workflow:completed');
     });

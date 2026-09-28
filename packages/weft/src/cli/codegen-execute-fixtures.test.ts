@@ -1,16 +1,30 @@
-import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, afterEach, describe, expect, it } from 'bun:test';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+import ts from 'typescript';
 
 import manifest from '../../package.json';
 
 import { codegenPackageName, executeCodegen } from './codegen.ts';
 
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
+const PACKAGE_ROOT = resolve(import.meta.dir, '../..');
+const REPOSITORY_ROOT = resolve(PACKAGE_ROOT, '../..');
 const REGISTRY_FIXTURE = join(FIXTURE_DIR, 'registry.json');
 const EXPECTED_DTS = join(FIXTURE_DIR, 'expected.d.txt');
 const TYPECHECK_GENERATED_DTS = join(FIXTURE_DIR, 'typecheck', 'weft.generated.d.ts');
+const PACKED_FIXTURE_VERSION = '0.0.0-packed-fixture';
 
 /**
  * The one token in the golden that is not literal output.
@@ -41,8 +55,294 @@ function makeTempDir(): string {
   return dir;
 }
 
+const persistentTempDirs: string[] = [];
+function makePersistentTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'weft-codegen-'));
+  persistentTempDirs.push(dir);
+  return dir;
+}
+
+type ProcessResult = {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+};
+
+async function runProcess(command: readonly string[], cwd: string): Promise<ProcessResult> {
+  const process = Bun.spawn({
+    cmd: [...command],
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...Bun.env },
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+function copyDirectory(source: string, destination: string): void {
+  cpSync(source, destination, {
+    recursive: true,
+    filter: (path) => {
+      const parts = path.split(/[\\/]/);
+      return !parts.some((part) =>
+        ['node_modules', 'coverage', '.turbo', '.git', 'test-results'].includes(part),
+      );
+    },
+  });
+}
+
+function readJsonFile(path: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${path} did not contain a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function writeJsonFile(path: string, value: Record<string, unknown>): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function formatTypeScriptDiagnostic(diagnostic: ts.Diagnostic): string {
+  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+  if (diagnostic.file === undefined || diagnostic.start === undefined) return message;
+  const location = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+  return `${diagnostic.file.fileName}:${location.line + 1}:${location.character + 1} ${message}`;
+}
+
+function typecheckConsumerProject(configurationPath: string): readonly string[] {
+  const configuration = ts.readConfigFile(configurationPath, ts.sys.readFile);
+  if (configuration.error !== undefined) return [formatTypeScriptDiagnostic(configuration.error)];
+  const parsed = ts.parseJsonConfigFileContent(
+    configuration.config,
+    ts.sys,
+    resolve(configurationPath, '..'),
+  );
+  if (parsed.errors.length > 0) return parsed.errors.map(formatTypeScriptDiagnostic);
+  const program = ts.createProgram({
+    rootNames: parsed.fileNames,
+    options: parsed.options,
+  });
+  return ts.getPreEmitDiagnostics(program).map(formatTypeScriptDiagnostic);
+}
+
+function preparePackedWorkspace(root: string): string {
+  const packageDirectory = join(root, 'packages', 'weft');
+  const typescriptDirectory = join(root, 'internal', 'typescript');
+  copyDirectory(PACKAGE_ROOT, packageDirectory);
+  copyDirectory(join(REPOSITORY_ROOT, 'internal', 'typescript'), typescriptDirectory);
+
+  const rootPackageJsonPath = join(root, 'package.json');
+  const rootPackageJson = readJsonFile(join(REPOSITORY_ROOT, 'package.json'));
+  rootPackageJson['workspaces'] = ['packages/weft', 'internal/typescript'];
+  writeJsonFile(rootPackageJsonPath, rootPackageJson);
+  cpSync(join(REPOSITORY_ROOT, 'bun.lock'), join(root, 'bun.lock'));
+
+  const packageJsonPath = join(packageDirectory, 'package.json');
+  const packageJson = readJsonFile(packageJsonPath);
+  packageJson['version'] = PACKED_FIXTURE_VERSION;
+  const devDependencies = packageJson['devDependencies'];
+  if (
+    devDependencies === null ||
+    typeof devDependencies !== 'object' ||
+    Array.isArray(devDependencies)
+  ) {
+    throw new Error('expected @lostgradient/weft package.json devDependencies to be an object');
+  }
+  (devDependencies as Record<string, unknown>)['@lostgradient/typescript'] = PACKED_FIXTURE_VERSION;
+  writeJsonFile(packageJsonPath, packageJson);
+
+  const typescriptPackageJsonPath = join(typescriptDirectory, 'package.json');
+  const typescriptPackageJson = readJsonFile(typescriptPackageJsonPath);
+  typescriptPackageJson['version'] = PACKED_FIXTURE_VERSION;
+  writeJsonFile(typescriptPackageJsonPath, typescriptPackageJson);
+
+  return packageDirectory;
+}
+
+async function packWeftTarball(root: string): Promise<string> {
+  const packageDirectory = preparePackedWorkspace(root);
+
+  const tarballPath = join(root, 'weft-packed-fixture.tgz');
+  const pack = await runProcess(
+    [process.execPath, 'pm', 'pack', '--quiet', '--ignore-scripts', '--filename', tarballPath],
+    packageDirectory,
+  );
+  expect(pack.exitCode, pack.stderr).toBe(0);
+  expect(pack.stdout).toBe(tarballPath);
+  expect(existsSync(tarballPath)).toBe(true);
+
+  const packageJson = await runProcess(['tar', '-xOf', tarballPath, 'package/package.json'], root);
+  expect(packageJson.exitCode, packageJson.stderr).toBe(0);
+  const packedManifest = JSON.parse(packageJson.stdout) as { name?: unknown; version?: unknown };
+  expect(packedManifest.name).toBe('@lostgradient/weft');
+  expect(packedManifest.version).toBe(PACKED_FIXTURE_VERSION);
+
+  return tarballPath;
+}
+
+function writePackedConsumerFixture(
+  consumerDirectory: string,
+  tarballPath: string,
+): {
+  readonly generatedWorkerPath: string;
+  readonly registryPath: string;
+} {
+  mkdirSync(consumerDirectory, { recursive: true });
+  const packageJson = {
+    private: true,
+    type: 'module',
+    dependencies: {
+      '@lostgradient/weft': `file:${tarballPath}`,
+    },
+  };
+  writeJsonFile(join(consumerDirectory, 'package.json'), packageJson);
+  writeJsonFile(join(consumerDirectory, 'tsconfig.json'), {
+    compilerOptions: {
+      target: 'ES2022',
+      lib: ['ESNext', 'DOM', 'DOM.Iterable'],
+      module: 'ESNext',
+      moduleResolution: 'bundler',
+      allowImportingTsExtensions: true,
+      verbatimModuleSyntax: true,
+      isolatedModules: true,
+      noEmit: true,
+      strict: true,
+      noUncheckedIndexedAccess: true,
+      exactOptionalPropertyTypes: true,
+      noImplicitReturns: true,
+      noFallthroughCasesInSwitch: true,
+      noPropertyAccessFromIndexSignature: true,
+      types: ['bun'],
+      typeRoots: [
+        join(PACKAGE_ROOT, 'node_modules', '@types'),
+        join(REPOSITORY_ROOT, 'node_modules', '@types'),
+      ],
+      skipLibCheck: true,
+    },
+    include: ['*.ts'],
+  });
+
+  const registryPath = join(consumerDirectory, 'registry.json');
+  const registry = readFileSync(REGISTRY_FIXTURE, 'utf8');
+  writeFileSync(registryPath, registry);
+
+  const generatedWorkerPath = join(consumerDirectory, 'weft-worker.generated.ts');
+  writeFileSync(
+    join(consumerDirectory, 'consumer.ts'),
+    [
+      "import { defineGeneratedWorker } from './weft-worker.generated.ts';",
+      "import { defineWorker } from '@lostgradient/weft/worker/generated-authoring';",
+      '',
+      'const directWorker = defineWorker({ deployment: "packed-consumer-direct", workflows: {} });',
+      'if (directWorker.deployment !== "packed-consumer-direct") throw new Error("direct worker export failed");',
+      '',
+      'const generatedWorker = defineGeneratedWorker({',
+      '  deployment: "packed-consumer-generated",',
+      '  workflows: {',
+      '    farewell: { name: "farewell", activities: {} },',
+      '    welcome: { name: "welcome", activities: {} },',
+      '  },',
+      '});',
+      'if (generatedWorker.workflows.welcome.name !== "welcome") throw new Error("generated worker import failed");',
+      '',
+      "const resolved = Bun.resolveSync('@lostgradient/weft/worker/generated-authoring', import.meta.dir);",
+      'console.log(JSON.stringify({',
+      '  resolved,',
+      '  workflows: Object.keys(generatedWorker.workflows).toSorted(),',
+      '}));',
+      '',
+    ].join('\n'),
+  );
+
+  return { generatedWorkerPath, registryPath };
+}
+
+type PackedConsumerFixture = {
+  readonly consumerDirectory: string;
+  readonly generatedWorkerPath: string;
+  readonly registryPath: string;
+  readonly tarballPath: string;
+};
+
+type PackedTarballFixture = {
+  readonly root: string;
+  readonly tarballPath: string;
+};
+
+let packedTarballFixturePromise: Promise<PackedTarballFixture> | undefined;
+let packedConsumerFixturePromise: Promise<PackedConsumerFixture> | undefined;
+
+async function getPackedTarballFixture(): Promise<PackedTarballFixture> {
+  packedTarballFixturePromise ??= createPackedTarballFixture();
+  return packedTarballFixturePromise;
+}
+
+async function getPackedConsumerFixture(): Promise<PackedConsumerFixture> {
+  packedConsumerFixturePromise ??= createPackedConsumerFixture();
+  return packedConsumerFixturePromise;
+}
+
+async function createPackedTarballFixture(): Promise<PackedTarballFixture> {
+  const root = makePersistentTempDir();
+  const tarballPath = await packWeftTarball(root);
+  return { root, tarballPath };
+}
+
+async function createPackedConsumerFixture(): Promise<PackedConsumerFixture> {
+  const { root, tarballPath } = await getPackedTarballFixture();
+  const consumerDirectory = join(root, 'consumer');
+  const { generatedWorkerPath, registryPath } = writePackedConsumerFixture(
+    consumerDirectory,
+    tarballPath,
+  );
+
+  const install = await runProcess(
+    [
+      process.execPath,
+      'install',
+      '--production',
+      '--ignore-scripts',
+      '--prefer-offline',
+      '--no-progress',
+      '--no-summary',
+    ],
+    consumerDirectory,
+  );
+  expect(install.exitCode, install.stderr).toBe(0);
+
+  const codegen = await runProcess(
+    [
+      process.execPath,
+      join(consumerDirectory, 'node_modules', '.bin', 'weft'),
+      'codegen',
+      '--from',
+      registryPath,
+      '--target',
+      'worker',
+      '--out',
+      generatedWorkerPath,
+    ],
+    consumerDirectory,
+  );
+  expect(codegen.exitCode, codegen.stderr).toBe(0);
+
+  return { consumerDirectory, generatedWorkerPath, registryPath, tarballPath };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+afterAll(() => {
+  for (const dir of persistentTempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -136,6 +436,93 @@ describe('executeCodegen end-to-end', () => {
     expect(resultEarly.exitCode).toBe(0);
     expect(resultLate.exitCode).toBe(0);
     expect(await Bun.file(outEarly).text()).toBe(await Bun.file(outLate).text());
+  });
+
+  it('emits a worker target without importing executable workflow modules', async () => {
+    const dir = makeTempDir();
+    const out = join(dir, 'weft-worker.generated.ts');
+    const result = await executeCodegen({
+      from: REGISTRY_FIXTURE,
+      out,
+      target: 'worker',
+      timeoutMs: 30_000,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const written = await Bun.file(out).text();
+    expect(written).toContain('defineGeneratedWorker');
+    expect(written).toContain("from '@lostgradient/weft/worker/generated-authoring'");
+    expect(written).not.toContain("from './");
+  });
+
+  it('packs a @lostgradient/weft tarball with the expected package identity', async () => {
+    const { tarballPath } = await getPackedTarballFixture();
+    expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
+    expect(existsSync(tarballPath)).toBe(true);
+  });
+
+  it('runs packed CLI codegen from an isolated packed consumer without workspace fallback', async () => {
+    const { consumerDirectory, generatedWorkerPath, tarballPath } =
+      await getPackedConsumerFixture();
+
+    const installedManifest = readJsonFile(
+      join(consumerDirectory, 'node_modules', '@lostgradient', 'weft', 'package.json'),
+    );
+    expect(installedManifest['name']).toBe('@lostgradient/weft');
+    expect(installedManifest['version']).toBe(PACKED_FIXTURE_VERSION);
+    expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
+    expect(existsSync(join(consumerDirectory, 'node_modules', '.bin', 'weft'))).toBe(true);
+    const generated = await Bun.file(generatedWorkerPath).text();
+    expect(generated).toContain("from '@lostgradient/weft/worker/generated-authoring'");
+    expect(generated).toContain('defineGeneratedWorker');
+
+    const resolution = await runProcess(
+      [
+        process.execPath,
+        '--print',
+        `Bun.resolveSync('@lostgradient/weft/worker/generated-authoring', ${JSON.stringify(consumerDirectory)})`,
+      ],
+      consumerDirectory,
+    );
+    expect(resolution.exitCode, resolution.stderr).toBe(0);
+    expect(
+      realpathSync(resolution.stdout).startsWith(
+        realpathSync(join(consumerDirectory, 'node_modules')),
+      ),
+      resolution.stdout,
+    ).toBe(true);
+    expect(resolution.stdout).not.toContain(PACKAGE_ROOT);
+  });
+
+  it('typechecks generated worker code against the packed artifact', async () => {
+    const { consumerDirectory } = await getPackedConsumerFixture();
+
+    const diagnostics = typecheckConsumerProject(join(consumerDirectory, 'tsconfig.json'));
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('executes generated worker code against the packed artifact', async () => {
+    const { consumerDirectory } = await getPackedConsumerFixture();
+
+    const execution = await runProcess(
+      [process.execPath, '--no-install', join(consumerDirectory, 'consumer.ts')],
+      consumerDirectory,
+    );
+    expect(execution.exitCode, execution.stderr).toBe(0);
+    const proof = JSON.parse(execution.stdout) as {
+      readonly resolved?: unknown;
+      readonly workflows?: unknown;
+    };
+    expect(proof.workflows).toEqual(['farewell', 'welcome']);
+    if (typeof proof.resolved !== 'string') {
+      throw new Error(`expected resolver proof to be a string, received ${String(proof.resolved)}`);
+    }
+    expect(
+      realpathSync(proof.resolved).startsWith(
+        realpathSync(join(consumerDirectory, 'node_modules')),
+      ),
+    ).toBe(true);
+    expect(proof.resolved).not.toContain(PACKAGE_ROOT);
   });
 
   it('fails with a clear diagnostic on registry version mismatch and writes no output', async () => {

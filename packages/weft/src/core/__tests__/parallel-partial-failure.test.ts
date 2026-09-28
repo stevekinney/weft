@@ -468,13 +468,23 @@ describe('ctx.race asymmetry: loser results are not preserved', () => {
     // workflow's logic would re-dispatch its losing branches.
     const engine = new Engine();
     let fastCalls = 0;
+    // `ctx.race` discards the loser's *result*, but nothing cancels the real
+    // `setTimeout` its activity function armed — an arbitrary async function
+    // has no cooperative cancellation without checking an AbortSignal itself,
+    // and this one doesn't. Track each loser's timer and clear it explicitly
+    // once the test is done with it, rather than let it fire on its own up to
+    // 50ms later, which the real-timer-leak guard reports as a leak.
+    const pendingLoserTimers = new Set<ReturnType<typeof setTimeout>>();
     const fast = async () => {
       fastCalls++;
       return 'winner';
     };
     const slow = async () => {
       // Slow enough that fast wins.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 50);
+        pendingLoserTimers.add(timer);
+      });
       return 'loser';
     };
 
@@ -494,6 +504,7 @@ describe('ctx.race asymmetry: loser results are not preserved', () => {
     // Each ctx.race is a distinct step, so each ran the fast branch.
     expect(fastCalls).toBe(2);
     engine[Symbol.dispose]();
+    for (const timer of pendingLoserTimers) clearTimeout(timer);
   });
 });
 

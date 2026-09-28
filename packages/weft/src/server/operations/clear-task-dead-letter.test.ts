@@ -31,7 +31,7 @@ function runClear(engine: Engine, operationId: string, scopes: ReadonlyArray<Aut
 describe('weft.tasks.diagnostics.deadletters.clear', () => {
   it('deletes a dead-lettered ledger record, freeing the operationId', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-to-clear' }));
 
     const result = await runClear(engine, 'op-to-clear', ['system:admin']);
@@ -44,7 +44,7 @@ describe('weft.tasks.diagnostics.deadletters.clear', () => {
 
   it('faults NotFound when no dead-lettered record exists for the operationId', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
 
     const result = await runClear(engine, 'never-dispatched', ['system:admin']);
 
@@ -55,7 +55,7 @@ describe('weft.tasks.diagnostics.deadletters.clear', () => {
 
   it('faults NotFound rather than clearing a record that is not currently dead-lettered', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     await putLedgerRecord(storage, queuedFixture({ operationId: 'still-queued' }));
 
     const result = await runClear(engine, 'still-queued', ['system:admin']);
@@ -68,7 +68,7 @@ describe('weft.tasks.diagnostics.deadletters.clear', () => {
 
   it('requires system admin scope', async () => {
     const storage = new MemoryStorage();
-    const engine = createEngine(storage);
+    await using engine = createEngine(storage);
     await putLedgerRecord(storage, deadLetteredFixture({ operationId: 'op-scoped' }));
 
     const result = await runClear(engine, 'op-scoped', ['system:read']);

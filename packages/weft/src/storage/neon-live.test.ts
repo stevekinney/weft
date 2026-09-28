@@ -2,9 +2,8 @@ import { neonConfig } from '@neondatabase/serverless';
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { createNeonTestProxy } from './neon-proxy.test-support.ts';
 import {
-  createPostgresTestServer,
-  postgresTestDatabase,
-  type PostgresTestDatabase,
+  openPostgresTestDatabase,
+  requireOpenedPostgresTestDatabase,
 } from './postgres-server.test-support.ts';
 
 import { restoreWorkflowCatalog } from '../core/catalog/storage-io.ts';
@@ -20,25 +19,27 @@ import {
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
-// Skip only when no database is obtainable: neither a supplied WEFT_TEST_POSTGRES_URL
-// nor the client binaries to spawn a disposable cluster. The wrapper exists so the
-// hooks below are skipped too — a file-level beforeAll runs even when every suite
-// inside it is skipped, and this one opens a database.
-describe.skipIf(postgresTestDatabase === null)('live Neon driver', () => {
+// Opened at load, before any hook is timed — see `openPostgresTestDatabase`. `null`
+// only when no database is obtainable: neither a supplied WEFT_TEST_POSTGRES_URL nor
+// the client binaries to spawn a disposable cluster.
+const database = await openPostgresTestDatabase();
+
+// The wrapper exists so the hooks below are skipped too — a file-level beforeAll runs
+// even when every suite inside it is skipped, and this one configures the driver.
+describe.skipIf(database === null)('live Neon driver', () => {
+  const live = () => requireOpenedPostgresTestDatabase(database);
   // Use the real Neon WebSocket driver against whichever PostgreSQL this machine can
   // reach: a disposable local cluster, or the server a CI job supplied a URL for.
   // Per the driver documentation, an ordinary PostgreSQL endpoint uses wsProxy and
   // disables password pipelining when local authentication is not password-based.
-  let database: PostgresTestDatabase;
   let proxy: ReturnType<typeof createNeonTestProxy>;
   const originalConfiguration = {
     wsProxy: neonConfig.wsProxy,
     useSecureWebSocket: neonConfig.useSecureWebSocket,
     pipelineConnect: neonConfig.pipelineConnect,
   };
-  beforeAll(async () => {
-    database = await createPostgresTestServer();
-    proxy = createNeonTestProxy({ host: database.host, port: database.port });
+  beforeAll(() => {
+    proxy = createNeonTestProxy({ host: live().host, port: live().port });
     neonConfig.wsProxy = () => proxy.address;
     neonConfig.useSecureWebSocket = false;
     neonConfig.pipelineConnect = false;
@@ -46,10 +47,8 @@ describe.skipIf(postgresTestDatabase === null)('live Neon driver', () => {
   afterAll(async () => {
     Object.assign(neonConfig, originalConfiguration);
     if (proxy) await proxy[Symbol.asyncDispose]();
-    if (database) {
-      await dropLiveTable(database.url);
-      await database[Symbol.asyncDispose]();
-    }
+    await dropLiveTable(live().url);
+    await live()[Symbol.asyncDispose]();
   });
 
   // A dedicated table, because the database may be one this run does not own: with
@@ -60,7 +59,7 @@ describe.skipIf(postgresTestDatabase === null)('live Neon driver', () => {
   const LIVE_TABLE = 'weft_test_neon_kv';
 
   async function createLiveNeonStorage(): Promise<NeonStorage> {
-    const storage = new NeonStorage({ url: database.url, table: LIVE_TABLE });
+    const storage = new NeonStorage({ url: live().url, table: LIVE_TABLE });
     // Reset the suite's own table so each case starts from an empty store. The
     // adapter's #ensureTable creates the table on first use; a put-then-delete via
     // the public surface both guarantees the table exists and clears it.

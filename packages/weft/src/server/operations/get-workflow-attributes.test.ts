@@ -57,6 +57,8 @@ describe('weft.workflows.attributes.get', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual(attributes);
+
+    engine[Symbol.dispose]();
   });
 
   it('returns 404 with the canonical error body when attributes do not exist', async () => {
@@ -77,6 +79,8 @@ describe('weft.workflows.attributes.get', () => {
       error: 'Attributes for workflow "does-not-exist" not found',
       data: { resource: 'attributes', identifier: 'does-not-exist' },
     });
+
+    engine[Symbol.dispose]();
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
@@ -106,5 +110,7 @@ describe('weft.workflows.attributes.get', () => {
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual({ error: 'Internal server error' });
+
+    engine[Symbol.dispose]();
   });
 });

@@ -254,6 +254,7 @@ import {
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
 import { processPendingUpdatesForHandlers as processPendingUpdatesForHandlersFromInternals } from './pending-updates.ts';
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
+import { settleInFlightPurgeWrites } from './purge-write-tracking.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
   register as registerWorkflow,
@@ -450,6 +451,9 @@ export const ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING = Symbol(
 );
 export const ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING = Symbol(
   'engineWaitForSignalWaiterForTesting',
+);
+export const ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING = Symbol(
+  'engineWaitForParkedWorkflowForTesting',
 );
 export const ENGINE_SET_WORKER_TURN_TIMEOUT_RESOLVER_FOR_TESTING = Symbol(
   'engineSetWorkerTurnTimeoutResolverForTesting',
@@ -773,6 +777,7 @@ export class Engine<
     getInternals(this).sleepResolversByWorkflow = new Map();
     getInternals(this).sleepResolverReadyWaitersForTesting = new Map();
     getInternals(this).signalWaiterReadyWaitersForTesting = new Map();
+    getInternals(this).parkedWorkflowReadyWaitersForTesting = new Map();
     getInternals(this).sleepTimerAcknowledgementWaiters = new Map();
     getInternals(this).durableInlineOperations = new Map();
     getInternals(this).sleepTimersFiredWithoutResolver = new Map();
@@ -907,6 +912,7 @@ export class Engine<
     );
     getInternals(this).retentionSweepInterval = null;
     getInternals(this).retentionSweepInFlight = null;
+    getInternals(this).inFlightPurgeWrites = new Set();
     getInternals(this).nextRetentionSweepAt = null;
     getInternals(this).secondInstanceDetectionInterval = null;
     getInternals(this).secondInstanceDetector = null;
@@ -950,6 +956,7 @@ export class Engine<
         )
       : null;
     getInternals(this).workflowCatalog = null;
+    getInternals(this).workflowRefreshCoordinator = null;
     getInternals(this).pendingCatalogInstalls = [];
     getInternals(this).catalogRestored = false;
     getInternals(this).catalogDrainPromise = null;
@@ -2076,6 +2083,7 @@ export class Engine<
       await this.#runRetentionSweep();
     }
     internals.alertManager?.tick();
+    await internals.workflowRefreshCoordinator?.runMaintenance();
   }
   /**
    * Deterministically drain the inline launch queue (COR-74): every queued
@@ -2349,9 +2357,13 @@ export class Engine<
     return getInternals(this).signalWaiters.size;
   }
   /**
-   * Resolve once `workflowId` has a registered signal waiter — immediately if
-   * it already has one. Settled by `registerSignalWaiter` (signals.ts) or by
-   * engine disposal (disposal.ts).
+   * Resolve once `workflowId` is waiting on a signal — immediately if it
+   * already is. A workflow waits either through a registered signal waiter
+   * (worker mode, race branches, or an inline run that must stay resident) or,
+   * in inline mode, by parking on a top-level `waitForSignal` without one.
+   * Settled by `notifySignalWaitReadyForTesting` (signals.ts), which
+   * `registerSignalWaiter` and `parkInlineWorkflowAfterCheckpoint`
+   * (inline-parking.ts) both call, or by engine disposal (disposal.ts).
    *
    * Unlike {@link ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING}, this installs
    * no timer. Reaching a signal wait in worker mode means booting a real
@@ -2364,13 +2376,43 @@ export class Engine<
    */
   async [ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId: string): Promise<void> {
     const internals = getInternals(this);
-    if (internals.signalWaitersByWorkflow.has(workflowId)) return;
+    if (
+      internals.signalWaitersByWorkflow.has(workflowId) ||
+      internals.parkedInlineWorkflows.has(workflowId)
+    ) {
+      return;
+    }
 
     const { promise, resolve } = Promise.withResolvers<void>();
     let waiters = internals.signalWaiterReadyWaitersForTesting?.get(workflowId);
     if (waiters === undefined) {
       waiters = new Set();
       internals.signalWaiterReadyWaitersForTesting?.set(workflowId, waiters);
+    }
+    waiters.add(resolve);
+    return await promise;
+  }
+  /**
+   * Resolve once `workflowId` is parked inline on a top-level `waitForSignal`
+   * (it is in `parkedInlineWorkflows`) — immediately if it already is.
+   * Settled by `parkInlineWorkflowAfterCheckpoint` (inline-parking.ts) when it
+   * publishes the park marker, or by engine disposal (disposal.ts).
+   *
+   * Narrower than {@link ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING}, which
+   * also resolves when a workflow registers a signal waiter, such as a
+   * `ctx.race` branch's, before it ever parks. Like that seam, this installs no
+   * timer: a workflow that never parks is a genuine hang, reported by the test
+   * runner's own per-test timeout.
+   */
+  async [ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](workflowId: string): Promise<void> {
+    const internals = getInternals(this);
+    if (internals.parkedInlineWorkflows.has(workflowId)) return;
+
+    const { promise, resolve } = Promise.withResolvers<void>();
+    let waiters = internals.parkedWorkflowReadyWaitersForTesting?.get(workflowId);
+    if (waiters === undefined) {
+      waiters = new Set();
+      internals.parkedWorkflowReadyWaitersForTesting?.set(workflowId, waiters);
     }
     waiters.add(resolve);
     return await promise;
@@ -2969,6 +3011,7 @@ export class Engine<
       void this.#asyncDisposeResult;
       return;
     }
+    getInternals(this).workflowRefreshCoordinator?.assertSynchronousDisposeSafe();
 
     // Capture the lease manager before disposeEngine() detaches it (disposeEngine
     // only stops renewals — it does NOT release the holder, so each disposal path
@@ -3041,6 +3084,7 @@ export class Engine<
         // before any awaited release.
         const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
         disposeEngine(getInternals(this), (event) => this.dispatchEvent(event));
+        await getInternals(this).workflowRefreshCoordinator?.[Symbol.asyncDispose]();
         // A lease acquire may still be parked (waiting for handoff) when disposal
         // runs. disposeEngine() set `disposed` and stopped the manager, so the
         // parked acquire's wait loop exits (or, if it already committed a holder
@@ -3050,6 +3094,12 @@ export class Engine<
         // (EngineDisposedError) — that rejection is the intended outcome, not a
         // failure to surface, so swallow it here.
         await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
+        // Disposal does not cancel a purge already in flight (a retention
+        // sweep's, or a `purge()`/`deleteAll()` call's). Settle the writes it
+        // already issued so none lands after this promise or the lease handoff
+        // below. Its pending reads are abandoned instead: storage calls cannot
+        // be cancelled, and every purge write checks for disposal first.
+        await settleInFlightPurgeWrites(getInternals(this));
         // Clean deploy handoff: release the ownership lease as the LAST durable
         // action, AFTER queued starts have drained and all write paths are down, so
         // the incoming instance cannot acquire and recover while this one is still
@@ -3072,6 +3122,9 @@ export class Engine<
     }
     this[Symbol.dispose]();
     await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
+    // An engine already disposed synchronously may still have purge writes in
+    // flight; settle them here too (see the first-disposal branch above).
+    await settleInFlightPurgeWrites(getInternals(this));
     return (await this.#synchronousDisposeResult) ?? true;
   }
 

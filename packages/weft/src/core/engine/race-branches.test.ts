@@ -27,7 +27,7 @@ import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { MAX_TIMER_DELAY_MS, nextSleepTimerDelayMs } from './coordination-branch-executors.ts';
 import { isDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
-import { Engine } from './index.ts';
+import { Engine, ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
 import { assertValidRaceBranchNames, executeRaceSubOperations } from './operations-coordination.ts';
@@ -376,10 +376,7 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     await activityStarted;
     await engine.signal('mixed-race', 'sync-requested', 'buffered');
     release();
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('mixed-race'), {
-      timeoutMs: 2000,
-      label: 'mixed race settled and workflow parked on finish',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('mixed-race');
 
     expect(additionalBranchRan).toBe(true);
     const bufferedSignal = await peekSignal(getInternals(engine), 'mixed-race', 'sync-requested');
@@ -603,10 +600,7 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
     const loserHandle = await engine.start('keyed-race-signal-loser', null, {
       id: 'keyed-signal-loser',
     });
-    await waitForCondition(
-      () => getInternals(engine).parkedInlineWorkflows.has('keyed-signal-loser'),
-      { timeoutMs: 2000, label: 'workflow parked on the later event wait' },
-    );
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('keyed-signal-loser');
     await engine.signal('keyed-signal-loser', 'event', 'later-payload');
     expect(await loserHandle.result()).toEqual({
       winner: { key: 'work', value: 'complete' },
@@ -657,13 +651,7 @@ describe('#456 a losing wait-signal branch must not consume the signal', () => {
     const handle = await engine.start('positive-timeout-signal-race', null, {
       id: 'positive-timeout',
     });
-    await waitForCondition(
-      () => getInternals(engine).parkedInlineWorkflows.has('positive-timeout'),
-      {
-        timeoutMs: 2000,
-        label: 'positive timeout settled and workflow parked on the later signal wait',
-      },
-    );
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('positive-timeout');
     await engine.signal('positive-timeout', 'ev', 'late-signal');
 
     expect(await handle.result()).toEqual({ timedOut: undefined, later: 'late-signal' });
@@ -691,10 +679,7 @@ describe('#456 a losing wait-signal branch must not consume the signal', () => {
     const handle = await engine.start('signal-loses', null, { id: 'sig-loses' });
     // Wait for the top-level waitForSignal to park, then deliver. (Signals are
     // delivered/buffered durably under a plain Engine.)
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('sig-loses'), {
-      timeoutMs: 2000,
-      label: 'run parked on the top-level waitForSignal after the race settled',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('sig-loses');
     await engine.signal('sig-loses', 'ev', 'late-signal');
 
     const result = (await handle.result()) as { first: unknown; second: unknown };
@@ -963,10 +948,7 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
     );
 
     const handle = await engine.start('nested-all-loses', null, { id: 'nal' });
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nal'), {
-      timeoutMs: 2000,
-      label: 'parked on the top-level waitForSignal after the outer race settled',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('nal');
     // No leaked nested waiter survived the loss.
     expect(getInternals(engine).signalWaiters.size).toBe(0);
     await engine.signal('nal', 'ev', 'late-ev');
@@ -996,10 +978,7 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
     );
 
     const handle = await engine.start('nested-race-loses', null, { id: 'nrl' });
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nrl'), {
-      timeoutMs: 2000,
-      label: 'parked on the top-level waitForSignal after the outer race settled',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('nrl');
     expect(getInternals(engine).signalWaiters.size).toBe(0);
     await engine.signal('nrl', 'ev', 'late-ev');
 
@@ -1091,10 +1070,7 @@ describe('#456 a winning wait-signal survives replay without re-consuming', () =
     const handle = await engine.start('signal-wins-replay', null, { id: 'swr' });
     await engine.signal('swr', 'ev', 'ev-payload');
     // The workflow now parks on the second waitForSignal('gate'); resume replays.
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('swr'), {
-      timeoutMs: 2000,
-      label: 'parked on waitForSignal(gate) after the race resolved',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('swr');
     await engine.signal('swr', 'gate', 'gate-payload');
 
     const result = (await handle.result()) as { winner: unknown; gate: unknown };
@@ -1122,10 +1098,7 @@ describe('#456 a winning wait-signal survives replay without re-consuming', () =
 
     const handle = await engine.start('all-signal-replay', null, { id: 'asr' });
     await engine.signal('asr', 'ev', 'ev-payload');
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('asr'), {
-      timeoutMs: 2000,
-      label: 'parked on waitForSignal(gate) after the all resolved',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('asr');
     await engine.signal('asr', 'gate', 'gate-payload');
 
     const result = (await handle.result()) as { both: unknown; gate: unknown };
@@ -1322,10 +1295,7 @@ describe('#456 nested ctx.all releases parked siblings when a branch rejects', (
     );
 
     const handle = await engine.start('nested-all-reject-survives', null, { id: 'nars' });
-    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nars'), {
-      timeoutMs: 2000,
-      label: 'parked on the top-level waitForSignal after the nested all rejected',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('nars');
     // The nested wait-signal waiter was released (not leaked) when the nested all
     // rejected — size 0 — and the workflow is now parked on the top-level waiter.
     const internals = getInternals(engine);

@@ -139,8 +139,13 @@ export interface EngineInternals {
   sleepResolversByWorkflow: Map<string, Set<string>>;
   /** Test-only event waiters notified when a workflow registers a sleep resolver. */
   sleepResolverReadyWaitersForTesting?: Map<string, Set<() => void>>;
-  /** Test-only event waiters notified when a workflow registers a signal waiter. */
+  /**
+   * Test-only event waiters notified when a workflow starts waiting on a
+   * signal: it registers a signal waiter, or it parks inline.
+   */
   signalWaiterReadyWaitersForTesting?: Map<string, Set<() => void>>;
+  /** Test-only event waiters notified when an inline workflow parks. */
+  parkedWorkflowReadyWaitersForTesting?: Map<string, Set<() => void>>;
   /**
    * Fired sleep timers awaiting proof that the awakened inline workflow reached
    * its next durable checkpoint or terminal state. External schedulers must not
@@ -220,6 +225,8 @@ export interface EngineInternals {
   pendingExecutionStateOwnerId: string | null | undefined;
   pendingParentWorkflowId: string | undefined;
   pendingParentWorkflowExecutionToken: string | undefined;
+  pendingParentWorkerBinding:
+    import('../../worker/versioning-policy.ts').WorkflowWorkerBinding | undefined;
   workflowNestingDepths: Map<string, number>;
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;
@@ -270,6 +277,13 @@ export interface EngineInternals {
   cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker | null;
   retentionSweepInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInFlight: Promise<void> | null;
+  /**
+   * Purge writes (a purge commit, the retention scan's orphaned-index delete,
+   * or a bulk operation's audit record) issued and not yet settled. Async
+   * disposal settles these instead of the whole sweep; see
+   * `purge-write-tracking.ts`. Never cleared by disposal.
+   */
+  inFlightPurgeWrites: Set<Promise<unknown>>;
   nextRetentionSweepAt: number | null;
   /** Interval driving the best-effort second-instance detector; `null` when off. */
   secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
@@ -436,6 +450,8 @@ export interface EngineInternals {
    * directly.
    */
   workflowCatalog: import('../catalog/index.ts').WorkflowCatalog | null;
+  /** Opt-in conditional refresh coordinator owned by this engine lifecycle. */
+  workflowRefreshCoordinator: import('../catalog/index.ts').WorkflowRefreshCoordinator | null;
   /** Workflow names `commitWorkflowDefinition` (`registration.ts`) has queued for catalog install+activate since the last drain — `engine.register()` stays synchronous (it cannot itself build a manifest) and defers to the next `ensureWorkflowCatalogReady` call. */
   pendingCatalogInstalls: string[];
   /** Whether {@link workflowCatalog} has been restored from storage at least once. */

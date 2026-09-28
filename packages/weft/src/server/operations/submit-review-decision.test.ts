@@ -31,7 +31,7 @@ const bindings = [submitReviewDecisionRestBinding];
 
 describe('weft.reviews.decision.submit', () => {
   it('submits a review decision and returns the ok response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     let capturedReviewId = '';
     let capturedOptions: unknown;
     const originalSubmitReview = engine.submitReview.bind(engine);
@@ -70,7 +70,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('submits sectionDecisions over REST and passes them through to the engine', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     let capturedOptions: unknown;
     const originalSubmitReview = engine.submitReview.bind(engine);
     engine.submitReview = async (_reviewId, options) => {
@@ -105,7 +105,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('submits sectionDecisions over JSON-RPC without being rejected as an unknown key', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     let capturedOptions: unknown;
     const originalSubmitReview = engine.submitReview.bind(engine);
     engine.submitReview = async (_reviewId, options) => {
@@ -143,7 +143,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('rejects a malformed sectionDecisions value with InvalidParams', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('POST', '/v1/reviews/rev-1/decision', {
@@ -166,7 +166,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('returns 400 for validation failures', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
 
     const response = await handleRequest(
       request('POST', '/v1/reviews/rev-1/decision', {
@@ -187,7 +187,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('returns 404 when the engine reports that the review was not found', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalSubmitReview = engine.submitReview.bind(engine);
     engine.submitReview = async () => {
       throw new Error('review not found');
@@ -217,7 +217,7 @@ describe('weft.reviews.decision.submit', () => {
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalSubmitReview = engine.submitReview.bind(engine);
     engine.submitReview = async () => {
       throw new Error('review submission failed');

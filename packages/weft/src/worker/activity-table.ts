@@ -2,7 +2,8 @@
 // Activity table resolution and result normalization for the remote worker
 // ---------------------------------------------------------------------------
 
-import { isRemoteWorkerJsonValue, type RemoteWorkerJsonValue } from './protocol.ts';
+import type { RemoteWorkerJsonValue } from './protocol.ts';
+import { encodeStrictWorkerJsonValue } from './strict-json.ts';
 import {
   buildQualifiedActivityTable,
   type RemoteWorkerActivityFunction,
@@ -23,16 +24,12 @@ export type ActivityTableSource = {
 };
 
 /**
- * Coerce an activity's return value into a JSON value safe to send over the
- * wire. `undefined`, non-serializable values, and anything that does not round
- * -trip through JSON collapse to `null`.
+ * Validate and clone an activity's return value into a JSON value safe to send
+ * over the wire. Values JSON would erase or rewrite are rejected with a path
+ * instead of silently becoming `null`.
  */
 export function normalizeWorkerJsonValue(value: unknown): RemoteWorkerJsonValue {
-  if (value === undefined) return null;
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) return null;
-  const parsed: unknown = JSON.parse(encoded);
-  return isRemoteWorkerJsonValue(parsed) ? parsed : null;
+  return encodeStrictWorkerJsonValue(value, 'activity result');
 }
 
 /**

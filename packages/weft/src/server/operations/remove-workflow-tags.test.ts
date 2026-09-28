@@ -30,7 +30,7 @@ const bindings = [removeWorkflowTagsRestBinding];
 
 describe('weft.workflows.tags.remove', () => {
   it('removes tags from a workflow and returns the ok response', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('echo', 'payload', {
       id: 'remove-tags-success',
       tags: ['alpha', 'beta'],
@@ -53,7 +53,7 @@ describe('weft.workflows.tags.remove', () => {
   });
 
   it('returns 400 when tag validation fails in invoke', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const handle = await engine.start('echo', 'payload', {
       id: 'remove-tags-invalid',
       tags: ['alpha'],
@@ -74,7 +74,7 @@ describe('weft.workflows.tags.remove', () => {
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalRemoveTags = engine.removeTags.bind(engine);
     engine.removeTags = async () => {
       throw new Error('workflow not found');
@@ -101,7 +101,7 @@ describe('weft.workflows.tags.remove', () => {
   });
 
   it('masks unexpected engine failures to a 500 generic error body', async () => {
-    const engine = createEngine();
+    await using engine = createEngine();
     const originalRemoveTags = engine.removeTags.bind(engine);
     engine.removeTags = async () => {
       throw new Error('boom');

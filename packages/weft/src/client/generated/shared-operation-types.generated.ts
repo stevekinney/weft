@@ -171,6 +171,20 @@ export type SharedBackoffMultiplierInitial_64d024ea = {
   readonly maxBackoff: number | string;
   readonly nonRetryableErrors?: ReadonlyArray<string>;
 };
+export type SharedCurrentBuildIdDeployment_a9512ca3 = {
+  readonly currentBuildId: string;
+  readonly deploymentName: string;
+  readonly expectedGeneration?: number;
+  readonly rampBasisPoints: number;
+  readonly rampingBuildId?: string;
+};
+export type SharedCurrentBuildIdDeployment_d4467560 = {
+  readonly currentBuildId: string;
+  readonly deploymentName: string;
+  readonly generation: number;
+  readonly rampBasisPoints: number;
+  readonly updatedAt: number;
+};
 export type SharedFilterMatchedSampleLimit_d7a67f2a = {
   readonly filter: SharedAttributesLimitOffset_5f765b01;
   readonly matched: number;

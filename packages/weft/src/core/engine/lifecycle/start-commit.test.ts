@@ -51,6 +51,7 @@ function createBaseContext(storage: MemoryStorage) {
     delayedStartTimer: undefined,
     persistedWorkflowStartHeaders: undefined,
     additionalStartOperations: undefined,
+    additionalStartConditions: undefined,
     purgeDeleteOperations: undefined,
     // These cases exercise the idempotency and workflow-concurrency conditions in
     // isolation; the duplicate-id condition has its own coverage in

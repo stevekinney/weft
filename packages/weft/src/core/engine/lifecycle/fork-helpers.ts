@@ -1,5 +1,6 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
+import { inheritWorkflowWorkerBinding } from '../../../worker/binding-helpers.ts';
 import { deserializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
@@ -342,6 +343,36 @@ export function createForkedWorkflowState(
     startedAt: forkedAt,
     updatedAt: forkedAt,
     forkedFrom: lineage,
+  };
+}
+
+export function applyForkWorkerBindingInheritance(
+  state: WorkflowState,
+  sourceState: WorkflowState,
+  options: Readonly<{
+    persistedRevision: string | undefined;
+    forkedAt: number;
+    checkpointId: string;
+  }>,
+): void {
+  if (sourceState.workerBinding === undefined || sourceState.workerVersioningPolicy === undefined) {
+    return;
+  }
+  const currentBinding = sourceState.workerBinding.current;
+  if (
+    options.persistedRevision !== undefined &&
+    options.persistedRevision !== currentBinding.workflowRevision
+  ) {
+    return;
+  }
+  state.workerVersioningPolicy = sourceState.workerVersioningPolicy;
+  state.workerBinding = {
+    current: inheritWorkflowWorkerBinding(currentBinding, {
+      workflowId: state.id,
+      boundAt: options.forkedAt,
+      checkpointId: options.checkpointId,
+    }),
+    history: sourceState.workerBinding.history,
   };
 }
 

@@ -32,7 +32,16 @@ export type CliCommand =
       from?: string;
       token?: string;
       out: string;
+      target: 'registry' | 'worker';
       timeoutMs: number;
+      help: boolean;
+      json: boolean;
+    }
+  | {
+      command: 'worker';
+      action: 'verify';
+      manifest: string;
+      from: string;
       help: boolean;
       json: boolean;
     }

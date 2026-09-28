@@ -93,6 +93,42 @@ export async function createPostgresTestServer(
 }
 
 /**
+ * Open the live database while the calling test file loads, or `null` when this
+ * machine can reach none.
+ *
+ * Starting a disposable cluster is host-bound work with nothing to wait on — `initdb`
+ * alone runs a CPU-heavy bootstrap, and `pg_ctl -w` already blocks until the server
+ * accepts connections — so under load it can outlast `bun test`'s per-test and per-hook
+ * timeout with nothing wrong. A file's top-level `await` runs before any test or hook
+ * is timed, so the live suites call this at load rather than from `beforeAll`: the
+ * timeout keeps bounding what the tests exercise, not how fast the host boots a
+ * cluster. A cluster that cannot start still fails its file loudly, at load.
+ */
+export async function openPostgresTestDatabase(
+  source: PostgresTestDatabaseSource | null = postgresTestDatabase,
+): Promise<PostgresTestDatabase | null> {
+  return source === null ? null : createPostgresTestServer(source);
+}
+
+/**
+ * Narrow a database {@link openPostgresTestDatabase} opened for a suite gated on
+ * `describe.skipIf(database === null)`. Call it only from that suite's hooks and tests,
+ * which never run when it is skipped. Bun still runs a skipped suite's callback to
+ * register its tests as skipped, so narrowing in the callback body would throw there,
+ * and returning early would drop those tests from the report.
+ */
+export function requireOpenedPostgresTestDatabase(
+  database: PostgresTestDatabase | null,
+): PostgresTestDatabase {
+  if (database === null) {
+    throw new Error(
+      'No PostgreSQL was opened for this suite. Gate it with `describe.skipIf(database === null)` so it skips instead of reaching here.',
+    );
+  }
+  return database;
+}
+
+/**
  * Describe a server someone else runs. Disposal is deliberately a no-op: the runner that
  * supplied the URL owns the server's lifetime, and both live suites dispose what they
  * open, so stopping it here would pull the database out from under the next file.

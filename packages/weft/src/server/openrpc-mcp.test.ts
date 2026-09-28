@@ -108,7 +108,7 @@ function createRegistryDouble(operations: ReadonlyArray<ErasedOperation>): Opera
 
 describe('generateOpenRpcDocument — MCP metadata', () => {
   it('emits x-weft-mcp metadata for MCP-exposable operations and the live MCP discovery surface', () => {
-    const engine = createMcpEngine();
+    using engine = createMcpEngine();
     const registry = createOperationRegistry([
       makeOp({
         name: 'weft.workflows.checkout.start',
@@ -160,7 +160,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
   });
 
   it('keeps the root MCP tool list in parity with method-level live MCP tool names', () => {
-    const engine = createMcpEngine();
+    using engine = createMcpEngine();
     const registry = createOperationRegistry([
       makeOp({
         name: 'weft.workflows.checkout.start',

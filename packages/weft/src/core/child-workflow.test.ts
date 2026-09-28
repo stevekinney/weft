@@ -185,7 +185,7 @@ describe('child workflows', () => {
   });
 
   it('parent starts child and gets result', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const childWorkflow = workflow({ name: 'child' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -240,7 +240,7 @@ describe('child workflows', () => {
   });
 
   it('nesting depth limit is enforced at default depth (10)', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     // Register a recursive workflow that calls itself as a child
     const recursiveWorkflow = workflow({ name: 'recursive' }).execute(async function* (
@@ -264,7 +264,7 @@ describe('child workflows', () => {
   });
 
   it('custom maxNestingDepth limits nesting', async () => {
-    const engine = new Engine({ maxNestingDepth: 2 });
+    await using engine = new Engine({ maxNestingDepth: 2 });
 
     const nestedWorkflow = workflow({ name: 'nested' }).execute(async function* (
       ctx: WorkflowContext,
@@ -286,7 +286,7 @@ describe('child workflows', () => {
   });
 
   it('succeeds within custom maxNestingDepth', async () => {
-    const engine = new Engine({ maxNestingDepth: 3 });
+    await using engine = new Engine({ maxNestingDepth: 3 });
 
     const nestedOkWorkflow = workflow({ name: 'nested-ok' }).execute(async function* (
       ctx: WorkflowContext,
@@ -309,7 +309,7 @@ describe('child workflows', () => {
 
   it('child is independently stored', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const storedChildWorkflow = workflow({ name: 'stored-child' }).execute(async function* (
       _ctx: WorkflowContext,
@@ -344,7 +344,7 @@ describe('child workflows', () => {
   });
 
   it('cached result on recovery path', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     let childCallCount = 0;
 
@@ -379,7 +379,7 @@ describe('child workflows', () => {
   });
 
   it('abandoned child survives parent completion without parent execution ownership', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const childWorkflowId = 'abandoned-completion-child';
 
     engine.register(
@@ -417,7 +417,7 @@ describe('child workflows', () => {
   });
 
   it('abandoned child survives parent cancellation without parent execution ownership', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const childWorkflowId = 'abandoned-cancel-child';
 
     engine.register(
@@ -456,7 +456,7 @@ describe('child workflows', () => {
   });
 
   it('request-cancel child receives cancellation when the parent cancels', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const childWorkflowId = 'request-cancel-child';
 
     engine.register(
@@ -533,7 +533,7 @@ describe('child workflows', () => {
   });
 
   it('await parent-close policy preserves child result and parent execution ownership', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
     const childWorkflowId = 'await-policy-child';
     const parentWorkflowId = 'await-policy-parent';
 

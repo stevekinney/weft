@@ -40,6 +40,34 @@ function createCheck(name: string, ok: boolean, message: string): ConformanceChe
   return { name, ok, message };
 }
 
+/**
+ * Judge a registration from the registry record alone. A worker on the wrong
+ * queue or missing a required activity can never pass a later check, so the
+ * mismatch is reported here, from observed state, rather than left to surface
+ * as whichever downstream wait happens to time out first.
+ */
+export function createRegisterCheck(
+  workerId: string,
+  registered: { queue: string; activities: readonly string[] } | undefined,
+): ConformanceCheck {
+  if (registered === undefined) {
+    return createCheck('register', false, `worker ${workerId} disconnected after registering`);
+  }
+  const problems: string[] = [];
+  if (registered.queue !== CONFORMANCE_QUEUE) {
+    problems.push(`registered on queue ${registered.queue}, expected ${CONFORMANCE_QUEUE}`);
+  }
+  const missing = CONFORMANCE_ACTIVITIES.filter(
+    (activity) => !registered.activities.includes(activity),
+  );
+  if (missing.length > 0) {
+    problems.push(`does not advertise ${missing.join(', ')}`);
+  }
+  return problems.length === 0
+    ? createCheck('register', true, `registered worker ${workerId}`)
+    : createCheck('register', false, `worker ${workerId} ${problems.join('; ')}`);
+}
+
 async function dispatchAndWait(
   server: WeftServer,
   storage: MemoryStorage,
@@ -84,15 +112,9 @@ async function runConformanceChecks(
   try {
     worker = startWorker(command, server);
     const workerId = await waitForRegisteredWorker(server, timeoutMs);
-    const registered = server.registry.getWorker(workerId);
-    checks.push(
-      createCheck(
-        'register',
-        registered?.queue === CONFORMANCE_QUEUE &&
-          CONFORMANCE_ACTIVITIES.every((activity) => registered.activities.includes(activity)),
-        `registered worker ${workerId}`,
-      ),
-    );
+    const registerCheck = createRegisterCheck(workerId, server.registry.getWorker(workerId));
+    checks.push(registerCheck);
+    if (!registerCheck.ok) return checks;
 
     await dispatchAndWait(
       server,

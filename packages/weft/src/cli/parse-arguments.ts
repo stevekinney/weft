@@ -13,6 +13,7 @@ import { parseScheduleArguments } from './parse-schedule-arguments.ts';
 import { parseStorageBackend } from './storage-backend-arguments.ts';
 import { CLI_FLAG_VALUE_OPTIONS } from './subcommand-detection.ts';
 import type { CliCommand } from './types.ts';
+import { parseWorkerArguments } from './worker-arguments.ts';
 
 const KNOWN_SUBCOMMANDS = new Set([
   'serve',
@@ -26,6 +27,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   'api',
   'server',
   'workflow',
+  'worker',
   'tail',
   'completions',
 ]);
@@ -41,6 +43,7 @@ const SUBCOMMAND_PARSERS: Record<string, (args: string[]) => CliCommand> = {
   api: parseApiArguments,
   server: parseServerArguments,
   workflow: parseWorkflowArguments,
+  worker: parseWorkerArguments,
   tail: parseTailArguments,
   completions: parseCompletionsArguments,
 };

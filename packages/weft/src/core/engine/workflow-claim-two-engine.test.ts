@@ -34,7 +34,7 @@ import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
 import {
-  ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
+  ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING,
   Engine,
   WorkflowClaimUnavailableError,
 } from './index.ts';
@@ -277,9 +277,7 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
     // `waitForSignal` this engine's registry tracks a real, non-null epoch —
     // the exact precondition the root-cause analysis requires.
     const handle = await engine.start('claim-race-recovery', null, { id: workflowId });
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
     const registry = getInternals(engine).workflowClaimRegistry;
     expect(registry).not.toBeNull();
     expect(registry?.currentEpoch(workflowId)).not.toBeNull();
@@ -317,9 +315,7 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
     const workflowId = 'suspend-resume-two-engine-race';
 
     const handle = await engineA.start('claim-race-recovery', null, { id: workflowId });
-    await waitForCondition(() => engineA[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
     await handle.suspend();
     expect(await storage.get(KEYS.workflowOwnerHolder(workflowId))).toBeNull();
 
@@ -438,9 +434,7 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
     const workflowId = 'suspend-precommit-epoch-capture';
 
     const handle = await engine.start('claim-race-recovery', null, { id: workflowId });
-    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
-      label: 'inline workflow parked on waitForSignal',
-    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](handle.id);
     const registry = getInternals(engine).workflowClaimRegistry;
     expect(registry).not.toBeNull();
     const preSuspendEpoch = registry?.currentEpoch(workflowId) ?? null;

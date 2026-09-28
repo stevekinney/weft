@@ -191,7 +191,12 @@ export {
   diffCheckpointShapes,
   inferShape,
 } from './versioning.ts';
-export type { FieldDiff, ShapeDescriptor, ShapeDiffOptions } from './versioning.ts';
+export type {
+  FieldDiff,
+  ShapeDescriptor,
+  ShapeDiffOptions,
+  WorkflowWorkerVersioningPolicy,
+} from './versioning.ts';
 export {
   WeftError,
   isWeftError,

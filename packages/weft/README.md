@@ -105,7 +105,7 @@ If you'd rather wire things up by hand — useful for tests, isolating engines o
 
 When a workflow needs a live host capability that cannot be checkpointed, pass it as per-run `services`:
 
-```typescript
+```typescript partial
 const handle = await engine.start('welcome', { name: 'Steve' }, { services: { crmClient } });
 ```
 
@@ -149,7 +149,7 @@ Use `ctx.raceKeyed()` when the workflow needs to know which branch won without e
 
 Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 
-```typescript
+```typescript partial
 const checkout = workflow({ name: 'checkout' })
   .activities({ chargeCard, reserveInventory, sendConfirmation, scheduleShipping })
   .execute(async function* (ctx, order: Order) {
@@ -171,7 +171,7 @@ If `scheduleShipping` fails, `sendConfirmation`'s result is recorded in the pare
 
 Sleeps survive process restarts. Signals pause workflows for seconds, days, or weeks at no cost—the checkpoint just sits in storage.
 
-```typescript
+```typescript partial
 const approvalSignal = signal<{ approved: boolean }>('approval');
 
 const approval = workflow({ name: 'approval' })
@@ -216,7 +216,7 @@ const quorum = workflow({ name: 'quorum' })
 
 Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` defaults to the per-workflow `/v1/workflows/:id/watch` WebSocket channel when the runtime can carry authentication headers, and falls back to fetch-based SSE at `/v1/workflows/:id/events/sse` when it cannot. Both transports run history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. JSON-RPC clients can subscribe over WebSocket with `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
 
-```typescript
+```typescript partial
 const handle = await client.start('checkout', order);
 const tail = handle.tail();
 
@@ -233,7 +233,7 @@ The tail is single-consumer and stops on terminal workflow events or `tail.close
 
 Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run. The call returns `{ handle, outcome }`, where `outcome` is `'started'` for the caller that created the run and `'signalled'` for callers that delivered to, or converged onto, an existing run.
 
-```typescript
+```typescript partial
 const { handle, outcome } = await engine.startOrSignal(
   'approval',
   { orderId: 'order-123' },
@@ -322,7 +322,7 @@ Every attempt is durably marked `attempting` _before_ the adapter is called, so 
 
 Attach indexed metadata to a workflow at runtime, then list and filter on it.
 
-```typescript
+```typescript partial
 const order = workflow({ name: 'order' })
   .searchAttributes({
     customerId: { type: 'string' },
@@ -420,7 +420,7 @@ For long-running workflows, `history.retentionWindow` can compact old event-log 
 
 `serve()` wraps `Bun.serve()` to expose your engine over HTTP and WebSocket with a versioned REST API.
 
-```typescript
+```typescript partial
 import { Engine } from '@lostgradient/weft';
 import { serve } from '@lostgradient/weft/server';
 import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
@@ -438,7 +438,7 @@ Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, sign
 
 Workers can connect to the server over WebSocket, pull tasks, execute activities, and report results back. The same activity code runs inline in development and remote in production—no API changes.
 
-```typescript
+```typescript partial
 import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
@@ -456,6 +456,8 @@ const worker = new RemoteWorker({
 await worker.connect();
 ```
 
+Workflow worker selection is pinned by default. Persist the binding returned by `bindWorkflowWorkerAtStart()` with the workflow so retries, children, forks, scheduled runs, and terminal restarts inherit the same deployment, build, artifact, manifest, workflow revision, and activity contract. An `auto-upgrade` policy must provide the exact `workflowRevision` and `activityContractHash` compatibility contract; evaluate it only after a durable checkpoint and before acquiring the next execution realm. Upgrades use compare-and-swap and retain bounded binding history. Use `issueWorkflowWorkerStartOverridePreview()` only for an explicitly destructive start-time override, and require the server-issued scoped token before applying it.
+
 ### Browser Support
 
 The core engine runs inside a Web Worker, with a Service Worker acting as the durable persistence layer over `IndexedDB`. Browser-compatible workflow logic ships across server and browser without modification—useful for offline-first apps that need durable client-side workflows. Activities, storage adapters, and other environment-bound pieces still need browser-safe implementations: use `IndexedDBStorage`, `WebExtensionStorage`, or `resolveDefaultStorage()` instead of SQLite storage, swap server-only activities for `fetch`-based equivalents, and so on.
@@ -469,16 +471,19 @@ Built-in event system (`EventTarget`-based, so it composes with everything), W3C
 Schedules also emit `schedule:fired` on the live engine each time a schedule actually launches a workflow run. The event carries `scheduleId`, `workflowId`, `firedAt`, and the scheduled `occurrence` when one is retained, so in-process dispatchers can react to cadence without polling schedule state.
 
 ```typescript
-import { createObservabilityInterceptors, createOpenTelemetryMetrics } from '@lostgradient/weft';
+import { Engine, MemoryStorage, createObservabilityInterceptors } from '@lostgradient/weft';
 
-const metrics = createOpenTelemetryMetrics({/* your meter provider */});
-const interceptors = createObservabilityInterceptors({ metrics });
+await using engine = new Engine({ storage: new MemoryStorage() });
 
-const engine = new Engine({
-  storage,
-  interceptors: [interceptors.interceptor],
+// Passing the engine as `eventTarget` lets the interceptor close root workflow spans on terminal events.
+const { interceptor } = createObservabilityInterceptors({
+  tracerName: 'orders',
+  eventTarget: engine,
 });
+engine.addInterceptor(interceptor);
 ```
+
+Spans go to the tracer from `@opentelemetry/api` when it is installed and to a no-op otherwise. For metrics on your own meter, `createOpenTelemetryMetrics(meterOrName)` creates Weft's standard instrument set—workflow and activity durations, activity attempts, and active workflows.
 
 Inside workflow code, `ctx.log` emits structured console records with `workflowId`, `workflowType`, `level`, and `timestamp` attached. Caller attributes are nested under `attributes`, so they cannot overwrite the envelope. Logs at already-restored checkpoint positions are suppressed on recovery; logs at the live frontier still emit, and in worker mode the destination is the worker process console.
 
@@ -486,7 +491,7 @@ Inside workflow code, `ctx.log` emits structured console records with `workflowI
 
 `TestEngine` swaps the production engine in tests and gives you a virtual clock. `engine.advanceTime('1 hour')` jumps timers forward without waiting; `engine.mock(activity, fake)` swaps in fake activity implementations with type-checked signatures, call recording, and per-call overrides.
 
-```typescript
+```typescript partial
 import { TestEngine } from '@lostgradient/weft/testing';
 import { expect, test } from 'bun:test';
 
@@ -516,7 +521,7 @@ For chaos testing, `withChaos()` wraps activities with configurable transient fa
 
 Every error Weft throws extends `WeftError`, so a single `instanceof` check catches them all, and each carries a stable string `code` equal to its class name:
 
-```typescript
+```typescript partial
 import { isWeftError } from '@lostgradient/weft';
 
 try {

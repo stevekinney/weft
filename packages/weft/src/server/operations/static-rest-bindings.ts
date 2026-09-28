@@ -72,6 +72,7 @@ import { suspendWorkflowRestBinding } from './suspend-workflow.ts';
 import { timeoutWorkflowRestBinding } from './timeout-workflow.ts';
 import { updateScheduleRestBinding } from './update-schedule.ts';
 import { updateWorkflowRestBinding } from './update-workflow.ts';
+import { workerStartOverridePreviewRestBinding } from './worker-start-override-preview.ts';
 import { workflowEventsSseRestBinding } from './workflow-events-sse.ts';
 
 /**
@@ -160,4 +161,5 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   storageScanRestBinding,
   storageBatchRestBinding,
   storageConditionalBatchRestBinding,
+  workerStartOverridePreviewRestBinding,
 ];

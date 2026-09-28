@@ -9,6 +9,7 @@
  */
 
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import type { WorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import type { RemoteTaskAttemptFields, RemoteTaskBase } from './task-ledger-types.ts';
 
 export type TaskLedgerTransitionResult<T> =
@@ -20,6 +21,14 @@ export type TaskLedgerPreconditionResult =
 // Internal field pickers — explicit, not `...current`, so a next record never
 // silently inherits state-specific fields (e.g. `availableAt`) that do not
 // belong on the target state.
+
+function pickWorkflowWorkerBinding(record: RemoteTaskBase): {
+  workflowWorkerBinding?: WorkflowWorkerBinding;
+} {
+  return record.workflowWorkerBinding === undefined
+    ? {}
+    : { workflowWorkerBinding: record.workflowWorkerBinding };
+}
 
 export function pickBase(record: RemoteTaskBase): RemoteTaskBase {
   return {
@@ -46,6 +55,7 @@ export function pickBase(record: RemoteTaskBase): RemoteTaskBase {
     ...(record.executionRequirement !== undefined
       ? { executionRequirement: record.executionRequirement }
       : {}),
+    ...pickWorkflowWorkerBinding(record),
     createdAt: record.createdAt,
     generation: record.generation,
   };

@@ -1,4 +1,6 @@
+/* oxlint-disable max-lines -- Worker lifecycle, leases, and routing share one cohesive registry state machine. */
 // Server-side worker tracking and pluggable routing policies.
+import { workerDeploymentRolloutBucket } from './deployment-routing.ts';
 import {
   DeploymentConsistencyGuard,
   type DeploymentConsistencyResult,
@@ -20,6 +22,7 @@ import {
   pickFairShare,
   pickLeastLoaded,
   pickRoundRobin,
+  workerMatchesRequirement,
 } from './registry/routing.ts';
 import {
   deploymentHealth,
@@ -55,6 +58,7 @@ export type {
   WorkerRegistryOptions,
   WorkerSessionIdentity,
   WorkerSummary,
+  WorkerTransport,
 } from './registry/types.ts';
 
 /**
@@ -187,6 +191,7 @@ export class WorkerRegistry {
     this.#workers.set(info.id, {
       id: info.id,
       queue: info.queue,
+      transport: info.transport ?? 'websocket',
       activities: [...info.activities],
       concurrency: info.concurrency,
       ...(info.deploymentName !== undefined ? { deploymentName: info.deploymentName } : {}),
@@ -217,7 +222,7 @@ export class WorkerRegistry {
       workerId: info.id,
       sessionGeneration: info.sessionGeneration,
       manifestDigest: info.acceptedManifestDigest,
-      transport: 'websocket',
+      transport: info.transport,
     };
   }
 
@@ -273,28 +278,64 @@ export class WorkerRegistry {
    * 4. A `sticky` worker that also satisfies the above wins regardless of policy.
    */
   findWorker(activityName: string, options: RoutingOptions = {}): WorkerInfo | undefined {
-    const { queue, sticky: stickyId, fairShareKey, excludeWorkerIds } = options;
-    const eligible: WorkerInfo[] = [];
-    let stickyCandidate: WorkerInfo | undefined;
-    for (const worker of this.#workers.values()) {
-      if (!this.#workerIsEligible(worker, activityName, queue, excludeWorkerIds)) continue;
-      if (stickyId !== undefined && worker.id === stickyId) stickyCandidate = worker;
-      eligible.push(worker);
-    }
-    if (stickyCandidate !== undefined) return stickyCandidate;
+    const eligible = this.#eligibleWorkers(activityName, options);
+    const sticky = eligible.find((worker) => worker.id === options.sticky);
+    if (sticky !== undefined) return sticky;
     if (eligible.length === 0) return undefined;
-    return this.#selectByPolicy(eligible, queue, activityName, fairShareKey);
+    return this.#selectByPolicy(eligible, options.queue, activityName, options.fairShareKey);
+  }
+
+  /**
+   * Whether {@link findWorker} has an eligible worker that `include` accepts,
+   * without running the routing policy — so asking never advances round-robin
+   * or fair-share state.
+   */
+  hasEligibleWorker(
+    activityName: string,
+    options: RoutingOptions = {},
+    include: (worker: WorkerInfo) => boolean = () => true,
+  ): boolean {
+    return this.#eligibleWorkers(activityName, options).some(include);
+  }
+
+  #eligibleWorkers(activityName: string, options: RoutingOptions): WorkerInfo[] {
+    return [...this.#workers.values()].filter((worker) =>
+      this.#workerIsEligible(worker, activityName, options),
+    );
   }
 
   #workerIsEligible(
     worker: WorkerInfo,
     activityName: string,
-    queue: string | undefined,
-    excludeWorkerIds: ReadonlySet<string> | undefined,
+    {
+      queue,
+      excludeWorkerIds,
+      executionRequirement,
+      deploymentRouting,
+      workflowId,
+    }: RoutingOptions,
   ): boolean {
     if (excludeWorkerIds?.has(worker.id)) return false;
     if (!matchesWorkerCapabilities(worker, activityName, queue)) return false;
     if (isWorkerDraining(worker, this.#deploymentDrainStates)) return false;
+    if (
+      executionRequirement !== undefined &&
+      !workerMatchesRequirement(worker, executionRequirement, activityName)
+    )
+      return false;
+    if (deploymentRouting !== undefined) {
+      const bucket = workerDeploymentRolloutBucket(
+        deploymentRouting.deploymentName,
+        workflowId ?? activityName,
+        deploymentRouting.generation,
+      );
+      const selectedBuild =
+        deploymentRouting.rampingBuildId !== undefined && bucket < deploymentRouting.rampBasisPoints
+          ? deploymentRouting.rampingBuildId
+          : deploymentRouting.currentBuildId;
+      if (worker.manifest.deployment.name !== deploymentRouting.deploymentName) return false;
+      if (worker.manifest.deployment.buildId !== selectedBuild) return false;
+    }
     return true;
   }
 
@@ -539,6 +580,7 @@ export class WorkerRegistry {
     return [...this.#workers.values()].map((worker) => ({
       id: worker.id,
       queue: worker.queue,
+      transport: worker.transport,
       activities: worker.activities,
       concurrency: worker.concurrency,
       inFlight: worker.inFlight,

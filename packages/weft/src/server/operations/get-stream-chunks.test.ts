@@ -25,7 +25,7 @@ function request(method: string, path: string, accept?: string): Request {
 
 describe('weft.workflows.streams.chunks', () => {
   it('returns stored chunks as JSON on the happy path', async () => {
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => [
       { sequence: 1, value: 'hello' },
@@ -53,7 +53,7 @@ describe('weft.workflows.streams.chunks', () => {
   });
 
   it('forwards the `after` query parameter to engine.getStreamChunks', async () => {
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
     let capturedAfter: number | undefined;
     engine.getStreamChunks = async (_workflowId, _key, options) => {
@@ -79,7 +79,7 @@ describe('weft.workflows.streams.chunks', () => {
       // scientific notation (1e3), and obviously non-numeric strings via the
       // same DECIMAL_INTEGER_PATTERN regex. Cover all three classes here so
       // a future change to the regex doesn't silently widen acceptance.
-      const engine = createEngineWithChunks();
+      await using engine = createEngineWithChunks();
 
       const response = await handleRequest(
         request('GET', `/v1/workflows/wf-1/streams/tokens?after=${badValue}`),
@@ -99,7 +99,7 @@ describe('weft.workflows.streams.chunks', () => {
     // explicitly so JSON-RPC callers can't bypass the rule by passing a
     // raw integer that the prior `z.number().int()` schema would have
     // accepted; the validator now lives in invoke().
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
 
     const response = await handleRequest(
       request('GET', `/v1/workflows/wf-1/streams/tokens?after=${badValue}`),
@@ -114,7 +114,7 @@ describe('weft.workflows.streams.chunks', () => {
   });
 
   it('returns 400 for an empty `after` query parameter', async () => {
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
 
     const response = await handleRequest(
       request('GET', '/v1/workflows/wf-1/streams/tokens?after='),
@@ -129,7 +129,7 @@ describe('weft.workflows.streams.chunks', () => {
   it('returns SSE when the Accept header requests text/event-stream', async () => {
     // when SSE is negotiated, the response body is the SSE
     // wire format and content-type is text/event-stream.
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => [
       { sequence: 7, value: 'alpha' },
@@ -166,7 +166,7 @@ describe('weft.workflows.streams.chunks', () => {
     // Engine errors are masked before returning to the client. Pin that —
     // raw engine messages can contain SQL fragments, file paths, etc., and
     // must never reach a caller.
-    const engine = createEngineWithChunks();
+    await using engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => {
       throw new Error('storage offline: secret-credential-leak');

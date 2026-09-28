@@ -3,7 +3,7 @@ import type { Engine } from '../core/engine.ts';
 import { createWorkflowHandleEventIterator } from '../core/engine/handle-iteration.ts';
 import { SignalReceivedEvent, WorkflowCompletedEvent } from '../core/events.ts';
 import type { WorkflowEvent, WorkflowState } from '../core/types.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 
 function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
@@ -17,15 +17,9 @@ async function drain(tail: {
   const consume = (async () => {
     for await (const e of tail) seen.push(e.type);
   })();
-  await Promise.race([
-    consume,
-    new Promise<never>((_resolve, reject) =>
-      setTimeout(
-        () => reject(new Error(`tail did not terminate; seen=${JSON.stringify(seen)}`)),
-        1000,
-      ),
-    ),
-  ]);
+  // `withTimeout` (shared test support) always clears its timer, so a passing
+  // `consume` never leaves a real timeout alive for the guard to flag.
+  await withTimeout(consume, 1000, 'tail to terminate');
   return seen;
 }
 
@@ -104,19 +98,7 @@ describe('createLocalWorkflowEventTail', () => {
     // Only now begin iterating. The pre-iteration signal must still be delivered
     // (it was buffered, not dropped), followed by the terminal completion that
     // ends the tail cleanly.
-    const seen: string[] = [];
-    const consume = (async () => {
-      for await (const frame of tail) seen.push(frame.type);
-    })();
-    await Promise.race([
-      consume,
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(
-          () => reject(new Error(`tail did not terminate; seen=${JSON.stringify(seen)}`)),
-          1000,
-        ),
-      ),
-    ]);
+    const seen = await drain(tail);
 
     expect(seen).toEqual(['signal:received', 'workflow:completed']);
   });
@@ -170,16 +152,7 @@ describe('createLocalWorkflowEventTail', () => {
     const tail = createLocalWorkflowEventTail(fakeEngine(handle), 'wf-finished');
 
     await tail.whenConnected();
-    const seen: string[] = [];
-    const consume = (async () => {
-      for await (const frame of tail) seen.push(frame.type);
-    })();
-    await Promise.race([
-      consume,
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(() => reject(new Error('tail did not terminate for finished workflow')), 1000),
-      ),
-    ]);
+    const seen = await drain(tail);
 
     // The synthesizer emits the terminal event for the already-finished
     // workflow, so the tail delivers it once and then ends — it must terminate
@@ -212,12 +185,7 @@ describe('createLocalWorkflowEventTail', () => {
 
     tail.close();
     // Must resolve (from close), not hang on the gated fetch.
-    await Promise.race([
-      tail.whenConnected(),
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(() => reject(new Error('whenConnected hung after close')), 1000),
-      ),
-    ]);
+    await withTimeout(tail.whenConnected(), 1000, 'whenConnected to resolve after close');
   });
 
   it('close() while idle terminates the tail promptly (pump does not hang)', async () => {
@@ -231,17 +199,9 @@ describe('createLocalWorkflowEventTail', () => {
     await tail.whenConnected();
     // No events have been (or will be) dispatched; the pump is parked. Begin
     // iterating, then close — the iteration must end promptly.
-    const seen: string[] = [];
-    const consume = (async () => {
-      for await (const e of tail) seen.push(e.type);
-    })();
+    const seenPromise = drain(tail);
     tail.close();
-    await Promise.race([
-      consume,
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(() => reject(new Error('idle close did not terminate iteration')), 1000),
-      ),
-    ]);
+    const seen = await seenPromise;
     expect(seen).toEqual([]);
   });
 

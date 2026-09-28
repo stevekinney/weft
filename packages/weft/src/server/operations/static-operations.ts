@@ -72,6 +72,7 @@ import { suspendWorkflowOperation } from './suspend-workflow.ts';
 import { timeoutWorkflowOperation } from './timeout-workflow.ts';
 import { updateScheduleOperation } from './update-schedule.ts';
 import { updateWorkflowOperation } from './update-workflow.ts';
+import { workerStartOverridePreviewOperation } from './worker-start-override-preview.ts';
 import { workflowEventsSseOperation } from './workflow-events-sse.ts';
 import { workflowEventsSubscriptionOperation } from './workflow-events-subscription.ts';
 
@@ -158,4 +159,5 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   storageScanOperation,
   storageBatchOperation,
   storageConditionalBatchOperation,
+  workerStartOverridePreviewOperation,
 ];

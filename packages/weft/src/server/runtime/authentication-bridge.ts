@@ -36,6 +36,7 @@ import {
 import { handleWebSocketUpgrade } from './websocket-upgrade.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 import { runWorkerDisconnectRequeue } from './worker-disconnect-requeue.ts';
+import { handleWorkerSessionRequest } from './worker-sessions.ts';
 
 type ServerFetchOptions = {
   // Widened to `RegistryAgnosticEngine` (see its JSDoc / #708) to match the
@@ -98,8 +99,8 @@ function stripApiPrefix(request: Request): Request {
 }
 
 /**
- * Resolve the principal handed to the long-poll task endpoints. Only `/v1/tasks/`
- * routes consume it, and only when an auth context exists, so other paths skip
+ * Resolve the principal handed to the long-poll worker endpoints. Only the
+ * worker task/session routes consume it, and only when an auth context exists, so other paths skip
  * `authContextToPrincipal` and avoid turning a client auth error into a spurious
  * failure on routes that never needed the principal.
  */
@@ -107,7 +108,11 @@ function resolveTaskPrincipal(
   authContext: AuthContext | undefined,
   url: URL,
 ): ReturnType<typeof authContextToPrincipal> | undefined {
-  if (authContext === undefined || !url.pathname.startsWith('/v1/tasks/')) return undefined;
+  if (
+    authContext === undefined ||
+    (!url.pathname.startsWith('/v1/tasks/') && !url.pathname.startsWith('/v1/worker-sessions'))
+  )
+    return undefined;
   return authContextToPrincipal(authContext);
 }
 
@@ -194,6 +199,17 @@ async function dispatchServerFetchRequest(
   }
 
   const taskPrincipal = resolveTaskPrincipal(authentication.authContext, url);
+  const workerSessionResponse = await handleWorkerSessionRequest(
+    context,
+    options,
+    request,
+    url,
+    taskPrincipal,
+  );
+  if (workerSessionResponse !== null) {
+    return workerSessionResponse;
+  }
+
   const taskPollResponse = await handleTaskPollRequest(
     context,
     options,
@@ -403,7 +419,14 @@ export function createServerWebSocketHandlers(
         // Reconnect grace period: defer the requeue so a same-`workerId`
         // re-register inside the window keeps its in-flight work. `0`
         // disables the grace period and runs the requeue inline.
-        if (context.workerReconnectGracePeriodMs <= 0) {
+        //
+        // A stopping server also runs it inline: `server.stop()` closes
+        // worker sockets only after its timer-clearing disposer has already
+        // emptied `pendingWorkerRequeues`, so a grace timer armed here would
+        // outlive the server and fire against its torn-down registry.
+        // `runWorkerDisconnectRequeue` itself skips the durable forfeit once
+        // `context.stopping` is set.
+        if (context.workerReconnectGracePeriodMs <= 0 || context.stopping) {
           void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
           return;
         }
