@@ -310,7 +310,9 @@ if (
         fail(`weft root TestEngine import failed:\n${messages}`);
       }
     } catch (error) {
-      fail(`weft root TestEngine import threw:\n${error instanceof Error ? error.message : String(error)}`);
+      fail(
+        `weft root TestEngine import threw:\n${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
