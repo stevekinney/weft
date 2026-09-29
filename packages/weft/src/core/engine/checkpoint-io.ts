@@ -22,6 +22,7 @@ import {
   getCommittedCheckpointBytes,
   rememberCommittedCheckpointBytes,
 } from './checkpoint-commit-snapshots.ts';
+import { CheckpointEncodingError } from './checkpoint-encoding-error.ts';
 import {
   attachTransientCheckpointReplayPayload,
   createCheckpointEventPayload,
@@ -178,13 +179,19 @@ async function persistInlineCheckpoint(
     advanced,
     resolvePendingOperationStep(operation, context.stepIndex),
   );
+  let serialized: ReturnType<typeof serializeCheckpoint>;
+  try {
+    serialized = serializeCheckpoint(
+      attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload),
+    );
+  } catch (error) {
+    throw new CheckpointEncodingError(workflowId, error);
+  }
   const commit = createCheckpointCommit(
     internals,
     workflowId,
     pruned.checkpoint,
-    serializeCheckpoint(
-      attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload),
-    ),
+    serialized,
     pruned.replayPayload,
   );
   appendAttributeOperations(

@@ -1,6 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { hasExposedAccessors, hasUpdateHandlers } from '../context/context-presence.ts';
 import type { WorkerOutboundMessage, WorkflowState } from '../types.ts';
+import { CheckpointEncodingError } from './checkpoint-encoding-error.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   resumeWorkflowFromStorage as resumeWorkflowFromStorageFromLifecycle,
@@ -255,6 +256,19 @@ export async function handleStrategyMessage(
     await dispatchStrategyMessage(internals, message, callbacks);
   } catch (error) {
     rejectSleepTimerAcknowledgements(internals, message.workflowId, error);
-    throw error;
+    // The inline strategy contains a handler's rejection so one workflow's
+    // failure cannot take down the engine. A storage failure is left that way
+    // on purpose: the workflow stays `running` and recovery retries it. A
+    // checkpoint that cannot be encoded is not retryable, since the same
+    // state fails on every resume, so left alone it would stay `running` with
+    // `result()` pending forever. Fail the workflow with the cause instead.
+    if (!(error instanceof CheckpointEncodingError)) throw error;
+    await failWorkflowFromTermination(
+      internals,
+      message.workflowId,
+      error,
+      callbacks.createTerminationCallbacks(),
+      'system',
+    );
   }
 }
