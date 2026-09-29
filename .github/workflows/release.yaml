@@ -6,13 +6,26 @@ name: release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: Publish an opt-in prerelease to npm's next dist-tag
+        type: boolean
+        required: true
+        default: false
+      expected_sha:
+        description: Exact commit SHA verified by the mirror sync
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: github.event_name == 'push' || inputs.snapshot
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,16 +40,30 @@ jobs:
           bun-version: 1.4.0
 
       - name: Verify tag, package.json, and VERSION agree
+        if: github.event_name == 'push'
         run: bun run scripts/verify-release-version.ts
+
+      - name: Prepare and verify snapshot ref
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bun run scripts/prepare-snapshot.ts
 
   # The same verification a pull request gets, called rather than restated: mirror-verify.yaml is
   # emitted by the corvidae mirror transform from the steps its own sync runs (install, build,
   # typecheck, pack, publint, attw, consumer smoke test). Lint, tests and coverage run in corvidae,
   # the source of truth, before a sync ever reaches this repository (COR-1286).
   verify-mirror:
+    if: github.event_name == 'push' || inputs.snapshot
     uses: ./.github/workflows/mirror-verify.yaml
 
   publish-npm:
+    if: github.event_name == 'push' || inputs.snapshot
     needs: [verify, verify-mirror]
     runs-on: ubuntu-latest
     permissions:
@@ -52,8 +79,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Configure npm for trusted publishing
         shell: bash
@@ -77,15 +104,39 @@ jobs:
         working-directory: .
 
       - name: Verify tag, package.json, and VERSION agree
+        if: github.event_name == 'push'
         run: bun run scripts/verify-release-version.ts
+
+      - name: Prepare snapshot version
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bun run scripts/prepare-snapshot.ts
 
       - name: Run package prepack gates
         run: bun run prepack
 
       - name: Verify npm publish dry run
+        if: github.event_name == 'push'
         run: npm publish --dry-run --ignore-scripts
 
+      - name: Verify npm snapshot publish dry run
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        run: npm publish --dry-run --ignore-scripts --tag=next
+
       - name: Publish to npm
+        if: github.event_name == 'push'
         env:
-          NPM_CONFIG_PROVENANCE: 'true'
+          NPM_CONFIG_PROVENANCE: "true"
         run: npm publish --ignore-scripts
+
+      - name: Publish snapshot to npm next dist-tag
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+        run: npm publish --ignore-scripts --tag=next
