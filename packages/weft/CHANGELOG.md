@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.2] - 2026-09-29
+
+### Fixed
+
+- Fail a workflow when its checkpoint cannot be encoded, so its result no longer waits indefinitely after a deterministic encoding error.
+
 ## [0.27.1] - 2026-09-29
 
 ### Fixed
