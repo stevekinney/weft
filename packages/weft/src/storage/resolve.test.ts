@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type { HTTPStorage } from './http.ts';
 import { MemoryStorage } from './memory.ts';
 import { resolveStorage, type HTTPStorageConfiguration } from './resolve.ts';
@@ -142,42 +143,46 @@ describe('resolveStorage', () => {
   });
 
   it('rejects unknown storage configuration variants', async () => {
-    expect(resolveStorage({ type: 'nope' } as never)).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveStorage({ type: 'nope' } as never))).toThrow(
       'Unsupported storage configuration type: nope',
     );
   });
 
   it('rejects non-object storage configuration values predictably', async () => {
-    expect(resolveStorage(null as never)).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveStorage(null as never))).toThrow(
       'Unsupported storage configuration type: unknown',
     );
   });
 
   it('validates backend-specific runtime configuration before constructing storage', async () => {
-    expect(resolveStorage({ type: 'http' } as never)).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveStorage({ type: 'http' } as never))).toThrow(
       'HTTP storage configuration requires "baseUrl" as a string or URL.',
     );
-    expect(resolveStorage({ type: 'lmdb' } as never)).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveStorage({ type: 'lmdb' } as never))).toThrow(
       'LMDB storage configuration requires "path" as a string.',
     );
     expect(
-      resolveStorage({ type: 'lmdb', path: './weft-data', durability: 'eventual' } as never),
-    ).rejects.toThrow(
-      'LMDB storage configuration field "durability" must be one of full or relaxed.',
-    );
-    expect(resolveStorage({ type: 'neon' } as never)).rejects.toThrow(
+      await throwingRejectionOf(
+        resolveStorage({ type: 'lmdb', path: './weft-data', durability: 'eventual' } as never),
+      ),
+    ).toThrow('LMDB storage configuration field "durability" must be one of full or relaxed.');
+    expect(await throwingRejectionOf(resolveStorage({ type: 'neon' } as never))).toThrow(
       'Neon storage configuration requires "url" as a string.',
     );
-    expect(resolveStorage({ type: 'web-extension', area: 'chrome' } as never)).rejects.toThrow(
+    expect(
+      await throwingRejectionOf(resolveStorage({ type: 'web-extension', area: 'chrome' } as never)),
+    ).toThrow(
       'WebExtension storage configuration field "area" must be one of local, sync, session, or managed.',
     );
     expect(
-      resolveStorage({
-        type: 'http',
-        baseUrl: 'https://example.test',
-        headers: { ok: 1 },
-      } as never),
-    ).rejects.toThrow('HTTP storage configuration field "headers" must be a string record.');
+      await throwingRejectionOf(
+        resolveStorage({
+          type: 'http',
+          baseUrl: 'https://example.test',
+          headers: { ok: 1 },
+        } as never),
+      ),
+    ).toThrow('HTTP storage configuration field "headers" must be a string record.');
   });
 });
 

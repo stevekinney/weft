@@ -5,6 +5,7 @@ import type { WorkflowContext, WorkflowState, WorkflowStatus } from '../../core/
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   invalidJsonRequest,
   jsonRequest,
@@ -100,13 +101,13 @@ describe('operation test helpers', () => {
 
     try {
       expect(
-        waitForWorkflowStatus(engine, 'missing-workflow', 'running', {
-          intervalMilliseconds: 1,
-          timeoutMilliseconds: 1,
-        }),
-      ).rejects.toThrow(
-        'Timed out after 1ms waiting for workflow missing-workflow to reach running',
-      );
+        await throwingRejectionOf(
+          waitForWorkflowStatus(engine, 'missing-workflow', 'running', {
+            intervalMilliseconds: 1,
+            timeoutMilliseconds: 1,
+          }),
+        ),
+      ).toThrow('Timed out after 1ms waiting for workflow missing-workflow to reach running');
     } finally {
       engine[Symbol.dispose]();
     }
@@ -117,11 +118,13 @@ describe('operation test helpers', () => {
 
     try {
       expect(
-        waitForWorkflowStatus(engine, 'invalid-interval-workflow', 'running', {
-          intervalMilliseconds: 0,
-          timeoutMilliseconds: 1,
-        }),
-      ).rejects.toThrow('intervalMs must be a finite, positive number');
+        await throwingRejectionOf(
+          waitForWorkflowStatus(engine, 'invalid-interval-workflow', 'running', {
+            intervalMilliseconds: 0,
+            timeoutMilliseconds: 1,
+          }),
+        ),
+      ).toThrow('intervalMs must be a finite, positive number');
     } finally {
       engine[Symbol.dispose]();
     }

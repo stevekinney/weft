@@ -50,6 +50,7 @@ import {
   useFakeTimers,
   waitForCondition,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import {
@@ -348,9 +349,9 @@ describe('Leased-origin cancellation records durable intent before sending contr
 
     // The durable write criterion 10 gates delivery on never actually
     // commits — `cancelTask` must not have sent a `cancel` control anyway.
-    await expect(cancelTask(context, options, 'op-leased', 'operator requested')).rejects.toThrow(
-      'simulated durable storage failure',
-    );
+    expect(
+      await throwingRejectionOf(cancelTask(context, options, 'op-leased', 'operator requested')),
+    ).toThrow('simulated durable storage failure');
 
     const cancelMessages = ws.sentMessages
       .map((raw) => JSON.parse(raw) as { type: string })

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { jsonRpcEndpoint, sendJsonRpcRequest } from './json-rpc-request.ts';
 
 type StubServer = { url: string; stop: () => void };
@@ -52,7 +53,9 @@ describe('sendJsonRpcRequest', () => {
     // Objects that merely have a `jsonrpc` field but no `id` are not valid success envelopes.
     stub = serveRaw({ jsonrpc: '2.0', status: 'ok' });
     expect(
-      sendJsonRpcRequest({ server: stub.url }, 'weft.workflows.cancel', {}, 'x'),
-    ).rejects.toThrow('Invalid JSON-RPC response');
+      await throwingRejectionOf(
+        sendJsonRpcRequest({ server: stub.url }, 'weft.workflows.cancel', {}, 'x'),
+      ),
+    ).toThrow('Invalid JSON-RPC response');
   });
 });

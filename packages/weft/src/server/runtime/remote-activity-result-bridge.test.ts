@@ -74,9 +74,9 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
     });
     using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(
-      bridgeRemoteActivityResult(engine, operationId, { status: 'completed', value: 42 }),
-    ).resolves.toBeUndefined();
+    expect(
+      await bridgeRemoteActivityResult(engine, operationId, { status: 'completed', value: 42 }),
+    ).toBeUndefined();
 
     expect(completeSpy).toHaveBeenCalledWith(operationId, 42);
     expect(errorSpy).toHaveBeenCalledWith(
@@ -121,9 +121,12 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
     });
     using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(
-      bridgeRemoteActivityResult(engine, operationId, { status: 'failed', error: 'card declined' }),
-    ).resolves.toBeUndefined();
+    expect(
+      await bridgeRemoteActivityResult(engine, operationId, {
+        status: 'failed',
+        error: 'card declined',
+      }),
+    ).toBeUndefined();
 
     expect(failSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(

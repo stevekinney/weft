@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { WeftWorkflowClaimLostWarning } from './lease-deposition.ts';
 import {
   decodeEpoch,
@@ -245,7 +246,7 @@ describe('WorkflowClaimRegistry.renew', () => {
     const epochBefore = registry.currentEpoch('wf-1');
 
     gated.queueThrow(new Error('transient storage failure'));
-    expect(registry.renew('wf-1')).rejects.toThrow('transient storage failure');
+    expect(await throwingRejectionOf(registry.renew('wf-1'))).toThrow('transient storage failure');
 
     expect(warnings).toHaveLength(0);
     expect(registry.currentEpoch('wf-1')).toBe(epochBefore);
@@ -279,7 +280,7 @@ describe('WorkflowClaimRegistry.renew', () => {
     const renewPromise = registry.renew('wf-1');
     const releasePromise = registry.release('wf-1');
 
-    expect(renewPromise).rejects.toThrow('renew storage failure');
+    expect(await throwingRejectionOf(renewPromise)).toThrow('renew storage failure');
     const releaseResult = await releasePromise;
 
     expect(releaseResult).toEqual({ status: 'released', workflowId: 'wf-1' });
@@ -322,7 +323,7 @@ describe('WorkflowClaimRegistry.renew · racing takeover', () => {
 
     gate.release();
     // The renewal loses its CAS, because the bytes it conditioned on are gone.
-    expect(renewing).resolves.toMatchObject({ status: 'lost' });
+    expect(await renewing).toMatchObject({ status: 'lost' });
 
     // ...but it must not forget the generation the takeover just established.
     // Dropping it here would stop renewing a claim this engine durably owns and
@@ -728,7 +729,7 @@ describe('WorkflowClaimRegistry.releaseAll', () => {
 
     gated.queueThrow(new Error('storage unavailable'));
 
-    expect(registry.releaseAll()).resolves.toBeUndefined();
+    expect(await registry.releaseAll()).toBeUndefined();
     expect(await readHolderExists(storage, 'wf-2')).toBe(false);
   });
 });
@@ -768,7 +769,7 @@ describe('createWorkflowClaimTestStorage', () => {
     };
     const gated = createWorkflowClaimTestStorage(bareStorage);
 
-    expect(gated.storage.conditionalBatch?.([], [])).rejects.toThrow(
+    expect(await throwingRejectionOf(gated.storage.conditionalBatch?.([], []))).toThrow(
       /requires conditionalBatch support/,
     );
   });

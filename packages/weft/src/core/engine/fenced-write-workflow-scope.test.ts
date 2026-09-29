@@ -30,6 +30,7 @@ import type {
 } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   commitFencedEngineWrite,
@@ -272,21 +273,30 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     });
 
     const warnings: WeftWorkflowClaimLostWarning[] = [];
+    // `process.emitWarning` delivers the event asynchronously, so the test
+    // waits for it rather than for the rejection alone.
+    const warned = Promise.withResolvers<void>();
     const listener = (warning: Error): void => {
-      if (warning instanceof WeftWorkflowClaimLostWarning) warnings.push(warning);
+      if (warning instanceof WeftWorkflowClaimLostWarning) {
+        warnings.push(warning);
+        warned.resolve();
+      }
     };
     process.on('warning', listener);
 
     try {
       expect(
-        commitFencedEngineWrite(
-          internals,
-          'wf-unclaimed',
-          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-          [],
-          () => new Error('should not surface — deposed, not lost-race'),
+        await throwingRejectionOf(
+          commitFencedEngineWrite(
+            internals,
+            'wf-unclaimed',
+            [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+            [],
+            () => new Error('should not surface — deposed, not lost-race'),
+          ),
         ),
-      ).rejects.toThrow(EngineDeposedError);
+      ).toThrow(EngineDeposedError);
+      await warned.promise;
     } finally {
       process.off('warning', listener);
     }
@@ -307,14 +317,16 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
 
     const lostRace = new Error('lost the base-condition race');
     expect(
-      commitFencedEngineWrite(
-        internals,
-        'wf-a',
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [{ key: 'exists', expectedValue: null }], // require-absent on a present key => fails
-        () => lostRace,
+      await rejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          'wf-a',
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [{ key: 'exists', expectedValue: null }], // require-absent on a present key => fails
+          () => lostRace,
+        ),
       ),
-    ).rejects.toBe(lostRace);
+    ).toBe(lostRace);
     expect(internals.deposed).toBe(false);
 
     await engine[Symbol.asyncDispose]();
@@ -327,21 +339,30 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     await stealWorkflowClaim(internals.storage, 'wf-a', 99);
 
     const warnings: WeftWorkflowClaimLostWarning[] = [];
+    // `process.emitWarning` delivers the event asynchronously, so the test
+    // waits for it rather than for the rejection alone.
+    const warned = Promise.withResolvers<void>();
     const listener = (warning: Error): void => {
-      if (warning instanceof WeftWorkflowClaimLostWarning) warnings.push(warning);
+      if (warning instanceof WeftWorkflowClaimLostWarning) {
+        warnings.push(warning);
+        warned.resolve();
+      }
     };
     process.on('warning', listener);
 
     try {
       expect(
-        commitFencedEngineWrite(
-          internals,
-          'wf-a',
-          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-          [],
-          () => new Error('should not surface — the epoch fence was the one that failed'),
+        await throwingRejectionOf(
+          commitFencedEngineWrite(
+            internals,
+            'wf-a',
+            [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+            [],
+            () => new Error('should not surface — the epoch fence was the one that failed'),
+          ),
         ),
-      ).rejects.toThrow(EngineDeposedError);
+      ).toThrow(EngineDeposedError);
+      await warned.promise;
     } finally {
       process.off('warning', listener);
     }
@@ -378,14 +399,16 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     });
 
     expect(
-      commitFencedEngineWrite(
-        internals,
-        'wf-a',
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('should not surface — re-read threw, so we halt as deposed'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          'wf-a',
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('should not surface — re-read threw, so we halt as deposed'),
+        ),
       ),
-    ).rejects.toThrow(EngineDeposedError);
+    ).toThrow(EngineDeposedError);
     expect(internals.deposed).toBe(false);
 
     await engine[Symbol.asyncDispose]();
@@ -411,13 +434,15 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     // never a silent `false` a caller could misread as "already exists".
     await stealWorkflowClaim(internals.storage, 'wf-a', 42);
     expect(
-      commitFencedEngineWriteAllowingPreconditionFailure(
-        internals,
-        'wf-a',
-        [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
-        [],
+      await throwingRejectionOf(
+        commitFencedEngineWriteAllowingPreconditionFailure(
+          internals,
+          'wf-a',
+          [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
+          [],
+        ),
       ),
-    ).rejects.toThrow(EngineDeposedError);
+    ).toThrow(EngineDeposedError);
     expect(internals.deposed).toBe(false);
 
     await engine[Symbol.asyncDispose]();
@@ -437,14 +462,16 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     await stealWorkflowClaim(internals.storage, 'wf-a', 7);
 
     expect(
-      commitFencedEngineWrite(
-        internals,
-        'wf-a',
-        [{ type: 'put', key: 'a', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('unused'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          'wf-a',
+          [{ type: 'put', key: 'a', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('unused'),
+        ),
       ),
-    ).rejects.toThrow(EngineDeposedError);
+    ).toThrow(EngineDeposedError);
 
     // wf-b's write commits normally — this engine's own halt for wf-a never
     // touched wf-b's tracked claim or the shared `internals.deposed` flag.
@@ -481,14 +508,16 @@ describe('fenced-write.ts: per-workflow scope (ADR 0002, stage 89)', () => {
     // it entirely and fences on the GLOBAL epoch — losing it sets the
     // engine-wide `deposed` flag, unlike the per-workflow case above.
     expect(
-      commitFencedEngineWrite(
-        internals,
-        'wf-a',
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('unused'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          'wf-a',
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('unused'),
+        ),
       ),
-    ).rejects.toThrow(EngineDeposedError);
+    ).toThrow(EngineDeposedError);
     expect(internals.deposed).toBe(true);
 
     await engine[Symbol.asyncDispose]();

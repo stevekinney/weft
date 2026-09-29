@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { WorkerDeploymentCatalog } from '../../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../../worker/manifest/types.ts';
 import { issueWorkflowWorkerStartOverridePreview } from '../../worker/start-override-preview.ts';
@@ -431,13 +432,15 @@ describe('workflow worker versioning integration', () => {
     await second.result();
     const restarted = decode((await storage.get(KEYS.workflow(first.id)))!) as WorkflowState;
     expect(restarted.workerBinding?.current.buildId).toBe('build-2');
-    await expect(
-      engine.start('versioned-restart', null, {
-        id: first.id,
-        onTerminalConflict: 'start-new',
-        workerStartOverridePreview: preview,
-      }),
-    ).rejects.toThrow('workerStartOverridePreview');
+    expect(
+      await throwingRejectionOf(
+        engine.start('versioned-restart', null, {
+          id: first.id,
+          onTerminalConflict: 'start-new',
+          workerStartOverridePreview: preview,
+        }),
+      ),
+    ).toThrow('workerStartOverridePreview');
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { deserializeCheckpoint } from './checkpoint/serialization.ts';
 import { decode } from './codec.ts';
 import { Engine } from './engine.ts';
@@ -99,7 +100,7 @@ describe('ctx.getVersion workflow patching', () => {
     expect(recoveredHandles.map((handle) => handle.id)).toEqual(['versioned-old']);
 
     await recoveredEngine.signal('versioned-old', 'continue', 'old-signal');
-    expect(recoveredHandles[0]!.result()).resolves.toEqual({
+    expect(await recoveredHandles[0]!.result()).toEqual({
       branch: 'old',
       signal: 'old-signal',
       version: 1,
@@ -109,7 +110,7 @@ describe('ctx.getVersion workflow patching', () => {
       id: 'versioned-new',
     });
     await recoveredEngine.signal('versioned-new', 'continue', 'new-signal');
-    expect(newHandle.result()).resolves.toEqual({
+    expect(await newHandle.result()).toEqual({
       branch: 'new',
       signal: 'new-signal',
       version: 2,
@@ -138,7 +139,7 @@ describe('ctx.getVersion workflow patching', () => {
     const recoveredHandles = await recoveredEngine.recoverAll();
     expect(recoveredHandles).toHaveLength(1);
 
-    expect(recoveredHandles[0]!.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(recoveredHandles[0]!.result())).toThrow(
       'Workflow version patch "shipping-v2" is pinned to version 1, below the minimum supported version 2',
     );
 
@@ -167,7 +168,7 @@ describe('ctx.getVersion workflow patching', () => {
     expect(recoveredHandles).toHaveLength(1);
 
     await recoveredEngine.signal('version-crash-window', 'continue', 'after-crash');
-    expect(recoveredHandles[0]!.result()).resolves.toEqual({
+    expect(await recoveredHandles[0]!.result()).toEqual({
       branch: 'new',
       signal: 'after-crash',
       version: 2,

@@ -34,6 +34,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { RealmReadyOutcome } from '../worker-realm-readiness.ts';
 import type { RealmLifecycle, RealmRestartOutcome } from './realm-lifecycle.ts';
 import type { RealmTurnEnvelope } from './realm-protocol.ts';
@@ -150,7 +151,7 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
       const pending = realm.dispatchTurn(envelope, { hello: 'world' });
       realm.deliverResult(envelope, { echoed: true });
 
-      await expect(pending).resolves.toEqual({ echoed: true });
+      expect(await pending).toEqual({ echoed: true });
       realm.discard();
       await realm.dispose();
     });
@@ -159,9 +160,11 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
       const realm = harness.create();
       const activation = await readyAndActive(realm);
 
-      await expect(
-        realm.dispatchTurn({ ...activation, workflowRevision: 'wrong-revision', turnId: 1 }, {}),
-      ).rejects.toThrow();
+      expect(
+        await throwingRejectionOf(
+          realm.dispatchTurn({ ...activation, workflowRevision: 'wrong-revision', turnId: 1 }, {}),
+        ),
+      ).toThrow();
       expect(realm.pendingTurnCount).toBe(0);
       realm.discard();
       await realm.dispose();
@@ -171,7 +174,9 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
       const realm = harness.create();
       const activation = await readyAndActive(realm);
 
-      await expect(realm.dispatchTurn({ ...activation, turnId: 2 }, {})).rejects.toThrow();
+      expect(
+        await throwingRejectionOf(realm.dispatchTurn({ ...activation, turnId: 2 }, {})),
+      ).toThrow();
       expect(realm.pendingTurnCount).toBe(0);
       realm.discard();
       await realm.dispose();
@@ -190,7 +195,7 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
 
       expect(realm.pendingTurnCount).toBe(1);
       realm.deliverResult(envelope, 'the-real-result');
-      await expect(pending).resolves.toBe('the-real-result');
+      expect(await pending).toBe('the-real-result');
       realm.discard();
       await realm.dispose();
     });
@@ -207,8 +212,14 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
 
       expect(realm.lifecycle.state).toBe('crashed');
       expect(realm.pendingTurnCount).toBe(0);
-      await expect(first).rejects.toThrow();
-      await expect(second).rejects.toThrow();
+      // Both turns reject at the crash; observe them together so neither is
+      // left without a handler while the other is awaited.
+      const [firstRejection, secondRejection] = await Promise.all([
+        throwingRejectionOf(first),
+        throwingRejectionOf(second),
+      ]);
+      expect(firstRejection).toThrow();
+      expect(secondRejection).toThrow();
       await realm.dispose();
     });
 
@@ -222,7 +233,7 @@ export function describeRealmConformance(harness: RealmConformanceHarness): void
       realm.terminate();
 
       expect(realm.lifecycle.state).toBe('terminated');
-      await expect(pending).rejects.toThrow();
+      expect(await throwingRejectionOf(pending)).toThrow();
 
       // "A drained realm terminates and cannot emit an accepted late
       // result" -- delivering one now must be a silent no-op, never a

@@ -18,6 +18,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
 import type { RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
@@ -53,10 +54,12 @@ describe('EngineOwnedRemoteActivityBroker malformed-record handling (COR-219)', 
       enqueuedCount += 1;
     });
 
-    await expect(broker.enqueue(fixtureRequest())).rejects.toBeInstanceOf(
+    expect(await rejectionOf(broker.enqueue(fixtureRequest()))).toBeInstanceOf(
       PersistedDataCorruptError,
     );
-    await expect(broker.enqueue(fixtureRequest())).rejects.toThrow(/op-malformed-1|corrupt/i);
+    expect(await throwingRejectionOf(broker.enqueue(fixtureRequest()))).toThrow(
+      /op-malformed-1|corrupt/i,
+    );
 
     // The malformed bytes must survive untouched — no overwrite, no fresh
     // `queued` record silently created in their place.

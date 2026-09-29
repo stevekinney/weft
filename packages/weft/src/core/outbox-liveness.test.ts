@@ -12,6 +12,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
 import { ApplicationDeliveryValidationError } from './outbox-guards.ts';
 import {
@@ -89,10 +90,10 @@ describe('Outbox waitForDue', () => {
 
   it('validates the wait budget', async () => {
     const { outbox } = createOutboxFixture();
-    expect(outbox.waitForDue({ timeoutMs: -1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(outbox.waitForDue({ timeoutMs: -1 }))).toThrow(
       ApplicationDeliveryValidationError,
     );
-    expect(outbox.waitForDue({ pollIntervalMs: 0 })).rejects.toThrow(
+    expect(await throwingRejectionOf(outbox.waitForDue({ pollIntervalMs: 0 }))).toThrow(
       ApplicationDeliveryValidationError,
     );
     outbox.dispose();
@@ -169,7 +170,7 @@ describe('Outbox awaitCleanup', () => {
     const aborted = outbox.awaitCleanup({ deliveryId, timeoutMs: 1000, signal: controller.signal });
     await flush();
     controller.abort(new Error('caller gave up'));
-    expect(aborted).rejects.toThrow('caller gave up');
+    expect(await throwingRejectionOf(aborted)).toThrow('caller gave up');
 
     // A first read that never returns within the budget has nothing to report.
     const stalled = createOutboxFixture({
@@ -183,7 +184,7 @@ describe('Outbox awaitCleanup', () => {
     const spent = stalled.awaitCleanup({ deliveryId, timeoutMs: 10 });
     await flush();
     await advanceTimersByTime(10);
-    expect(spent).rejects.toThrow(WaitBudgetElapsedError);
+    expect(await throwingRejectionOf(spent)).toThrow(WaitBudgetElapsedError);
     stalled.dispose();
     outbox.dispose();
   });

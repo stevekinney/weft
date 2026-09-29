@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { FleetEventEnvelope } from '../fleet-event-feed.ts';
 import { createFleetEventFeed } from '../fleet-event-feed.ts';
 import { anonymousPrincipal } from '../principal.ts';
@@ -108,13 +109,15 @@ describe('weft.events.subscribe operation', () => {
     };
 
     expect(
-      fleetEventsSubscriptionOperation.invoke({
-        input: { fromCursor: 'not-a-cursor' },
-        principal: anonymousPrincipal(),
-        engine: { fleetFeed },
-        transport: 'jsonRpcWebSocket',
-      }),
-    ).rejects.toMatchObject({
+      await rejectionOf(
+        fleetEventsSubscriptionOperation.invoke({
+          input: { fromCursor: 'not-a-cursor' },
+          principal: anonymousPrincipal(),
+          engine: { fleetFeed },
+          transport: 'jsonRpcWebSocket',
+        }),
+      ),
+    ).toMatchObject({
       code: 'InvalidParams',
       message: 'Invalid cursor',
     });
@@ -146,7 +149,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectFirstSequences(subscription.iterable, 1)).resolves.toEqual([1001]);
+    expect(await collectFirstSequences(subscription.iterable, 1)).toEqual([1001]);
     await subscription.close();
   });
 
@@ -164,7 +167,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectSequences(subscription.iterable)).resolves.toEqual([1, 3]);
+    expect(await collectSequences(subscription.iterable)).toEqual([1, 3]);
     await subscription.close();
   });
 
@@ -178,7 +181,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectSequences(subscription.iterable)).resolves.toEqual([2]);
+    expect(await collectSequences(subscription.iterable)).toEqual([2]);
     await subscription.close();
   });
 
@@ -199,7 +202,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectSequences(subscription.iterable)).resolves.toEqual([4, 5]);
+    expect(await collectSequences(subscription.iterable)).toEqual([4, 5]);
     await subscription.close();
   });
 
@@ -253,7 +256,7 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectSequences(subscription.iterable)).rejects.toMatchObject({
+    expect(await rejectionOf(collectSequences(subscription.iterable))).toMatchObject({
       code: 'InvalidParams',
       message:
         'Fleet event replay window is 1001 matching events; maximum is 1000. Supply a more recent fromCursor.',
@@ -319,6 +322,6 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    expect(collectSequences(subscription.iterable)).resolves.toEqual([22]);
+    expect(await collectSequences(subscription.iterable)).toEqual([22]);
   });
 });

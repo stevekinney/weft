@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import {
   processOperation,
@@ -33,6 +34,13 @@ function createRouterCallbacks(): OperationRouterCallbacks {
     finalizePendingTimelineEntry: mock(() => {}),
     feedOperationResult: mock(() => {}),
   };
+}
+
+function createRouterInternals(workflowId: string, operationId: string) {
+  return {
+    checkpoints: new Map(),
+    durableInlineOperations: new Map([[workflowId, { operationId, type: 'activity' }]]),
+  } as never;
 }
 
 describe('operations router', () => {
@@ -94,9 +102,13 @@ describe('operations router', () => {
     const callbacks = createRouterCallbacks();
 
     await processOperation(
-      {} as never,
+      createRouterInternals('workflow-router', 'unsupported:1'),
       'workflow-router',
-      { type: 'unknown-operation', callerStack: 'workflow stack' } as never,
+      {
+        type: 'unknown-operation',
+        operationId: 'unsupported:1',
+        callerStack: 'workflow stack',
+      } as never,
       callbacks,
     );
 
@@ -116,6 +128,8 @@ describe('operations router', () => {
       expect.objectContaining({
         value: expect.any(Error),
       }),
+      'unsupported:1',
+      undefined,
     );
   });
 
@@ -123,9 +137,9 @@ describe('operations router', () => {
     const callbacks = createRouterCallbacks();
 
     await runOperationWithoutResult(
-      {} as never,
+      createRouterInternals('workflow-without-result', 'operation:1'),
       'workflow-without-result',
-      { callerStack: 'workflow call site' },
+      { operationId: 'operation:1', callerStack: 'workflow call site' },
       async () => {
         throw new Error('operation failed');
       },
@@ -139,13 +153,27 @@ describe('operations router', () => {
     );
   });
 
+  it('rejects result operations that omit their operation ID', async () => {
+    expect(
+      await throwingRejectionOf(
+        runOperationWithResult(
+          createRouterInternals('workflow-without-operation-id', 'operation:1'),
+          'workflow-without-operation-id',
+          {} as never,
+          async () => 'finished',
+          createRouterCallbacks(),
+        ),
+      ),
+    ).toThrow('Operation result is missing its operation ID');
+  });
+
   it('completes operations that produce a result', async () => {
     const callbacks = createRouterCallbacks();
 
     await runOperationWithResult(
-      {} as never,
+      createRouterInternals('workflow-with-result', 'operation:2'),
       'workflow-with-result',
-      {},
+      { operationId: 'operation:2' },
       async () => 'finished',
       callbacks,
     );
@@ -155,9 +183,12 @@ describe('operations router', () => {
       'completed',
       'finished',
     );
-    expect(callbacks.feedOperationResult).toHaveBeenCalledWith('workflow-with-result', {
-      status: 'completed',
-      value: 'finished',
-    });
+    expect(callbacks.feedOperationResult).toHaveBeenCalledWith(
+      'workflow-with-result',
+      { status: 'completed', value: 'finished' },
+      undefined,
+      'operation:2',
+      undefined,
+    );
   });
 });

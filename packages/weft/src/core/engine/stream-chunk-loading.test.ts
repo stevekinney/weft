@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { loadStoredStreamChunks, loadStoredStreamTailSequence } from './stream-chunk-loading.ts';
 
@@ -46,27 +47,27 @@ describe('loadStoredStreamChunks', () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamChunk('workflow-1', 'tokens', 0), new Uint8Array([0xc1]));
 
-    expect(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')).rejects.toThrow(
-      'Unrecognized type byte: 0xc1',
-    );
+    expect(
+      await throwingRejectionOf(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')),
+    ).toThrow('Unrecognized type byte: 0xc1');
   });
 
   it('loads a stored stream tail sequence', async () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 7 }));
 
-    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBe(7);
+    expect(await loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).toBe(7);
   });
 
   it('treats missing or malformed stream tail records as absent', async () => {
     const storage = new MemoryStorage();
 
-    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(await loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).toBeNull();
 
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 'bad' }));
-    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(await loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).toBeNull();
 
     await storage.put(KEYS.streamTail('workflow-1', 'tokens'), new Uint8Array([0xc1]));
-    expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+    expect(await loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).toBeNull();
   });
 });

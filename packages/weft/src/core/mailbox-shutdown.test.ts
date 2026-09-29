@@ -17,6 +17,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   admitOne,
   claimOne,
@@ -289,7 +290,7 @@ describe('Mailbox disposal', () => {
   it('aborts a pending claim through its own signal', async () => {
     const { mailbox } = createMailboxFixture();
     await admitOne(mailbox);
-    expect(mailbox.claim({ signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(await throwingRejectionOf(mailbox.claim({ signal: AbortSignal.abort() }))).toThrow();
     // The durable work is untouched by an aborted claim attempt.
     const listed = await mailbox.list();
     expect(listed[0]?.state).toBe('available');

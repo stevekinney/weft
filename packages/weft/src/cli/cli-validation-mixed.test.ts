@@ -25,7 +25,7 @@ describe('executeValidate', () => {
       mkdirSync(examplePath, { recursive: true });
       await Bun.write(join(examplePath, 'only.test.ts'), 'export const testWorkflow = "clean";');
 
-      expect(expandGlobEntryPaths([join(workspacePath, 'examples/*.ts')])).resolves.toEqual([]);
+      expect(await expandGlobEntryPaths([join(workspacePath, 'examples/*.ts')])).toEqual([]);
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }

@@ -106,8 +106,15 @@ export function createActivityOperationCallbacks<
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
     finalizePendingTimelineEntry: (workflowId, status, value) =>
       finalizePendingTimelineEntry(getInternals(engine), workflowId, status, value),
-    feedOperationResult: (workflowId, result, error) =>
-      feedOperationResult(getInternals(engine), workflowId, result, error),
+    feedOperationResult: (workflowId, result, error, operationId, workflowExecutionToken) =>
+      feedOperationResult(
+        getInternals(engine),
+        workflowId,
+        result,
+        error,
+        operationId,
+        workflowExecutionToken,
+      ),
     getComposedActivityInterceptor: () => getComposedActivityInterceptor(getInternals(engine)),
     getComposedWorkflowInterceptor: () => getComposedWorkflowInterceptor(getInternals(engine)),
   };
@@ -118,7 +125,10 @@ export function createCoordinationOperationCallbacks<
   TActivities extends object,
 >(engine: Engine<TWorkflows, TActivities>): CoordinationOperationCallbacks {
   return {
-    completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    completeOperation: (workflowId, value, operationId, workflowExecutionToken) =>
+      completeOperationForEngine(engine, workflowId, value, operationId, workflowExecutionToken),
+    failOperation: (workflowId, operation, error, workflowExecutionToken) =>
+      failOperationForEngine(engine, workflowId, operation, error, workflowExecutionToken),
     runOperationWithResult: (workflowId, operation, execute) =>
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
     executeSubOperation: (workflowId, operation, signal, speculativeState) =>
@@ -132,9 +142,10 @@ export function createConditionOperationCallbacks<
   TActivities extends object,
 >(engine: Engine<TWorkflows, TActivities>): ConditionOperationCallbacks {
   return {
-    completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
-    failOperation: (workflowId, operation, error) =>
-      failOperationForEngine(engine, workflowId, operation, error),
+    completeOperation: (workflowId, value, operationId, workflowExecutionToken) =>
+      completeOperationForEngine(engine, workflowId, value, operationId, workflowExecutionToken),
+    failOperation: (workflowId, operation, error, workflowExecutionToken) =>
+      failOperationForEngine(engine, workflowId, operation, error, workflowExecutionToken),
     isWorkflowRunning: async (workflowId) => {
       const state = await loadWorkflowState(getInternals(engine), workflowId);
       return state?.status === 'running';
@@ -191,7 +202,8 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
   engine: Engine<TWorkflows, TActivities>,
 ): TimeOperationCallbacks {
   return {
-    completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    completeOperation: (workflowId, value, operationId, workflowExecutionToken) =>
+      completeOperationForEngine(engine, workflowId, value, operationId, workflowExecutionToken),
     dispatchEvent: (event) => engine.dispatchEvent(event),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     failWorkflow: (workflowId, error) =>
@@ -275,7 +287,8 @@ export function createUpdateCallbacks<TWorkflows extends object, TActivities ext
     dispatchEvent: (event) => engine.dispatchEvent(event),
     broadcast: (message) =>
       broadcastFromInternals(getInternals(engine), message, createBroadcastCallbacks(engine)),
-    completeOperation: (id, value) => completeOperationForEngine(engine, id, value),
+    completeOperation: (id, value, operationId, workflowExecutionToken) =>
+      completeOperationForEngine(engine, id, value, operationId, workflowExecutionToken),
     guardTerminalWorkflow: (id) =>
       guardTerminalWorkflow(getInternals(engine), id, createGuardCallbacks(engine)),
     guardTerminalWorkflowAfterCoordinatedRequest: (id, updateId) =>
@@ -324,7 +337,6 @@ export function createUpdateCallbacks<TWorkflows extends object, TActivities ext
       ),
   };
 }
-
 async function persistCoordinatedUpdateResponse<
   TWorkflows extends object,
   TActivities extends object,
@@ -370,15 +382,22 @@ async function persistCoordinatedUpdateResponse<
     );
   }
 }
-
 export function completeOperationForEngine<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
   workflowId: string,
   value: unknown,
+  operationId: string,
+  workflowExecutionToken?: string,
 ): void {
-  return completeOperation(getInternals(engine), workflowId, value, callRouterCallbacks(engine));
+  return completeOperation(
+    getInternals(engine),
+    workflowId,
+    value,
+    callRouterCallbacks(engine),
+    operationId,
+    workflowExecutionToken,
+  );
 }
-
 /**
  * Fail the pending operation for a workflow, feeding the error to the generator
  * so it re-throws at the `yield*` site (catchable by the workflow body). Used by
@@ -390,6 +409,7 @@ export function failOperationForEngine<TWorkflows extends object, TActivities ex
   workflowId: string,
   operation: OperationWithCallerStack,
   error: unknown,
+  workflowExecutionToken?: string,
 ): void {
   return failOperation(
     getInternals(engine),
@@ -397,9 +417,10 @@ export function failOperationForEngine<TWorkflows extends object, TActivities ex
     operation,
     error,
     callRouterCallbacks(engine),
+    (operation as { operationId: string }).operationId,
+    workflowExecutionToken,
   );
 }
-
 export async function runOperationWithResultForEngine<
   TWorkflows extends object,
   TActivities extends object,
@@ -417,7 +438,6 @@ export async function runOperationWithResultForEngine<
     callRouterCallbacks(engine),
   );
 }
-
 export async function runOperationWithoutResultForEngine<
   TWorkflows extends object,
   TActivities extends object,
@@ -435,7 +455,6 @@ export async function runOperationWithoutResultForEngine<
     callRouterCallbacks(engine),
   );
 }
-
 export async function executeSubOperationForEngine<
   TWorkflows extends object,
   TActivities extends object,
@@ -460,7 +479,6 @@ export async function executeSubOperationForEngine<
     speculativeState,
   );
 }
-
 export async function processReviewOperationForEngine<
   TWorkflows extends object,
   TActivities extends object,
@@ -468,11 +486,15 @@ export async function processReviewOperationForEngine<
   engine: Engine<TWorkflows, TActivities>,
   workflowId: string,
   options: HumanReviewOptions,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
 ): Promise<void> {
   return processReviewOperation(
     getInternals(engine),
     workflowId,
     options,
+    operationId,
+    workflowExecutionToken,
     createReviewOperationCallbacks(engine),
   );
 }

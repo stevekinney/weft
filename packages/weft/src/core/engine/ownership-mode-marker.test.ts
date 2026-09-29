@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { OwnershipModeMismatchError } from './lease-errors.ts';
 import {
   assertOwnershipModeMarker,
@@ -118,8 +119,12 @@ describe('bootstrapOwnershipGates', () => {
     };
 
     expect(
-      bootstrapOwnershipGates({ storage: noCasStorage, ownershipMode: 'none', getNow: () => 0 }),
-    ).resolves.toBeUndefined();
+      await bootstrapOwnershipGates({
+        storage: noCasStorage,
+        ownershipMode: 'none',
+        getNow: () => 0,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -182,8 +187,12 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     );
 
     expect(
-      assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
-    ).resolves.toBeUndefined();
+      await assertOwnershipModeMarker({
+        storage,
+        configuredMode: 'workflow-lease',
+        getNow: () => 999,
+      }),
+    ).toBeUndefined();
 
     // Verify Gate 2 did not overwrite the existing marker on a match.
     const bytes = await storage.get(markerKey);
@@ -220,8 +229,12 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     const storage = createCasLossStorage({ concurrentWriteBytes: concurrentBytes });
 
     expect(
-      assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
-    ).resolves.toBeUndefined();
+      await assertOwnershipModeMarker({
+        storage,
+        configuredMode: 'workflow-lease',
+        getNow: () => 999,
+      }),
+    ).toBeUndefined();
   });
 
   it('on a CAS loss, re-reads and throws OwnershipModeMismatchError when the winning engine used a different mode', async () => {
@@ -254,8 +267,10 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     });
 
     expect(
-      assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
-    ).rejects.toThrow(/absent again/);
+      await throwingRejectionOf(
+        assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
+      ),
+    ).toThrow(/absent again/);
   });
 
   it('a corrupt marker fails closed instead of being treated as absent', async () => {
@@ -264,8 +279,10 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     await storage.put(markerKey, new TextEncoder().encode(JSON.stringify({ mode: 'bogus-mode' })));
 
     expect(
-      assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
-    ).rejects.toThrow(/does not decode as a valid/);
+      await throwingRejectionOf(
+        assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
+      ),
+    ).toThrow(/does not decode as a valid/);
 
     // Also prove it was not silently overwritten: the corrupt bytes remain.
     const bytes = await storage.get(markerKey);
@@ -279,7 +296,9 @@ describe('assertOwnershipModeMarker (Gate 2)', () => {
     const storage = createCasLossStorage({ concurrentWriteBytes: corruptBytes });
 
     expect(
-      assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
-    ).rejects.toThrow(/does not decode as a valid/);
+      await throwingRejectionOf(
+        assertOwnershipModeMarker({ storage, configuredMode: 'workflow-lease', getNow: () => 999 }),
+      ),
+    ).toThrow(/does not decode as a valid/);
   });
 });

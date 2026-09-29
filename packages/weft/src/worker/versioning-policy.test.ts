@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { encode } from '../core/codec.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   bindingFromExecution,
   inheritWorkflowWorkerBinding,
@@ -142,9 +143,9 @@ describe('workflow worker versioning policy', () => {
     const first = await bindWorkflowWorkerAtStart(storage, binding('build-1'));
     const retry = await bindWorkflowWorkerAtStart(storage, binding('build-1'));
     expect(retry).toEqual(first);
-    await expect(bindWorkflowWorkerAtStart(storage, binding('build-2'))).rejects.toThrow(
-      'already has a different worker binding',
-    );
+    expect(
+      await throwingRejectionOf(bindWorkflowWorkerAtStart(storage, binding('build-2'))),
+    ).toThrow('already has a different worker binding');
   });
 
   it('rejects a lost concurrent start binding CAS during the initial batch', async () => {
@@ -155,9 +156,9 @@ describe('workflow worker versioning policy', () => {
     }
     using storage = new LostCasStorage();
     await seedWorkflow(storage);
-    await expect(bindWorkflowWorkerAtStart(storage, binding('build-1'))).rejects.toThrow(
-      'Concurrent worker binding changed workflow',
-    );
+    expect(
+      await throwingRejectionOf(bindWorkflowWorkerAtStart(storage, binding('build-1'))),
+    ).toThrow('Concurrent worker binding changed workflow');
   });
 
   it('records bounded upgrades only under the exact contract at a checkpoint boundary', async () => {
@@ -205,25 +206,27 @@ describe('workflow worker versioning policy', () => {
     expect(upgraded.history).toHaveLength(1);
     const stored = await readWorkflowWorkerBinding(storage, first.workflowId);
     expect(stored?.current.buildId).toBe('build-2');
-    await expect(
-      recordWorkflowWorkerUpgrade(
-        storage,
-        {
-          mode: 'auto-upgrade',
-          maxBindingHistory: 0,
-          compatibility: {
-            deploymentName: candidate.deploymentName,
-            buildId: candidate.buildId,
-            artifactDigest: candidate.artifactDigest,
-            manifestDigest: candidate.manifestDigest,
-            workflowRevision: first.workflowRevision,
-            activityContractHash: first.activityContractHash,
+    expect(
+      await throwingRejectionOf(
+        recordWorkflowWorkerUpgrade(
+          storage,
+          {
+            mode: 'auto-upgrade',
+            maxBindingHistory: 0,
+            compatibility: {
+              deploymentName: candidate.deploymentName,
+              buildId: candidate.buildId,
+              artifactDigest: candidate.artifactDigest,
+              manifestDigest: candidate.manifestDigest,
+              workflowRevision: first.workflowRevision,
+              activityContractHash: first.activityContractHash,
+            },
           },
-        },
-        candidate,
-        binding('build-3'),
+          candidate,
+          binding('build-3'),
+        ),
       ),
-    ).rejects.toThrow('maxBindingHistory');
+    ).toThrow('maxBindingHistory');
   });
 
   it('automatically records a compatible upgrade after a checkpoint commit', async () => {

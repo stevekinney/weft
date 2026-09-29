@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { asConcreteContext } from './context/run-operation.ts';
 import { Engine } from './engine.ts';
 import {
@@ -103,7 +104,7 @@ describe('step-context', () => {
     engine.register(errorStepWorkflow);
 
     const handle = await engine.start('error-step', {});
-    expect(handle.result()).rejects.toThrow('Step failed intentionally');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Step failed intentionally');
   });
 
   it('auto-detects step functions in register()', async () => {
@@ -386,7 +387,7 @@ describe('step-context durability', () => {
     );
 
     const handle = await engine.start('failing-step', null, { id: 'wf-failing-step' });
-    expect(handle.result()).rejects.toThrow('step blew up');
+    expect(await throwingRejectionOf(handle.result())).toThrow('step blew up');
 
     engine[Symbol.dispose]();
   });
@@ -413,7 +414,7 @@ describe('step-context durability', () => {
     );
 
     const handle = await engine.start('lone-failing-step', null, { id: 'wf-lone-failing' });
-    expect(handle.result()).rejects.toThrow('lone boom');
+    expect(await throwingRejectionOf(handle.result())).toThrow('lone boom');
 
     engine[Symbol.dispose]();
   }, 5_000);

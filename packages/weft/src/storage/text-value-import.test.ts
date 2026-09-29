@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type { Storage } from './interface.ts';
 import { storageConditionalBatch } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
@@ -32,12 +33,14 @@ describe('copyTextKeyValueRowsToStorage', () => {
     await storage.put('app:my-service:session:1', new TextEncoder().encode('existing'));
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        targetPrefix: 'app:my-service',
-        rows: [{ key: 'session:1', value: 'new' }],
-      }),
-    ).rejects.toThrow('Target storage already contains key "app:my-service:session:1"');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          targetPrefix: 'app:my-service',
+          rows: [{ key: 'session:1', value: 'new' }],
+        }),
+      ),
+    ).toThrow('Target storage already contains key "app:my-service:session:1"');
 
     expect(decode(await storage.get('app:my-service:session:1'))).toBe('existing');
   });
@@ -46,46 +49,52 @@ describe('copyTextKeyValueRowsToStorage', () => {
     await using storage = new MemoryStorage();
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        rows: [
-          { key: 'same', value: 'first' },
-          { key: 'same', value: 'second' },
-        ],
-      }),
-    ).rejects.toThrow('Text key-value import source produced duplicate target key "same"');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          rows: [
+            { key: 'same', value: 'first' },
+            { key: 'same', value: 'second' },
+          ],
+        }),
+      ),
+    ).toThrow('Text key-value import source produced duplicate target key "same"');
   });
 
   it('rejects rows whose runtime key or value is not text', async () => {
     await using storage = new MemoryStorage();
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        rows: [{ key: 1, value: 'session' } as never],
-      }),
-    ).rejects.toThrow('Text key-value import rows must have string keys');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          rows: [{ key: 1, value: 'session' } as never],
+        }),
+      ),
+    ).toThrow('Text key-value import rows must have string keys');
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        rows: [{ key: 'session:1', value: 1 } as never],
-      }),
-    ).rejects.toThrow('Text key-value import rows must have string values');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          rows: [{ key: 'session:1', value: 1 } as never],
+        }),
+      ),
+    ).toThrow('Text key-value import rows must have string values');
   });
 
   it('rejects target keys that would write into Weft reserved keyspace', async () => {
     await using storage = new MemoryStorage();
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        targetPrefix: 'wf',
-        rows: [{ key: 'workflow-id', value: 'reserved' }],
-      }),
-    ).rejects.toThrow(
-      'Text key-value import target key "wf:workflow-id" uses a Weft-reserved key prefix',
-    );
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          targetPrefix: 'wf',
+          rows: [{ key: 'workflow-id', value: 'reserved' }],
+        }),
+      ),
+    ).toThrow('Text key-value import target key "wf:workflow-id" uses a Weft-reserved key prefix');
   });
 
   it('uses conditionalBatch so target changes during import abort the copy', async () => {
@@ -102,11 +111,13 @@ describe('copyTextKeyValueRowsToStorage', () => {
     await using storage = new RacingStorage();
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage,
-        rows: [{ key: 'session:1', value: 'new' }],
-      }),
-    ).rejects.toThrow('Target storage changed before import could commit');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage,
+          rows: [{ key: 'session:1', value: 'new' }],
+        }),
+      ),
+    ).toThrow('Target storage changed before import could commit');
 
     expect(decode(await storage.get('session:1'))).toBe('racing');
   });
@@ -139,12 +150,14 @@ describe('copyTextKeyValueRowsToStorage', () => {
     };
 
     expect(
-      copyTextKeyValueRowsToStorage({
-        storage: unavailable,
-        rows: [{ key: 'session:1', value: 'new' }],
-      }),
-    ).rejects.toThrow('requires storage capability "conditionalBatch"');
+      await throwingRejectionOf(
+        copyTextKeyValueRowsToStorage({
+          storage: unavailable,
+          rows: [{ key: 'session:1', value: 'new' }],
+        }),
+      ),
+    ).toThrow('requires storage capability "conditionalBatch"');
 
-    expect(storageConditionalBatch(storage, [], [])).resolves.toBe(true);
+    expect(await storageConditionalBatch(storage, [], [])).toBe(true);
   });
 });

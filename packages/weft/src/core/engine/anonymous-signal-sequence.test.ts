@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import { commitAnonymousSignalOperations } from './anonymous-signal-sequence.ts';
 import type { EngineInternals } from './internals.ts';
@@ -76,14 +77,16 @@ describe('anonymous signal sequence', () => {
     await storage.put(KEYS.signalSequence(workflowId), encode('bad-sequence'));
 
     expect(
-      commitAnonymousSignalOperations(
-        createInternals(storage),
-        workflowId,
-        [{ signalName: 'continue', payload: null }],
-        () => {},
-        () => {},
+      await throwingRejectionOf(
+        commitAnonymousSignalOperations(
+          createInternals(storage),
+          workflowId,
+          [{ signalName: 'continue', payload: null }],
+          () => {},
+          () => {},
+        ),
       ),
-    ).rejects.toThrow('Stored anonymous signal sequence must be a non-negative safe integer');
+    ).toThrow('Stored anonymous signal sequence must be a non-negative safe integer');
   });
 
   it('rejects anonymous signal sequence overflow discovered during a scan', async () => {
@@ -99,14 +102,16 @@ describe('anonymous signal sequence', () => {
     );
 
     expect(
-      commitAnonymousSignalOperations(
-        createInternals(storage),
-        workflowId,
-        [{ signalName: 'continue', payload: null }],
-        () => {},
-        () => {},
+      await throwingRejectionOf(
+        commitAnonymousSignalOperations(
+          createInternals(storage),
+          workflowId,
+          [{ signalName: 'continue', payload: null }],
+          () => {},
+          () => {},
+        ),
       ),
-    ).rejects.toThrow(`Anonymous signal sequence overflow for workflow "${workflowId}"`);
+    ).toThrow(`Anonymous signal sequence overflow for workflow "${workflowId}"`);
   });
 
   it('throws after exhausting compare-and-set attempts', async () => {
@@ -114,13 +119,15 @@ describe('anonymous signal sequence', () => {
     const workflowId = 'anonymous-retry-exhaustion';
 
     expect(
-      commitAnonymousSignalOperations(
-        createInternals(storage),
-        workflowId,
-        [{ signalName: 'continue', payload: null }],
-        () => {},
-        () => {},
+      await throwingRejectionOf(
+        commitAnonymousSignalOperations(
+          createInternals(storage),
+          workflowId,
+          [{ signalName: 'continue', payload: null }],
+          () => {},
+          () => {},
+        ),
       ),
-    ).rejects.toThrow(`Could not allocate anonymous signal sequence for workflow "${workflowId}"`);
+    ).toThrow(`Could not allocate anonymous signal sequence for workflow "${workflowId}"`);
   });
 });

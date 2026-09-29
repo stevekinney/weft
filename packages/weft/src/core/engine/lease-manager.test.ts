@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS, type Storage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './lease-errors.ts';
 import {
   createLeaseManager,
@@ -177,7 +178,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
 
     await manager.acquire();
-    expect(manager.release()).resolves.toBe(true);
+    expect(await manager.release()).toBe(true);
 
     expect(await readHolder(storage)).toBeNull();
     // The epoch is NOT deleted — a future boot must re-acquire above it.
@@ -197,7 +198,7 @@ describe('createLeaseManager', () => {
     clock.advance(TTL_MS);
     await successor.acquire();
 
-    expect(incumbent.release()).resolves.toBe(false);
+    expect(await incumbent.release()).toBe(false);
     expect(await holderId(storage)).toBe('engine-b');
     await successor.release();
   });
@@ -213,7 +214,7 @@ describe('createLeaseManager', () => {
       throw new Error('storage offline');
     };
     try {
-      expect(manager.release()).resolves.toBe(false);
+      expect(await manager.release()).toBe(false);
     } finally {
       storage.conditionalBatch = originalConditionalBatch;
     }
@@ -577,7 +578,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    expect(await rejectionOf(manager.acquire())).toBeInstanceOf(EngineLeaseCorruptedError);
     // Corrupt state untouched — no acquisition happened.
     expect(await holderId(storage)).toBe('ghost');
   });
@@ -593,7 +594,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    expect(await rejectionOf(manager.acquire())).toBeInstanceOf(EngineLeaseCorruptedError);
   });
 
   it('throws EngineLeaseCorruptedError on an epoch at exactly MAX_SAFE_INTEGER (no room to increment)', async () => {
@@ -610,7 +611,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    expect(await rejectionOf(manager.acquire())).toBeInstanceOf(EngineLeaseCorruptedError);
   });
 
   it('throws EngineLeaseCorruptedError when a holder exists with no epoch key', async () => {
@@ -628,7 +629,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    expect(await rejectionOf(manager.acquire())).toBeInstanceOf(EngineLeaseCorruptedError);
   });
 
   it('ignores a structurally-invalid holder object (valid JSON, wrong field types)', async () => {
@@ -720,7 +721,9 @@ describe('createLeaseManager', () => {
     );
     // Must NOT throw EngineLeaseCorruptedError: the concurrent holder it now sees is
     // live, so it cleanly times out (lease held) rather than fail-closing.
-    expect(challenger.acquire()).rejects.toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
+    expect(await rejectionOf(challenger.acquire())).toBeInstanceOf(
+      EngineLeaseAcquisitionTimeoutError,
+    );
 
     await concurrent.release();
   });
@@ -754,7 +757,7 @@ describe('createLeaseManager', () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
       throwOnNow = false; // let release() compute its own clock value normally
       // release() awaits the (contained) in-flight renewal and must still resolve.
-      expect(manager.release()).resolves.toBe(true);
+      expect(await manager.release()).toBe(true);
       await new Promise((resolve) => setImmediate(resolve));
       expect(unhandled).toEqual([]);
     } finally {
@@ -782,7 +785,7 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    expect(await rejectionOf(manager.acquire())).toBeInstanceOf(EngineLeaseCorruptedError);
     // The epoch is untouched — no unrecoverable value was written.
     expect(await readEpoch(storage)).toBe(Number.MAX_SAFE_INTEGER - 1);
   });

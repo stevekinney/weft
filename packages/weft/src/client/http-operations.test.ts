@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 
+import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { httpClientCatalogTransport, httpClientOperationTransport } from './http-operations.ts';
 import { HttpClientError } from './http-request.ts';
 import type { ClientRestOperationBinding } from './operation-client-runtime.ts';
@@ -41,13 +42,13 @@ describe('generated REST operation transport', () => {
     );
 
     expect(
-      transport('weft.test.metadata', {
+      await transport('weft.test.metadata', {
         id: 'path/with space',
         filter: 'waiting',
         trace: 'trace-1',
         value: { ok: true },
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     expect(capturedUrl).toBe('https://weft.example/v1/things/path%2Fwith%20space?filter=waiting');
     expect(capturedInit?.method).toBe('POST');
@@ -105,8 +106,10 @@ describe('generated REST operation transport', () => {
     spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not json', { status: 502 }));
 
     expect(
-      httpClientCatalogTransport('https://weft.example', {})('weft.test.catalog', {}),
-    ).rejects.toMatchObject({
+      await rejectionOf(
+        httpClientCatalogTransport('https://weft.example', {})('weft.test.catalog', {}),
+      ),
+    ).toMatchObject({
       status: 502,
       message: 'HTTP 502 from https://weft.example/jsonrpc',
     });
@@ -119,11 +122,11 @@ describe('generated REST operation transport', () => {
       { 'weft.test.metadata': binding },
     );
 
-    expect(transport('weft.test.metadata', null)).rejects.toMatchObject({
+    expect(await rejectionOf(transport('weft.test.metadata', null))).toMatchObject({
       status: 400,
       message: 'Operation weft.test.metadata input must be an object.',
     });
-    expect(transport('weft.test.metadata', { value: null })).rejects.toMatchObject({
+    expect(await rejectionOf(transport('weft.test.metadata', { value: null }))).toMatchObject({
       status: 400,
       message: 'Operation weft.test.metadata requires a non-empty string "id" field.',
     });
@@ -158,11 +161,11 @@ describe('generated REST operation transport', () => {
     );
 
     expect(
-      transport('weft.test.search', {
+      await transport('weft.test.search', {
         tags: ['one', 2, true],
         payload: { query: 'value' },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).toEqual({ ok: true });
 
     expect(capturedUrl).toBe('https://weft.example/v1/search?tag=one&tag=2&tag=true');
     expect(new Headers(capturedInit?.headers).get('content-type')).toBe('application/json');

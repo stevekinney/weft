@@ -4,6 +4,7 @@ import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
@@ -371,13 +372,13 @@ describe('weft.workflows.events.sse', () => {
     if (authorize === undefined) throw new Error('Expected workflow SSE authorizer');
 
     expect(
-      authorize({
+      await authorize({
         input: { workflowId: 'wf-sse', selector: 'events' },
         principal: anonymousPrincipal(),
         engine: {},
         transport: 'http-rest',
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       allowed: false,
       classification: 'unauthorized',
       reason: 'authentication required',
@@ -403,13 +404,15 @@ describe('weft.workflows.events.sse', () => {
 
   it('throws UnsupportedTransport when invoked without an object context', async () => {
     expect(
-      workflowEventsSseOperation.invoke({
-        input: { workflowId: 'wf-sse', selector: 'events' },
-        principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
-        engine: null,
-        transport: 'http-rest',
-      }),
-    ).rejects.toMatchObject({
+      await rejectionOf(
+        workflowEventsSseOperation.invoke({
+          input: { workflowId: 'wf-sse', selector: 'events' },
+          principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
+          engine: null,
+          transport: 'http-rest',
+        }),
+      ),
+    ).toMatchObject({
       code: 'UnsupportedTransport',
       message: 'workflow event SSE requires a workflow event feed',
     });

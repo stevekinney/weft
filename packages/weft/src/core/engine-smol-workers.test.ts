@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';
 import { activity, workflow } from './types.ts';
@@ -114,7 +115,7 @@ describe('Engine with smol: true workers', () => {
 
       const handle = await engine.start('smol-failing', null);
 
-      expect(handle.result()).rejects.toThrow();
+      expect(await throwingRejectionOf(handle.result())).toThrow();
 
       engine[Symbol.dispose]();
     });

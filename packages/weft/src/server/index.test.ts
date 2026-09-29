@@ -43,6 +43,7 @@ import { METRICS } from '../observability/metrics.ts';
 import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type { WorkerManifest } from '../worker/manifest/index.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import {
@@ -1308,7 +1309,7 @@ describe('serve', () => {
       const response = route.GET!(new Request('http://weft.test/assets/app.js'));
 
       expect(response.headers.get('content-length')).toBe('9');
-      expect(response.text()).rejects.toThrow(
+      expect(await throwingRejectionOf(response.text())).toThrow(
         'Dashboard asset ended before its verified content length was read.',
       );
     } finally {
@@ -1450,7 +1451,7 @@ describe('serve', () => {
       readFailure = true;
       const failedResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
       expect(failedResponse.status).toBe(200);
-      expect(failedResponse.text()).rejects.toThrow('asset read failed');
+      expect(await throwingRejectionOf(failedResponse.text())).toThrow('asset read failed');
       readFailure = false;
       const cancelledResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
       const reader = cancelledResponse.body!.getReader();
@@ -1909,7 +1910,7 @@ describe('serve', () => {
       });
 
       expect(response.status).toBe(401);
-      expect(response.json()).resolves.toEqual({ error: 'No valid credentials provided' });
+      expect(await response.json()).toEqual({ error: 'No valid credentials provided' });
     },
   );
 
@@ -3437,7 +3438,7 @@ describe('worker WebSocket protocol', () => {
     const { RemoteWorker } = await import('../worker/index.ts');
 
     const worker = new RemoteWorker({
-      serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
+      serverUrl: `ws://127.0.0.1:${server.port}/v1/tasks/default/stream`,
       workerId: 'remote-1',
       deploymentName: 'test-deployment',
       buildId: 'test-build',
@@ -3857,7 +3858,7 @@ describe('queue-aware worker stream', () => {
     const { RemoteWorker } = await import('../worker/index.ts');
 
     const worker = new RemoteWorker({
-      serverUrl: `ws://localhost:${server.port}/v1/tasks/billing/stream`,
+      serverUrl: `ws://127.0.0.1:${server.port}/v1/tasks/billing/stream`,
       workerId: 'billing-remote',
       deploymentName: 'test-deployment',
       buildId: 'test-build',
@@ -5930,15 +5931,17 @@ describe('visibility timeout persistence', () => {
     try {
       server = serveTestServer({ engine, port: 0 });
 
-      expect(server.ready).rejects.toThrow('recovery scan failed');
+      expect(await throwingRejectionOf(server.ready)).toThrow('recovery scan failed');
       expect(
-        server.dispatchTask({
-          operationId: 'blocked-by-recovery-failure',
-          activityName: 'test.charge',
-          workflowType: 'test',
-          input: null,
-        }),
-      ).rejects.toThrow('startup task-ledger recovery failed');
+        await throwingRejectionOf(
+          server.dispatchTask({
+            operationId: 'blocked-by-recovery-failure',
+            activityName: 'test.charge',
+            workflowType: 'test',
+            input: null,
+          }),
+        ),
+      ).toThrow('startup task-ledger recovery failed');
     } finally {
       restoreScan();
     }
@@ -8846,7 +8849,7 @@ describe('header propagation in task dispatch', () => {
     );
 
     const worker = new RemoteWorker({
-      serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
+      serverUrl: `ws://127.0.0.1:${server.port}/v1/tasks/default/stream`,
       workerId: 'header-e2e-worker',
       deploymentName: 'test-deployment',
       buildId: 'test-build',
@@ -8905,7 +8908,7 @@ describe('header propagation in task dispatch', () => {
     );
 
     const worker = new RemoteWorker({
-      serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
+      serverUrl: `ws://127.0.0.1:${server.port}/v1/tasks/default/stream`,
       workerId: 'header-e2e-no-headers',
       deploymentName: 'test-deployment',
       buildId: 'test-build',

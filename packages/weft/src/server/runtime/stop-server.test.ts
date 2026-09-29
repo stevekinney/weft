@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { stopBunServerForShutdown } from './stop-server.ts';
 
 describe('stopBunServerForShutdown', () => {
@@ -12,7 +13,9 @@ describe('stopBunServerForShutdown', () => {
       },
     };
 
-    expect(stopBunServerForShutdown(server as never)).rejects.toThrow('stop failed');
+    expect(await throwingRejectionOf(stopBunServerForShutdown(server as never))).toThrow(
+      'stop failed',
+    );
 
     expect(consoleError).toHaveBeenCalledWith('[weft] Bun server stop failed:', error);
     consoleError.mockRestore();

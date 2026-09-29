@@ -35,8 +35,8 @@ describe('watch WebSocket delivery', () => {
     );
     const engine = { storage } as unknown as Engine;
 
-    expect(getHighestStoredStreamSequence(engine, 'wf-sequences', 'tokens')).resolves.toBe(3);
-    expect(getHighestStoredWatchSequence(engine, 'wf-sequences')).resolves.toBe(4);
+    expect(await getHighestStoredStreamSequence(engine, 'wf-sequences', 'tokens')).toBe(3);
+    expect(await getHighestStoredWatchSequence(engine, 'wf-sequences')).toBe(4);
   });
 
   it('returns no durable watch sequence when only non-event keys share the prefix', async () => {
@@ -44,7 +44,7 @@ describe('watch WebSocket delivery', () => {
     await storage.put(`${KEYS.eventPrefix('wf-empty-watch')}head`, encode({ ignored: true }));
     const engine = { storage } as unknown as Engine;
 
-    expect(getHighestStoredWatchSequence(engine, 'wf-empty-watch')).resolves.toBe(-1);
+    expect(await getHighestStoredWatchSequence(engine, 'wf-empty-watch')).toBe(-1);
   });
 
   it('rejects watch sockets when the per-workflow stream cap is already full', () => {

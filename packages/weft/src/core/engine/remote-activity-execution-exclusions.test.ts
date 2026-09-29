@@ -35,6 +35,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { durableActivity } from '../context/durable-activity.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -97,7 +98,7 @@ describe('remote dispatch exclusions (COR-152 criterion 12)', () => {
     );
 
     await engine.cancel(handle.id);
-    await expect(handle.result()).rejects.toThrow();
+    expect(await throwingRejectionOf(handle.result())).toThrow();
 
     // The teardown timer fires at terminalization time.
     await engine.scheduler.tick(now);

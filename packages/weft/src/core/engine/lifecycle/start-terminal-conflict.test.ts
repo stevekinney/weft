@@ -9,6 +9,7 @@ import {
 } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { flushMicrotasks, waitForCondition } from '../../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../../testing/test-engine.ts';
 import { ActivityRegistry } from '../../activity-registry.ts';
 import { Engine } from '../../engine.ts';
@@ -162,7 +163,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const engine = createEngine();
 
     const first = await engine.start('throws-immediately', null, { id: 'reuse-failed' });
-    expect(first.result()).rejects.toThrow('boom');
+    expect(await throwingRejectionOf(first.result())).toThrow('boom');
     await waitForCondition(async () => (await statusOf(engine, 'reuse-failed')) === 'failed', {
       timeoutMs: 2000,
       label: 'first run reached failed',
@@ -247,11 +248,13 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     expect(await statusOf(engine, 'still-running')).toBe('running');
 
     expect(
-      engine.start('echo-input', 'displace', {
-        id: 'still-running',
-        onTerminalConflict: 'start-new',
-      }),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+      await rejectionOf(
+        engine.start('echo-input', 'displace', {
+          id: 'still-running',
+          onTerminalConflict: 'start-new',
+        }),
+      ),
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
 
     // The live run is untouched: still running, still resolvable via its signal.
     expect(await statusOf(engine, 'still-running')).toBe('running');
@@ -275,11 +278,13 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     expect(await statusOf(engine, 'pending-delayed')).toBe('pending');
 
     expect(
-      engine.start('echo-input', 'displace', {
-        id: 'pending-delayed',
-        onTerminalConflict: 'start-new',
-      }),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+      await rejectionOf(
+        engine.start('echo-input', 'displace', {
+          id: 'pending-delayed',
+          onTerminalConflict: 'start-new',
+        }),
+      ),
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
 
     // The pending run is untouched and still fires when its delay elapses.
     expect(await statusOf(engine, 'pending-delayed')).toBe('pending');
@@ -293,12 +298,14 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const first = await engine.start('echo-input', 'first', { id: 'no-policy', defer: false });
     expect(await first.result()).toBe('first');
 
-    expect(engine.start('echo-input', 'second', { id: 'no-policy' })).rejects.toBeInstanceOf(
-      WorkflowAlreadyExistsError,
-    );
     expect(
-      engine.start('echo-input', 'second', { id: 'no-policy', onTerminalConflict: 'error' }),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+      await rejectionOf(engine.start('echo-input', 'second', { id: 'no-policy' })),
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
+    expect(
+      await rejectionOf(
+        engine.start('echo-input', 'second', { id: 'no-policy', onTerminalConflict: 'error' }),
+      ),
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
 
     engine[Symbol.dispose]();
   });
@@ -308,8 +315,8 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       const storage = new MemoryStorage();
       const engine = createEngine(storage);
       expect(
-        engine.start('echo-input', null, { onTerminalConflict: 'start-new' }),
-      ).rejects.toBeInstanceOf(StartWorkflowValidationError);
+        await rejectionOf(engine.start('echo-input', null, { onTerminalConflict: 'start-new' })),
+      ).toBeInstanceOf(StartWorkflowValidationError);
       // The validation fires before any id is generated or persisted, so the
       // store holds no workflow records at all.
       expect(await countKeysWithPrefix(storage, 'wf:')).toBe(0);
@@ -319,11 +326,13 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     it("rejects 'start-new' combined with an idempotencyKey", async () => {
       const engine = createEngine();
       expect(
-        engine.start('echo-input', null, {
-          idempotencyKey: 'k',
-          onTerminalConflict: 'start-new',
-        }),
-      ).rejects.toBeInstanceOf(StartWorkflowValidationError);
+        await rejectionOf(
+          engine.start('echo-input', null, {
+            idempotencyKey: 'k',
+            onTerminalConflict: 'start-new',
+          }),
+        ),
+      ).toBeInstanceOf(StartWorkflowValidationError);
       engine[Symbol.dispose]();
     });
 
@@ -341,23 +350,27 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       // A repeat call with the same key AND the (illegal) policy must throw, not
       // silently return the existing run.
       expect(
-        engine.start('echo-input', 'again', {
-          idempotencyKey: 'dedup-key',
-          onTerminalConflict: 'start-new',
-        }),
-      ).rejects.toBeInstanceOf(StartWorkflowValidationError);
+        await rejectionOf(
+          engine.start('echo-input', 'again', {
+            idempotencyKey: 'dedup-key',
+            onTerminalConflict: 'start-new',
+          }),
+        ),
+      ).toBeInstanceOf(StartWorkflowValidationError);
       engine[Symbol.dispose]();
     });
 
     it('rejects an unknown onTerminalConflict value', async () => {
       const engine = createEngine();
       expect(
-        engine.start('echo-input', null, {
-          id: 'bad-policy',
-          // Untyped caller smuggling an out-of-union value.
-          onTerminalConflict: 'restart' as 'start-new',
-        }),
-      ).rejects.toBeInstanceOf(StartWorkflowValidationError);
+        await rejectionOf(
+          engine.start('echo-input', null, {
+            id: 'bad-policy',
+            // Untyped caller smuggling an out-of-union value.
+            onTerminalConflict: 'restart' as 'start-new',
+          }),
+        ),
+      ).toBeInstanceOf(StartWorkflowValidationError);
       engine[Symbol.dispose]();
     });
   });
@@ -378,11 +391,13 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       // Oversized restart input: rejected AFTER the duplicate-id decision but
       // BEFORE the destructive purge, so the prior run must survive.
       expect(
-        engine.start('echo-input', 'x'.repeat(1024), {
-          id: 'keep-on-reject',
-          onTerminalConflict: 'start-new',
-        }),
-      ).rejects.toThrow();
+        await throwingRejectionOf(
+          engine.start('echo-input', 'x'.repeat(1024), {
+            id: 'keep-on-reject',
+            onTerminalConflict: 'start-new',
+          }),
+        ),
+      ).toThrow();
       const survivor = await engine.get('keep-on-reject');
       expect(survivor?.status).toBe('completed');
       expect(survivor?.input).toBe('small');
@@ -402,12 +417,14 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
       expect(await first.result()).toBe('original');
 
       expect(
-        engine.start('echo-input', 'replacement', {
-          id: 'overflow-keep',
-          onTerminalConflict: 'start-new',
-          executionTimeout: Number.MAX_SAFE_INTEGER,
-        }),
-      ).rejects.toThrow();
+        await throwingRejectionOf(
+          engine.start('echo-input', 'replacement', {
+            id: 'overflow-keep',
+            onTerminalConflict: 'start-new',
+            executionTimeout: Number.MAX_SAFE_INTEGER,
+          }),
+        ),
+      ).toThrow();
       const survivor = await engine.get('overflow-keep');
       expect(survivor?.status).toBe('completed');
       expect(survivor?.input).toBe('original');
@@ -479,12 +496,14 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
 
       failNextStatePut = true;
       expect(
-        engine.start('echo-input', 'replacement', {
-          id: 'commit-fail',
-          onTerminalConflict: 'start-new',
-          defer: false,
-        }),
-      ).rejects.toThrow('injected create-batch failure');
+        await throwingRejectionOf(
+          engine.start('echo-input', 'replacement', {
+            id: 'commit-fail',
+            onTerminalConflict: 'start-new',
+            defer: false,
+          }),
+        ),
+      ).toThrow('injected create-batch failure');
 
       // Prior run intact: the purge delete that would have removed it was in the
       // SAME batch as the failed create put, so it never committed. Reads rebuild
@@ -632,7 +651,7 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     const first = await engine.start(type, 'old-input', {
       id: 'terminal-conflict-revision-id',
     });
-    expect(first.result()).resolves.toBe('old-input');
+    expect(await first.result()).toBe('old-input');
     const firstSummary = await engine.get(first.id);
     expect(firstSummary?.revision).toBe(revisionV1);
 

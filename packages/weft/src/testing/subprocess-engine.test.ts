@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { HttpClient } from '../client/http-client.ts';
 import type { WorkflowState } from '../core/types.ts';
 import { sleepForTesting } from './fake-timers.test-support.ts';
+import { throwingRejectionOf } from './promise-outcome.test-support.ts';
 import {
   killAndReboot,
   spawnServerSubprocess,
@@ -197,11 +198,13 @@ describe('subprocess server harness', () => {
     );
 
     expect(
-      spawnServerSubprocess({
-        entrypoint,
-        databasePath: join(createFixturePath('startup-crash-db'), 'weft.db'),
-      }),
-    ).rejects.toThrow(/startup exploded/);
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('startup-crash-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/startup exploded/);
   });
 
   it('rejects killAndReboot when the subprocess already exited without a signal', async () => {
@@ -223,7 +226,7 @@ setTimeout(() => process.exit(17), 1_000);
     handles.push(handle);
 
     await handle.process.exited;
-    expect(killAndReboot(handle)).rejects.toThrow(/already exited/);
+    expect(await throwingRejectionOf(killAndReboot(handle))).toThrow(/already exited/);
   });
 
   it('rejects a subprocess that exits immediately after printing readiness', async () => {
@@ -237,11 +240,13 @@ process.exit(0);
     );
 
     expect(
-      spawnServerSubprocess({
-        entrypoint,
-        databasePath: join(createFixturePath('ready-then-exit-db'), 'weft.db'),
-      }),
-    ).rejects.toThrow(/after readiness/);
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('ready-then-exit-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/after readiness/);
   });
 
   it('rejects readiness URLs without explicit ports', async () => {
@@ -254,11 +259,13 @@ setInterval(() => {}, 1000);
     );
 
     expect(
-      spawnServerSubprocess({
-        entrypoint,
-        databasePath: join(createFixturePath('ready-without-port-db'), 'weft.db'),
-      }),
-    ).rejects.toThrow(/explicit port/);
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('ready-without-port-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/explicit port/);
   });
 
   it('surfaces bind failures on a reused port', async () => {
@@ -282,8 +289,10 @@ setInterval(() => {}, 1000);
       // assertion to these two messages preserves the test's intent: it must not
       // pass merely because some unrelated startup delay timed out.
       expect(
-        startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5000 }),
-      ).rejects.toThrow(/before readiness|EADDRINUSE/);
+        await throwingRejectionOf(
+          startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5000 }),
+        ),
+      ).toThrow(/before readiness|EADDRINUSE/);
     } finally {
       portBlocker.stop(true);
     }
@@ -336,7 +345,9 @@ setInterval(() => {}, 1000);
     });
     handles.push(handle);
 
-    expect(killAndReboot(handle, 'SIGTERM')).rejects.toThrow(/Expected subprocess/);
+    expect(await throwingRejectionOf(killAndReboot(handle, 'SIGTERM'))).toThrow(
+      /Expected subprocess/,
+    );
   });
 
   it('recovers a parked workflow after SIGKILL without re-running a completed activity', async () => {
@@ -362,7 +373,7 @@ setInterval(() => {}, 1000);
     expect(handle.command).toContain('0');
     await rebootedClient.signal(workflow.id, 'finish', 'done');
 
-    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({
       activityCount: 1,
       signalPayload: 'done',
     });
@@ -384,7 +395,7 @@ setInterval(() => {}, 1000);
     await waitForFileText(join(directory, 'activity-started.txt'), '2', 'second activity dispatch');
     await Bun.write(join(directory, 'activity-release.txt'), 'go');
 
-    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({ attempt: 2 });
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({ attempt: 2 });
   });
 
   it('accepts a signal over the wire after reboot and completes the recovered workflow', async () => {
@@ -407,7 +418,7 @@ setInterval(() => {}, 1000);
     const rebootedClient = new HttpClient({ baseUrl: handle.url });
     await rebootedClient.signal(workflow.id, 'finish', { ok: true });
 
-    expect(readWorkflowResult(handle.url, workflow.id)).resolves.toEqual({
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({
       signalPayload: { ok: true },
     });
   });

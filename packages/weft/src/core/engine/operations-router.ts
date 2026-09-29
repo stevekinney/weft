@@ -2,9 +2,14 @@ import type { ContextOperationRequest } from '../context.ts';
 import { classifyErrorAsFailureCategory } from '../failure-categories.ts';
 import type { OperationOutcome } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
-import type { CapturedRejectionReason } from './strategy-helpers.ts';
+import {
+  isCurrentOperation,
+  workflowExecutionTokenForWorkflow,
+  type CapturedRejectionReason,
+} from './strategy-helpers.ts';
 
 export type OperationWithCallerStack = {
+  operationId: string;
   callerStack?: string;
 };
 
@@ -93,7 +98,9 @@ export type OperationRouterCallbacks = {
   feedOperationResult: (
     workflowId: string,
     result: OperationOutcome,
-    originalReason?: CapturedRejectionReason,
+    originalReason: CapturedRejectionReason | undefined,
+    operationId: string,
+    workflowExecutionToken?: string,
   ) => void;
 };
 
@@ -165,6 +172,8 @@ export async function processOperation(
     operation,
     new Error(`Unsupported operation type: ${unsupportedType}`),
     callbacks,
+    operationIdOf(operation),
+    workflowExecutionTokenForWorkflow(internals, workflowId),
   );
 }
 
@@ -211,9 +220,18 @@ export function completeOperation(
   workflowId: string,
   value: unknown,
   callbacks: Pick<OperationRouterCallbacks, 'finalizePendingTimelineEntry' | 'feedOperationResult'>,
+  operationId: string,
+  workflowExecutionToken?: string,
 ): void {
+  if (!isCurrentOperation(_internals, workflowId, operationId, workflowExecutionToken)) return;
   callbacks.finalizePendingTimelineEntry(workflowId, 'completed', value);
-  callbacks.feedOperationResult(workflowId, { status: 'completed', value });
+  callbacks.feedOperationResult(
+    workflowId,
+    { status: 'completed', value },
+    undefined,
+    operationId,
+    workflowExecutionToken,
+  );
 }
 
 export function failOperation(
@@ -222,7 +240,11 @@ export function failOperation(
   operation: OperationWithCallerStack,
   error: unknown,
   callbacks: Pick<OperationRouterCallbacks, 'finalizePendingTimelineEntry' | 'feedOperationResult'>,
+  operationId: string,
+  workflowExecutionToken?: string,
 ): void {
+  operationId ??= operationIdOf(operation);
+  if (!isCurrentOperation(_internals, workflowId, operationId, workflowExecutionToken)) return;
   if (error instanceof Error && operation.callerStack) {
     error.stack = `${error.stack}\n    --- workflow call site ---\n${operation.callerStack}`;
   }
@@ -234,17 +256,20 @@ export function failOperation(
   // when the original reason is `undefined`.
   const errorMessage = error instanceof Error ? error.message : String(error);
   callbacks.finalizePendingTimelineEntry(workflowId, 'failed', errorMessage);
+  const outcome = {
+    status: 'failed' as const,
+    error: errorMessage,
+    ...(error instanceof Error ? { errorName: error.name } : {}),
+    failureCategory: classifyErrorAsFailureCategory(error, {
+      defaultErrorCategory: 'application',
+    }),
+  };
   callbacks.feedOperationResult(
     workflowId,
-    {
-      status: 'failed',
-      error: errorMessage,
-      ...(error instanceof Error ? { errorName: error.name } : {}),
-      failureCategory: classifyErrorAsFailureCategory(error, {
-        defaultErrorCategory: 'application',
-      }),
-    },
+    outcome,
     { value: error },
+    operationId,
+    workflowExecutionToken,
   );
 }
 
@@ -255,11 +280,26 @@ export async function runOperationWithResult(
   execute: () => Promise<unknown>,
   callbacks: OperationRouterCallbacks,
 ): Promise<void> {
+  const workflowExecutionToken = operationExecutionToken(
+    internals,
+    workflowId,
+    operationIdOf(operation),
+  );
   try {
     const value = await execute();
-    completeOperation(internals, workflowId, value, callbacks);
+    const operationId = operationIdOf(operation);
+    completeOperation(internals, workflowId, value, callbacks, operationId, workflowExecutionToken);
   } catch (error) {
-    failOperation(internals, workflowId, operation, error, callbacks);
+    const operationId = operationIdOf(operation);
+    failOperation(
+      internals,
+      workflowId,
+      operation,
+      error,
+      callbacks,
+      operationId,
+      workflowExecutionToken,
+    );
   }
 }
 
@@ -270,9 +310,39 @@ export async function runOperationWithoutResult(
   execute: () => Promise<void>,
   callbacks: OperationRouterCallbacks,
 ): Promise<void> {
+  const workflowExecutionToken = operationExecutionToken(
+    internals,
+    workflowId,
+    operationIdOf(operation),
+  );
   try {
     await execute();
   } catch (error) {
-    failOperation(internals, workflowId, operation, error, callbacks);
+    const operationId = operationIdOf(operation);
+    failOperation(
+      internals,
+      workflowId,
+      operation,
+      error,
+      callbacks,
+      operationId,
+      workflowExecutionToken,
+    );
   }
+}
+
+function operationIdOf(operation: OperationWithCallerStack): string {
+  const operationId = (operation as { operationId?: unknown }).operationId;
+  if (typeof operationId !== 'string') {
+    throw new Error('Operation result is missing its operation ID');
+  }
+  return operationId;
+}
+
+function operationExecutionToken(
+  internals: EngineInternals,
+  workflowId: string,
+  _operationId: string,
+): string | undefined {
+  return workflowExecutionTokenForWorkflow(internals, workflowId);
 }

@@ -12,6 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { decode, encode } from './codec.ts';
 import { ApplicationDeliveryValidationError } from './outbox-guards.ts';
 import { encodeApplicationDeliveryEntry, encodeOutboxRecord } from './outbox-index-codec.ts';
@@ -61,7 +62,7 @@ describe('claim commit failures', () => {
     storage.beforeBatch = (ordinal) => {
       if (ordinal === 2) throw new Error('storage down');
     };
-    expect(outbox.claim()).rejects.toThrow('storage down');
+    expect(await throwingRejectionOf(outbox.claim())).toThrow('storage down');
     storage.beforeBatch = null;
     // The delivery is still claimable and the registry holds no leaked attempt.
     const claim = await claimOne(outbox);
@@ -102,9 +103,9 @@ describe('enqueue edge cases', () => {
   it('admits idempotency keys only up to the ceiling the record decoder accepts', async () => {
     const { outbox } = createOutboxFixture();
     for (const field of ['idempotencyKey', 'externalIdempotencyKey'] as const) {
-      expect(outbox.enqueue(deliveryInput({ [field]: 'k'.repeat(257) }))).rejects.toThrow(
-        ApplicationDeliveryValidationError,
-      );
+      expect(
+        await throwingRejectionOf(outbox.enqueue(deliveryInput({ [field]: 'k'.repeat(257) }))),
+      ).toThrow(ApplicationDeliveryValidationError);
       const admitted = await outbox.enqueue(
         deliveryInput({ [field]: `${field}-`.padEnd(256, 'k'), kind: field }),
       );
@@ -130,7 +131,9 @@ describe('enqueue edge cases', () => {
         enqueuedCount: 0,
       }),
     );
-    expect(outbox.enqueue(deliveryInput())).rejects.toThrow(/sequence allocator/);
+    expect(await throwingRejectionOf(outbox.enqueue(deliveryInput()))).toThrow(
+      /sequence allocator/,
+    );
     outbox.dispose();
   });
 
@@ -142,9 +145,9 @@ describe('enqueue edge cases', () => {
       bindingKey,
       encode({ recordVersion: 1, deliveryId: other, identityDigest: 'x'.repeat(64) }),
     );
-    expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'forged' }))).rejects.toThrow(
-      PersistedDataCorruptError,
-    );
+    expect(
+      await throwingRejectionOf(outbox.enqueue(deliveryInput({ idempotencyKey: 'forged' }))),
+    ).toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 
@@ -152,14 +155,14 @@ describe('enqueue edge cases', () => {
     const { outbox, storage } = createOutboxFixture();
     const garbage = encode({ nested: { deep: true } }).slice(0, 3);
     await storage.put(KEYS.applicationOutbox(NAMESPACE, OWNER), garbage);
-    expect(outbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(outbox.capacity())).toThrow(PersistedDataCorruptError);
     await storage.delete(KEYS.applicationOutbox(NAMESPACE, OWNER));
     await storage.put(KEYS.applicationDeliveryIdempotency(NAMESPACE, OWNER, 'k'), garbage);
-    expect(outbox.enqueue(deliveryInput({ idempotencyKey: 'k' }))).rejects.toThrow(
-      PersistedDataCorruptError,
-    );
+    expect(
+      await throwingRejectionOf(outbox.enqueue(deliveryInput({ idempotencyKey: 'k' }))),
+    ).toThrow(PersistedDataCorruptError);
     await storage.put(KEYS.applicationDeliveryDue(NAMESPACE, OWNER, 0, 'x'), garbage);
-    expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(outbox.claim())).toThrow(PersistedDataCorruptError);
     outbox.dispose();
   });
 });
@@ -218,7 +221,7 @@ describe('maintenance races and bounds', () => {
     await claimOne(outbox);
     clock.advance(10);
     storage.losing = true;
-    expect(outbox.runMaintenance()).rejects.toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.runMaintenance())).toThrow(OutboxContentionError);
     storage.losing = false;
     expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 1 });
     outbox.dispose();
@@ -231,8 +234,10 @@ describe('maintenance races and bounds', () => {
     const deliveryId = await enqueueOne(outbox);
     await deliverOne(outbox);
     storage.losing = true;
-    expect(outbox.retry({ deliveryId })).rejects.toThrow(OutboxContentionError);
-    expect(outbox.deadLetter({ deliveryId })).rejects.toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.retry({ deliveryId }))).toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.deadLetter({ deliveryId }))).toThrow(
+      OutboxContentionError,
+    );
     outbox.dispose();
   });
 
@@ -411,16 +416,16 @@ describe('outcome validation', () => {
     });
     await Promise.resolve();
     controller.abort(new Error('gave up'));
-    expect(waiting).rejects.toThrow('gave up');
+    expect(await throwingRejectionOf(waiting)).toThrow('gave up');
     stalled.dispose();
     outbox.dispose();
   });
 
   it('rejects a heartbeat whose delivery id cannot form a key', async () => {
     const { outbox } = createOutboxFixture();
-    expect(outbox.heartbeat({ deliveryId: '\uD800', attemptToken: 't' })).rejects.toThrow(
-      ApplicationDeliveryValidationError,
-    );
+    expect(
+      await throwingRejectionOf(outbox.heartbeat({ deliveryId: '\uD800', attemptToken: 't' })),
+    ).toThrow(ApplicationDeliveryValidationError);
     expect(
       await statusOf(
         outbox.settle({ deliveryId: 'x', attemptToken: 't', outcome: { status: 'acknowledged' } }),
@@ -437,7 +442,7 @@ describe('due index identity', () => {
     const real = await enqueueOne(outbox, { availableAfterMs: 1000 });
     const stray = KEYS.applicationDeliveryDue('bureau', 'agent-7', 0, 'stranded');
     await storage.put(stray, encodeApplicationDeliveryEntry(real));
-    expect(outbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(outbox.claim())).toThrow(PersistedDataCorruptError);
     // The canonical entry is left in place, not discarded as an orphan.
     expect(await storage.get(stray)).not.toBeNull();
     outbox.dispose();

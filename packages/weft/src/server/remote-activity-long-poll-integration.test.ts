@@ -20,6 +20,7 @@ import { decodeRemoteTaskRecord } from '../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { activity, workflow } from '../core/types.ts';
 import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { LongPollWorker } from '../worker/long-poll.ts';
 import { serve, type WeftServer } from './index.ts';
 
@@ -228,7 +229,7 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
     );
 
     await engine.cancel(handle.id);
-    await expect(handle.result()).rejects.toThrow();
+    expect(await throwingRejectionOf(handle.result())).toThrow();
 
     await waitForCondition(
       async () => {

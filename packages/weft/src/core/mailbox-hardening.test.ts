@@ -22,6 +22,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
 import {
@@ -298,7 +299,7 @@ describe('durable settlement metadata', () => {
       'outcome' in override
         ? mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken, ...override })
         : mailbox.renew({ commandId, attemptToken: claim.attemptToken, ...override });
-    expect(call).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(call)).toThrow(ApplicationCommandValidationError);
 
     // The record is untouched and still readable.
     const receipt = await mailbox.receipt(commandId);
@@ -312,22 +313,28 @@ describe('durable settlement metadata', () => {
     const claim = await claimOne(mailbox);
 
     expect(
-      mailbox.reject({
-        commandId,
-        attemptToken: claim.attemptToken,
-        failure: { reason: 'application', details: new Date() as never },
-      }),
-    ).rejects.toThrow(/JSON-safe/);
+      await throwingRejectionOf(
+        mailbox.reject({
+          commandId,
+          attemptToken: claim.attemptToken,
+          failure: { reason: 'application', details: new Date() as never },
+        }),
+      ),
+    ).toThrow(/JSON-safe/);
     expect(
-      mailbox.reject({
-        commandId,
-        attemptToken: claim.attemptToken,
-        failure: { reason: 'made-up' as never },
-      }),
-    ).rejects.toThrow(/failure.reason/);
+      await throwingRejectionOf(
+        mailbox.reject({
+          commandId,
+          attemptToken: claim.attemptToken,
+          failure: { reason: 'made-up' as never },
+        }),
+      ),
+    ).toThrow(/failure.reason/);
     expect(
-      mailbox.reject({ commandId, attemptToken: claim.attemptToken, failure: null as never }),
-    ).rejects.toThrow(/failure must be an object/);
+      await throwingRejectionOf(
+        mailbox.reject({ commandId, attemptToken: claim.attemptToken, failure: null as never }),
+      ),
+    ).toThrow(/failure must be an object/);
     mailbox.dispose();
   });
 
@@ -338,12 +345,14 @@ describe('durable settlement metadata', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
     expect(
-      mailbox.acknowledge({
-        commandId,
-        attemptToken: claim.attemptToken,
-        outcome: cyclic as never,
-      }),
-    ).rejects.toThrow(/not encodable/);
+      await throwingRejectionOf(
+        mailbox.acknowledge({
+          commandId,
+          attemptToken: claim.attemptToken,
+          outcome: cyclic as never,
+        }),
+      ),
+    ).toThrow(/not encodable/);
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('claimed');
     mailbox.dispose();
@@ -374,11 +383,13 @@ describe('durable settlement metadata', () => {
 describe('injected identifier and clock validation', () => {
   it('refuses an empty or oversized generated identifier before writing anything', async () => {
     const empty = createMailboxFixture({ generateId: () => '' });
-    expect(empty.mailbox.admit(commandInput())).rejects.toThrow(/generateId/);
+    expect(await throwingRejectionOf(empty.mailbox.admit(commandInput()))).toThrow(/generateId/);
     empty.mailbox.dispose();
 
     const oversized = createMailboxFixture({ generateId: () => 'x'.repeat(300) });
-    expect(oversized.mailbox.admit(commandInput())).rejects.toThrow(/generateId/);
+    expect(await throwingRejectionOf(oversized.mailbox.admit(commandInput()))).toThrow(
+      /generateId/,
+    );
     oversized.mailbox.dispose();
   });
 
@@ -390,7 +401,9 @@ describe('injected identifier and clock validation', () => {
   ])('refuses %s as a maintenance instant before reading or writing', async (_name, instant) => {
     const { mailbox } = createMailboxFixture({ terminalRetentionMs: 1_000 });
     const commandId = await admitOne(mailbox);
-    expect(mailbox.runMaintenance(instant)).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.runMaintenance(instant))).toThrow(
+      ApplicationCommandValidationError,
+    );
     // Nothing was swept and nothing was terminalized.
     const receipt = await mailbox.receipt(commandId);
     expect(receipt?.state).toBe('available');
@@ -516,7 +529,9 @@ describe('a mismatched event sink', () => {
     const events = new RecordingEventSink(elsewhere);
     const { mailbox } = createMailboxFixture({ storage: mailboxStorage, events });
 
-    expect(mailbox.admit(commandInput())).rejects.toThrow(/different storage backend/);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(
+      /different storage backend/,
+    );
     expect(await mailbox.list()).toEqual([]);
     mailbox.dispose();
   });
@@ -611,7 +626,9 @@ describe('second-round hardening', () => {
       resourceId: 'agent-8',
       events: new RecordingEventSink(new MemoryStorage()),
     }).mailbox;
-    expect(bad.admit(commandInput())).rejects.toThrow(/different storage backend/);
+    expect(await throwingRejectionOf(bad.admit(commandInput()))).toThrow(
+      /different storage backend/,
+    );
     good.dispose();
     bad.dispose();
   });
@@ -619,7 +636,9 @@ describe('second-round hardening', () => {
   it('rejects an injected clock that cannot produce a durable timestamp', async () => {
     for (const instant of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
       const { mailbox } = createMailboxFixture({ now: () => instant });
-      expect(mailbox.admit(commandInput())).rejects.toThrow(ApplicationCommandValidationError);
+      expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(
+        ApplicationCommandValidationError,
+      );
       mailbox.dispose();
     }
   });
@@ -629,9 +648,9 @@ describe('second-round hardening', () => {
     // not, and the record decoder would reject the result.
     const nearCeiling = Number.MAX_SAFE_INTEGER - 1_000;
     const { mailbox } = createMailboxFixture({ now: () => nearCeiling });
-    expect(mailbox.admit(commandInput({ commandTimeoutMs: 60_000 }))).rejects.toThrow(
-      /safe-integer millisecond range/,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.admit(commandInput({ commandTimeoutMs: 60_000 }))),
+    ).toThrow(/safe-integer millisecond range/);
     mailbox.dispose();
   });
 
@@ -666,9 +685,9 @@ describe('second-round hardening', () => {
     const { mailbox } = createMailboxFixture();
     // A lone surrogate passes a byte-length check but makes `encodeURIComponent`
     // throw a raw URIError when the storage key is built.
-    expect(mailbox.admit(commandInput({ caller: 'user:\ud800' }))).rejects.toThrow(
-      /well-formed Unicode/,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.admit(commandInput({ caller: 'user:\ud800' }))),
+    ).toThrow(/well-formed Unicode/);
     expect(() => createMailboxFixture({ namespace: 'bureau\udfff' })).toThrow(
       /well-formed Unicode/,
     );
@@ -678,9 +697,11 @@ describe('second-round hardening', () => {
   it('bounds the cancellation reason', async () => {
     const { mailbox } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
-    expect(mailbox.requestCancellation({ commandId, reason: 'x'.repeat(4_096) })).rejects.toThrow(
-      ApplicationCommandValidationError,
-    );
+    expect(
+      await throwingRejectionOf(
+        mailbox.requestCancellation({ commandId, reason: 'x'.repeat(4_096) }),
+      ),
+    ).toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
   });
 
@@ -690,7 +711,9 @@ describe('second-round hardening', () => {
     ['a zero poll interval', { timeoutMs: 10, pollIntervalMs: 0 }],
   ])('rejects %s rather than waiting forever', async (_name, options) => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.waitForAvailable(options)).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.waitForAvailable(options))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 
@@ -912,7 +935,7 @@ describe('third-round hardening', () => {
       storage,
       events: new RecordingEventSink(elsewhere),
     }).mailbox;
-    expect(withBadSink.requestCancellation({ commandId })).rejects.toThrow(
+    expect(await throwingRejectionOf(withBadSink.requestCancellation({ commandId }))).toThrow(
       /different storage backend/,
     );
     // The local record is untouched.
@@ -933,13 +956,15 @@ describe('third-round hardening', () => {
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
     expect(
-      mailbox.reject({
-        commandId,
-        attemptToken: claim.attemptToken,
-        failure: { reason: 'application' },
-        retry: true,
-      }),
-    ).rejects.toThrow(/safe-integer millisecond range/);
+      await throwingRejectionOf(
+        mailbox.reject({
+          commandId,
+          attemptToken: claim.attemptToken,
+          failure: { reason: 'application' },
+          retry: true,
+        }),
+      ),
+    ).toThrow(/safe-integer millisecond range/);
     mailbox.dispose();
   });
 
@@ -973,26 +998,30 @@ describe('third-round hardening', () => {
     const commandId = await admitOne(mailbox);
     const claim = await claimOne(mailbox);
     expect(
-      mailbox.acknowledge({
-        commandId,
-        attemptToken: claim.attemptToken,
-        outcome: { blob: 'x'.repeat(70_000) },
-      }),
-    ).rejects.toThrow(/durable metadata ceiling/);
+      await throwingRejectionOf(
+        mailbox.acknowledge({
+          commandId,
+          attemptToken: claim.attemptToken,
+          outcome: { blob: 'x'.repeat(70_000) },
+        }),
+      ),
+    ).toThrow(/durable metadata ceiling/);
     mailbox.dispose();
   });
 
   it('rejects a null causation with the public validation error', async () => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.admit(commandInput({ causation: null as never }))).rejects.toThrow(
-      ApplicationCommandValidationError,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.admit(commandInput({ causation: null as never }))),
+    ).toThrow(ApplicationCommandValidationError);
     mailbox.dispose();
   });
 
   it('rejects a generated identifier containing an unpaired surrogate', async () => {
     const { mailbox } = createMailboxFixture({ generateId: () => 'id-\ud800' });
-    expect(mailbox.admit(commandInput())).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 });
@@ -1090,13 +1119,15 @@ describe('fourth-round hardening', () => {
     const claim = await claimOne(mailbox);
     for (const reason of ['attempts-exhausted', 'deadline-exceeded', 'cancelled'] as const) {
       expect(
-        mailbox.reject({
-          commandId,
-          attemptToken: claim.attemptToken,
-          failure: { reason } as unknown as ApplicationCommandRejection,
-          retry: false,
-        }),
-      ).rejects.toThrow(ApplicationCommandValidationError);
+        await throwingRejectionOf(
+          mailbox.reject({
+            commandId,
+            attemptToken: claim.attemptToken,
+            failure: { reason } as unknown as ApplicationCommandRejection,
+            retry: false,
+          }),
+        ),
+      ).toThrow(ApplicationCommandValidationError);
     }
     // The claim is still live: nothing above was persisted.
     const receipt = await mailbox.receipt(commandId);
@@ -1113,7 +1144,7 @@ describe('fourth-round hardening', () => {
       const bytes = await storage.get(key);
       const record = decode(bytes as Uint8Array) as Record<string, unknown>;
       await storage.put(key, encode({ ...record, [field]: 0 }));
-      expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+      expect(await throwingRejectionOf(mailbox.claim())).toThrow(PersistedDataCorruptError);
       mailbox.dispose();
     },
   );
@@ -1209,22 +1240,26 @@ describe('fifth-round hardening', () => {
 
   it('rejects a wait deadline outside the safe-integer range', async () => {
     const { mailbox } = createMailboxFixture({ now: () => Number.MAX_SAFE_INTEGER - 5_000 });
-    expect(mailbox.waitForAvailable({ timeoutMs: 10_000 })).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.waitForAvailable({ timeoutMs: 10_000 }))).toThrow(
       /safe-integer millisecond range/,
     );
-    expect(mailbox.awaitCleanup({ commandId: 'c', timeoutMs: 10_000 })).rejects.toThrow(
-      /safe-integer millisecond range/,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.awaitCleanup({ commandId: 'c', timeoutMs: 10_000 })),
+    ).toThrow(/safe-integer millisecond range/);
     mailbox.dispose();
   });
 
   it('rejects a malformed command id with the public validation error', async () => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.receipt('id-\ud800')).rejects.toThrow(ApplicationCommandValidationError);
-    expect(mailbox.requestCancellation({ commandId: 'x'.repeat(300) })).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.receipt('id-\ud800'))).toThrow(
       ApplicationCommandValidationError,
     );
-    expect(mailbox.cleanupState('')).rejects.toThrow(ApplicationCommandValidationError);
+    expect(
+      await throwingRejectionOf(mailbox.requestCancellation({ commandId: 'x'.repeat(300) })),
+    ).toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.cleanupState(''))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 
@@ -1281,7 +1316,7 @@ describe('sixth-round hardening', () => {
     const second = await admitOne(mailbox, { idempotencyKey: 'b' });
     const bytes = await storage.get(KEYS.applicationCommand('bureau', 'agent-7', first));
     await storage.put(KEYS.applicationCommand('bureau', 'agent-7', second), bytes as Uint8Array);
-    expect(mailbox.receipt(second)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(second))).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -1420,7 +1455,9 @@ describe('seventh-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, namespace: 'bureau\ud800' }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 
@@ -1430,8 +1467,10 @@ describe('seventh-round hardening', () => {
     const header = await storage.get(KEYS.applicationMailbox('bureau', 'agent-7'));
     await storage.put(KEYS.applicationMailbox('bureau', 'agent-8'), header as Uint8Array);
     const other = new Mailbox({ storage, namespace: 'bureau', resourceId: 'agent-8' });
-    expect(other.capacity()).rejects.toThrow(PersistedDataCorruptError);
-    expect(other.admit(commandInput())).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(other.capacity())).toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(other.admit(commandInput()))).toThrow(
+      PersistedDataCorruptError,
+    );
     other.dispose();
     mailbox.dispose();
   });
@@ -1461,7 +1500,7 @@ describe('eighth-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, attempt: 3 }));
-    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -1553,7 +1592,7 @@ describe('ninth-round hardening', () => {
       KEYS.applicationCommandReady('bureau', 'agent-7', 0),
       encodeApplicationReadyEntry('id-\ud800'),
     );
-    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -1566,7 +1605,7 @@ describe('ninth-round hardening', () => {
       KEYS.applicationCommandBySequence('bureau', 'agent-7', 0),
       encodeApplicationReadyEntry(second),
     );
-    expect(mailbox.list()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.list())).toThrow(PersistedDataCorruptError);
     expect(first).not.toBe(second);
     mailbox.dispose();
   });
@@ -1596,9 +1635,9 @@ describe('ninth-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, attempt }));
-    expect(mailbox.renew({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
-      PersistedDataCorruptError,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.renew({ commandId, attemptToken: claim.attemptToken })),
+    ).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -1617,7 +1656,7 @@ describe('ninth-round hardening', () => {
       }
       return original(...args);
     };
-    expect(mailbox.claim()).rejects.toThrow('transient');
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow('transient');
     expect(attemptControllerRegistry(storage, MAILBOX_PRIMITIVE, 'bureau', 'agent-7').size).toBe(0);
     // The handle is still usable and the command is still claimable.
     const claim = await mailbox.claim();
@@ -1674,9 +1713,9 @@ describe('ninth-round hardening', () => {
     const key = KEYS.applicationMailbox('bureau', 'agent-7');
     const header = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...header, nextSequence: 0 }));
-    expect(mailbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.capacity())).toThrow(PersistedDataCorruptError);
     await storage.put(key, encode({ ...header, openCount: 99 }));
-    expect(mailbox.capacity()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.capacity())).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -1687,7 +1726,7 @@ describe('ninth-round hardening', () => {
     const key = KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'a');
     const binding = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...binding, commandId: unrelated }));
-    expect(mailbox.admit(commandInput({ idempotencyKey: 'a' }))).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.admit(commandInput({ idempotencyKey: 'a' })))).toThrow(
       PersistedDataCorruptError,
     );
     mailbox.dispose();
@@ -1721,12 +1760,16 @@ describe('ninth-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', admission.receipt.commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, payloadDigest: 'b'.repeat(64) }));
-    expect(mailbox.receipt(admission.receipt.commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(admission.receipt.commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     await storage.put(
       key,
       encode({ ...record, payload: { form: 'reference', reference: 'blob:1', digest: 'nope' } }),
     );
-    expect(mailbox.receipt(admission.receipt.commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(admission.receipt.commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 });
@@ -1768,7 +1811,7 @@ describe('tenth-round hardening', () => {
     const key = KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'a');
     const binding = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...binding, commandId: 'id-\ud800' }));
-    expect(mailbox.admit(commandInput({ idempotencyKey: 'a' }))).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.admit(commandInput({ idempotencyKey: 'a' })))).toThrow(
       PersistedDataCorruptError,
     );
     mailbox.dispose();
@@ -1784,19 +1827,25 @@ describe('tenth-round hardening', () => {
 
     // An applied record cannot carry a failure.
     await storage.put(key, encode({ ...applied, failure: { reason: 'attempts-exhausted' } }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     // A dead-lettered record cannot carry a claimant failure, and a rejected one
     // cannot carry a mailbox-owned reason.
     await storage.put(
       key,
       encode({ ...applied, state: 'dead-lettered', failure: { reason: 'application' } }),
     );
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     await storage.put(
       key,
       encode({ ...applied, state: 'rejected', failure: { reason: 'cancelled' } }),
     );
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     // The legal pairings still decode.
     await storage.put(
       key,
@@ -1873,7 +1922,9 @@ describe('eleventh-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, idempotencyKey: 'k-\ud800' }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 
@@ -1913,8 +1964,10 @@ describe('eleventh-round hardening', () => {
     const controller = new AbortController();
     controller.abort(new Error('gone'));
     expect(
-      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
-    ).rejects.toThrow('gone');
+      await throwingRejectionOf(
+        mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
+      ),
+    ).toThrow('gone');
     expect(reads).toBe(0);
     mailbox.dispose();
   });
@@ -1981,8 +2034,10 @@ describe('twelfth-round hardening', () => {
       return originalGet(key);
     };
     expect(
-      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
-    ).rejects.toThrow('gone mid-read');
+      await throwingRejectionOf(
+        mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: controller.signal }),
+      ),
+    ).toThrow('gone mid-read');
     mailbox.dispose();
   });
 
@@ -1994,8 +2049,10 @@ describe('twelfth-round hardening', () => {
       throw new Error('storage down');
     };
     expect(
-      mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: new AbortController().signal }),
-    ).rejects.toThrow('storage down');
+      await throwingRejectionOf(
+        mailbox.awaitCleanup({ commandId, timeoutMs: 1_000, signal: new AbortController().signal }),
+      ),
+    ).toThrow('storage down');
     mailbox.dispose();
   });
 
@@ -2045,7 +2102,7 @@ describe('twelfth-round hardening', () => {
         admittedCount: Number.MAX_SAFE_INTEGER,
       }),
     );
-    expect(mailbox.admit(commandInput())).rejects.toThrow(/sequence allocator/);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(/sequence allocator/);
     // Nothing was written: the header still decodes.
     const capacity = await mailbox.capacity();
     expect(capacity.admitted).toBe(Number.MAX_SAFE_INTEGER);
@@ -2055,8 +2112,10 @@ describe('twelfth-round hardening', () => {
   it('rejects a poll interval beyond the timer range', async () => {
     const { mailbox } = createMailboxFixture();
     expect(
-      mailbox.waitForAvailable({ timeoutMs: 0, pollIntervalMs: 2_147_483_648 }),
-    ).rejects.toThrow(/largest delay a timer can schedule/);
+      await throwingRejectionOf(
+        mailbox.waitForAvailable({ timeoutMs: 0, pollIntervalMs: 2_147_483_648 }),
+      ),
+    ).toThrow(/largest delay a timer can schedule/);
     mailbox.dispose();
   });
 });
@@ -2161,7 +2220,9 @@ describe('thirteenth-round hardening', () => {
       }
       return originalGet(key);
     };
-    expect(mailbox.awaitCleanup({ commandId, timeoutMs: 10_000 })).rejects.toThrow(/disposed/);
+    expect(
+      await throwingRejectionOf(mailbox.awaitCleanup({ commandId, timeoutMs: 10_000 })),
+    ).toThrow(/disposed/);
   });
 });
 
@@ -2246,7 +2307,9 @@ describe('fourteenth-round hardening', () => {
       }
       return originalGet(key);
     };
-    expect(mailbox.claim({ signal: controller.signal })).rejects.toThrow('caller gone');
+    expect(await throwingRejectionOf(mailbox.claim({ signal: controller.signal }))).toThrow(
+      'caller gone',
+    );
     mailbox.dispose();
   });
 
@@ -2262,7 +2325,9 @@ describe('fourteenth-round hardening', () => {
       controller.abort(new Error('late abort'));
       return originalScan(...args);
     };
-    expect(mailbox.claim({ signal: controller.signal })).rejects.toThrow('late abort');
+    expect(await throwingRejectionOf(mailbox.claim({ signal: controller.signal }))).toThrow(
+      'late abort',
+    );
     mailbox.dispose();
   });
 });
@@ -2393,12 +2458,16 @@ describe('fifteenth-round hardening', () => {
     const key = KEYS.applicationCommand('bureau', 'agent-7', commandId);
     const record = decode((await storage.get(key)) as Uint8Array) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, visibilityExpiresAt: 1 }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     await storage.put(
       key,
       encode({ ...record, visibilityExpiresAt: (record['visibilityExpiresAt'] as number) + 1 }),
     );
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 });
@@ -2633,9 +2702,9 @@ describe('seventeenth-round hardening', () => {
 
   it('rejects a wait budget beyond the timer range', async () => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.waitForAvailable({ timeoutMs: 2_147_483_648 })).rejects.toThrow(
-      /largest delay a timer can schedule/,
-    );
+    expect(
+      await throwingRejectionOf(mailbox.waitForAvailable({ timeoutMs: 2_147_483_648 })),
+    ).toThrow(/largest delay a timer can schedule/);
     mailbox.dispose();
   });
 
@@ -2683,7 +2752,7 @@ describe('seventeenth-round hardening', () => {
       }
       return original(...args);
     };
-    expect(mailbox.runMaintenance()).rejects.toThrow('transient');
+    expect(await throwingRejectionOf(mailbox.runMaintenance())).toThrow('transient');
     // The retry must revisit the command it failed on rather than resume past it.
     const report = await mailbox.runMaintenance();
     expect(report.reclaimed).toBe(1);
@@ -2755,7 +2824,9 @@ describe('eighteenth-round hardening', () => {
     // An abandoned attempt without the cleanup flag, on a disposition that
     // cannot abandon one.
     await storage.put(key, encode({ ...applied, abandonedAttemptToken: 't' }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     // The flag without the attempt it would name.
     await storage.put(
       key,
@@ -2766,7 +2837,9 @@ describe('eighteenth-round hardening', () => {
         cleanupPending: true,
       }),
     );
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     // Both, on a disposition that abandons a lease: legal.
     await storage.put(
       key,
@@ -2810,7 +2883,7 @@ describe('eighteenth-round hardening', () => {
       }
       return original(...args);
     };
-    expect(mailbox.claim()).rejects.toThrow(MailboxContentionError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(MailboxContentionError);
     expect(losses).toBe(25);
     mailbox.dispose();
   });

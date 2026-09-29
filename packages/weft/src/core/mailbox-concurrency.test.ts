@@ -13,6 +13,7 @@ import { describe, expect, it } from 'bun:test';
 import { createFleetEventFeed } from '../server/fleet-event-feed.ts';
 import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   collectKeys,
   storageBackends,
@@ -234,7 +235,7 @@ describe('Mailbox state and event atomicity', () => {
       return original(conditions, operations);
     };
 
-    expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(failure);
 
     const persisted = await collectKeys(
       storage,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { buildInternalRealmManifest } from '../../worker/manifest/internal-realm.ts';
 import { FakeRealm, type FakeRealmActivation } from './fake-realm.test-support.ts';
 import { RealmEnvelopeMismatchError, type RealmTurnEnvelope } from './realm-protocol.ts';
@@ -42,7 +43,7 @@ describe('FakeRealm', () => {
   describe('ready-manifest validation gates Ready and turn execution', () => {
     it('cannot execute a turn while Warming, before any ready handshake', async () => {
       const realm = fakeRealm();
-      await expect(realm.dispatchTurn(turn())).rejects.toThrow(
+      expect(await throwingRejectionOf(realm.dispatchTurn(turn()))).toThrow(
         'Fake realm cannot accept a turn while warming',
       );
     });
@@ -86,7 +87,7 @@ describe('FakeRealm', () => {
       });
       expect(realm.lifecycle.state).toBe('crashed');
 
-      await expect(realm.dispatchTurn(turn())).rejects.toThrow(
+      expect(await throwingRejectionOf(realm.dispatchTurn(turn()))).toThrow(
         'Fake realm cannot accept a turn while crashed',
       );
     });
@@ -111,34 +112,34 @@ describe('FakeRealm', () => {
     it('rejects a turn with the wrong workflowRevision', async () => {
       const realm = fakeRealm();
       await readyAndActive(realm);
-      await expect(
-        realm.dispatchTurn(turn({ workflowRevision: 'revision-b' })),
-      ).rejects.toBeInstanceOf(RealmEnvelopeMismatchError);
+      expect(
+        await rejectionOf(realm.dispatchTurn(turn({ workflowRevision: 'revision-b' }))),
+      ).toBeInstanceOf(RealmEnvelopeMismatchError);
       expect(realm.pendingTurnCount).toBe(0);
     });
 
     it('rejects a turn with the wrong realmGeneration', async () => {
       const realm = fakeRealm();
       await readyAndActive(realm, 'generation-1');
-      await expect(
-        realm.dispatchTurn(turn({ realmGeneration: 'generation-stale' })),
-      ).rejects.toBeInstanceOf(RealmEnvelopeMismatchError);
+      expect(
+        await rejectionOf(realm.dispatchTurn(turn({ realmGeneration: 'generation-stale' }))),
+      ).toBeInstanceOf(RealmEnvelopeMismatchError);
       expect(realm.pendingTurnCount).toBe(0);
     });
 
     it('rejects a turn with the wrong executionToken', async () => {
       const realm = fakeRealm();
       await readyAndActive(realm);
-      await expect(
-        realm.dispatchTurn(turn({ executionToken: 'wrong-token' })),
-      ).rejects.toBeInstanceOf(RealmEnvelopeMismatchError);
+      expect(
+        await rejectionOf(realm.dispatchTurn(turn({ executionToken: 'wrong-token' }))),
+      ).toBeInstanceOf(RealmEnvelopeMismatchError);
       expect(realm.pendingTurnCount).toBe(0);
     });
 
     it('rejects an out-of-order turnId', async () => {
       const realm = fakeRealm();
       await readyAndActive(realm);
-      await expect(realm.dispatchTurn(turn({ turnId: 2 }))).rejects.toBeInstanceOf(
+      expect(await rejectionOf(realm.dispatchTurn(turn({ turnId: 2 })))).toBeInstanceOf(
         RealmEnvelopeMismatchError,
       );
       expect(realm.pendingTurnCount).toBe(0);
@@ -152,7 +153,7 @@ describe('FakeRealm', () => {
 
       const accepted = realm.acceptResult(turn({ turnId: 1 }), 'the-result');
       expect(accepted).toEqual({ accepted: true, result: 'the-result' });
-      await expect(pending).resolves.toBe('the-result');
+      expect(await pending).toBe('the-result');
       expect(realm.pendingTurnCount).toBe(0);
     });
 
@@ -161,11 +162,11 @@ describe('FakeRealm', () => {
       await readyAndActive(realm);
       const first = realm.dispatchTurn(turn({ turnId: 1 }));
       realm.acceptResult(turn({ turnId: 1 }), 'first');
-      await expect(first).resolves.toBe('first');
+      expect(await first).toBe('first');
 
       const second = realm.dispatchTurn(turn({ turnId: 2 }));
       realm.acceptResult(turn({ turnId: 2 }), 'second');
-      await expect(second).resolves.toBe('second');
+      expect(await second).toBe('second');
     });
   });
 
@@ -181,7 +182,7 @@ describe('FakeRealm', () => {
       expect(realm.pendingTurnCount).toBe(1);
 
       realm.acceptResult(turn({ turnId: 1 }), 'the-real-result');
-      await expect(pending).resolves.toBe('the-real-result');
+      expect(await pending).toBe('the-real-result');
     });
 
     it('rejects a result claiming the wrong realmGeneration for the pending turn', async () => {
@@ -195,7 +196,7 @@ describe('FakeRealm', () => {
       expect(realm.pendingTurnCount).toBe(1);
 
       realm.acceptResult(turn({ turnId: 1 }), 'the-real-result');
-      await expect(pending).resolves.toBe('the-real-result');
+      expect(await pending).toBe('the-real-result');
     });
 
     it('rejects a result claiming the wrong executionToken for the pending turn', async () => {
@@ -209,7 +210,7 @@ describe('FakeRealm', () => {
       expect(realm.pendingTurnCount).toBe(1);
 
       realm.acceptResult(turn({ turnId: 1 }), 'the-real-result');
-      await expect(pending).resolves.toBe('the-real-result');
+      expect(await pending).toBe('the-real-result');
     });
 
     it('a stale result surviving a crash/restart cannot resolve the fresh turn reusing the same turnId', async () => {
@@ -223,7 +224,7 @@ describe('FakeRealm', () => {
       // bounded restart — a fresh generation, but the turnId sequence starts
       // over at 1 again on `activate()`.
       realm.crash();
-      await expect(staleDispatch).rejects.toThrow();
+      expect(await throwingRejectionOf(staleDispatch)).toThrow();
       expect(realm.restart()).toEqual({ ok: true });
       await readyAndActive(realm, 'generation-2');
 
@@ -244,7 +245,7 @@ describe('FakeRealm', () => {
       expect(realm.pendingTurnCount).toBe(1);
 
       realm.acceptResult(turn({ turnId: 1, realmGeneration: 'generation-2' }), 'fresh-result');
-      await expect(freshDispatch).resolves.toBe('fresh-result');
+      expect(await freshDispatch).toBe('fresh-result');
     });
   });
 
@@ -254,7 +255,7 @@ describe('FakeRealm', () => {
       await readyAndActive(realm);
       realm.beginDrain();
 
-      await expect(realm.dispatchTurn(turn())).rejects.toThrow(
+      expect(await throwingRejectionOf(realm.dispatchTurn(turn()))).toThrow(
         'Fake realm cannot accept a turn while draining',
       );
     });
@@ -269,7 +270,9 @@ describe('FakeRealm', () => {
       realm.terminate();
       expect(realm.lifecycle.state).toBe('terminated');
 
-      await expect(pending).rejects.toThrow('Turn 1 was not accepted: realm-not-active');
+      expect(await throwingRejectionOf(pending)).toThrow(
+        'Turn 1 was not accepted: realm-not-active',
+      );
       expect(realm.pendingTurnCount).toBe(0);
 
       const lateResult = realm.acceptResult(turn({ turnId: 1 }), 'too-late');
@@ -289,8 +292,14 @@ describe('FakeRealm', () => {
 
       expect(realm.lifecycle.state).toBe('crashed');
       expect(realm.pendingTurnCount).toBe(0);
-      await expect(first).rejects.toThrow();
-      await expect(second).rejects.toThrow();
+      // Both turns reject at the crash; observe them together so neither is
+      // left without a handler while the other is awaited.
+      const [firstRejection, secondRejection] = await Promise.all([
+        throwingRejectionOf(first),
+        throwingRejectionOf(second),
+      ]);
+      expect(firstRejection).toThrow();
+      expect(secondRejection).toThrow();
     });
 
     it('does not touch a sibling realm (a different revision) pending turns when one realm crashes', async () => {
@@ -311,14 +320,14 @@ describe('FakeRealm', () => {
       expect(crashingRealm.lifecycle.state).toBe('crashed');
       expect(siblingRealm.lifecycle.state).toBe('active');
       expect(siblingRealm.pendingTurnCount).toBe(1);
-      await expect(crashingTurn).rejects.toThrow();
+      expect(await throwingRejectionOf(crashingTurn)).toThrow();
 
       const siblingAccepted = siblingRealm.acceptResult(
         turn({ turnId: 1, realmGeneration: 'generation-sibling' }),
         'sibling-still-fine',
       );
       expect(siblingAccepted).toEqual({ accepted: true, result: 'sibling-still-fine' });
-      await expect(siblingTurn).resolves.toBe('sibling-still-fine');
+      expect(await siblingTurn).toBe('sibling-still-fine');
     });
   });
 

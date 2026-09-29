@@ -34,7 +34,7 @@ describe('stopProcess — escalated SIGKILL whose exited promise also rejects', 
   it('still resolves instead of propagating the rejection, after escalating to SIGKILL', async () => {
     const { process, killCalls } = fakeUnresponsiveProcess();
 
-    await expect(stopProcess(process, 'SIGTERM', 5)).resolves.toBeUndefined();
+    expect(await stopProcess(process, 'SIGTERM', 5)).toBeUndefined();
 
     // The initial signal, then the SIGKILL escalation once the (rejecting)
     // wait for exit failed and the process still hadn't terminated.

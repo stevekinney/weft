@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
@@ -166,7 +167,7 @@ describe('removeCatalogEntry', () => {
     await storage.put(generationKey, new TextEncoder().encode('not-a-number'));
     await catalog.install(manifest, fakeDefinition('checkout'));
 
-    expect(removeCatalogEntry(storage, 'checkout', 'pinned-1')).rejects.toThrow(
+    expect(await throwingRejectionOf(removeCatalogEntry(storage, 'checkout', 'pinned-1'))).toThrow(
       /do not decode as a non-negative integer/,
     );
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { Engine, workflow, type ActivityContext, type ActivityDefinition } from '../index.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { registerModuleExports, toActivityCallable } from './serve-registrations.ts';
 
 describe('registerModuleExports', () => {
@@ -13,8 +14,8 @@ describe('registerModuleExports', () => {
     registerModuleExports(engine, { exportAlias: definition }, []);
 
     const handle = await engine.start('canonical-name', undefined);
-    expect(handle.result()).resolves.toBe('done');
-    expect(engine.start('exportAlias', undefined)).rejects.toThrow(
+    expect(await handle.result()).toBe('done');
+    expect(await throwingRejectionOf(engine.start('exportAlias', undefined))).toThrow(
       'No workflow registered with name "exportAlias"',
     );
   });

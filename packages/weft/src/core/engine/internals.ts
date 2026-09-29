@@ -73,6 +73,7 @@ export type DurableInlineOperation = {
   operationId: string;
   scheduledFireAt?: number;
   type: ContextOperationRequest['type'];
+  workflowExecutionToken?: string;
 };
 
 type EngineRuntime = WorkflowHandleEngine &
@@ -135,7 +136,10 @@ export interface EngineInternals {
    * reused the same deterministic operationId (its durable timer outlives
    * terminal cleanup) is ignored rather than resolving a replacement run early.
    */
-  sleepResolvers: Map<string, { resolve: () => void; fireAt: number }>;
+  sleepResolvers: Map<
+    string,
+    { resolve: () => void; fireAt: number; workflowExecutionToken?: string }
+  >;
   sleepResolversByWorkflow: Map<string, Set<string>>;
   /** Test-only event waiters notified when a workflow registers a sleep resolver. */
   sleepResolverReadyWaitersForTesting?: Map<string, Set<() => void>>;
@@ -167,6 +171,7 @@ export interface EngineInternals {
    * stale earlier-run timer. Cleared entirely at engine disposal.
    */
   sleepTimersFiredWithoutResolver: Map<string, Map<string, number>>;
+  sleepTimerTokensFiredWithoutResolver: Map<string, Map<string, string | undefined>>;
   interceptors: Interceptor[];
   // `undefined` means "not yet computed". `null` means "computed and empty —
   // no interceptor implements hooks for this side". Distinguishing the two
@@ -442,6 +447,10 @@ export interface EngineInternals {
   pendingAtomicWorkflowCommitSideEffects: Map<
     string,
     import('./checkpoint-side-effects.ts').AtomicWorkflowCommitSideEffects
+  >;
+  pendingOperationAtomicWorkflowCommitSideEffects: Map<
+    string,
+    Map<string, import('./checkpoint-side-effects.ts').AtomicWorkflowCommitSideEffects>
   >;
   /**
    * The durable workflow catalog (WFT-9/WFT-10), `null` until

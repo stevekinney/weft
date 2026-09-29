@@ -1,4 +1,5 @@
 import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
+import { clearAllPendingAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
@@ -194,7 +195,7 @@ export function disposeEngine(
   internals.pendingScheduleCreations.clear();
   internals.eventLogHeads.clear();
   internals.pendingTimelineEntries.clear();
-  internals.pendingAtomicWorkflowCommitSideEffects.clear();
+  clearAllPendingAtomicWorkflowCommitSideEffects(internals);
   internals.pendingAsyncActivityResolutions.clear();
   internals.workflowVersionTuples.clear();
   internals.workflowFeedListeners.clear();

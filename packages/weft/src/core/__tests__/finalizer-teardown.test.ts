@@ -21,6 +21,7 @@ import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine, WorkflowTeardownPendingError } from '../engine.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
@@ -106,7 +107,7 @@ async function startAndCancel(engine: Engine, type: string, id: string): Promise
   const handle = await engine.start(type, null, { id });
   await waitForRecordedState(engine, id);
   await engine.cancel(handle.id);
-  expect(handle.result()).rejects.toThrow('Workflow cancelled');
+  expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 }
 
 /** Register a finalizer-bearing workflow that records `sandboxId` then parks forever. */
@@ -171,7 +172,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-on-timeout', null, { id: 'teardown-timeout-1' });
     await waitForRecordedState(engine, 'teardown-timeout-1');
     await engine.timeout(handle.id);
-    expect(handle.result()).rejects.toThrow('exceeded execution timeout');
+    expect(await throwingRejectionOf(handle.result())).toThrow('exceeded execution timeout');
 
     await engine.scheduler.tick(now);
 
@@ -193,7 +194,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-no-finalizer', null, { id: 'teardown-none-1' });
     await waitForParked(engine, 'teardown-none-1');
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     await engine.scheduler.tick(now);
 
     // No finalizer declared → no owed marker is ever written.
@@ -226,7 +227,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     const handle = await engine.start('teardown-no-state', null, { id: 'teardown-nostate-1' });
     await waitForParked(engine, 'teardown-nostate-1');
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     await engine.scheduler.tick(now);
 
     expect(finalizerRan).toBe(false);
@@ -545,11 +546,13 @@ describe('finalizer teardown interlocks with deletion paths (#446 Phase 2)', () 
       // Restarting under the same id while teardown is owed must be refused with the
       // distinct, transient error — never silently displacing the prior finalizer.
       expect(
-        engine.start('teardown-start-new', null, {
-          id: 'teardown-startnew-1',
-          onTerminalConflict: 'start-new',
-        }),
-      ).rejects.toBeInstanceOf(WorkflowTeardownPendingError);
+        await rejectionOf(
+          engine.start('teardown-start-new', null, {
+            id: 'teardown-startnew-1',
+            onTerminalConflict: 'start-new',
+          }),
+        ),
+      ).toBeInstanceOf(WorkflowTeardownPendingError);
 
       // The prior run's finalizer state is intact (not displaced by the restart).
       expect(await storage.get(KEYS.finalizerState('teardown-startnew-1'))).not.toBeNull();

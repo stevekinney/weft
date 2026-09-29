@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { flushPortableMicrotasks, yieldToPortableEventLoop } from '../testing/event-loop.ts';
 import { restoreRealTimers } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../testing/test-engine.ts';
 import {
   DurableMutex,
@@ -195,7 +196,9 @@ describe('durable mutex inside workflows', () => {
     );
     await flush();
     expect(order).toEqual(['holder:acquired']);
-    expect(holder.result()).rejects.toThrow('holder crashed before releasing the lock');
+    expect(await throwingRejectionOf(holder.result())).toThrow(
+      'holder crashed before releasing the lock',
+    );
 
     const waiter = await engine.start(
       'lock-contender',

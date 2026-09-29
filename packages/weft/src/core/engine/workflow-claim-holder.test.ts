@@ -105,7 +105,7 @@ describe('COR-65: engine.claimHolder (two real engines, one store)', () => {
     const storage = new MemoryStorage();
     const engine = await createProbeEngine(storage, () => 5_000_000);
 
-    await expect(engine.claimHolder('never-claimed')).resolves.toBeUndefined();
+    expect(await engine.claimHolder('never-claimed')).toBeUndefined();
 
     await engine[Symbol.asyncDispose]();
   });
@@ -119,7 +119,7 @@ describe('COR-65: engine.claimHolder (two real engines, one store)', () => {
     await startParkedWorkflow(engineA, storage, id);
 
     // The holder (engineA) sees itself as the live holder.
-    await expect(engineA.claimHolder(id)).resolves.toEqual({
+    expect(await engineA.claimHolder(id)).toEqual({
       heldByThisProcess: true,
       heldByAnyProcess: true,
     });
@@ -130,7 +130,7 @@ describe('COR-65: engine.claimHolder (two real engines, one store)', () => {
     // cross-process visibility COR-65 exists to provide.
     let nowB = nowA; // same instant — well within the live TTL.
     const engineB = await createProbeEngine(storage, () => nowB, { recover: false });
-    await expect(engineB.claimHolder(id)).resolves.toEqual({
+    expect(await engineB.claimHolder(id)).toEqual({
       heldByThisProcess: false,
       heldByAnyProcess: true,
     });
@@ -144,8 +144,8 @@ describe('COR-65: engine.claimHolder (two real engines, one store)', () => {
 
     // Both engines — the former holder and the never-holding second engine —
     // now read the SAME "no record" shape from the same durable key.
-    await expect(engineA.claimHolder(id)).resolves.toBeUndefined();
-    await expect(engineB.claimHolder(id)).resolves.toBeUndefined();
+    expect(await engineA.claimHolder(id)).toBeUndefined();
+    expect(await engineB.claimHolder(id)).toBeUndefined();
 
     await engineA[Symbol.asyncDispose]();
     await engineB[Symbol.asyncDispose]();
@@ -171,7 +171,7 @@ describe('COR-65: engine.claimHolder (two real engines, one store)', () => {
       nowA + CLAIM_TTL_MS + WORKFLOW_CLAIM_TAKEOVER_GRACE_MULTIPLIER * CLAIM_RENEW_INTERVAL_MS + 1;
     const engineB = await createProbeEngine(storage, () => nowB, { recover: false });
 
-    await expect(engineB.claimHolder(id)).resolves.toEqual({
+    expect(await engineB.claimHolder(id)).toEqual({
       heldByThisProcess: false,
       heldByAnyProcess: false,
     });

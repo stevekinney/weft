@@ -17,7 +17,7 @@ describe('LocalHandle', () => {
     const localHandle = new LocalHandle(wrappedHandle as never, client);
     const listener = () => undefined;
 
-    expect(localHandle.result()).resolves.toBe('wrapped-result');
+    expect(await localHandle.result()).toBe('wrapped-result');
 
     localHandle.addEventListener('workflow:completed', listener);
     localHandle.removeEventListener('workflow:completed', listener);

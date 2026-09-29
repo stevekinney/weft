@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS, type ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
@@ -81,14 +82,14 @@ describe('start-commit lifecycle helpers', () => {
     };
 
     expect(
-      buildAndCommitStartBatch(context as never, () => ({
+      await buildAndCommitStartBatch(context as never, () => ({
         conditions: [],
         operations: [{ type: 'put', key: 'start-idempotent', value: new Uint8Array([2]) }],
       })),
-    ).resolves.toBeUndefined();
-    expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
-    expect(storage.get('start-additional')).resolves.toEqual(new Uint8Array([1]));
-    expect(storage.get('start-idempotent')).resolves.toEqual(new Uint8Array([2]));
+    ).toBeUndefined();
+    expect(await storage.get(`wf:${context.workflowId}`)).not.toBeNull();
+    expect(await storage.get('start-additional')).toEqual(new Uint8Array([1]));
+    expect(await storage.get('start-idempotent')).toEqual(new Uint8Array([2]));
   });
 
   it('throws the idempotency sentinel when a start precondition loses its race without concurrency admission', async () => {
@@ -104,11 +105,13 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(context as never, () => ({
-        conditions: [condition],
-        operations: [],
-      })),
-    ).rejects.toThrow('start idempotency compare-and-swap lost to a concurrent caller');
+      await throwingRejectionOf(
+        buildAndCommitStartBatch(context as never, () => ({
+          conditions: [condition],
+          operations: [],
+        })),
+      ),
+    ).toThrow('start idempotency compare-and-swap lost to a concurrent caller');
   });
 
   it('exhausts workflow-concurrency retries when only concurrency conditions keep losing', async () => {
@@ -118,18 +121,20 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
-            operations: [],
-            stateKey: 'workflow-concurrency',
-          }),
-        },
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(AtomicStateConflictError);
+    ).toBeInstanceOf(AtomicStateConflictError);
   });
 
   it('treats a lost start precondition as an idempotency race even when concurrency admission is also present', async () => {
@@ -145,21 +150,23 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+      await throwingRejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          () => ({
+            conditions: [condition],
             operations: [],
-            stateKey: 'workflow-concurrency',
           }),
-        },
-        () => ({
-          conditions: [condition],
-          operations: [],
-        }),
+        ),
       ),
-    ).rejects.toThrow('start idempotency compare-and-swap lost to a concurrent caller');
+    ).toThrow('start idempotency compare-and-swap lost to a concurrent caller');
   });
 
   it('reports a duplicate id ahead of the signal sentinel when both conditions conflict', async () => {
@@ -185,14 +192,16 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          duplicateIdCondition: { key: workflowKey, expectedValue: null },
-        } as never,
-        () => ({ conditions: [signalCondition], operations: [] }),
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            duplicateIdCondition: { key: workflowKey, expectedValue: null },
+          } as never,
+          () => ({ conditions: [signalCondition], operations: [] }),
+        ),
       ),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
   it('attributes a lost duplicate-id CAS by elimination, even when the winner was purged', async () => {
@@ -212,11 +221,13 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        { ...context, duplicateIdCondition: { key: workflowKey, expectedValue: null } } as never,
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          { ...context, duplicateIdCondition: { key: workflowKey, expectedValue: null } } as never,
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
   it('fails closed when a lost batch shows no retryable cause at all', async () => {
@@ -236,19 +247,21 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          duplicateIdCondition: { key: workflowKey, expectedValue: null },
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
-            operations: [],
-            stateKey: 'workflow-concurrency',
-          }),
-        },
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            duplicateIdCondition: { key: workflowKey, expectedValue: null },
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 
   it('retries admission only on positive evidence that concurrency is what missed', async () => {
@@ -268,19 +281,21 @@ describe('start-commit lifecycle helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          duplicateIdCondition: { key: workflowKey, expectedValue: null },
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
-            operations: [],
-            stateKey: 'workflow-concurrency',
-          }),
-        },
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            duplicateIdCondition: { key: workflowKey, expectedValue: null },
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(AtomicStateConflictError);
+    ).toBeInstanceOf(AtomicStateConflictError);
   });
 
   it('WFT-153: attributes a lost CAS to the generation condition, instead of retrying on stale concurrency evidence', async () => {
@@ -321,20 +336,22 @@ describe('start-commit lifecycle helpers', () => {
     };
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          duplicateIdCondition: { key: workflowKey, expectedValue: null },
-          duplicateIdGenerationCondition: { key: generationKey, expectedValue: null },
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
-            operations: [],
-            stateKey: 'workflow-concurrency',
-          }),
-        },
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            duplicateIdCondition: { key: workflowKey, expectedValue: null },
+            duplicateIdGenerationCondition: { key: generationKey, expectedValue: null },
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
     expect(conditionalBatchCalls).toBe(1);
   });
 
@@ -367,14 +384,14 @@ describe('start-commit lifecycle helpers', () => {
     // just the fold's own), distinct from an ordinary claimed start with no
     // preconditions.
     expect(
-      buildAndCommitStartBatch(context as never, () => ({
+      await buildAndCommitStartBatch(context as never, () => ({
         conditions: [idempotentCondition],
         operations: [{ type: 'put', key: 'start-idempotent-mapping', value: new Uint8Array([1]) }],
       })),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
-    expect(storage.get(`wf:${context.workflowId}`)).resolves.not.toBeNull();
-    expect(storage.get('start-idempotent-mapping')).resolves.toEqual(new Uint8Array([1]));
+    expect(await storage.get(`wf:${context.workflowId}`)).not.toBeNull();
+    expect(await storage.get('start-idempotent-mapping')).toEqual(new Uint8Array([1]));
     expect(registry.currentEpoch(context.workflowId)).toBe(1);
   });
 
@@ -428,19 +445,21 @@ describe('start-commit lifecycle helpers', () => {
     };
 
     expect(
-      buildAndCommitStartBatch(
-        {
-          ...context,
-          buildWorkflowConcurrencyStartOperations: async () => ({
-            conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
-            operations: [],
-            stateKey: 'workflow-concurrency',
-          }),
-        },
-        undefined,
+      await rejectionOf(
+        buildAndCommitStartBatch(
+          {
+            ...context,
+            buildWorkflowConcurrencyStartOperations: async () => ({
+              conditions: [{ key: 'workflow-concurrency', expectedValue: null }],
+              operations: [],
+              stateKey: 'workflow-concurrency',
+            }),
+          },
+          undefined,
+        ),
       ),
-    ).rejects.toBeInstanceOf(WorkflowRevisionUnavailableError);
+    ).toBeInstanceOf(WorkflowRevisionUnavailableError);
     expect(entryReads).toBe(3);
-    expect(storage.get(`wf:${context.workflowId}`)).resolves.toBeNull();
+    expect(await storage.get(`wf:${context.workflowId}`)).toBeNull();
   });
 });

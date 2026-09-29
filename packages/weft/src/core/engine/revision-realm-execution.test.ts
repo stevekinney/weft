@@ -19,6 +19,7 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import type { RevisionRealmConfig } from '../realm/revision-realm-registry.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -487,7 +488,7 @@ describe('RevisionRealmExecutionStrategy (engine integration, COR-249)', () => {
       // revision realm assigned" error.
       const finalState = await engine.get(workflowId);
       expect(finalState?.status).toBe('cancelled');
-      await expect(handle.result()).rejects.toThrow(/cancelled/i);
+      expect(await throwingRejectionOf(handle.result())).toThrow(/cancelled/i);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

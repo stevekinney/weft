@@ -15,17 +15,17 @@ import type {
   ReviewListFilter,
   SubmitReviewOptions,
 } from '../types.ts';
-import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import {
   deleteCompletedReviewsForWorkflow,
   listCompletedReviewsFromStorage,
   matchesReviewListFilter,
   persistCompletedReviewRecord,
+  stageTimedOutReviewDeletion,
 } from './completed-review-storage.ts';
 import type { EngineInternals } from './internals.ts';
 import { parseStoredReviewRequest, toPendingReviewEntry } from './review-list-entries.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
-
+import type { CapturedRejectionReason } from './strategy-helpers.ts';
 type ReviewOperationOutcome = { ok: true; value: HumanReviewResult } | { ok: false; error: Error };
 
 export type SubmitReviewCallbacks = {
@@ -35,7 +35,13 @@ export type SubmitReviewCallbacks = {
 export type ReviewOperationCallbacks = {
   dispatchEvent: (event: Event) => boolean;
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;
-  feedOperationResult: (workflowId: string, result: OperationOutcome) => void;
+  feedOperationResult: (
+    workflowId: string,
+    result: OperationOutcome,
+    originalReason: CapturedRejectionReason | undefined,
+    operationId: string,
+    workflowExecutionToken: string | undefined,
+  ) => void;
   ensureTerminalCleanupTracked: (workflowId: string) => Promise<void>;
 };
 
@@ -231,6 +237,7 @@ export async function handleReviewEscalationTimer(
   resolve: (result: ReviewOperationOutcome) => void,
   entry: { id: string; workflowId: string },
   callbacks: Pick<ReviewOperationCallbacks, 'dispatchEvent' | 'failWorkflow'>,
+  workflowExecutionToken?: string,
 ): Promise<boolean> {
   if (
     !entry.id.startsWith(`review-escalation:${reviewId}:`) &&
@@ -244,10 +251,7 @@ export async function handleReviewEscalationTimer(
     untrackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
     const elapsed = internals.options.getNow() - reviewRequest.createdAt;
     const timeoutError = new ReviewTimeoutError(reviewId, elapsed);
-    stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
-      operations: [{ type: 'delete', key: KEYS.review(workflowId, reviewId) }],
-      conditions: [],
-    });
+    stageTimedOutReviewDeletion(internals, workflowId, reviewId, workflowExecutionToken);
     await callbacks.failWorkflow(workflowId, timeoutError);
     resolve({ ok: false, error: timeoutError });
     return true;
@@ -394,7 +398,6 @@ async function scheduleReviewTimers(
   }
   return timerIds;
 }
-
 function createReviewWaiter(
   internals: EngineInternals,
   workflowId: string,
@@ -410,7 +413,6 @@ function createReviewWaiter(
   trackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
   return { promise, resolve, waiterKey };
 }
-
 function registerReviewLifecycleTracking(
   internals: EngineInternals,
   workflowId: string,
@@ -427,7 +429,6 @@ function registerReviewLifecycleTracking(
   }
   reviewIdSet.add(reviewId);
 }
-
 function cleanupReviewLifecycleTracking(
   internals: EngineInternals,
   workflowId: string,
@@ -439,11 +440,12 @@ function cleanupReviewLifecycleTracking(
   trackedIds?.delete(reviewId);
   if (trackedIds?.size === 0) internals.workflowReviewIds.delete(workflowId);
 }
-
 export async function processReviewOperation(
   internals: EngineInternals,
   workflowId: string,
   options: HumanReviewOptions,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
   callbacks: ReviewOperationCallbacks,
 ): Promise<void> {
   const now = internals.options.getNow();
@@ -454,7 +456,6 @@ export async function processReviewOperation(
     createReviewOptions(options),
   );
   const reviewId = reviewRequest.reviewId;
-
   callbacks.dispatchEvent(
     new ReviewRequestedEvent(
       workflowId,
@@ -463,13 +464,11 @@ export async function processReviewOperation(
       reviewRequest.reviewers,
     ),
   );
-
   if (options.webhookUrl !== undefined) {
     const webhookAbort = new AbortController();
     internals.pendingWebhooks.add(webhookAbort);
     void sendReviewWebhook(internals, workflowId, reviewRequest, options.webhookUrl, webhookAbort);
   }
-
   const timerIds = await scheduleReviewTimers(internals, workflowId, reviewId, options, now);
   const { promise, resolve, waiterKey } = createReviewWaiter(internals, workflowId, reviewId);
   registerReviewLifecycleTracking(internals, workflowId, reviewId, timerIds, (entry) =>
@@ -483,18 +482,18 @@ export async function processReviewOperation(
       resolve,
       entry,
       callbacks,
+      workflowExecutionToken,
     ),
   );
-
   const outcome = await promise;
-
   cleanupReviewLifecycleTracking(internals, workflowId, reviewId);
-  for (const timerId of timerIds) {
-    await internals.scheduler.cancel(timerId, workflowId);
-  }
-
-  if (!outcome.ok) {
-    return;
-  }
-  callbacks.feedOperationResult(workflowId, { status: 'completed', value: outcome.value });
+  for (const timerId of timerIds) await internals.scheduler.cancel(timerId, workflowId);
+  if (!outcome.ok) return;
+  callbacks.feedOperationResult(
+    workflowId,
+    { status: 'completed', value: outcome.value },
+    undefined,
+    operationId,
+    workflowExecutionToken,
+  );
 }

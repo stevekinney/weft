@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { waitForever } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { flush } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';
@@ -50,7 +51,9 @@ describe('update validators (pre-acceptance)', () => {
     await flush();
 
     // Invalid payload — validator throws (use string name to bypass payload type check)
-    expect(handle.update('approve', { wrong: true })).rejects.toThrow(UpdateValidationError);
+    expect(await throwingRejectionOf(handle.update('approve', { wrong: true }))).toThrow(
+      UpdateValidationError,
+    );
 
     // Workflow never observed the bad payload
     expect(observed).toHaveLength(0);
@@ -145,8 +148,8 @@ describe('update validators (pre-acceptance)', () => {
     await flush();
 
     // First two calls are rejected by the validator
-    expect(handle.update(tick, 'a')).rejects.toThrow(UpdateValidationError);
-    expect(handle.update(tick, 'b')).rejects.toThrow(UpdateValidationError);
+    expect(await throwingRejectionOf(handle.update(tick, 'a'))).toThrow(UpdateValidationError);
+    expect(await throwingRejectionOf(handle.update(tick, 'b'))).toThrow(UpdateValidationError);
 
     // Third call passes — validator no longer throws
     const result = await handle.update(tick, 'c');

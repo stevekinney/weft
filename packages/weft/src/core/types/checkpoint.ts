@@ -303,6 +303,7 @@ export interface TimerEntry {
     | 'teardown'
     | 'wait-condition';
   executionTimeoutMs?: number;
+  workflowExecutionToken?: string;
 }
 
 // ---------------------------------------------------------------------------

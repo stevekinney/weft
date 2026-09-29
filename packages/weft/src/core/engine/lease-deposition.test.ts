@@ -32,6 +32,7 @@ import type {
 } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   commitFencedEngineWrite,
@@ -214,14 +215,16 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     internals.storage = probe;
 
     expect(
-      commitFencedEngineWrite(
-        internals,
-        null,
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('unused'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          null,
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('unused'),
+        ),
       ),
-    ).rejects.toThrow(/deposed/i);
+    ).toThrow(/deposed/i);
     expect(batched).toBe(false);
 
     internals.storage = storage;
@@ -244,16 +247,18 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     // the engine is NOT deposed.
     const lostRace = new Error('lost the checkpoint race');
     expect(
-      commitFencedEngineWrite(
-        internals,
-        null,
-        [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
-        // Require-absent on a key we pre-populate, forcing a base-condition failure
-        // with the epoch condition still satisfied.
-        [{ key: KEYS.leaseHolder(), expectedValue: null }],
-        () => lostRace,
+      await rejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          null,
+          [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
+          // Require-absent on a key we pre-populate, forcing a base-condition failure
+          // with the epoch condition still satisfied.
+          [{ key: KEYS.leaseHolder(), expectedValue: null }],
+          () => lostRace,
+        ),
       ),
-    ).rejects.toBe(lostRace);
+    ).toBe(lostRace);
     expect(internals.deposed).toBe(false);
 
     await engine[Symbol.asyncDispose]();
@@ -356,13 +361,20 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const engine = new Engine({ storage, ownership: 'lease' });
     engine.register(waiterWorkflow);
 
-    expect(engine.start('deposition-waiter', null, { id: 'too-early' })).rejects.toBeInstanceOf(
-      EngineLeaseNotHeldError,
-    );
+    expect(
+      await rejectionOf(engine.start('deposition-waiter', null, { id: 'too-early' })),
+    ).toBeInstanceOf(EngineLeaseNotHeldError);
     // startOrSignal shares the precondition.
     expect(
-      engine.startOrSignal('deposition-waiter', null, { name: 'continue' }, { id: 'too-early-2' }),
-    ).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+      await rejectionOf(
+        engine.startOrSignal(
+          'deposition-waiter',
+          null,
+          { name: 'continue' },
+          { id: 'too-early-2' },
+        ),
+      ),
+    ).toBeInstanceOf(EngineLeaseNotHeldError);
 
     // After recoverAll() acquires the lease, the same start succeeds.
     await engine.recoverAll();
@@ -381,8 +393,12 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     const engine = new Engine({ storage, ownership: 'lease' });
     engine.register(waiterWorkflow);
 
-    expect(engine.fork('nonexistent-src')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
-    expect(engine.resume('nonexistent-id')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    expect(await rejectionOf(engine.fork('nonexistent-src'))).toBeInstanceOf(
+      EngineLeaseNotHeldError,
+    );
+    expect(await rejectionOf(engine.resume('nonexistent-id'))).toBeInstanceOf(
+      EngineLeaseNotHeldError,
+    );
     // The misuse must NOT have flipped the engine into the deposed/halting state.
     expect(getInternals(engine).deposed).toBe(false);
 
@@ -444,7 +460,9 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
       const leaseManagerBefore = internals.leaseManager;
       const tearDownAfterDepositionBefore = internals.tearDownAfterDeposition;
 
-      expect(mutator.run(engine), mutator.name).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+      expect(await rejectionOf(mutator.run(engine)), mutator.name).toBeInstanceOf(
+        EngineLeaseNotHeldError,
+      );
       expect(durableWrites, mutator.name).toEqual([]);
       expect(internals.deposed, mutator.name).toBe(false);
       expect(internals.disposed, mutator.name).toBe(false);
@@ -490,9 +508,9 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     // Simulate the deposed state the commit-path detection reaches.
     getInternals(engine).deposed = true;
 
-    expect(engine.start('deposition-waiter', null, { id: 'on-deposed' })).rejects.toBeInstanceOf(
-      EngineLeaseNotHeldError,
-    );
+    expect(
+      await rejectionOf(engine.start('deposition-waiter', null, { id: 'on-deposed' })),
+    ).toBeInstanceOf(EngineLeaseNotHeldError);
 
     getInternals(engine).deposed = false;
     await engine[Symbol.asyncDispose]();
@@ -536,14 +554,16 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     internals.leaseManager = null;
 
     expect(
-      commitFencedEngineWrite(
-        internals,
-        null,
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('unused'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          null,
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('unused'),
+        ),
       ),
-    ).rejects.toThrow(/deposed/i);
+    ).toThrow(/deposed/i);
     expect(touchedStorage).toBe(false);
 
     internals.leaseManager = realManager;
@@ -592,14 +612,16 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     internals.storage = probe;
 
     expect(
-      commitFencedEngineWrite(
-        internals,
-        null,
-        [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
-        [],
-        () => new Error('should not surface — re-read threw, so we halt as deposed'),
+      await throwingRejectionOf(
+        commitFencedEngineWrite(
+          internals,
+          null,
+          [{ type: 'put', key: 'k', value: new Uint8Array([1]) }],
+          [],
+          () => new Error('should not surface — re-read threw, so we halt as deposed'),
+        ),
       ),
-    ).rejects.toThrow(/deposed/i);
+    ).toThrow(/deposed/i);
     expect(internals.deposed).toBe(true);
 
     internals.storage = storage;
@@ -636,13 +658,15 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     // (2) A successor steals the lease → the epoch condition fails → deposition halt.
     await stealLease(storage, 2, 'successor');
     expect(
-      commitFencedEngineWriteAllowingPreconditionFailure(
-        internals,
-        null,
-        [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
-        [],
+      await throwingRejectionOf(
+        commitFencedEngineWriteAllowingPreconditionFailure(
+          internals,
+          null,
+          [{ type: 'put', key: 'k2', value: new Uint8Array([3]) }],
+          [],
+        ),
       ),
-    ).rejects.toThrow(/deposed/i);
+    ).toThrow(/deposed/i);
     expect(internals.deposed).toBe(true);
 
     await waitForCondition(async () => getInternals(engine).disposed, {
@@ -678,8 +702,10 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // epoch → deposition halt, NOT a spurious idempotency resolution.
     await stealLease(storage, 2, 'successor');
     expect(
-      engine.start('deposition-waiter', null, { idempotencyKey: 'idem-key-2' }),
-    ).rejects.toThrow(/deposed/i);
+      await throwingRejectionOf(
+        engine.start('deposition-waiter', null, { idempotencyKey: 'idem-key-2' }),
+      ),
+    ).toThrow(/deposed/i);
     expect(getInternals(engine).deposed).toBe(true);
 
     await waitForCondition(async () => getInternals(engine).disposed, {
@@ -708,7 +734,7 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     // Steal the lease, then suspend: the suspend state-commit is fenced and loses
     // its CAS, so the workflow record is NOT flipped to 'suspended'.
     await stealLease(storage, 2, 'successor');
-    expect(handle.suspend()).rejects.toThrow();
+    expect(await throwingRejectionOf(handle.suspend())).toThrow();
 
     const { decodeWorkflowState } = await import('./validation.ts');
     const raw = await storage.get(KEYS.workflow('suspend-run'));
@@ -748,14 +774,16 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       // Trigger deposition (sets the flag, schedules deferred teardown), then run a
       // normal asyncDispose in the same tick before the deferred teardown fires.
       expect(
-        commitFencedEngineWrite(
-          internals,
-          null,
-          [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
-          [],
-          () => new Error('unused'),
+        await throwingRejectionOf(
+          commitFencedEngineWrite(
+            internals,
+            null,
+            [{ type: 'put', key: KEYS.checkpoint('x'), value: new Uint8Array([1]) }],
+            [],
+            () => new Error('unused'),
+          ),
         ),
-      ).rejects.toThrow(/deposed/i);
+      ).toThrow(/deposed/i);
       expect(internals.deposed).toBe(true);
       await engine[Symbol.asyncDispose]();
       // Let the deferred deposition teardown run; it must no-op (already disposed).
@@ -816,20 +844,22 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
     await stealLease(storage, 2, 'successor');
     const now = internals.options.getNow();
     expect(
-      commitSelfWorkflowStateOperations(
-        internals,
-        {
-          id: 'sfx-run',
-          type: 'deposition-waiter',
-          status: 'running',
-          input: null,
-          createdAt: now,
-          updatedAt: now,
-        } as never,
-        [{ type: 'put', key: KEYS.workflow('sfx-run'), value: new Uint8Array([1]) }],
-        { includePendingAtomicSideEffects: true },
+      await throwingRejectionOf(
+        commitSelfWorkflowStateOperations(
+          internals,
+          {
+            id: 'sfx-run',
+            type: 'deposition-waiter',
+            status: 'running',
+            input: null,
+            createdAt: now,
+            updatedAt: now,
+          } as never,
+          [{ type: 'put', key: KEYS.workflow('sfx-run'), value: new Uint8Array([1]) }],
+          { includePendingAtomicSideEffects: true },
+        ),
       ),
-    ).rejects.toThrow(/deposed/i);
+    ).toThrow(/deposed/i);
 
     // The failed CAS carried BOTH the side-effect condition AND the lease-epoch
     // condition — the side-effect write was genuinely fenced, not unconditioned.
@@ -871,20 +901,22 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
 
     const now = internals.options.getNow();
     expect(
-      commitSelfWorkflowStateOperations(
-        internals,
-        {
-          id: 'race-run',
-          type: 'deposition-waiter',
-          status: 'running',
-          input: null,
-          createdAt: now,
-          updatedAt: now,
-        } as never,
-        [{ type: 'put', key: KEYS.workflow('race-run'), value: new Uint8Array([1]) }],
-        { includePendingAtomicSideEffects: true },
+      await throwingRejectionOf(
+        commitSelfWorkflowStateOperations(
+          internals,
+          {
+            id: 'race-run',
+            type: 'deposition-waiter',
+            status: 'running',
+            input: null,
+            createdAt: now,
+            updatedAt: now,
+          } as never,
+          [{ type: 'put', key: KEYS.workflow('race-run'), value: new Uint8Array([1]) }],
+          { includePendingAtomicSideEffects: true },
+        ),
       ),
-    ).rejects.toThrow(/atomic side-effect precondition/);
+    ).toThrow(/atomic side-effect precondition/);
     expect(internals.deposed).toBe(false);
 
     await engine[Symbol.asyncDispose]();

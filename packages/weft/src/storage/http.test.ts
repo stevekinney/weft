@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
 import { handleRequest } from '../server/handler.ts';
 import { principalFromApiKey } from '../server/principal.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { HTTPStorage } from './http.ts';
 import { MemoryStorage } from './memory.ts';
 import { assertCapabilitiesShape } from './storage-adapter.test-support.ts';
@@ -386,7 +387,7 @@ describe('HTTPStorage', () => {
     try {
       const storage = new HTTPStorage({ baseUrl: 'http://localhost' });
 
-      expect(storage.get('wf:key')).rejects.toThrow('returned 403');
+      expect(await throwingRejectionOf(storage.get('wf:key'))).toThrow('returned 403');
     } finally {
       restoreFetch();
     }

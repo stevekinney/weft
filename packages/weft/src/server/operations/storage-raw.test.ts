@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { Engine } from '../../core/engine.ts';
 import { MAX_SCAN_LIMIT } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
@@ -225,7 +226,7 @@ describe('storage REST raw operations', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.text()).rejects.toThrow('scan failed');
+    expect(await throwingRejectionOf(response.text())).toThrow('scan failed');
   });
 
   it('rejects raw storage scans above MAX_SCAN_LIMIT', async () => {

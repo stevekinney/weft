@@ -6,6 +6,7 @@ import {
 
 import { KEYS, type BatchOperation, type ScanOptions, type Storage } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { Engine } from './engine.ts';
 import {
   coerceStartWorkflowTags,
@@ -309,7 +310,7 @@ describe('workflow tags', () => {
       });
       await sleepForTesting(10);
 
-      expect(handle.addTags('overflow-a', 'overflow-b')).rejects.toThrow(
+      expect(await throwingRejectionOf(handle.addTags('overflow-a', 'overflow-b'))).toThrow(
         `Workflow tags must contain at most ${MAX_WORKFLOW_TAGS} tags`,
       );
 
@@ -336,7 +337,9 @@ describe('workflow tags', () => {
       });
       await sleepForTesting(10);
 
-      expect(handle.addTags('')).rejects.toThrow('Workflow tags must not contain empty tags');
+      expect(await throwingRejectionOf(handle.addTags(''))).toThrow(
+        'Workflow tags must not contain empty tags',
+      );
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -363,7 +366,7 @@ describe('workflow tags', () => {
       const signalPromise = handle.signal('continue', 'done');
 
       await Promise.all([addTagsPromise, signalPromise]);
-      expect(handle.result()).resolves.toBe('payload:done');
+      expect(await handle.result()).toBe('payload:done');
 
       const state = await engine.get(workflowId);
       expect(state?.status).toBe('completed');

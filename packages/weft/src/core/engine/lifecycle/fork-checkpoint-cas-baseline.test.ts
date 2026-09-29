@@ -56,9 +56,9 @@ describe("fork()'s checkpoint-bytes CAS baseline — WFT-21 Codex review round 1
       expect(primed).toEqual(durablyCommitted!);
 
       await engine.signal(forkedHandle.id, 'go', 'done');
-      expect(forkedHandle.result()).resolves.toBe('done');
+      expect(await forkedHandle.result()).toBe('done');
       await engine.signal(sourceHandle.id, 'go', 'done');
-      expect(sourceHandle.result()).resolves.toBe('done');
+      expect(await sourceHandle.result()).toBe('done');
     } finally {
       engine[Symbol.dispose]();
     }

@@ -15,6 +15,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { encode } from '../codec.ts';
 import type { UpdateRequest } from '../updates.ts';
 import { deliverCoordinatedUpdateToWaiterIfAvailable, update } from './updates.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -38,6 +39,12 @@ function createDeliveryHarness(registry: unknown) {
     storage: new MemoryStorage(),
     workflowClaimRegistry: registry,
     updateCoordinator: { deleteRequest },
+    durableInlineOperations: new Map([
+      [
+        'workflow-1',
+        { operationId: 'workflow-1:0', type: 'wait-update', workflowExecutionToken: 'run-1' },
+      ],
+    ]),
     updateWaiters: new Map<string, (payload: unknown) => void>([[WAITER_KEY, waiter]]),
     updateWaitersByWorkflow: new Map<string, Set<string>>([['workflow-1', new Set([WAITER_KEY])]]),
   } as any;
@@ -80,13 +87,16 @@ describe('coordinated update delivery is fenced on the claim generation', () => 
   });
 
   it('delivers normally when no claim registry is installed', async () => {
-    // `ownership: 'none'`/`'lease'` must stay byte-identical to pre-ADR-0002.
+    // Without a claim registry, delivery still advances the current waiter.
     const { internals, callbacks, waiter, deleteRequest } = createDeliveryHarness(null);
+    const request = createUpdateRequest();
+    const requestKey = KEYS.update(request.workflowId, request.updateId);
+    await internals.storage.put(requestKey, encode(request));
 
     const delivered = await deliverCoordinatedUpdateToWaiterIfAvailable(
       internals,
       'workflow-1',
-      createUpdateRequest(),
+      request,
       false,
       callbacks,
     );
@@ -94,7 +104,12 @@ describe('coordinated update delivery is fenced on the claim generation', () => 
     expect(delivered).toBe(true);
     expect(waiter).toHaveBeenCalled();
     expect(internals.updateWaiters.has(WAITER_KEY)).toBe(false);
-    expect(deleteRequest).toHaveBeenCalled();
+    expect(deleteRequest).not.toHaveBeenCalled();
+    expect(await internals.storage.get(requestKey)).not.toBeNull();
+    expect(
+      internals.pendingOperationAtomicWorkflowCommitSideEffects.get(request.workflowId).get('run-1')
+        .operations,
+    ).toContainEqual({ type: 'delete', key: requestKey });
   });
 });
 

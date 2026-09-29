@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   extractSharedScheduleRestFields,
   parseScheduleRestBodyRequestRecord,
@@ -8,26 +9,30 @@ import {
 describe('schedule REST body extraction', () => {
   it('maps malformed JSON to the shared invalid JSON fault', async () => {
     expect(
-      parseScheduleRestBodyRequestRecord(
-        new Request('http://localhost/v1/schedules', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{',
-        }),
+      await rejectionOf(
+        parseScheduleRestBodyRequestRecord(
+          new Request('http://localhost/v1/schedules', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{',
+          }),
+        ),
       ),
-    ).rejects.toMatchObject({ code: 'InvalidParams', message: 'Invalid JSON body' });
+    ).toMatchObject({ code: 'InvalidParams', message: 'Invalid JSON body' });
   });
 
   it.each([null, 'not-an-object', 42])('rejects JSON %j as a non-object body', async (body) => {
     expect(
-      parseScheduleRestBodyRequestRecord(
-        new Request('http://localhost/v1/schedules', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
-        }),
+      await rejectionOf(
+        parseScheduleRestBodyRequestRecord(
+          new Request('http://localhost/v1/schedules', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+        ),
       ),
-    ).rejects.toMatchObject({
+    ).toMatchObject({
       code: 'InvalidParams',
       message: 'Request body must be a JSON object',
     });

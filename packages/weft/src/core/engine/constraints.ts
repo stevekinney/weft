@@ -9,7 +9,7 @@ export type ConstraintCallbacks = {
   cancelWorkflowInStrategy: (workflowId: string) => void;
   dispatchEvent: (event: Event) => boolean;
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;
-  feedOperationResult: (
+  feedWorkflowResult: (
     workflowId: string,
     outcome: OperationOutcome,
     originalError?: CapturedRejectionReason,
@@ -146,7 +146,7 @@ function compensateConstraintViolation(
   workflowId: string,
   violationError: Error,
 ): void {
-  callbacks.feedOperationResult(
+  callbacks.feedWorkflowResult(
     workflowId,
     {
       status: 'failed',

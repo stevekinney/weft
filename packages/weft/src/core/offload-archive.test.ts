@@ -3,6 +3,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../testing/test-engine.ts';
 import { decode, encode } from './codec.ts';
 import type { OffloadReference } from './context.ts';
@@ -76,7 +77,7 @@ describe('offload, load, and archive', () => {
     engine.register(testWorkflow3);
 
     const handle = await engine.start('test', {});
-    expect(handle.result()).rejects.toThrow('Offloaded data not found');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Offloaded data not found');
   });
 
   it('rejects forged cross-workflow offload references', async () => {
@@ -138,7 +139,7 @@ describe('offload, load, and archive', () => {
 
     const handle = await engine.start('test', {});
 
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'ctx.load() requires a non-empty offload reference key',
     );
   });

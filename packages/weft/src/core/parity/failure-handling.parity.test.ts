@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { activity, workflow, type WorkflowContext } from '../types.ts';
 import { waitForParityCondition } from './real-timer-wait.test-support.ts';
@@ -41,7 +42,7 @@ describe('Temporal failure-handling parity', () => {
     expect(attempts).toEqual([0, 100]);
 
     await engine.advanceTime(1);
-    expect(handle.result()).resolves.toBe('charged');
+    expect(await handle.result()).toBe('charged');
     expect(attempts).toEqual([0, 100, 300]);
   });
 
@@ -68,7 +69,7 @@ describe('Temporal failure-handling parity', () => {
     await waitForParityCondition(() => attempts === 1, { label: 'first failing attempt' });
     await engine.advanceTime(50);
 
-    expect(handle.result()).rejects.toThrow('terminal failure 2');
+    expect(await throwingRejectionOf(handle.result())).toThrow('terminal failure 2');
     expect(attempts).toBe(2);
   });
 
@@ -103,7 +104,7 @@ describe('Temporal failure-handling parity', () => {
     });
     await engine.advanceTime(25);
 
-    expect(handle.result()).resolves.toBe('charge:ok');
+    expect(await handle.result()).toBe('charge:ok');
     expect(attempts).toEqual([0, 25]);
   });
 
@@ -143,7 +144,7 @@ describe('Temporal failure-handling parity', () => {
     const recoveredHandle = recovered.getHandle(originalHandle.id);
     await recovered.advanceTime(25);
 
-    expect(recoveredHandle.result()).resolves.toBe('recovered');
+    expect(await recoveredHandle.result()).toBe('recovered');
     expect(attempts).toEqual([1, 2]);
   });
 
@@ -212,7 +213,7 @@ describe('Temporal failure-handling parity', () => {
     const recoveredHandle = recovered.getHandle(originalHandle.id);
     await recovered.advanceTime(75);
 
-    expect(recoveredHandle.result()).resolves.toBe('first-ok/second-ok');
+    expect(await recoveredHandle.result()).toBe('first-ok/second-ok');
     expect(firstAttempts).toEqual([1, 2]);
     expect(secondAttempts).toEqual([1, 2]);
   });
@@ -246,7 +247,7 @@ describe('Temporal failure-handling parity', () => {
 
     const handle = await engine.start('parity-non-retryable', null);
 
-    expect(handle.result()).rejects.toThrow('bad checkout input');
+    expect(await throwingRejectionOf(handle.result())).toThrow('bad checkout input');
     expect(attempts).toBe(1);
 
     await engine.advanceTime(1_000);
@@ -298,7 +299,7 @@ describe('Temporal failure-handling parity', () => {
     );
 
     const handle = await engine.start('parity-saga-compensation', null);
-    expect(handle.result()).rejects.toThrow('carrier unavailable');
+    expect(await throwingRejectionOf(handle.result())).toThrow('carrier unavailable');
 
     expect(sideEffects).toEqual(['reserve:sku-1', 'charge:42']);
     expect(compensations).toEqual(['refund:42:charge:42', 'release:sku-1:reservation:sku-1']);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import type { ScanOptions } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { flush } from '../testing/storage-backends.test-support.ts';
 import { encode } from './codec.ts';
 import {
@@ -130,7 +131,7 @@ describe('Engine lifecycle ergonomics', () => {
       workflows: { resumable },
     });
     await recovered.signal('recoverable-workflow', 'release', 'ok');
-    expect(recovered.getHandle('recoverable-workflow').result()).resolves.toBe('done:ok');
+    expect(await recovered.getHandle('recoverable-workflow').result()).toBe('done:ok');
     recovered[Symbol.dispose]();
   });
 
@@ -163,7 +164,7 @@ describe('Engine lifecycle ergonomics', () => {
 
       await engine.runMaintenance(Date.now() + 60_000);
 
-      expect(handle.result()).resolves.toBe('awake');
+      expect(await handle.result()).toBe('awake');
     } finally {
       disposeEngine?.();
       globalThis.setInterval = originalSetInterval;
@@ -177,9 +178,9 @@ describe('Engine lifecycle ergonomics', () => {
     expect(() => new Engine({ backgroundTasks: 'manual', ownership: 'lease' })).toThrow(
       'ownership cannot be "lease" when backgroundTasks is "manual"',
     );
-    expect(Engine.create({ backgroundTasks: 'manual', startScheduler: true })).rejects.toThrow(
-      'startScheduler cannot be true when backgroundTasks is "manual"',
-    );
+    expect(
+      await throwingRejectionOf(Engine.create({ backgroundTasks: 'manual', startScheduler: true })),
+    ).toThrow('startScheduler cannot be true when backgroundTasks is "manual"');
     expect(() => new Engine({ backgroundTasks: 'invalid' } as never)).toThrow(
       'options.backgroundTasks must be "automatic" or "manual" when provided',
     );
@@ -223,7 +224,7 @@ describe('Engine lifecycle ergonomics', () => {
 
     try {
       const handle = await engine.start('completes', undefined, { id: 'retained-workflow' });
-      expect(handle.result()).resolves.toBe('done');
+      expect(await handle.result()).toBe('done');
       await storage.put(
         'upr:expired-update',
         encode({
@@ -258,7 +259,7 @@ describe('Engine lifecycle ergonomics', () => {
     engine.register(greet).register(welcome);
 
     const handle = await engine.start('welcome', { name: 'Ada' });
-    expect(handle.result()).resolves.toBe('Hello, Ada');
+    expect(await handle.result()).toBe('Hello, Ada');
     engine[Symbol.dispose]();
   });
 });

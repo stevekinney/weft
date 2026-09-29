@@ -19,6 +19,7 @@ import {
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { DevelopmentWarningEvent, ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleOverlapPolicy, WorkflowContext } from '../types.ts';
@@ -143,7 +144,9 @@ describe('ctx.services — worker mode rejection', () => {
     });
     engine.register(wf);
 
-    expect(engine.start('worker-wf', null, { services: { a: 1 } })).rejects.toThrow(/services/i);
+    expect(
+      await throwingRejectionOf(engine.start('worker-wf', null, { services: { a: 1 } })),
+    ).toThrow(/services/i);
     await engine[Symbol.asyncDispose]();
   });
 });
@@ -385,7 +388,7 @@ describe('ctx.services — recovery re-provision', () => {
 
     // recoverAll itself must not throw — the engine survives; the unresolvable
     // run is failed, not propagated.
-    expect(secondEngine.recoverAll()).resolves.toBeDefined();
+    expect(await secondEngine.recoverAll()).toBeDefined();
     await flush();
 
     // The single unresolvable run is now terminally failed (not left running,
@@ -747,7 +750,7 @@ describe('ctx.services — terminal cleanup', () => {
       KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       new Uint8Array(0),
     );
-    expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toEqual({
+    expect(await engine.getScheduleProvenance('purge-schedule-metadata-run')).toEqual({
       scheduleId: 'purge-schedule-metadata',
       occurrence: 1_767_225_600_000,
     });
@@ -761,7 +764,7 @@ describe('ctx.services — terminal cleanup', () => {
         KEYS.scheduleRunBySchedule('purge-schedule-metadata', 'purge-schedule-metadata-run'),
       ),
     ).toBeNull();
-    expect(engine.getScheduleProvenance('purge-schedule-metadata-run')).resolves.toBeNull();
+    expect(await engine.getScheduleProvenance('purge-schedule-metadata-run')).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 
@@ -807,7 +810,7 @@ describe('ctx.services — terminal cleanup', () => {
         ),
       ),
     ).toBeNull();
-    expect(engine.getScheduleProvenance('retention-schedule-metadata-run')).resolves.toBeNull();
+    expect(await engine.getScheduleProvenance('retention-schedule-metadata-run')).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });

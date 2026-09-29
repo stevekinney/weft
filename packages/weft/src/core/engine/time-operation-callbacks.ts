@@ -14,7 +14,12 @@ import type { ExecutableRegistration } from './dynamic-source-execution.ts';
 type RegistrationEntry = ExecutableRegistration['entry'];
 
 export type TimeOperationCallbacks = {
-  completeOperation: (workflowId: string, value: unknown) => void;
+  completeOperation: (
+    workflowId: string,
+    value: unknown,
+    operationId: string,
+    workflowExecutionToken?: string,
+  ) => void;
   dispatchEvent: (event: Event) => void;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;

@@ -164,8 +164,8 @@ describe('operation catalog — live operation registry matches REST_BINDINGS', 
         result: { ok: true },
       });
 
-      expect(restSignalHandle.result()).resolves.toBe('rest-release');
-      expect(jsonRpcSignalHandle.result()).resolves.toBe('jsonrpc-release');
+      expect(await restSignalHandle.result()).toBe('rest-release');
+      expect(await jsonRpcSignalHandle.result()).toBe('jsonrpc-release');
     } finally {
       await server.stop();
       engine[Symbol.dispose]();

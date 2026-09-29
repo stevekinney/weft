@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { WorkerPool } from './pool.ts';
 
 const workerUrl = new URL('./test-worker.ts', import.meta.url);
@@ -349,7 +350,7 @@ describe('WorkerPool', () => {
 
       try {
         const foreignWorker = await otherPool.acquire();
-        expect(pool.acquireSpecificWorker(foreignWorker)).rejects.toThrow(
+        expect(await throwingRejectionOf(pool.acquireSpecificWorker(foreignWorker))).toThrow(
           'Worker does not belong to this WorkerPool',
         );
         otherPool.release(foreignWorker);
@@ -367,7 +368,7 @@ describe('WorkerPool', () => {
 
       pool[Symbol.dispose]();
 
-      expect(specificAcquire).rejects.toThrow('WorkerPool has been disposed');
+      expect(await throwingRejectionOf(specificAcquire)).toThrow('WorkerPool has been disposed');
       expect(pool.pendingCount).toBe(0);
     });
   });
@@ -405,7 +406,9 @@ describe('WorkerPool', () => {
 
       pool.discard(worker);
 
-      expect(specificAcquire).rejects.toThrow('Worker was discarded from this WorkerPool');
+      expect(await throwingRejectionOf(specificAcquire)).toThrow(
+        'Worker was discarded from this WorkerPool',
+      );
       expect(pool.pendingCount).toBe(0);
     });
 

@@ -10,6 +10,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { decode } from '../codec.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -169,7 +170,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
     expect(loader).toHaveBeenCalledTimes(1);
 
     controller.abort();
-    expect(abortingWaiter).rejects.toBeTruthy();
+    expect(await rejectionOf(abortingWaiter)).toBeTruthy();
 
     // The shared load must still be alive for `start()`.
     deferred.resolve({ lazyRace: lazy });
@@ -405,7 +406,7 @@ describe('dynamic workflow sources — engine integration (WFT-15/16)', () => {
       id: workflowId,
       tags: ['lazy-retry-batch'],
     });
-    expect(originalHandle.result()).rejects.toBeTruthy();
+    expect(await rejectionOf(originalHandle.result())).toBeTruthy();
     engineA[Symbol.dispose]();
 
     await using engineB = new Engine({ storage });

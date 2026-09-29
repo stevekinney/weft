@@ -23,12 +23,7 @@ import {
   dispatchBranchesAllSettled,
   valuesFromSlots,
 } from './parallel-dispatch.ts';
-import {
-  consumeSignalWithAtomicWorkflowCommit,
-  peekSignal,
-  registerSignalWaiter,
-  untrackWaiterKey,
-} from './signals.ts';
+import { peekSignal } from './signals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
 import {
@@ -76,7 +71,18 @@ export function assertSupportedSignalBranches(
 }
 
 export type CoordinationOperationCallbacks = {
-  completeOperation: (workflowId: string, value: unknown) => void;
+  completeOperation: (
+    workflowId: string,
+    value: unknown,
+    operationId: string,
+    workflowExecutionToken?: string,
+  ) => void;
+  failOperation: (
+    workflowId: string,
+    operation: OperationWithCallerStack,
+    error: unknown,
+    workflowExecutionToken?: string,
+  ) => void;
   runOperationWithResult: (
     workflowId: string,
     operation: OperationWithCallerStack,
@@ -90,61 +96,6 @@ export type CoordinationOperationCallbacks = {
   ) => Promise<unknown>;
   getActivityOperationCallbacks: () => ActivityOperationCallbacks;
 };
-
-export async function processWaitSignalOperation(
-  internals: EngineInternals,
-  workflowId: string,
-  operation: WaitSignalOperation,
-  callbacks: Pick<CoordinationOperationCallbacks, 'completeOperation'>,
-): Promise<void> {
-  const abortSignal = internals.abortController.signal;
-  const waiterKey = `${workflowId}:${operation.signalName}`;
-
-  while (true) {
-    if (abortSignal.aborted) {
-      return;
-    }
-
-    const existingPayload = await consumeSignalWithAtomicWorkflowCommit(
-      internals,
-      workflowId,
-      operation.signalName,
-    );
-    if (existingPayload.found) {
-      callbacks.completeOperation(workflowId, existingPayload.payload);
-      return;
-    }
-
-    const { promise, resolve } = Promise.withResolvers<void>();
-    registerSignalWaiter(internals, workflowId, waiterKey, resolve);
-
-    if (abortSignal.aborted) {
-      internals.signalWaiters.delete(waiterKey);
-      untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
-      return;
-    }
-
-    const bufferedPayload = await consumeSignalWithAtomicWorkflowCommit(
-      internals,
-      workflowId,
-      operation.signalName,
-    );
-    if (bufferedPayload.found) {
-      if (internals.signalWaiters.get(waiterKey) === resolve) {
-        internals.signalWaiters.delete(waiterKey);
-        untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
-      }
-      callbacks.completeOperation(workflowId, bufferedPayload.payload);
-      return;
-    }
-
-    await promise;
-
-    if (abortSignal.aborted) {
-      return;
-    }
-  }
-}
 
 export async function processParallelOperation(
   internals: EngineInternals,

@@ -8,6 +8,7 @@ import {
   type StorageCapabilities,
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import type { ActivityInterception } from '../interceptor.ts';
@@ -247,16 +248,18 @@ describe('activity operation helpers', () => {
 
   it('throws when worker activity execution is requested without a dispatcher', async () => {
     expect(
-      invokeWorkerActivity(
-        createInternals() as never,
-        'op-1',
-        'missing-dispatcher',
-        'payload',
-        1,
-        undefined,
-        undefined,
+      await throwingRejectionOf(
+        invokeWorkerActivity(
+          createInternals() as never,
+          'op-1',
+          'missing-dispatcher',
+          'payload',
+          1,
+          undefined,
+          undefined,
+        ),
       ),
-    ).rejects.toThrow('No activity worker dispatcher available for "missing-dispatcher"');
+    ).toThrow('No activity worker dispatcher available for "missing-dispatcher"');
   });
 
   it('rehydrates worker activity failure names', async () => {
@@ -272,16 +275,18 @@ describe('activity operation helpers', () => {
     });
 
     expect(
-      invokeWorkerActivity(
-        internals as never,
-        'op-validation',
-        'validate',
-        'payload',
-        1,
-        undefined,
-        undefined,
+      await rejectionOf(
+        invokeWorkerActivity(
+          internals as never,
+          'op-validation',
+          'validate',
+          'payload',
+          1,
+          undefined,
+          undefined,
+        ),
       ),
-    ).rejects.toMatchObject({ name: 'ValidationError', message: 'validation failed' });
+    ).toMatchObject({ name: 'ValidationError', message: 'validation failed' });
   });
 
   it('copies activity-interceptor headers onto the operation before returning', async () => {
@@ -370,30 +375,34 @@ describe('activity operation helpers', () => {
     let caughtInGenerator: unknown;
 
     expect(
-      executeActivity(
-        createInternals() as never,
-        'workflow-id',
-        operation,
-        createCallbacks({
-          getComposedWorkflowInterceptor: () =>
-            ({
-              *activity(
-                interception: ActivityInterception,
-                next: (interception: ActivityInterception) => Generator<unknown, unknown, unknown>,
-              ) {
-                try {
-                  return yield* next(interception);
-                } catch (error) {
-                  caughtInGenerator = error;
-                  throw error;
-                } finally {
-                  finallyRan = true;
-                }
-              },
-            }) as never,
-        }),
+      await throwingRejectionOf(
+        executeActivity(
+          createInternals() as never,
+          'workflow-id',
+          operation,
+          createCallbacks({
+            getComposedWorkflowInterceptor: () =>
+              ({
+                *activity(
+                  interception: ActivityInterception,
+                  next: (
+                    interception: ActivityInterception,
+                  ) => Generator<unknown, unknown, unknown>,
+                ) {
+                  try {
+                    return yield* next(interception);
+                  } catch (error) {
+                    caughtInGenerator = error;
+                    throw error;
+                  } finally {
+                    finallyRan = true;
+                  }
+                },
+              }) as never,
+          }),
+        ),
       ),
-    ).rejects.toThrow('activity boom');
+    ).toThrow('activity boom');
 
     expect(finallyRan).toBe(true);
     expect(caughtInGenerator).toBeInstanceOf(Error);
@@ -421,7 +430,7 @@ describe('activity operation helpers', () => {
 
     expect(result).toBe('verified-result');
     expect(verificationPromises).toHaveLength(1);
-    expect(verificationPromises[0]).resolves.toBeUndefined();
+    expect(await verificationPromises[0]).toBeUndefined();
     expect(verify).toHaveBeenCalledWith(
       'verified-result',
       expect.objectContaining({ phase: 'post-execution-validation' }),
@@ -434,13 +443,13 @@ describe('activity operation helpers', () => {
     const operation = createActivityOperation({ fn: activityFunction });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals() as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('verified-inline');
+    ).toBe('verified-inline');
 
     expect(verify).toHaveBeenCalledWith(
       'verified-inline',
@@ -454,13 +463,13 @@ describe('activity operation helpers', () => {
     const operation = createActivityOperation({ attempt: 3, fn: activityFunction });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals() as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('attempted-result');
+    ).toBe('attempted-result');
 
     expect(verify).toHaveBeenCalledWith(
       'attempted-result',
@@ -473,13 +482,15 @@ describe('activity operation helpers', () => {
     const activityFunction = Object.assign(() => 'result', { verify });
 
     expect(
-      executeActivityOperationResult(
-        createInternals() as never,
-        'workflow-id',
-        createActivityOperation({ fn: activityFunction }),
-        createCallbacks(),
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals() as never,
+          'workflow-id',
+          createActivityOperation({ fn: activityFunction }),
+          createCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('Verification failed for activity "test-activity"');
+    ).toThrow('Verification failed for activity "test-activity"');
   });
 
   it('records and replays keyed activity results through the checkpoint commit', async () => {
@@ -491,13 +502,13 @@ describe('activity operation helpers', () => {
     const internals = createInternals({ storage });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         internals as never,
         'workflow:id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('first-result');
+    ).toBe('first-result');
 
     const keys: string[] = [];
     for await (const [key] of storage.scan(KEYS.activityReconciliationPrefix('workflow:id'))) {
@@ -521,13 +532,13 @@ describe('activity operation helpers', () => {
       options: { idempotencyKey: 'order:123' },
     });
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow:id',
         replayOperation,
         createCallbacks(),
       ),
-    ).resolves.toBe('first-result');
+    ).toBe('first-result');
   });
 
   it('can commit a keyed activity completion immediately without staging a checkpoint side effect', async () => {
@@ -539,7 +550,7 @@ describe('activity operation helpers', () => {
     const internals = createInternals({ storage });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         internals as never,
         'workflow:id',
         operation,
@@ -548,7 +559,7 @@ describe('activity operation helpers', () => {
         undefined,
         { reconciliationCompletion: 'immediate-fenced' },
       ),
-    ).resolves.toBe('immediate-result');
+    ).toBe('immediate-result');
 
     expect(internals.pendingAtomicWorkflowCommitSideEffects.has('workflow:id')).toBe(false);
     expect(await readSingleActivityReconciliationRecord(storage, 'workflow:id')).toMatchObject({
@@ -577,7 +588,7 @@ describe('activity operation helpers', () => {
     });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         internals as never,
         'workflow:id',
         operation,
@@ -586,7 +597,7 @@ describe('activity operation helpers', () => {
         undefined,
         { reconciliationCompletion: 'immediate-fenced' },
       ),
-    ).resolves.toBe('fenced-result');
+    ).toBe('fenced-result');
 
     expect(
       storage.conditionBatches.some((conditions) =>
@@ -610,13 +621,15 @@ describe('activity operation helpers', () => {
     await seedStartedRecord(storage, 'workflow-id', operation, 'order-456');
 
     expect(
-      executeActivityOperationResult(
-        createInternals({ storage }) as never,
-        'workflow-id',
-        operation,
-        createCallbacks(),
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals({ storage }) as never,
+          'workflow-id',
+          operation,
+          createCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('prior dispatch marker but no Tier-0 verifier');
+    ).toThrow('prior dispatch marker but no Tier-0 verifier');
   });
 
   it('uses Tier-0 verifier states after a started record proves a prior dispatch', async () => {
@@ -646,13 +659,13 @@ describe('activity operation helpers', () => {
       const activityFunction = Object.assign(operation.fn!, { verify });
 
       expect(
-        executeActivityOperationResult(
+        await executeActivityOperationResult(
           createInternals({ storage }) as never,
           'workflow-id',
           { ...operation, fn: activityFunction },
           createCallbacks(),
         ),
-      ).resolves.toBe(testCase.expected);
+      ).toBe(testCase.expected);
 
       expect(operation.fn).toHaveBeenCalledTimes(testCase.calls);
       expect(verify).toHaveBeenCalledWith(
@@ -673,13 +686,15 @@ describe('activity operation helpers', () => {
       const activityFunction = Object.assign(operation.fn!, { verify: mock(async () => state) });
 
       expect(
-        executeActivityOperationResult(
-          createInternals({ storage }) as never,
-          'workflow-id',
-          { ...operation, fn: activityFunction },
-          createCallbacks(),
+        await throwingRejectionOf(
+          executeActivityOperationResult(
+            createInternals({ storage }) as never,
+            'workflow-id',
+            { ...operation, fn: activityFunction },
+            createCallbacks(),
+          ),
         ),
-      ).rejects.toThrow('Activity "test-activity"');
+      ).toThrow('Activity "test-activity"');
       expect(operation.fn).not.toHaveBeenCalled();
     }
   });
@@ -694,13 +709,13 @@ describe('activity operation helpers', () => {
     const firstInternals = createInternals({ storage });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         firstInternals as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('external-result');
+    ).toBe('external-result');
     expect(firstExecute).toHaveBeenCalledTimes(1);
     expect(await readSingleActivityReconciliationRecord(storage, 'workflow-id')).toMatchObject({
       status: 'started',
@@ -721,13 +736,13 @@ describe('activity operation helpers', () => {
     });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
         replayOperation,
         createCallbacks(),
       ),
-    ).resolves.toBe('external-result');
+    ).toBe('external-result');
 
     expect(replayExecute).not.toHaveBeenCalled();
     expect(verify).toHaveBeenCalledWith(
@@ -746,13 +761,13 @@ describe('activity operation helpers', () => {
     const firstInternals = createInternals({ storage });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         firstInternals as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('lost-result');
+    ).toBe('lost-result');
     expect(firstExecute).toHaveBeenCalledTimes(1);
     expect(await readSingleActivityReconciliationRecord(storage, 'workflow-id')).toMatchObject({
       status: 'started',
@@ -770,13 +785,13 @@ describe('activity operation helpers', () => {
     });
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
         replayOperation,
         createCallbacks(),
       ),
-    ).resolves.toBe('second-result');
+    ).toBe('second-result');
 
     expect(secondExecute).toHaveBeenCalledTimes(1);
     expect(verify).toHaveBeenCalledWith(
@@ -811,13 +826,15 @@ describe('activity operation helpers', () => {
       const activityFunction = Object.assign(operation.fn!, { verify: testCase.verifier });
 
       expect(
-        executeActivityOperationResult(
-          createInternals({ storage }) as never,
-          'workflow-id',
-          { ...operation, fn: activityFunction },
-          createCallbacks(),
+        await throwingRejectionOf(
+          executeActivityOperationResult(
+            createInternals({ storage }) as never,
+            'workflow-id',
+            { ...operation, fn: activityFunction },
+            createCallbacks(),
+          ),
         ),
-      ).rejects.toThrow('Activity');
+      ).toThrow('Activity');
       expect(operation.fn).not.toHaveBeenCalled();
     }
   });
@@ -840,13 +857,15 @@ describe('activity operation helpers', () => {
       await storage.put(key, encode(record));
 
       expect(
-        executeActivityOperationResult(
-          createInternals({ storage }) as never,
-          'workflow-id',
-          operation,
-          createCallbacks(),
+        await throwingRejectionOf(
+          executeActivityOperationResult(
+            createInternals({ storage }) as never,
+            'workflow-id',
+            operation,
+            createCallbacks(),
+          ),
         ),
-      ).rejects.toThrow('Activity reconciliation record');
+      ).toThrow('Activity reconciliation record');
       expect(operation.fn).not.toHaveBeenCalled();
     }
   });
@@ -863,13 +882,15 @@ describe('activity operation helpers', () => {
     const activityFunction = Object.assign(operation.fn!, { verify });
 
     expect(
-      executeActivityOperationResult(
-        createInternals({ storage }) as never,
-        'workflow-id',
-        { ...operation, fn: activityFunction },
-        createCallbacks(),
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals({ storage }) as never,
+          'workflow-id',
+          { ...operation, fn: activityFunction },
+          createCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('compare-and-set');
+    ).toThrow('compare-and-set');
 
     expect(operation.fn).not.toHaveBeenCalled();
     expect(storageValuesEqual(await storage.get(key), previous)).toBe(true);
@@ -890,13 +911,15 @@ describe('activity operation helpers', () => {
     const activityFunction = Object.assign(operation.fn!, { verify });
 
     expect(
-      executeActivityOperationResult(
-        createInternals({ storage }) as never,
-        'workflow-id',
-        { ...operation, fn: activityFunction },
-        createCallbacks(),
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals({ storage }) as never,
+          'workflow-id',
+          { ...operation, fn: activityFunction },
+          createCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('compare-and-set');
+    ).toThrow('compare-and-set');
 
     expect(operation.fn).not.toHaveBeenCalled();
     expect(storageValuesEqual(await storage.get(key), previous)).toBe(true);
@@ -909,13 +932,15 @@ describe('activity operation helpers', () => {
     });
 
     expect(
-      executeActivityOperationResult(
-        createInternals({ storage: new NoConditionalBatchStorage() }) as never,
-        'workflow-id',
-        operation,
-        createCallbacks(),
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals({ storage: new NoConditionalBatchStorage() }) as never,
+          'workflow-id',
+          operation,
+          createCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('requires storage capability "conditionalBatch"');
+    ).toThrow('requires storage capability "conditionalBatch"');
 
     expect(operation.fn).not.toHaveBeenCalled();
   });
@@ -935,13 +960,13 @@ describe('activity operation helpers', () => {
     );
 
     expect(
-      executeActivityOperationResult(
+      await executeActivityOperationResult(
         createInternals({ storage }) as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).resolves.toBe('competing-result');
+    ).toBe('competing-result');
 
     expect(operation.fn).not.toHaveBeenCalled();
   });
@@ -957,23 +982,25 @@ describe('activity operation helpers', () => {
     const verificationPromises: Promise<void>[] = [];
 
     expect(
-      executeActivityOperationResult(
-        createInternals({ storage }) as never,
-        'workflow-id',
-        operation,
-        createCallbacks(),
-        undefined,
-        {
-          recordCompensation: () => undefined,
-          recordVerification: (verification: Promise<void>) => {
-            verificationPromises.push(verification);
-          },
-        } as never,
+      await throwingRejectionOf(
+        executeActivityOperationResult(
+          createInternals({ storage }) as never,
+          'workflow-id',
+          operation,
+          createCallbacks(),
+          undefined,
+          {
+            recordCompensation: () => undefined,
+            recordVerification: (verification: Promise<void>) => {
+              verificationPromises.push(verification);
+            },
+          } as never,
+        ),
       ),
-    ).rejects.toThrow('Verification failed for activity "test-activity"');
+    ).toThrow('Verification failed for activity "test-activity"');
 
     expect(verificationPromises).toHaveLength(1);
-    expect(verificationPromises[0]).rejects.toThrow(
+    expect(await throwingRejectionOf(verificationPromises[0])).toThrow(
       'Verification failed for activity "test-activity"',
     );
 

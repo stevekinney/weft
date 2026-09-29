@@ -31,6 +31,7 @@ import {
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
 import {
@@ -99,6 +100,10 @@ async function createClaimEngine(
   engineId: string,
   workflows: ClaimWorkflows,
 ) {
+  // Manual background tasks: the renewal/reclaim interval is bound to the
+  // registry `Engine.create` built, not the one installed below, so an
+  // automatic tick could claim a workflow under an engine id the test
+  // never controls. Nothing here needs the interval.
   const engine = await Engine.create({
     storage,
     workflows,
@@ -106,6 +111,7 @@ async function createClaimEngine(
     workflowClaimTtl: '1m',
     workflowClaimRenewInterval: '5s',
     recover: false,
+    backgroundTasks: 'manual',
   });
   installClaimRegistry(engine, engineId, storage);
   return engine;
@@ -254,9 +260,9 @@ describe('WFT-78: two engines sharing one store under ownership: "workflow-lease
     const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
     await using engine = await createClaimEngine(storage, 'engine-a', workflows);
 
-    const rejection = expect(engine.resume('explicit-resume-race')).rejects;
-    await rejection.toBeInstanceOf(WorkflowClaimUnavailableError);
-    await rejection.toMatchObject({ workflowId: 'explicit-resume-race', heldBy: 'ghost-engine' });
+    const rejection = expect(await rejectionOf(engine.resume('explicit-resume-race')));
+    rejection.toBeInstanceOf(WorkflowClaimUnavailableError);
+    rejection.toMatchObject({ workflowId: 'explicit-resume-race', heldBy: 'ghost-engine' });
 
     // An explicit single-workflow caller throws — unlike recoverAll(), which isolates.
     expect(getInternals(engine).workflowClaimRegistry?.currentEpoch('explicit-resume-race')).toBe(
@@ -568,7 +574,7 @@ describe('WFT-134: engine.suspend() does not strand a same-engine resume() under
 
     release.resolve();
 
-    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(await throwingRejectionOf(resumePromise)).toThrow(/status is "cancelled"/);
 
     // The regression: `acquireStandaloneClaimBeforeResume` freshly installed
     // a claim for engineA (no cached epoch, and nothing else held it after
@@ -666,7 +672,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
 
     release.resolve();
 
-    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(await throwingRejectionOf(resumePromise)).toThrow(/status is "cancelled"/);
 
     // The regression this finding describes: `acquireStandaloneClaimBeforeResume`
     // saw `cachedEpoch !== null` (the stale entry `staleAcquire` installed),
@@ -748,7 +754,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
 
     // The stale resume rejects — its own state, read before the cancel,
     // no longer matches what the serialized section observes.
-    expect(resumePromise).rejects.toThrow(/status is "cancelled"/);
+    expect(await throwingRejectionOf(resumePromise)).toThrow(/status is "cancelled"/);
 
     // The regression: cleaning up the STALE resume's claim must not release
     // whatever is CURRENTLY tracked (the replacement's live claim) — it must
@@ -806,7 +812,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
     const registryA = getInternals(engineA).workflowClaimRegistry;
     expect(registryA).not.toBeNull();
 
-    expect(engineA.resume(workflowId)).rejects.toThrow(/Checkpoint not found/);
+    expect(await throwingRejectionOf(engineA.resume(workflowId))).toThrow(/Checkpoint not found/);
 
     // The regression: `release()`'s durable CAS threw (simulated transient
     // failure, not a lost CAS), so the durable holder record is still
@@ -871,6 +877,7 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
       workflowClaimTtl: '1m',
       workflowClaimRenewInterval: '5s',
       recover: false,
+      backgroundTasks: 'manual',
     });
     installClaimRegistry(engine, 'engine-a', storage);
     const registry = getInternals(engine).workflowClaimRegistry;

@@ -7,6 +7,10 @@ import {
   registerSignalWaiter,
   releaseSignalWaiter,
 } from './signals.ts';
+import {
+  isCurrentWorkflowExecutionToken,
+  workflowExecutionTokenForWorkflow,
+} from './strategy-helpers.ts';
 
 /**
  * The largest delay a host `setTimeout` can hold without overflow. Node and Bun
@@ -143,6 +147,7 @@ export function executeWaitSignalSubOperation(
   signal?.throwIfAborted();
 
   const { signalName } = operation;
+  const workflowExecutionToken = workflowExecutionTokenForWorkflow(internals, workflowId);
   const waiterKey = `${workflowId}:${signalName}`;
   const engineAbort = internals.abortController.signal;
 
@@ -167,6 +172,8 @@ export function executeWaitSignalSubOperation(
         internals,
         workflowId,
         signalName,
+        () => isCurrentWorkflowExecutionToken(internals, workflowId, workflowExecutionToken),
+        workflowExecutionToken,
       );
       return consumed.found ? consumed.payload : undefined;
     };

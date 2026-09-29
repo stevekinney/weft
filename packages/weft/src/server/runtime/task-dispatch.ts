@@ -612,11 +612,16 @@ export async function cancelTask(
     // `commitUncertainCancellation`, which already carry this write.
     async (_record, nextRecord) =>
       nextRecord.state === 'terminal'
-        ? buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
-            status: 'failed',
-            error: nextRecord.cancellationReason,
-            failureCategory: 'cancellation',
-          })
+        ? buildTerminalResolutionWrites(
+            nextRecord.workflowId,
+            nextRecord.operationId,
+            {
+              status: 'failed',
+              error: nextRecord.cancellationReason,
+              failureCategory: 'cancellation',
+            },
+            nextRecord.workflowExecutionToken,
+          )
         : [],
   );
   if (!result.ok) return false;

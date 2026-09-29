@@ -10,6 +10,7 @@ import {
 import { Engine } from '../../core/engine.ts';
 import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { definitionSchemaToJsonSchema } from '../../core/types/definition-schema-to-json.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
 import {
   buildWorkerManifestFromRegistry,
@@ -167,12 +168,14 @@ describe('buildWorkerManifestFromRegistry', () => {
     engine = createEngine();
 
     expect(
-      buildWorkerManifestFromRegistry(engine, {
-        workflows: { 'not-registered': [] },
-        deployment: DEPLOYMENT,
-        runtime: RUNTIME,
-      }),
-    ).rejects.toThrow(WorkerManifestBuildError);
+      await throwingRejectionOf(
+        buildWorkerManifestFromRegistry(engine, {
+          workflows: { 'not-registered': [] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        }),
+      ),
+    ).toThrow(WorkerManifestBuildError);
   });
 
   it('throws WorkerManifestBuildError when a declared activity is not registered', async () => {
@@ -180,12 +183,14 @@ describe('buildWorkerManifestFromRegistry', () => {
     engine.register(workflow({ name: 'checkout' }).execute(async function* () {}));
 
     expect(
-      buildWorkerManifestFromRegistry(engine, {
-        workflows: { checkout: ['not-registered'] },
-        deployment: DEPLOYMENT,
-        runtime: RUNTIME,
-      }),
-    ).rejects.toThrow(WorkerManifestBuildError);
+      await throwingRejectionOf(
+        buildWorkerManifestFromRegistry(engine, {
+          workflows: { checkout: ['not-registered'] },
+          deployment: DEPLOYMENT,
+          runtime: RUNTIME,
+        }),
+      ),
+    ).toThrow(WorkerManifestBuildError);
   });
 
   it('produces identical manifests across two builds of the same registry (deterministic)', async () => {

@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   workflow,
   type WorkflowContext,
   type WorkflowState,
   type WorkflowStatus,
 } from '../types.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
@@ -19,6 +21,7 @@ import {
   rejectAllSleepTimerAcknowledgements,
   rejectSleepTimerAcknowledgements,
   resolveDiscardedTimerDisposition,
+  resolveSleepTimer,
   retainDiscardedDurableTimer,
   settleSleepTimerAcknowledgements,
 } from './sleep-timer-acknowledgements.ts';
@@ -26,6 +29,8 @@ import {
 function createInternals(): EngineInternals {
   return {
     durableInlineOperations: new Map(),
+    sleepResolvers: new Map(),
+    pendingAtomicWorkflowCommitSideEffects: new Map(),
     sleepTimerAcknowledgementWaiters: new Map(),
   } as EngineInternals;
 }
@@ -95,6 +100,151 @@ describe('sleep timer durable acknowledgements', () => {
     expect(internals.sleepTimerAcknowledgementWaiters.size).toBe(0);
   });
 
+  it('does not let a stale registration overwrite a successor sleep resolver', async () => {
+    const internals = createInternals();
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+    const successor = mock(() => {});
+    const stale = mock(() => {});
+    internals.sleepResolvers.set('workflow:workflow:0', {
+      resolve: successor,
+      fireAt: 2_000,
+      workflowExecutionToken: 'successor-run',
+    });
+
+    const { registerSleepResolver } = await import('./sleep-resolver-registration.ts');
+    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run');
+
+    expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
+  });
+
+  it('lets a successor replace a stale resolver that registered after replacement', async () => {
+    const internals = createInternals();
+    internals.sleepResolversByWorkflow = new Map();
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+    const successor = mock(() => {});
+    const stale = mock(() => {});
+    const { registerSleepResolver } = await import('./sleep-resolver-registration.ts');
+
+    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run');
+    registerSleepResolver(internals, 'workflow', 'workflow:0', successor, 2_000, 'successor-run');
+
+    expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
+  });
+
+  it('collects a stale-generation timer without waking a live successor', async () => {
+    const internals = createInternals();
+    internals.workflowClaimRegistry = null;
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+    const successor = mock(() => {});
+    internals.sleepResolvers.set('workflow:workflow:0', {
+      resolve: successor,
+      fireAt: 1_000,
+      workflowExecutionToken: 'successor-run',
+    });
+
+    await handleSleepTimerWithAcknowledgement(
+      internals,
+      {
+        id: 'sleep:workflow:0',
+        workflowId: 'workflow',
+        fireAt: 2_000,
+        kind: 'sleep',
+        workflowExecutionToken: 'old-run',
+      },
+      async () => createWorkflowState('workflow', 'running'),
+    );
+
+    expect(successor).not.toHaveBeenCalled();
+    expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
+  });
+
+  it('cancels acknowledgement when an earlier timer cannot resolve the live sleep', async () => {
+    const internals = createInternals();
+    internals.workflowClaimRegistry = null;
+    internals.inlineStrategy = {} as EngineInternals['inlineStrategy'];
+    const liveResolver = mock(() => {});
+    internals.sleepResolvers.set('workflow:workflow:0', {
+      resolve: liveResolver,
+      fireAt: 2_000,
+    });
+
+    await handleSleepTimerWithAcknowledgement(
+      internals,
+      { id: 'sleep:workflow:0', workflowId: 'workflow', fireAt: 1_000, kind: 'sleep' },
+      async () => createWorkflowState('workflow', 'running'),
+    );
+
+    expect(liveResolver).not.toHaveBeenCalled();
+    expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(liveResolver);
+    expect(internals.sleepTimerAcknowledgementWaiters.size).toBe(0);
+  });
+
+  it('replaces an old early-fire marker when the successor timer has the same deadline', () => {
+    const internals = createInternals();
+    internals.sleepTimersFiredWithoutResolver = new Map();
+    internals.sleepTimerTokensFiredWithoutResolver = new Map();
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+    const timer = {
+      id: 'sleep:workflow:0',
+      workflowId: 'workflow',
+      fireAt: 2_000,
+      kind: 'sleep' as const,
+    };
+
+    expect(resolveSleepTimer(internals, { ...timer, workflowExecutionToken: 'old-run' })).toBe(
+      true,
+    );
+    expect(
+      resolveSleepTimer(internals, { ...timer, workflowExecutionToken: 'successor-run' }),
+    ).toBe(true);
+    expect(
+      resolveSleepTimer(internals, {
+        ...timer,
+        fireAt: 3_000,
+        workflowExecutionToken: 'old-run',
+      }),
+    ).toBe(true);
+
+    expect(internals.sleepTimersFiredWithoutResolver.get('workflow')?.get('workflow:0')).toBe(
+      2_000,
+    );
+    expect(internals.sleepTimerTokensFiredWithoutResolver.get('workflow')?.get('workflow:0')).toBe(
+      'successor-run',
+    );
+  });
+
+  it('clears side effects staged by a replaced execution generation', () => {
+    const internals = createInternals();
+    stageAtomicWorkflowCommitSideEffects(internals, 'workflow', {
+      conditions: [],
+      operations: [{ type: 'delete', key: 'signal:old' }],
+    });
+    internals.durableInlineOperations.set('workflow', {
+      operationId: 'old-operation',
+      type: 'wait-signal',
+      workflowExecutionToken: 'old-run',
+    });
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+
+    recordDurableInlineOperation(internals, 'workflow', {
+      type: 'wait-signal',
+      operationId: 'successor-operation',
+      signalName: 'release',
+    });
+
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.has('workflow')).toBe(false);
+  });
+
   it('settles only acknowledgements older than the current sleep deadline', async () => {
     const internals = createInternals();
     const older = createSleepTimerAcknowledgement(internals, 'workflow', 'workflow:0', 1_000);
@@ -126,15 +276,15 @@ describe('sleep timer durable acknowledgements', () => {
     const internals = createInternals();
     const first = createSleepTimerAcknowledgement(internals, 'first', 'first:0', 1_000);
     rejectSleepTimerAcknowledgements(internals, 'first', 'checkpoint failed');
-    expect(first.promise).rejects.toThrow('checkpoint failed');
+    expect(await throwingRejectionOf(first.promise)).toThrow('checkpoint failed');
 
     const second = createSleepTimerAcknowledgement(internals, 'second', 'second:0', 2_000);
     const third = createSleepTimerAcknowledgement(internals, 'third', 'third:0', 3_000);
     const disposalError = new Error('engine disposed');
     rejectAllSleepTimerAcknowledgements(internals, disposalError);
 
-    expect(second.promise).rejects.toBe(disposalError);
-    expect(third.promise).rejects.toBe(disposalError);
+    expect(await rejectionOf(second.promise)).toBe(disposalError);
+    expect(await rejectionOf(third.promise)).toBe(disposalError);
     expect(internals.sleepTimerAcknowledgementWaiters.size).toBe(0);
   });
 });
@@ -160,12 +310,14 @@ describe('handleSleepTimerWithAcknowledgement: ADR 0002 "sleep" wake kind owners
     // proves the ownership check runs, and decides discard-vs-proceed,
     // BEFORE that unclaimed-timer logic ever sees this fire.
     expect(
-      handleSleepTimerWithAcknowledgement(
-        internals,
-        { id: 'sleep:wf-unowned:0', workflowId: 'wf-unowned', fireAt: 0, kind: 'sleep' },
-        loadWorkflowState,
+      await throwingRejectionOf(
+        handleSleepTimerWithAcknowledgement(
+          internals,
+          { id: 'sleep:wf-unowned:0', workflowId: 'wf-unowned', fireAt: 0, kind: 'sleep' },
+          loadWorkflowState,
+        ),
       ),
-    ).rejects.toThrow(/retaining it in storage for the true owner/);
+    ).toThrow(/retaining it in storage for the true owner/);
   });
 
   it('collects a fired timer for a workflow this engine holds no tracked claim for and that no longer exists', async () => {
@@ -179,12 +331,12 @@ describe('handleSleepTimerWithAcknowledgement: ADR 0002 "sleep" wake kind owners
     const loadWorkflowState = async (): Promise<null> => null;
 
     expect(
-      handleSleepTimerWithAcknowledgement(
+      await handleSleepTimerWithAcknowledgement(
         internals,
         { id: 'sleep:wf-gone:0', workflowId: 'wf-gone', fireAt: 0, kind: 'sleep' },
         loadWorkflowState,
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
   });
 
   it('collects a fired timer for a terminal workflow this engine holds no tracked claim for', async () => {
@@ -199,12 +351,12 @@ describe('handleSleepTimerWithAcknowledgement: ADR 0002 "sleep" wake kind owners
       createWorkflowState('wf-done', 'completed');
 
     expect(
-      handleSleepTimerWithAcknowledgement(
+      await handleSleepTimerWithAcknowledgement(
         internals,
         { id: 'sleep:wf-done:0', workflowId: 'wf-done', fireAt: 0, kind: 'sleep' },
         loadWorkflowState,
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
   });
 });
 
@@ -245,16 +397,18 @@ describe('resolveDiscardedTimerDisposition', () => {
 describe('retainDiscardedDurableTimer', () => {
   it('resolves without throwing when the disposition is collect', async () => {
     expect(
-      retainDiscardedDurableTimer('sleep:wf-gone:0', 'wf-gone', async () => null),
-    ).resolves.toBeUndefined();
+      await retainDiscardedDurableTimer('sleep:wf-gone:0', 'wf-gone', async () => null),
+    ).toBeUndefined();
   });
 
   it('throws a descriptive error naming the timer and workflow when the disposition is retain', async () => {
     expect(
-      retainDiscardedDurableTimer('sleep:wf-live:0', 'wf-live', async () =>
-        createWorkflowState('wf-live', 'running'),
+      await throwingRejectionOf(
+        retainDiscardedDurableTimer('sleep:wf-live:0', 'wf-live', async () =>
+          createWorkflowState('wf-live', 'running'),
+        ),
       ),
-    ).rejects.toThrow(/sleep:wf-live:0.*wf-live/s);
+    ).toThrow(/sleep:wf-live:0.*wf-live/s);
   });
 });
 
@@ -318,7 +472,7 @@ describe('handleSleepTimerWithAcknowledgement + Scheduler: WFT-79 finding 2 regr
     // The true owner's own copy of this same fire performs the real wake —
     // and, this time, actually deletes the durable timer key.
     await owner.scheduler.tick(now);
-    expect(handle.result()).resolves.toBe('woke');
+    expect(await handle.result()).toBe('woke');
     expect(await countSleepTimerIndexKeys(storage)).toBe(0);
   });
 

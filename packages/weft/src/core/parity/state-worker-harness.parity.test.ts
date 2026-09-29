@@ -111,10 +111,10 @@ describe('durable state, remote worker, and testing-harness parity', () => {
 
     await recoveredHandle.signal('deposit', 7);
 
-    expect(recoveredHandle.result()).resolves.toBe(12);
+    expect(await recoveredHandle.result()).toBe(12);
     expect(
-      recoveredEngine.state.workflow<number>('parity-durable-account', 'balance').get(),
-    ).resolves.toBe(12);
+      await recoveredEngine.state.workflow<number>('parity-durable-account', 'balance').get(),
+    ).toBe(12);
   });
 
   it('round-trips RemoteWorker WebSocket activity results through workflow ctx.run (COR-152)', async () => {
@@ -268,7 +268,7 @@ describe('durable state, remote worker, and testing-harness parity', () => {
 
     await testEngine.advanceTime(1);
 
-    expect(handle.result()).resolves.toEqual({
+    expect(await handle.result()).toEqual({
       confirmation: 'mocked-charge:ord-123',
     });
     expect(chargeCardMock.callCount).toBe(1);

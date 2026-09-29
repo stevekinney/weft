@@ -3,6 +3,7 @@ import type { z } from 'zod';
 
 import { Engine } from '../../core/engine.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
@@ -66,31 +67,35 @@ describe('storage REST operations', () => {
     using engine = new Engine({ storage: rawStorage });
 
     expect(
-      storageGetOperation.invoke({
-        input: { key: 'workflow-key' },
-        engine,
-        principal: anonymousPrincipal(),
-        transport: 'http-rest',
-      }),
-    ).rejects.toMatchObject({ code: 'Unauthorized' });
+      await rejectionOf(
+        storageGetOperation.invoke({
+          input: { key: 'workflow-key' },
+          engine,
+          principal: anonymousPrincipal(),
+          transport: 'http-rest',
+        }),
+      ),
+    ).toMatchObject({ code: 'Unauthorized' });
 
     expect(
-      storageGetOperation.invoke({
-        input: { key: 'workflow-key' },
-        engine,
-        principal: principalFromApiKey({ subject: 'unscoped', scopes: ['storage:read'] }),
-        transport: 'http-rest',
-      }),
-    ).rejects.toMatchObject({ code: 'Forbidden' });
+      await rejectionOf(
+        storageGetOperation.invoke({
+          input: { key: 'workflow-key' },
+          engine,
+          principal: principalFromApiKey({ subject: 'unscoped', scopes: ['storage:read'] }),
+          transport: 'http-rest',
+        }),
+      ),
+    ).toMatchObject({ code: 'Forbidden' });
 
     expect(
-      storageGetOperation.invoke({
+      await storageGetOperation.invoke({
         input: { key: 'workflow-key' },
         engine,
         principal: principalFromApiKey({ subject: 'admin', scopes: ['storage:admin'] }),
         transport: 'http-rest',
       }),
-    ).resolves.toEqual(encode('stored value'));
+    ).toEqual(encode('stored value'));
   });
 
   it('reports the backend capability profile to storage readers', async () => {

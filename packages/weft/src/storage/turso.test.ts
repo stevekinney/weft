@@ -1,6 +1,7 @@
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
@@ -121,11 +122,13 @@ describe('TursoStorage', () => {
         });
 
         expect(
-          fixture.storage.conditionalBatch(
-            [{ key: 'busy:key', expectedValue: null }],
-            [{ type: 'put', key: 'busy:key', value: encode('committed') }],
+          await throwingRejectionOf(
+            fixture.storage.conditionalBatch(
+              [{ key: 'busy:key', expectedValue: null }],
+              [{ type: 'put', key: 'busy:key', value: encode('committed') }],
+            ),
           ),
-        ).rejects.toThrow(/SQLITE_BUSY|busy|exhausted/i);
+        ).toThrow(/SQLITE_BUSY|busy|exhausted/i);
       } finally {
         await transaction.rollback().catch(() => {});
       }
@@ -196,7 +199,7 @@ describe('TursoStorage', () => {
   it('query rejects non-read-only SQL statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    expect(storage.query('DELETE FROM kv')).rejects.toThrow(
+    expect(await throwingRejectionOf(storage.query('DELETE FROM kv'))).toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 
@@ -206,7 +209,7 @@ describe('TursoStorage', () => {
   it('query rejects multiple SQL statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    expect(storage.query('SELECT key FROM kv; DELETE FROM kv')).rejects.toThrow(
+    expect(await throwingRejectionOf(storage.query('SELECT key FROM kv; DELETE FROM kv'))).toThrow(
       'Storage query must contain exactly one read-only statement.',
     );
 
@@ -216,7 +219,7 @@ describe('TursoStorage', () => {
   it('query rejects write PRAGMA statements', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
 
-    expect(storage.query('PRAGMA journal_mode = WAL')).rejects.toThrow(
+    expect(await throwingRejectionOf(storage.query('PRAGMA journal_mode = WAL'))).toThrow(
       'Storage query only supports read-only SELECT and PRAGMA statements.',
     );
 

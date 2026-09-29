@@ -199,6 +199,12 @@
       "bun": "./dist/worker/protocol.js",
       "import": "./dist/worker/protocol.js",
       "default": "./dist/worker/protocol.js"
+    },
+    "./worker/generated-authoring": {
+      "types": "./dist/worker/generated-authoring.d.ts",
+      "bun": "./dist/worker/generated-authoring.js",
+      "import": "./dist/worker/generated-authoring.js",
+      "default": "./dist/worker/generated-authoring.js"
     }
   },
   "main": "./dist/index.js",

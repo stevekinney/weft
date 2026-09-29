@@ -17,6 +17,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { ApplicationDeliveryValidationError } from './outbox-guards.ts';
 import {
   beginOne,
@@ -423,7 +424,7 @@ describe('runner: second review round', () => {
     expect(reads).toBeLessThan(12);
     // The settlement that follows the abort meets the same outage and surfaces
     // it to the caller; the lease stays `attempting` for maintenance.
-    expect(pending).rejects.toThrow('storage down');
+    expect(await throwingRejectionOf(pending)).toThrow('storage down');
     failing = false;
     outbox.dispose();
   });
@@ -913,7 +914,7 @@ describe('runner: sixth review round', () => {
     storage.beforeGet = (key) => {
       if (key.includes('appdlv:')) throw new Error('storage offline');
     };
-    expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow('storage offline');
+    expect(await throwingRejectionOf(outbox.drain({ timeoutMs: 0 }))).toThrow('storage offline');
     expect(adapter.requests).toHaveLength(0);
     outbox.dispose();
   });
@@ -949,7 +950,7 @@ describe('runner: sixth review round', () => {
     worker.dispose();
     clock.advance(100);
     const { outbox } = createOutboxFixture({ storage, clock, adapter: undefined });
-    expect(outbox.drain({ timeoutMs: 0 })).rejects.toThrow(/require an adapter/);
+    expect(await throwingRejectionOf(outbox.drain({ timeoutMs: 0 }))).toThrow(/require an adapter/);
     expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('claimed');
     outbox.dispose();
   });
@@ -1245,7 +1246,7 @@ describe('runner: eighth review round', () => {
     storage.beforeGet = (key) => {
       if (key.includes('appobx:')) outbox.dispose();
     };
-    expect(outbox.requestCancellation({ deliveryId: id })).rejects.toThrow(
+    expect(await throwingRejectionOf(outbox.requestCancellation({ deliveryId: id }))).toThrow(
       ApplicationDeliveryValidationError,
     );
     const observer = createOutboxFixture({ storage: remoteView(storage) }).outbox;

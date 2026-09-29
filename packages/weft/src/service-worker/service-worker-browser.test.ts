@@ -851,14 +851,14 @@ describe.skipIf(!browserSmokeEnabled)('Service Worker browser smoke', () => {
       await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running', withinPhase);
       await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' }, withinPhase);
       expect(
-        withinPhase(
+        await withinPhase(
           'read timer workflow result',
           page.evaluate(async () => {
             const response = await fetch('/weft/v1/workflows/timer-workflow/result');
             return response.json();
           }),
         ),
-      ).resolves.toEqual({ result: 'timer-fired' });
+      ).toEqual({ result: 'timer-fired' });
 
       const parkedWorkflow = await withinPhase(
         'start parked workflow',
@@ -917,14 +917,14 @@ describe.skipIf(!browserSmokeEnabled)('Service Worker browser smoke', () => {
       );
 
       expect(
-        withinPhase(
+        await withinPhase(
           'read parked workflow result',
           page.evaluate(async () => {
             const response = await fetch('/weft/v1/workflows/parked-workflow/result');
             return response.json();
           }),
         ),
-      ).resolves.toEqual({
+      ).toEqual({
         result: {
           count: 1,
           signalPayload: 'done',
@@ -1026,14 +1026,14 @@ describe.skipIf(!browserSmokeEnabled)('Service Worker browser smoke', () => {
 
       // Confirm the workflow completed with the expected result.
       expect(
-        withinPhase(
+        await withinPhase(
           'read parked workflow result',
           page.evaluate(async () => {
             const response = await fetch('/weft/v1/workflows/setup-parked-workflow/result');
             return response.json();
           }),
         ),
-      ).resolves.toEqual({
+      ).toEqual({
         result: {
           count: 1,
           signalPayload: 'recovered',
@@ -1153,14 +1153,14 @@ describe.skipIf(!browserSmokeEnabled)('Service Worker browser smoke', () => {
       });
 
       expect(
-        withinPhase(
+        await withinPhase(
           'read sleeping workflow result',
           page.evaluate(async () => {
             const response = await fetch('/weft/v1/workflows/setup-timer-workflow/result');
             return response.json();
           }),
         ),
-      ).resolves.toEqual({ result: 'slept-then-finished' });
+      ).toEqual({ result: 'slept-then-finished' });
 
       // This workflow runs no activity, so the counter must still be exactly 0 —
       // recovery must not synthesize spurious activity executions.

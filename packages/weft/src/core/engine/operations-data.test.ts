@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { processLoadOperation } from './operations-data.ts';
 
@@ -19,12 +20,14 @@ describe('data operation helpers', () => {
     };
 
     expect(
-      processLoadOperation({ storage: new MemoryStorage() } as never, 'workflow-id', operation, {
-        persistCheckpoint: async () => {},
-        runOperationWithResult: async (_workflowId, _operation, execute) => {
-          await execute();
-        },
-      }),
-    ).rejects.toThrow('ctx.load() requires a valid offload reference size');
+      await throwingRejectionOf(
+        processLoadOperation({ storage: new MemoryStorage() } as never, 'workflow-id', operation, {
+          persistCheckpoint: async () => {},
+          runOperationWithResult: async (_workflowId, _operation, execute) => {
+            await execute();
+          },
+        }),
+      ),
+    ).toThrow('ctx.load() requires a valid offload reference size');
   });
 });

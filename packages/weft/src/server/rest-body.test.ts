@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { readOptionalRestJsonBody, readRestBodyBounded } from './rest-body.ts';
 
 describe('readRestBodyBounded', () => {
@@ -14,14 +15,16 @@ describe('readRestBodyBounded', () => {
     });
 
     expect(
-      readRestBodyBounded(
-        new Request('http://localhost/body', {
-          method: 'POST',
-          body: stream,
-        }),
-        { maxBodyBytes: 1 },
+      await rejectionOf(
+        readRestBodyBounded(
+          new Request('http://localhost/body', {
+            method: 'POST',
+            body: stream,
+          }),
+          { maxBodyBytes: 1 },
+        ),
       ),
-    ).rejects.toMatchObject({
+    ).toMatchObject({
       code: 'PayloadTooLarge',
       message: 'Payload Too Large',
       data: { maxBytes: 1 },
@@ -32,23 +35,23 @@ describe('readRestBodyBounded', () => {
 describe('readOptionalRestJsonBody', () => {
   it('returns undefined for an empty JSON body', async () => {
     expect(
-      readOptionalRestJsonBody(
+      await readOptionalRestJsonBody(
         new Request('http://localhost/body', {
           method: 'POST',
           body: '  ',
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
   });
 
   it('parses a non-empty JSON body', async () => {
     expect(
-      readOptionalRestJsonBody(
+      await readOptionalRestJsonBody(
         new Request('http://localhost/body', {
           method: 'POST',
           body: '{"ok":true}',
         }),
       ),
-    ).resolves.toEqual({ ok: true });
+    ).toEqual({ ok: true });
   });
 });

@@ -4,6 +4,7 @@ import {
   requireOpenedPostgresTestDatabase,
 } from './postgres-server.test-support.ts';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { createPGliteTestFixture } from './pglite.test-support.ts';
 import { PostgresStorage, type PostgresPool } from './postgres.ts';
 import {
@@ -55,7 +56,9 @@ describe('PostgresStorage', () => {
     });
 
     expect(() => fixture.database).toThrow('PGlite test fixture is not running');
-    expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
+    expect(await throwingRejectionOf(fixture.reset())).toThrow(
+      'PGlite test fixture is not running',
+    );
 
     await initialize?.();
     expect(fixture.database).toBeDefined();
@@ -70,7 +73,9 @@ describe('PostgresStorage', () => {
 
     await dispose?.();
     expect(() => fixture.database).toThrow('PGlite test fixture is not running');
-    expect(fixture.reset()).rejects.toThrow('PGlite test fixture is not running');
+    expect(await throwingRejectionOf(fixture.reset())).toThrow(
+      'PGlite test fixture is not running',
+    );
   });
 
   it('accepts an injected pool without a url', async () => {

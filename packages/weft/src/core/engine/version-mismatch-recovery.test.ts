@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import { Engine } from './index.ts';
@@ -78,7 +79,7 @@ describe('recoverAll() version mismatch policies', () => {
 
     const matchedHandle = handles[0]!;
     await matchedHandle.signal('continue', 'continue');
-    expect(matchedHandle.result()).resolves.toBe('resumed:continue');
+    expect(await matchedHandle.result()).toBe('resumed:continue');
   });
 
   it('does not resolve services or invoke onRecoveredWorkflow for the mismatched run', async () => {
@@ -130,9 +131,9 @@ describe('recoverAll() version mismatch policies', () => {
     await using recovered = new Engine({ storage });
     recovered.register(createWaiterWorkflow('1.0.0'));
 
-    expect(recovered.recoverAll({ versionMismatchPolicy: 'throw' })).rejects.toThrow(
-      'Version mismatch',
-    );
+    expect(
+      await throwingRejectionOf(recovered.recoverAll({ versionMismatchPolicy: 'throw' })),
+    ).toThrow('Version mismatch');
 
     // The mismatched run's checkpoint/state is left untouched by the throw path.
     const mismatchedSummary = await recovered.get('sibling-a-mismatched-throw');

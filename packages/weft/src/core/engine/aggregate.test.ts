@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { AggregateDistinctKeyCapExceededError } from '../aggregate-validation.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
@@ -216,7 +217,7 @@ describe('engine.aggregate', () => {
     engine.register(failsWorkflow);
 
     const handle = await engine.start('fails', null, { id: 'failed-1' });
-    expect(handle.result()).rejects.toThrow('boom');
+    expect(await throwingRejectionOf(handle.result())).toThrow('boom');
     await storage.delete(KEYS.attribute('failed-1'));
 
     const result = await engine.aggregate(
@@ -270,8 +271,10 @@ describe('engine.aggregate', () => {
     await startAndComplete(engine, 'typed', 'wf-1');
 
     expect(
-      engine.aggregate(undefined, { groupBy: { attribute: 'unknownAttribute' } }),
-    ).rejects.toThrow(/Unknown search attribute/);
+      await throwingRejectionOf(
+        engine.aggregate(undefined, { groupBy: { attribute: 'unknownAttribute' } }),
+      ),
+    ).toThrow(/Unknown search attribute/);
     engine[Symbol.dispose]();
   });
 

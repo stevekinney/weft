@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import { Engine } from './index.ts';
@@ -150,7 +151,7 @@ describe('query()', () => {
       heartbeatDetails: new Map(),
       inlineStrategy: null,
     } as unknown as Parameters<typeof query>[0];
-    expect(query(internals, 'wf-1', 'custom')).rejects.toThrow(
+    expect(await throwingRejectionOf(query(internals, 'wf-1', 'custom'))).toThrow(
       'Workflow queries are not supported when using the worker execution strategy.',
     );
   });
@@ -193,9 +194,9 @@ describe('query()', () => {
       storage,
     } as unknown as Parameters<typeof query>[0];
 
-    const rejection = expect(query(internals, 'wf-1', 'custom')).rejects;
-    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
-    await rejection.toMatchObject({ workflowId: 'wf-1' });
+    const rejection = expect(await rejectionOf(query(internals, 'wf-1', 'custom')));
+    rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    rejection.toMatchObject({ workflowId: 'wf-1' });
   });
 
   it('invokes a registered query handler when a live context exists', async () => {
@@ -295,9 +296,9 @@ describe('query()', () => {
       storage,
     } as unknown as Parameters<typeof query>[0];
 
-    const rejection = expect(query(internals, 'wf-1', 'q', 'in')).rejects;
-    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
-    await rejection.toMatchObject({ workflowId: 'wf-1' });
+    const rejection = expect(await rejectionOf(query(internals, 'wf-1', 'q', 'in')));
+    rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    rejection.toMatchObject({ workflowId: 'wf-1' });
     expect(handler).not.toHaveBeenCalled();
   });
 });
@@ -455,9 +456,9 @@ describe('query() F2: ignores a stale durable holder for a locally terminal work
       storage,
     } as unknown as Parameters<typeof query>[0];
 
-    const rejection = expect(query(internals, 'wf-1', 'custom')).rejects;
-    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
-    await rejection.toMatchObject({ workflowId: 'wf-1' });
+    const rejection = expect(await rejectionOf(query(internals, 'wf-1', 'custom')));
+    rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    rejection.toMatchObject({ workflowId: 'wf-1' });
   });
 });
 
@@ -522,9 +523,9 @@ describe('WFT-79: cross-engine query() ownership signal', () => {
       recover: false,
     });
 
-    const rejection = expect(engineOutsider.query('query-claim-1', 'anything')).rejects;
-    await rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
-    await rejection.toMatchObject({ workflowId: 'query-claim-1' });
+    const rejection = expect(await rejectionOf(engineOutsider.query('query-claim-1', 'anything')));
+    rejection.toBeInstanceOf(WorkflowNotLocallyOwnedError);
+    rejection.toMatchObject({ workflowId: 'query-claim-1' });
 
     // Sanity: the OWNING engine's query for an unregistered name still
     // returns plain `undefined` (the pre-existing, unrelated ambiguity this

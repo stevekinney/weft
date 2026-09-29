@@ -62,6 +62,7 @@ export type PendingAsyncActivity = {
   readonly workflowId: string;
   readonly activityName: string;
   readonly operationId: string;
+  readonly workflowExecutionToken?: string | undefined;
   readonly step: number;
   readonly attempt: number;
   readonly createdAt: number;
@@ -75,6 +76,8 @@ export type PendingAsyncActivity = {
  */
 export type PendingAsyncActivityResolution = {
   readonly token: string;
+  readonly operationId: string;
+  readonly workflowExecutionToken?: string;
   readonly outcome: OperationOutcome;
   readonly originalReason?: { value: unknown };
   readonly timelineStatus: 'completed' | 'failed';
@@ -88,6 +91,7 @@ type PersistedAsyncActivity = {
   readonly workflowId: string;
   readonly activityName: string;
   readonly operationId: string;
+  readonly workflowExecutionToken?: string;
   readonly step: number;
   readonly attempt: number;
   readonly createdAt: number;
@@ -258,10 +262,12 @@ export async function listPendingAsyncActivities(
  * acknowledgement is durable before the caller learns it succeeded.
  */
 type PersistedAsyncActivityResolution = {
-  readonly version: 1;
+  readonly version: 2;
   readonly kind: 'resolution';
   readonly token: string;
   readonly workflowId: string;
+  readonly operationId: string;
+  readonly workflowExecutionToken?: string;
   readonly outcome: OperationOutcome;
 };
 
@@ -279,12 +285,19 @@ function isPersistedAsyncActivityResolution(
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
-    record['version'] === 1 &&
+    record['version'] === 2 &&
     record['kind'] === 'resolution' &&
     typeof record['token'] === 'string' &&
     typeof record['workflowId'] === 'string' &&
+    typeof record['operationId'] === 'string' &&
     isPersistedOperationOutcome(record['outcome'])
   );
+}
+
+function isLegacyPersistedAsyncActivityResolution(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record['version'] === 1 && record['kind'] === 'resolution';
 }
 
 /**
@@ -312,6 +325,9 @@ function buildPersistPendingAsyncActivityOperation(pending: PendingAsyncActivity
     workflowId: pending.workflowId,
     activityName: pending.activityName,
     operationId: pending.operationId,
+    ...(pending.workflowExecutionToken === undefined
+      ? {}
+      : { workflowExecutionToken: pending.workflowExecutionToken }),
     step: pending.step,
     attempt: pending.attempt,
     createdAt: pending.createdAt,
@@ -341,12 +357,16 @@ export function buildAsyncActivityResolutionWrite(
   workflowId: string,
   token: string,
   outcome: OperationOutcome,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
 ): BatchOperation {
   const record: PersistedAsyncActivityResolution = {
-    version: 1,
+    version: 2,
     kind: 'resolution',
     token,
     workflowId,
+    operationId,
+    ...(workflowExecutionToken === undefined ? {} : { workflowExecutionToken }),
     outcome,
   };
   return {
@@ -368,7 +388,13 @@ export function buildAsyncActivityAcknowledgementOperations(
 ): BatchOperation[] {
   return [
     { type: 'delete', key: KEYS.asyncActivity(pending.workflowId, pending.token) },
-    buildAsyncActivityResolutionWrite(pending.workflowId, pending.token, outcome),
+    buildAsyncActivityResolutionWrite(
+      pending.workflowId,
+      pending.token,
+      outcome,
+      pending.operationId,
+      pending.workflowExecutionToken,
+    ),
   ];
 }
 
@@ -443,6 +469,9 @@ export async function recoverPendingAsyncActivities(
         workflowId: decoded.workflowId,
         activityName: decoded.activityName,
         operationId: decoded.operationId,
+        ...(decoded.workflowExecutionToken === undefined
+          ? {}
+          : { workflowExecutionToken: decoded.workflowExecutionToken }),
         step: decoded.step,
         attempt: decoded.attempt,
         createdAt: decoded.createdAt,
@@ -457,12 +486,22 @@ export async function recoverPendingAsyncActivities(
       // outcomes are reconstructed from the recorded message/name/category.
       queuePendingAsyncActivityResolution(internals, decoded.workflowId, {
         token: decoded.token,
+        operationId: decoded.operationId,
+        ...(decoded.workflowExecutionToken === undefined
+          ? {}
+          : { workflowExecutionToken: decoded.workflowExecutionToken }),
         outcome: decoded.outcome,
         timelineStatus: decoded.outcome.status,
         timelineOutput:
           decoded.outcome.status === 'completed' ? decoded.outcome.value : decoded.outcome.error,
       });
+      continue;
     }
+    if (isLegacyPersistedAsyncActivityResolution(decoded))
+      throw new Error(
+        'Cannot recover legacy async-activity resolution record without run identity; ' +
+          'the acknowledged result must be replayed from its source before recovery can continue.',
+      );
   }
 }
 

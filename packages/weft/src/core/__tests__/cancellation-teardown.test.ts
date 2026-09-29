@@ -16,6 +16,7 @@ import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.tes
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -70,7 +71,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(onCancelRan).toEqual(['handler-ran']);
 
     engine[Symbol.dispose]();
@@ -120,7 +121,7 @@ describe('ctx.onCancel()', () => {
     await signalAborted.promise;
     await cancelPromise;
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(await engine.get(handle.id)).toMatchObject({ status: 'cancelled' });
     expect(events).toEqual(['signal-aborted', 'on-cancel']);
 
@@ -150,7 +151,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(order).toEqual(['first', 'second', 'third']);
 
     engine[Symbol.dispose]();
@@ -182,7 +183,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(afterFailure).toBe(true);
 
     engine[Symbol.dispose]();
@@ -207,7 +208,7 @@ describe('ctx.onCancel()', () => {
     engine.register(normalCompletionWorkflow);
 
     const handle = await engine.start('on-cancel-no-fire', null);
-    expect(handle.result()).resolves.toBe('done');
+    expect(await handle.result()).toBe('done');
 
     expect(cancelFired).toBe(false);
 
@@ -229,7 +230,7 @@ describe('ctx.onCancel()', () => {
     engine.register(fastWorkflow);
 
     const handle = await engine.start('on-cancel-race-no-fire', null);
-    expect(handle.result()).resolves.toBe('done');
+    expect(await handle.result()).toBe('done');
 
     await engine.cancel(handle.id);
     expect(cancelFired).toBe(false);
@@ -256,7 +257,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.timeout(handle.id);
 
-    expect(handle.result()).rejects.toThrow('exceeded execution timeout');
+    expect(await throwingRejectionOf(handle.result())).toThrow('exceeded execution timeout');
     expect(cancelFired).toBe(false);
 
     engine[Symbol.dispose]();
@@ -286,7 +287,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(sequence).toEqual(['async-handler-done']);
 
     engine[Symbol.dispose]();
@@ -317,7 +318,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(ran).toEqual(['post-resume']);
 
     engine[Symbol.dispose]();
@@ -344,7 +345,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(ran).toEqual(['pre-park']);
 
     engine[Symbol.dispose]();
@@ -370,7 +371,7 @@ describe('ctx.onCancel()', () => {
 
     await engine.cancel(forked.id);
 
-    expect(forked.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(forked.result())).toThrow('Workflow cancelled');
     expect(ranForWorkflowIds).toEqual([forked.id]);
 
     engine[Symbol.dispose]();
@@ -433,7 +434,7 @@ describe('ctx.saga() — cancellation compensation', () => {
     await engine.cancel(handle.id);
     gate.resolve();
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     // Steps 1 and 2 completed before cancel, so their compensators run in reverse.
     // Step 3 was in-flight (not completed) so its compensator must NOT run.
@@ -485,7 +486,7 @@ describe('ctx.saga() — cancellation compensation', () => {
     await engine.cancel(handle.id);
     gate.resolve();
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     // Compensators run in reverse (beta first, then alpha) with correct args.
     expect(compensatorArgs).toHaveLength(2);
@@ -530,7 +531,7 @@ describe('ctx.saga() — cancellation compensation', () => {
     engine.register(failBeforeCancelWorkflow);
 
     const handle = await engine.start('fail-not-cancel-saga', null);
-    expect(handle.result()).rejects.toThrow('step failed');
+    expect(await throwingRejectionOf(handle.result())).toThrow('step failed');
 
     // Compensator for 'passing' must have run exactly once via error path.
     expect(compensatorCallCount).toBe(1);
@@ -573,7 +574,7 @@ describe('ctx.saga() — cancellation compensation', () => {
     await engine.cancel(handle.id);
     gate.resolve();
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     expect(compensatorCalls).toBe(0);
 
@@ -605,7 +606,7 @@ describe('ctx.saga() — cancellation compensation', () => {
 
     await engine.cancel(handle.id);
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(compensationOrder).toEqual([]);
 
     engine[Symbol.dispose]();
@@ -666,7 +667,7 @@ describe('ctx.saga() — cancellation compensation', () => {
     await engine1.cancel(handle1.id);
     gate.resolve();
 
-    expect(handle1.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle1.result())).toThrow('Workflow cancelled');
     expect(compensatorCallCount).toBe(1);
 
     engine1[Symbol.dispose]();
@@ -717,7 +718,7 @@ describe('cancel-handler race condition', () => {
     // Fire two concurrent cancels — only the first should commit the state
     // transition; the second must see the already-terminal state and skip handlers.
     await Promise.allSettled([engine.cancel(handle.id), engine.cancel(handle.id)]);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     // Handler must fire exactly once — not twice due to the race.
     expect(handlerCallCount).toBe(1);
@@ -744,7 +745,7 @@ describe('cancel-handler race condition', () => {
     await flush();
 
     await engine.timeout(handle.id);
-    expect(handle.result()).rejects.toThrow('exceeded execution timeout');
+    expect(await throwingRejectionOf(handle.result())).toThrow('exceeded execution timeout');
 
     // Cancel handlers must never fire on timeout — they are scoped to cancellation only.
     expect(handlerCallCount).toBe(0);
@@ -792,7 +793,7 @@ describe('ctx.setFinalizerState() (#446)', () => {
     expect(decode(bytes!)).toEqual({ sandboxId: 'sbx-durable' });
 
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     engine[Symbol.dispose]();
   });
@@ -831,7 +832,7 @@ describe('ctx.setFinalizerState() (#446)', () => {
     expect(decode(bytes!)).toEqual({ sandboxId: 'sbx-parked' });
 
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     engine[Symbol.dispose]();
   });
@@ -890,7 +891,7 @@ describe('ctx.setFinalizerState() (#446)', () => {
     expect(finalizerBatches[0]?.keys).toContain(KEYS.checkpoint('finalizer-atomic-1'));
 
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     engine[Symbol.dispose]();
   });

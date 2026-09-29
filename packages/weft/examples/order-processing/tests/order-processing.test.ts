@@ -33,7 +33,7 @@ describe('order-processing reference example', () => {
     });
     await engine.advanceTime(highValueOrderInput.itemUpdateWindowMs!);
 
-    await expect(handle.query(orderStatusQuery)).resolves.toEqual({
+    expect(await handle.query(orderStatusQuery)).toEqual({
       itemCount: highValueOrderInput.items.length + 1,
       orderId: highValueOrderInput.orderId,
       status: 'awaiting-review',
@@ -56,7 +56,7 @@ describe('order-processing reference example', () => {
       decision: 'approved',
       reviewer: 'operations@example.com',
     });
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: highValueOrderInput.orderId,
       status: 'shipped',
       trackingNumber: expect.stringContaining('trk_'),
@@ -94,7 +94,7 @@ describe('order-processing reference example', () => {
       reviewer: 'operations@example.com',
     });
 
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: rejectedOrderInput.orderId,
       refundId: expect.stringContaining('refund_'),
       releasedReservationIds: expect.arrayContaining([expect.stringContaining('res_')]),
@@ -118,7 +118,7 @@ describe('order-processing reference example', () => {
 
     await handle.signal(cancelOrderSignal, { reason: 'customer-requested' });
 
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: standardOrderInput.orderId,
       refundId: expect.stringContaining('refund_'),
       releasedReservationIds: expect.arrayContaining([expect.stringContaining('res_')]),
@@ -136,7 +136,7 @@ describe('order-processing reference example', () => {
 
     await engine.advanceTime(1);
 
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: 'order_standard_ship',
       status: 'shipped',
       trackingNumber: expect.stringContaining('trk_'),
@@ -161,21 +161,21 @@ describe('order-processing reference example', () => {
 
     await engine.advanceTime(1_000);
 
-    await expect(
-      handle.update(addItemUpdate, {
+    expect(
+      await handle.update(addItemUpdate, {
         sku: 'late-item',
         quantity: 1,
         warehouseId: 'denver' as const,
         unitPrice: 5,
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       accepted: false,
       reason: 'Orders can only be changed before inventory reservation starts.',
       status: 'awaiting-shipment',
     });
 
     await handle.signal(cancelOrderSignal, { reason: 'cleanup' });
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: 'order_update_closed',
       status: 'cancelled',
     });
@@ -191,14 +191,14 @@ describe('order-processing reference example', () => {
     });
 
     const scheduleHandle = await engine.schedule(orderProcessingSchedule);
-    await expect(engine.getSchedule(scheduleHandle.id)).resolves.toMatchObject({
+    expect(await engine.getSchedule(scheduleHandle.id)).toMatchObject({
       id: scheduleHandle.id,
       status: 'active',
       workflowType: 'orderProcessingSweepStaleOrders',
     });
-    await expect(
-      engine.listSchedules({ workflowType: 'orderProcessingSweepStaleOrders' }),
-    ).resolves.toMatchObject({
+    expect(
+      await engine.listSchedules({ workflowType: 'orderProcessingSweepStaleOrders' }),
+    ).toMatchObject({
       items: [expect.objectContaining({ id: scheduleHandle.id })],
     });
 
@@ -221,7 +221,7 @@ describe('order-processing reference example', () => {
     });
     await handle.signal(cancelOrderSignal, { reason: 'stale-order-sweep' });
 
-    await expect(handle.result()).resolves.toMatchObject({
+    expect(await handle.result()).toMatchObject({
       orderId: 'order_stale',
       status: 'cancelled',
     });

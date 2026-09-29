@@ -175,8 +175,8 @@ describe('bulk retry direct coverage', () => {
       return MemoryStorage.prototype.get.call(missingStateStorage, key);
     };
     expect(
-      retryFailedAll(createInternals(missingStateStorage), { status: 'failed' }),
-    ).resolves.toEqual({
+      await retryFailedAll(createInternals(missingStateStorage), { status: 'failed' }),
+    ).toEqual({
       retried: 0,
       failed: 1,
       errors: [{ id: workflowId, error: 'Workflow no longer exists' }],
@@ -202,8 +202,8 @@ describe('bulk retry direct coverage', () => {
       return MemoryStorage.prototype.get.call(missingCheckpointStorage, key);
     };
     expect(
-      retryFailedAll(createInternals(missingCheckpointStorage), { status: 'failed' }),
-    ).resolves.toEqual({
+      await retryFailedAll(createInternals(missingCheckpointStorage), { status: 'failed' }),
+    ).toEqual({
       retried: 0,
       failed: 1,
       errors: [{ id: workflowId, error: 'Checkpoint no longer exists' }],
@@ -232,8 +232,8 @@ describe('bulk retry direct coverage', () => {
       return MemoryStorage.prototype.get.call(changedStatusStorage, key);
     };
     expect(
-      retryFailedAll(createInternals(changedStatusStorage), { status: 'failed' }),
-    ).resolves.toEqual({
+      await retryFailedAll(createInternals(changedStatusStorage), { status: 'failed' }),
+    ).toEqual({
       retried: 0,
       failed: 1,
       errors: [{ id: workflowId, error: 'Workflow is running, not failed' }],
@@ -260,7 +260,7 @@ describe('bulk retry direct coverage', () => {
     (missingRegistrationInternals as { registrations: Map<string, unknown> }).registrations =
       new Map();
 
-    expect(retryFailedAll(missingRegistrationInternals, { status: 'failed' })).resolves.toEqual({
+    expect(await retryFailedAll(missingRegistrationInternals, { status: 'failed' })).toEqual({
       retried: 0,
       failed: 1,
       errors: [
@@ -289,7 +289,7 @@ describe('bulk retry direct coverage', () => {
       version: '1',
     });
 
-    expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
+    expect(await retryFailedAll(internals, { status: 'failed' })).toEqual({
       retried: 0,
       failed: 1,
       errors: [
@@ -319,7 +319,7 @@ describe('bulk retry direct coverage', () => {
       engine: { start: ReturnType<typeof mock> };
     };
 
-    expect(retryFailedAll(internals, { status: 'failed' })).resolves.toEqual({
+    expect(await retryFailedAll(internals, { status: 'failed' })).toEqual({
       retried: 1,
       failed: 0,
       errors: [],

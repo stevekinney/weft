@@ -75,7 +75,7 @@ describe('executeValidate', () => {
       expect(result.stdout).toContain('No issues found.');
       const loaded = await loadRegistrationsFromModule(entryPath);
       const iterator = invokeFixtureWorkflow(loaded.registrations['myWorkflow']!.handler);
-      expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
+      expect(await iterator.next()).toEqual({ value: 'done', done: true });
     } finally {
       removeTemporaryTypeScriptPath(entryPath);
     }
@@ -101,7 +101,7 @@ describe('executeValidate', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain('unbounded-retry');
       const loaded = await loadRegistrationsFromModule(entryPath);
-      expect(loaded.activities[0]!.execute('payload')).resolves.toBe('payload');
+      expect(await loaded.activities[0]!.execute('payload')).toBe('payload');
     } finally {
       removeTemporaryTypeScriptPath(entryPath);
     }
@@ -139,7 +139,7 @@ describe('executeValidate', () => {
       });
       const loaded = await loadRegistrationsFromModule(entryPath);
       const iterator = invokeFixtureWorkflow(loaded.registrations['myWorkflow']!.handler);
-      expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
+      expect(await iterator.next()).toEqual({ value: 'done', done: true });
     } finally {
       removeTemporaryTypeScriptPath(entryPath);
     }

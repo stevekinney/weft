@@ -81,8 +81,21 @@ export function createReviewOperationCallbacks<
     dispatchEvent: engine.dispatchEvent.bind(engine),
     failWorkflow: (workflowId, error) =>
       failWorkflow(getInternals(engine), workflowId, error, createTerminationCallbacks(engine)),
-    feedOperationResult: (workflowId, result) =>
-      feedOperationResult(getInternals(engine), workflowId, result),
+    feedOperationResult: (
+      workflowId,
+      result,
+      _originalReason,
+      operationId,
+      workflowExecutionToken,
+    ) =>
+      feedOperationResult(
+        getInternals(engine),
+        workflowId,
+        result,
+        undefined,
+        operationId,
+        workflowExecutionToken,
+      ),
     ensureTerminalCleanupTracked: (workflowId) =>
       ensureTerminalCleanupTracked(getInternals(engine), workflowId),
   };

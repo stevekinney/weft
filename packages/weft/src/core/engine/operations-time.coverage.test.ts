@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
 import type { Checkpoint, WorkflowState } from '../types.ts';
@@ -50,48 +51,49 @@ describe('delayed-start coverage regression', () => {
     const loadWorkflowState = async () => createWorkflowState(workflowId);
 
     expect(
-      startDelayedWorkflow(
-        {
-          deposed: false,
-          leaseManager: {
-            currentEpochBytes: () => epochBytes,
+      await throwingRejectionOf(
+        startDelayedWorkflow(
+          {
+            deposed: false,
+            leaseManager: {
+              currentEpochBytes: () => epochBytes,
+            },
+            options: { getNow: () => 2_000, ownershipMode: 'lease' },
+            registrations: new Map([
+              [
+                'delayed-workflow',
+                {
+                  handler: async function* () {},
+                  version: '1',
+                },
+              ],
+            ]),
+            storage,
+          } as never,
+          {
+            fireAt: 2_000,
+            id: `delayed-start:${workflowId}`,
+            kind: 'delayed-start',
+            workflowId,
           },
-          options: { getNow: () => 2_000, ownershipMode: 'lease' },
-          registrations: new Map([
-            [
-              'delayed-workflow',
-              {
-                handler: async function* () {},
-                version: '1',
-              },
-            ],
-          ]),
-          storage,
-        } as never,
-        {
-          fireAt: 2_000,
-          id: `delayed-start:${workflowId}`,
-          kind: 'delayed-start',
-          workflowId,
-        },
-        {
-          beginWorkflowExecution: () => {},
-          dispatchEvent: () => true,
-          failWorkflow: async () => {},
-          handleCleanupError: () => {},
-          loadWorkflowStartHeaders: async () => undefined,
-          loadWorkflowState,
-          resolveExecutableRegistrationForRevision: async () => ({
-            entry: { handler: async function* () {}, version: '1' },
-            revision: undefined,
-          }),
-          runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
-          setWorkflowStartHeaders: () => {},
-          workflowVersionTupleFromState: () => ({ workflowVersion: '1' }),
-        },
+          {
+            beginWorkflowExecution: () => {},
+            dispatchEvent: () => true,
+            failWorkflow: async () => {},
+            handleCleanupError: () => {},
+            loadWorkflowStartHeaders: async () => undefined,
+            loadWorkflowState,
+            resolveExecutableRegistrationForRevision: async () => ({
+              entry: { handler: async function* () {}, version: '1' },
+              revision: undefined,
+            }),
+            runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) =>
+              writeOperation(),
+            setWorkflowStartHeaders: () => {},
+            workflowVersionTupleFromState: () => ({ workflowVersion: '1' }),
+          },
+        ),
       ),
-    ).rejects.toThrow(
-      'Delayed-start transition for workflow "delayed-start-race" lost its CAS race.',
-    );
+    ).toThrow('Delayed-start transition for workflow "delayed-start-race" lost its CAS race.');
   });
 });

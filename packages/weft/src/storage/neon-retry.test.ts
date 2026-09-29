@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { NeonStorage } from './neon.ts';
 import type { PostgresPool, PostgresPoolClient } from './postgres.ts';
 import { bytes as encode } from './storage-adapter.test-support.ts';
@@ -110,11 +111,13 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     await using storage = new NeonStorage({ url: 'stub://', pool });
 
     expect(
-      storage.conditionalBatch(
-        [{ key: 'idem:k', expectedValue: null }],
-        [{ type: 'put', key: 'idem:k', value: encode('v') }],
+      await throwingRejectionOf(
+        storage.conditionalBatch(
+          [{ key: 'idem:k', expectedValue: null }],
+          [{ type: 'put', key: 'idem:k', value: encode('v') }],
+        ),
       ),
-    ).rejects.toThrow('exhausted 5 attempts after retryable transaction failures');
+    ).toThrow('exhausted 5 attempts after retryable transaction failures');
 
     expect(pool.beginCount).toBe(5);
   });
@@ -142,11 +145,13 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     await using storage = new NeonStorage({ url: 'stub://', pool });
 
     expect(
-      storage.conditionalBatch(
-        [{ key: 'idem:k', expectedValue: null }],
-        [{ type: 'put', key: 'idem:k', value: encode('v') }],
+      await throwingRejectionOf(
+        storage.conditionalBatch(
+          [{ key: 'idem:k', expectedValue: null }],
+          [{ type: 'put', key: 'idem:k', value: encode('v') }],
+        ),
       ),
-    ).rejects.toThrow('transaction aborted, retry');
+    ).toThrow('transaction aborted, retry');
 
     // Exactly one attempt — no retry on a non-retryable code.
     expect(pool.beginCount).toBe(1);

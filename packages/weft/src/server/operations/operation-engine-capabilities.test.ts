@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { principalFromApiKey } from '../principal.ts';
 import {
   assertOperationEngineMethods,
@@ -33,7 +34,7 @@ describe('operation engine capability boundaries', () => {
       { storage: { get: () => Promise.resolve(null), conditionalBatch: true } },
       ['get'],
     );
-    await expect(storage.get('key')).resolves.toBeNull();
+    expect(await storage.get('key')).toBeNull();
   });
 
   it('rejects malformed nested workflow capabilities at the boundary', () => {
@@ -53,25 +54,27 @@ describe('operation engine capability boundaries', () => {
 
     await Promise.resolve(
       expect(
-        storageConditionalBatchOperation.invoke({
-          input: { conditions: [], operations: [] },
-          engine: {
-            storage: {
-              capabilities: () => ({
-                persistence: 'ephemeral',
-                readAfterWrite: 'linearizable',
-                scanConsistency: 'snapshot',
-                atomicBatch: true,
+        await throwingRejectionOf(
+          storageConditionalBatchOperation.invoke({
+            input: { conditions: [], operations: [] },
+            engine: {
+              storage: {
+                capabilities: () => ({
+                  persistence: 'ephemeral',
+                  readAfterWrite: 'linearizable',
+                  scanConsistency: 'snapshot',
+                  atomicBatch: true,
+                  conditionalBatch: true,
+                  boundedRangeDelete: false,
+                }),
                 conditionalBatch: true,
-                boundedRangeDelete: false,
-              }),
-              conditionalBatch: true,
+              },
             },
-          },
-          principal,
-          transport: 'http-rest',
-        }),
-      ).rejects.toThrow('does not implement the conditionalBatch() method'),
+            principal,
+            transport: 'http-rest',
+          }),
+        ),
+      ).toThrow('does not implement the conditionalBatch() method'),
     );
   });
 
@@ -97,14 +100,16 @@ describe('operation engine capability boundaries', () => {
       },
     };
 
-    await expect(
-      storageConditionalBatchOperation.invoke({
-        input: { conditions: [], operations: [] },
-        engine: { storage },
-        principal,
-        transport: 'http-rest',
-      }),
-    ).rejects.toThrow('requires storage capability "conditionalBatch"');
+    expect(
+      await throwingRejectionOf(
+        storageConditionalBatchOperation.invoke({
+          input: { conditions: [], operations: [] },
+          engine: { storage },
+          principal,
+          transport: 'http-rest',
+        }),
+      ),
+    ).toThrow('requires storage capability "conditionalBatch"');
     expect(capabilityChecks).toBe(2);
     expect(conditionalBatchCalls).toBe(0);
   });
@@ -123,13 +128,13 @@ describe('operation engine capability boundaries', () => {
 
     await Promise.resolve(
       expect(
-        storageGetOperation.invoke({
+        await storageGetOperation.invoke({
           input: { key: 'workflow-key' },
           engine: { storage },
           principal,
           transport: 'http-rest',
         }),
-      ).resolves.toEqual(new TextEncoder().encode('stored:workflow-key')),
+      ).toEqual(new TextEncoder().encode('stored:workflow-key')),
     );
   });
 });

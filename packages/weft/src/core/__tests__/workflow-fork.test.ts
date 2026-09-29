@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../../storage/interface.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
@@ -53,8 +54,8 @@ describe('workflow forking', () => {
     await engine.signal(original.id, 'branch', 'left');
     await engine.signal(forked.id, 'branch', 'right');
 
-    expect(original.result()).resolves.toBe('base:left');
-    expect(forked.result()).resolves.toBe('base:right');
+    expect(await original.result()).toBe('base:left');
+    expect(await forked.result()).toBe('base:right');
 
     const forkedState = await engine.get(forked.id);
     expect(forkedState).not.toBeNull();
@@ -105,7 +106,7 @@ describe('workflow forking', () => {
     await engine.signal(forked.id, 'hold');
     await engine.signal(forked.id, 'continue');
 
-    expect(forked.result()).resolves.toBe('first:second');
+    expect(await forked.result()).toBe('first:second');
     expect(executedStages).toEqual(['first', 'second']);
 
     const forkedState = await engine.get(forked.id);
@@ -118,7 +119,7 @@ describe('workflow forking', () => {
     });
 
     await engine.signal(original.id, 'continue');
-    expect(original.result()).resolves.toBe('first:second');
+    expect(await original.result()).toBe('first:second');
 
     engine[Symbol.dispose]();
   });
@@ -162,10 +163,10 @@ describe('workflow forking', () => {
     expect(forkedStateBeforeTimerFires?.status).toBe('running');
 
     await engine.advanceTime('1 minute');
-    expect(forked.result()).resolves.toBe('done');
+    expect(await forked.result()).toBe('done');
 
     await engine.cancel(original.id);
-    expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(originalResult)).toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -199,12 +200,12 @@ describe('workflow forking', () => {
     );
 
     const original = await engine.start('completed-fork', 'original', { id: 'wf-completed' });
-    expect(original.result()).resolves.toBe('original:prepare-done');
+    expect(await original.result()).toBe('original:prepare-done');
     expect(executedStages).toEqual(['prepare']);
     expect(terminalSummaries).toEqual(['original']);
 
     const forked = await engine.fork(original.id);
-    expect(forked.result()).resolves.toBe('original:prepare-done');
+    expect(await forked.result()).toBe('original:prepare-done');
     expect(executedStages).toEqual(['prepare']);
     expect(terminalSummaries).toEqual(['original', 'original']);
 
@@ -235,10 +236,10 @@ describe('workflow forking', () => {
     );
 
     const original = await engine.start('completed-ordering', null, { id: 'wf-order-root' });
-    expect(original.result()).resolves.toBe('done');
+    expect(await original.result()).toBe('done');
 
     const forked = await engine.fork(original.id);
-    expect(forked.result()).resolves.toBe('done');
+    expect(await forked.result()).toBe('done');
 
     const forkedEvents = observedEvents
       .filter((event) => event.workflowId === forked.id)
@@ -319,8 +320,14 @@ describe('workflow forking', () => {
     expect(descendants.items.map((item) => item.id)).toContain(forked.id);
 
     await engine.cancel(original.id);
-    expect(forkedResult).rejects.toThrow('Workflow cancelled');
-    expect(originalResult).rejects.toThrow('Workflow cancelled');
+    // Both results have rejected by now; observe them together so neither is
+    // left without a handler while the other is awaited.
+    const [forkedRejection, originalRejection] = await Promise.all([
+      throwingRejectionOf(forkedResult),
+      throwingRejectionOf(originalResult),
+    ]);
+    expect(forkedRejection).toThrow('Workflow cancelled');
+    expect(originalRejection).toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -372,7 +379,7 @@ describe('workflow forking', () => {
     expect(persistedHeaders.has('x-auth')).toBe(false);
 
     await engine.signal(forked.id, 'continue');
-    expect(forked.result()).resolves.toBe('child-complete');
+    expect(await forked.result()).toBe('child-complete');
     expect(capturedParentHeaders).toHaveLength(1);
     expect(capturedParentHeaders[0]?.get('traceparent')).toBe(
       '00-abcd1234abcd1234abcd1234abcd1234-ef56ef56ef56ef56-01',
@@ -381,7 +388,7 @@ describe('workflow forking', () => {
     expect(capturedParentHeaders[0]?.has('x-auth')).toBe(false);
 
     await engine.cancel(original.id);
-    expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(originalResult)).toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 
@@ -411,10 +418,10 @@ describe('workflow forking', () => {
     const originalResult = original.result();
 
     await engine.signal(forked.id, 'continue');
-    expect(forked.result()).resolves.toEqual([2, 4]);
+    expect(await forked.result()).toEqual([2, 4]);
 
     await engine.cancel(original.id);
-    expect(originalResult).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(originalResult)).toThrow('Workflow cancelled');
     engine[Symbol.dispose]();
   });
 });
@@ -474,8 +481,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    expect(original.result()).resolves.toBe('orig');
-    expect(forked.result()).resolves.toBe('forked');
+    expect(await original.result()).toBe('orig');
+    expect(await forked.result()).toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -523,8 +530,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    expect(original.result()).resolves.toBe('orig');
-    expect(forked.result()).resolves.toBe('forked');
+    expect(await original.result()).toBe('orig');
+    expect(await forked.result()).toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -558,7 +565,7 @@ describe('fork revision handling (WFT-21)', () => {
     expect(after.items.length).toBe(before.items.length);
 
     await engine.signal(original.id, 'go', 'done');
-    expect(original.result()).resolves.toBe('done');
+    expect(await original.result()).toBe('done');
     engine[Symbol.dispose]();
   });
 
@@ -586,7 +593,7 @@ describe('fork revision handling (WFT-21)', () => {
     expect((thrown as WorkflowRevisionUnavailableError).reason).toBe('not-registered');
 
     await engine.signal(original.id, 'go', 'done');
-    expect(original.result()).resolves.toBe('done');
+    expect(await original.result()).toBe('done');
     engine[Symbol.dispose]();
   });
 
@@ -610,8 +617,8 @@ describe('fork revision handling (WFT-21)', () => {
 
     await engine.signal(original.id, 'go', 'orig');
     await engine.signal(forked.id, 'go', 'forked');
-    expect(original.result()).resolves.toBe('orig');
-    expect(forked.result()).resolves.toBe('forked');
+    expect(await original.result()).toBe('orig');
+    expect(await forked.result()).toBe('forked');
     engine[Symbol.dispose]();
   });
 
@@ -649,12 +656,12 @@ describe('fork revision handling (WFT-21)', () => {
       ),
     );
 
-    expect(engine.fork(original.id, { revision: revisionV2 })).rejects.toThrow(
+    expect(await throwingRejectionOf(engine.fork(original.id, { revision: revisionV2 }))).toThrow(
       VersionMismatchError,
     );
 
     await engine.signal(original.id, 'go', 'done');
-    expect(original.result()).resolves.toBe('done');
+    expect(await original.result()).toBe('done');
     engine[Symbol.dispose]();
   });
 });

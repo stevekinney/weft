@@ -17,6 +17,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../../activity-registry.ts';
 import { decode, encode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';
@@ -431,7 +432,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       attempts: 1,
       completedAt: expect.any(Number),
     });
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toMatchObject({
+    expect(await engine.getFinalizerStatus(workflowId)).toMatchObject({
       status: 'succeeded',
       attempts: 1,
     });
@@ -721,7 +722,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
     releaseLoader.resolve();
 
-    await expect(resolution).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(resolution)).toBeInstanceOf(EngineDisposedError);
   });
 
   it('dead-letters (not clears) when the registration exists but no finalizer state was recorded', async () => {
@@ -1044,7 +1045,7 @@ describe('Engine.getFinalizerStatus', () => {
     await engine.storage.put(KEYS.workflow(workflowId), encode(terminalState(workflowId, 'type')));
     await engine.storage.put(KEYS.teardownOwed(workflowId), encode(owedClaim('token', 2)));
 
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(await engine.getFinalizerStatus(workflowId)).toEqual({
       status: 'pending',
       attempts: 2,
     });
@@ -1053,7 +1054,7 @@ describe('Engine.getFinalizerStatus', () => {
       KEYS.teardownOwed(workflowId),
       encode({ status: 'running', attempts: 2, token: 'token', claimedAt: 500 }),
     );
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(await engine.getFinalizerStatus(workflowId)).toEqual({
       status: 'running',
       attempts: 3,
       startedAt: 500,
@@ -1074,7 +1075,7 @@ describe('Engine.getFinalizerStatus', () => {
       }),
     );
 
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toEqual({
+    expect(await engine.getFinalizerStatus(workflowId)).toEqual({
       status: 'failed',
       attempts: 8,
       failedAt: 900,
@@ -1085,7 +1086,7 @@ describe('Engine.getFinalizerStatus', () => {
       KEYS.workflow(workflowId),
       encode({ ...terminalState(workflowId, 'type'), workflowExecutionToken: 'new-run' }),
     );
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(await engine.getFinalizerStatus(workflowId)).toBeNull();
   });
 
   it('does not attribute an unqualified historical outcome to a current tokenized run', async () => {
@@ -1097,7 +1098,7 @@ describe('Engine.getFinalizerStatus', () => {
       encode({ type: 'type', lastError: 'old failure', attempts: 8, deadLetteredAt: 900 }),
     );
 
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(await engine.getFinalizerStatus(workflowId)).toBeNull();
   });
 
   it('treats an undecodable success record as absent', async () => {
@@ -1106,7 +1107,7 @@ describe('Engine.getFinalizerStatus', () => {
 
     await engine.storage.put(KEYS.teardownSucceeded(workflowId), new Uint8Array([0xc1]));
 
-    expect(engine.getFinalizerStatus(workflowId)).resolves.toBeNull();
+    expect(await engine.getFinalizerStatus(workflowId)).toBeNull();
   });
 });
 

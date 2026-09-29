@@ -239,9 +239,7 @@ describe('weft.worker.startoverrides.preview operation', () => {
       body: JSON.stringify({ workflowId: WORKFLOW_ID, ttlMs: 50 }),
     });
 
-    await expect(
-      workerStartOverridePreviewRestBinding.extractInput(request, {}, {}),
-    ).resolves.toEqual({
+    expect(await workerStartOverridePreviewRestBinding.extractInput(request, {}, {})).toEqual({
       workflowId: WORKFLOW_ID,
       ttlMs: 50,
     });

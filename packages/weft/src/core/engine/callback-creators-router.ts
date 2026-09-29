@@ -22,7 +22,6 @@ import {
   processParallelOperation,
   processRaceOperation,
   processRunAllOperation,
-  processWaitSignalOperation,
 } from './operations-coordination.ts';
 import {
   processArchiveOperation,
@@ -36,10 +35,11 @@ import { processStateCommitOperation, processStateReadOperation } from './operat
 import { processStreamOperation } from './operations-stream.ts';
 import { processSleepOperation } from './operations-time.ts';
 import { processWaitConditionOperation } from './operations-wait-condition.ts';
-import { feedOperationResult } from './strategy-helpers.ts';
+import { processWaitSignalOperation } from './operations-wait-signal.ts';
+import { feedOperationResult, workflowExecutionTokenForWorkflow } from './strategy-helpers.ts';
 import { processWaitReviewOperation } from './sub-operation.ts';
 import { finalizePendingTimelineEntry } from './termination.ts';
-import { processWaitUpdateOperation } from './updates.ts';
+import { processWaitUpdateOperation } from './wait-update-operations.ts';
 
 export function createOperationRouterCallbacks<
   TWorkflows extends object,
@@ -82,12 +82,26 @@ export function createOperationRouterCallbacks<
         createConditionOperationCallbacks(engine),
       ),
     processGetVersionOperation: async (workflowId, operation) => {
-      completeOperation(getInternals(engine), workflowId, operation.version, {
-        finalizePendingTimelineEntry: (id, status, value) =>
-          finalizePendingTimelineEntry(getInternals(engine), id, status, value),
-        feedOperationResult: (id, result, error) =>
-          feedOperationResult(getInternals(engine), id, result, error),
-      });
+      completeOperation(
+        getInternals(engine),
+        workflowId,
+        operation.version,
+        {
+          finalizePendingTimelineEntry: (id, status, value) =>
+            finalizePendingTimelineEntry(getInternals(engine), id, status, value),
+          feedOperationResult: (id, result, error, operationId, workflowExecutionToken) =>
+            feedOperationResult(
+              getInternals(engine),
+              id,
+              result,
+              error,
+              operationId,
+              workflowExecutionToken,
+            ),
+        },
+        operation.operationId,
+        workflowExecutionTokenForWorkflow(getInternals(engine), workflowId),
+      );
     },
     processParallelOperation: (workflowId, operation) =>
       processParallelOperation(
@@ -177,13 +191,20 @@ export function createOperationRouterCallbacks<
       processWaitReviewOperation(getInternals(engine), workflowId, operation, {
         runOperationWithoutResult: (id, subOperation, execute) =>
           runOperationWithoutResultForEngine(engine, id, subOperation, execute),
-        processReviewOperation: (id, options) =>
-          processReviewOperationForEngine(engine, id, options),
+        processReviewOperation: (id, options, operationId, workflowExecutionToken) =>
+          processReviewOperationForEngine(engine, id, options, operationId, workflowExecutionToken),
       }),
     finalizePendingTimelineEntry: (workflowId, status, value) =>
       finalizePendingTimelineEntry(getInternals(engine), workflowId, status, value),
-    feedOperationResult: (workflowId, result, error) =>
-      feedOperationResult(getInternals(engine), workflowId, result, error),
+    feedOperationResult: (workflowId, result, error, operationId, workflowExecutionToken) =>
+      feedOperationResult(
+        getInternals(engine),
+        workflowId,
+        result,
+        error,
+        operationId,
+        workflowExecutionToken,
+      ),
   };
 }
 

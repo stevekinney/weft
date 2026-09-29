@@ -8,6 +8,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import type { ConstraintCheckState } from '../constraint.ts';
 import { constraint } from '../constraint.ts';
@@ -143,7 +144,9 @@ describe('constraint primitive', () => {
     engine.register(constrainedSagaWorkflow);
 
     const handle = await engine.start('constrained-saga', null);
-    expect(handle.result()).rejects.toThrow('Constraint violated: positiveBalance');
+    expect(await throwingRejectionOf(handle.result())).toThrow(
+      'Constraint violated: positiveBalance',
+    );
 
     // The ConstraintViolatedEvent must have fired.
     expect(violationEvents).toHaveLength(1);
@@ -211,7 +214,7 @@ describe('constraint primitive', () => {
     engine.register(failFastWorkflow);
 
     const handle = await engine.start('fail-fast', null);
-    expect(handle.result()).rejects.toThrow('Constraint violated: hardLimit');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Constraint violated: hardLimit');
 
     // Event must have fired.
     expect(violationEvents).toHaveLength(1);
@@ -364,7 +367,7 @@ describe('constraint primitive', () => {
 
     try {
       const handle = await engine.start('throwing-check-workflow', null);
-      expect(handle.result()).resolves.toBe('done');
+      expect(await handle.result()).toBe('done');
       expect(warning).toHaveBeenCalledWith(
         '[weft] Constraint "throwing-check" check() threw an error:',
         expect.objectContaining({ message: 'constraint dependency unavailable' }),

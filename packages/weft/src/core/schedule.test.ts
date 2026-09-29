@@ -9,6 +9,7 @@ import {
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { decode, encode } from './codec.ts';
 import { Engine } from './engine.ts';
 import {
@@ -369,9 +370,9 @@ describe('schedule validation helpers', () => {
       ),
     );
 
-    expect(engine.schedule(type, null, { every: false as never })).rejects.toThrow(
-      'Schedule interval "every" must be a duration string or a number of milliseconds',
-    );
+    expect(
+      await throwingRejectionOf(engine.schedule(type, null, { every: false as never })),
+    ).toThrow('Schedule interval "every" must be a duration string or a number of milliseconds');
 
     expect(loader).not.toHaveBeenCalled();
     engine[Symbol.dispose]();
@@ -603,7 +604,7 @@ describe('recurring schedules', () => {
     const state = createScheduleState();
 
     try {
-      expect(settleBackfillScheduleStateForEngine(engine, state)).resolves.toEqual(state);
+      expect(await settleBackfillScheduleStateForEngine(engine, state)).toEqual(state);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -621,7 +622,7 @@ describe('recurring schedules', () => {
       });
       await scheduleHandle.cancel();
 
-      expect(engine.resumeSchedule('cancelled-schedule')).rejects.toThrow(
+      expect(await throwingRejectionOf(engine.resumeSchedule('cancelled-schedule'))).toThrow(
         'has been cancelled and cannot be resumed',
       );
     } finally {
@@ -654,9 +655,9 @@ describe('recurring schedules', () => {
       await storage.put(scheduleRunKey, encode({ invalid: true }));
       storage.cleanupKeyToReject = scheduleRunKey;
 
-      expect(handleScheduledWorkflowTerminalForEngine(engine, workflowId)).rejects.toThrow(
-        `Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`,
-      );
+      expect(
+        await throwingRejectionOf(handleScheduledWorkflowTerminalForEngine(engine, workflowId)),
+      ).toThrow(`Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`);
       expect(await storage.get(scheduleRunKey)).not.toBeNull();
     } finally {
       await engine[Symbol.asyncDispose]();
@@ -972,7 +973,7 @@ describe('recurring schedules', () => {
       },
     );
 
-    expect(schedule.describe()).resolves.toMatchObject({
+    expect(await schedule.describe()).toMatchObject({
       id: 'described-schedule',
       description: 'Run the described workflow',
       intervalMs: 60_000,
@@ -985,7 +986,7 @@ describe('recurring schedules', () => {
       return 'done';
     });
 
-    expect(recoveredEngine.getSchedule('described-schedule')).resolves.toMatchObject({
+    expect(await recoveredEngine.getSchedule('described-schedule')).toMatchObject({
       id: 'described-schedule',
       description: 'Run the described workflow',
       intervalMs: 60_000,
@@ -1045,7 +1046,7 @@ describe('recurring schedules', () => {
       return 'done';
     });
 
-    expect(scheduleWithoutCron('missing-cron-echo', null)).rejects.toThrow(
+    expect(await throwingRejectionOf(scheduleWithoutCron('missing-cron-echo', null))).toThrow(
       'A cron string or schedule spec must be provided when scheduling by workflow type.',
     );
 
@@ -1213,7 +1214,9 @@ describe('recurring schedules', () => {
       KEYS.scheduleTick(replacementFireAt, 'update-atomicity-schedule'),
     );
 
-    expect(schedule.update('*/30 * * * * *')).rejects.toThrow('simulated schedule batch failure');
+    expect(await throwingRejectionOf(schedule.update('*/30 * * * * *'))).toThrow(
+      'simulated schedule batch failure',
+    );
 
     const storedScheduleBytes = await storage.get(KEYS.schedule('update-atomicity-schedule'));
     expect(storedScheduleBytes).not.toBeNull();
@@ -1394,9 +1397,9 @@ describe('recurring schedules', () => {
     });
     const before = await storage.get(KEYS.schedule('invalid-description'));
 
-    expect(schedule.update('*/5 * * * * *', { description: null as never })).rejects.toThrow(
-      'options.description must be a string when provided',
-    );
+    expect(
+      await throwingRejectionOf(schedule.update('*/5 * * * * *', { description: null as never })),
+    ).toThrow('options.description must be a string when provided');
     expect(await storage.get(KEYS.schedule('invalid-description'))).toEqual(before);
 
     engine[Symbol.dispose]();
@@ -1599,7 +1602,7 @@ describe('recurring schedules', () => {
       expect(updateSettled).toBe(false);
       storage.releaseBatch.resolve();
       await tickPromise;
-      expect(updatePromise).rejects.toThrow(
+      expect(await throwingRejectionOf(updatePromise)).toThrow(
         'Failed to persist schedule "serialized-update-failure" while processing its timer',
       );
 
@@ -2322,7 +2325,7 @@ describe('recurring schedules', () => {
       const resultPromise = engine.getHandle(firstWorkflowId).result();
 
       await engine.signal(firstWorkflowId, 'release', 'completed');
-      expect(resultPromise).resolves.toBe('completed');
+      expect(await resultPromise).toBe('completed');
       await drainEngine();
 
       expect(terminalEvents).toHaveLength(1);
@@ -3092,15 +3095,17 @@ describe('recurring schedules', () => {
         queuedRuns: [],
       }),
     );
-    expect(engine.getSchedule('old-descriptionless-schedule')).resolves.toMatchObject({
+    expect(await engine.getSchedule('old-descriptionless-schedule')).toMatchObject({
       id: 'old-descriptionless-schedule',
     });
     expect(
-      engine.schedule('validated-schedule-workflow', null, '* * * * *', {
-        overlap: 'bogus' as unknown as never,
-      }),
-    ).rejects.toThrow('options.overlap');
-    expect(engine.getSchedule('')).rejects.toThrow('scheduleId');
+      await throwingRejectionOf(
+        engine.schedule('validated-schedule-workflow', null, '* * * * *', {
+          overlap: 'bogus' as unknown as never,
+        }),
+      ),
+    ).toThrow('options.overlap');
+    expect(await throwingRejectionOf(engine.getSchedule(''))).toThrow('scheduleId');
 
     engine[Symbol.dispose]();
   });

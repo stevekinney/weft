@@ -33,7 +33,7 @@ import {
   runSerializedWorkflowStateWrite,
 } from './storage-io.ts';
 import {
-  feedOperationResult,
+  feedWorkflowResult,
   getComposedWorkflowInterceptor,
   swallowPromiseRejection,
 } from './strategy-helpers.ts';
@@ -353,7 +353,7 @@ export function createConstraintCallbacks<TWorkflows extends object, TActivities
     dispatchEvent: (event) => engine.dispatchEvent(event),
     failWorkflow: (workflowId, error) =>
       failWorkflow(getInternals(engine), workflowId, error, createTerminationCallbacks(engine)),
-    feedOperationResult: (workflowId, outcome, originalError) =>
-      feedOperationResult(getInternals(engine), workflowId, outcome, originalError),
+    feedWorkflowResult: (workflowId, outcome, originalError) =>
+      feedWorkflowResult(getInternals(engine), workflowId, outcome, originalError),
   };
 }

@@ -9,6 +9,7 @@ import type {
 import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { decode, encode } from '../codec.ts';
@@ -409,9 +410,11 @@ describe('engine.start idempotency', () => {
   it('throws when the storage backend lacks conditionalBatch', async () => {
     const engine = createEngine(new CompressedStorage(new MemoryStorage()));
     try {
-      expect(engine.start('wait-for-release', null, { idempotencyKey: 'no-cas' })).rejects.toThrow(
-        /conditionalBatch/,
-      );
+      expect(
+        await throwingRejectionOf(
+          engine.start('wait-for-release', null, { idempotencyKey: 'no-cas' }),
+        ),
+      ).toThrow(/conditionalBatch/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -527,8 +530,10 @@ describe('engine.start idempotency', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.start('wait-for-release', null, { id: 'fixed', idempotencyKey: 'k' }),
-      ).rejects.toThrow(/mutually exclusive/);
+        await throwingRejectionOf(
+          engine.start('wait-for-release', null, { id: 'fixed', idempotencyKey: 'k' }),
+        ),
+      ).toThrow(/mutually exclusive/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -537,9 +542,9 @@ describe('engine.start idempotency', () => {
   it('rejects an empty idempotencyKey', async () => {
     const engine = createEngine();
     try {
-      expect(engine.start('wait-for-release', null, { idempotencyKey: '' })).rejects.toThrow(
-        /must not be empty/,
-      );
+      expect(
+        await throwingRejectionOf(engine.start('wait-for-release', null, { idempotencyKey: '' })),
+      ).toThrow(/must not be empty/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -549,8 +554,10 @@ describe('engine.start idempotency', () => {
     const engine = createEngine();
     try {
       expect(
-        startWithIdempotency(getInternals(engine), 'wait-for-release', null, {}, {} as never),
-      ).rejects.toThrow('startWithIdempotency requires options.idempotencyKey');
+        await throwingRejectionOf(
+          startWithIdempotency(getInternals(engine), 'wait-for-release', null, {}, {} as never),
+        ),
+      ).toThrow('startWithIdempotency requires options.idempotencyKey');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -560,8 +567,10 @@ describe('engine.start idempotency', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.start('wait-for-release', null, { idempotencyKey: 'k'.repeat(118) }),
-      ).rejects.toThrow(/at most 117 UTF-8 bytes/);
+        await throwingRejectionOf(
+          engine.start('wait-for-release', null, { idempotencyKey: 'k'.repeat(118) }),
+        ),
+      ).toThrow(/at most 117 UTF-8 bytes/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -578,8 +587,10 @@ describe('engine.start idempotency', () => {
       await engine.purge({ idPrefix: first.id });
 
       expect(
-        engine.start('completes-immediately', null, { idempotencyKey: 'purge-me' }),
-      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+        await rejectionOf(
+          engine.start('completes-immediately', null, { idempotencyKey: 'purge-me' }),
+        ),
+      ).toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -610,8 +621,10 @@ describe('engine.start idempotency', () => {
       await engine.purge({ idPrefix: first.id });
 
       expect(
-        engine.start('completes-immediately', null, { idempotencyKey: 'start-cas-purged' }),
-      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+        await rejectionOf(
+          engine.start('completes-immediately', null, { idempotencyKey: 'start-cas-purged' }),
+        ),
+      ).toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -624,8 +637,10 @@ describe('engine.start idempotency', () => {
       // throws WorkflowNotRegisteredError, which is NOT a lost-race sentinel and
       // must surface rather than being mistaken for a concurrent winner.
       expect(
-        engine.start('not-registered', null, { idempotencyKey: 'unregistered-key' }),
-      ).rejects.toThrow(/No workflow registered/);
+        await throwingRejectionOf(
+          engine.start('not-registered', null, { idempotencyKey: 'unregistered-key' }),
+        ),
+      ).toThrow(/No workflow registered/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -814,13 +829,15 @@ describe('engine.startOrSignal', () => {
       expect(await completed.result()).toBe('done');
 
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'too-late', signalId: 'sig-terminal' },
-          { id: 'sos-terminal' },
+        await rejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'too-late', signalId: 'sig-terminal' },
+            { id: 'sos-terminal' },
+          ),
         ),
-      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+      ).toBeInstanceOf(StartOrSignalConflictError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -865,7 +882,7 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       const failed = await engine.start('throws-immediately', null, { id: 'sos-restart-failed' });
-      expect(failed.result()).rejects.toThrow('boom');
+      expect(await throwingRejectionOf(failed.result())).toThrow('boom');
 
       const { handle, outcome } = await engine.startOrSignal(
         'wait-for-release',
@@ -964,13 +981,15 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release' },
-          { idempotencyKey: 'sos-restart-idempotency', onTerminalConflict: 'start-new' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release' },
+            { idempotencyKey: 'sos-restart-idempotency', onTerminalConflict: 'start-new' },
+          ),
         ),
-      ).rejects.toThrow(/mutually exclusive with options\.idempotencyKey/);
+      ).toThrow(/mutually exclusive with options\.idempotencyKey/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -980,13 +999,15 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release' },
-          { id: 'sos-restart-missing-signal', onTerminalConflict: 'start-new' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release' },
+            { id: 'sos-restart-missing-signal', onTerminalConflict: 'start-new' },
+          ),
         ),
-      ).rejects.toThrow(/requires signal\.signalId/);
+      ).toThrow(/requires signal\.signalId/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1045,7 +1066,7 @@ describe('engine.startOrSignal', () => {
       expect(await completed.result()).toBe('done');
 
       expect(
-        resolveCallerIdWinnerOrRetry(
+        await resolveCallerIdWinnerOrRetry(
           getInternals(engine),
           'sos-restart-stale-terminal',
           {
@@ -1057,7 +1078,7 @@ describe('engine.startOrSignal', () => {
           unexpectedStartOrSignalCallbacks(),
           true,
         ),
-      ).resolves.toBeUndefined();
+      ).toBeUndefined();
       expect(await engine.getHandle('sos-restart-stale-terminal').result()).toBe('done');
     } finally {
       await engine[Symbol.asyncDispose]();
@@ -1073,18 +1094,20 @@ describe('engine.startOrSignal', () => {
       expect(await completed.result()).toBe('done');
 
       expect(
-        resolveCallerIdWinnerOrRetry(
-          getInternals(engine),
-          'sos-terminal-conflict',
-          {
-            name: 'release',
-            payload: 'after-terminal',
-            signalId: 'sig-terminal-conflict',
-          },
-          'sig-terminal-conflict',
-          unexpectedStartOrSignalCallbacks(),
+        await rejectionOf(
+          resolveCallerIdWinnerOrRetry(
+            getInternals(engine),
+            'sos-terminal-conflict',
+            {
+              name: 'release',
+              payload: 'after-terminal',
+              signalId: 'sig-terminal-conflict',
+            },
+            'sig-terminal-conflict',
+            unexpectedStartOrSignalCallbacks(),
+          ),
         ),
-      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+      ).toBeInstanceOf(StartOrSignalConflictError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1138,19 +1161,21 @@ describe('engine.startOrSignal', () => {
       };
 
       expect(
-        resolveCallerIdWinnerOrRetry(
-          getInternals(engine),
-          workflowId,
-          {
-            name: 'release',
-            payload: 'after-restart-loss',
-            signalId: 'sig-terminal-rerun',
-          },
-          'sig-terminal-rerun',
-          unexpectedStartOrSignalCallbacks(),
-          true,
+        await rejectionOf(
+          resolveCallerIdWinnerOrRetry(
+            getInternals(engine),
+            workflowId,
+            {
+              name: 'release',
+              payload: 'after-restart-loss',
+              signalId: 'sig-terminal-rerun',
+            },
+            'sig-terminal-rerun',
+            unexpectedStartOrSignalCallbacks(),
+            true,
+          ),
         ),
-      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+      ).toBeInstanceOf(StartOrSignalConflictError);
     } finally {
       pendingStarts.has = originalHas;
       pendingStarts.delete(workflowId);
@@ -1162,8 +1187,10 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.startOrSignal('wait-for-release', null, { name: 'release', payload: 'x' }, {}),
-      ).rejects.toThrow(/signalId or options\.idempotencyKey/);
+        await throwingRejectionOf(
+          engine.startOrSignal('wait-for-release', null, { name: 'release', payload: 'x' }, {}),
+        ),
+      ).toThrow(/signalId or options\.idempotencyKey/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1176,13 +1203,15 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'x', signalId: 'explicit' },
-          { idempotencyKey: 'also-a-key' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'x', signalId: 'explicit' },
+            { idempotencyKey: 'also-a-key' },
+          ),
         ),
-      ).rejects.toThrow(/does not accept both/);
+      ).toThrow(/does not accept both/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1265,13 +1294,15 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine(new CompressedStorage(new MemoryStorage()));
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'x', signalId: 'no-cas' },
-          { id: 'sos-no-cas' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'x', signalId: 'no-cas' },
+            { id: 'sos-no-cas' },
+          ),
         ),
-      ).rejects.toThrow(/conditionalBatch/);
+      ).toThrow(/conditionalBatch/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1386,13 +1417,15 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'x' },
-          { id: 'fixed', idempotencyKey: 'k' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'x' },
+            { id: 'fixed', idempotencyKey: 'k' },
+          ),
         ),
-      ).rejects.toThrow(/mutually exclusive/);
+      ).toThrow(/mutually exclusive/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1411,13 +1444,15 @@ describe('engine.startOrSignal', () => {
       await engine.purge({ idPrefix: created.id });
 
       expect(
-        engine.startOrSignal(
-          'completes-immediately',
-          null,
-          { name: 'release', payload: 'y' },
-          { idempotencyKey: 'sos-purge' },
+        await rejectionOf(
+          engine.startOrSignal(
+            'completes-immediately',
+            null,
+            { name: 'release', payload: 'y' },
+            { idempotencyKey: 'sos-purge' },
+          ),
         ),
-      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+      ).toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1430,13 +1465,15 @@ describe('engine.startOrSignal', () => {
       // unregistered type throws WorkflowNotRegisteredError, which is neither a
       // mapping-CAS loss nor a caller-id collision, so it must surface unchanged.
       expect(
-        engine.startOrSignal(
-          'not-registered',
-          null,
-          { name: 'release', signalId: 'sos-unregistered' },
-          {},
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'not-registered',
+            null,
+            { name: 'release', signalId: 'sos-unregistered' },
+            {},
+          ),
         ),
-      ).rejects.toThrow(/No workflow registered/);
+      ).toThrow(/No workflow registered/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1599,13 +1636,15 @@ describe('engine.startOrSignal', () => {
       await engine.purge({ idPrefix: created.id });
 
       expect(
-        engine.startOrSignal(
-          'completes-immediately',
-          null,
-          { name: 'release', payload: 'y' },
-          { idempotencyKey: 'sos-cas-purged' },
+        await rejectionOf(
+          engine.startOrSignal(
+            'completes-immediately',
+            null,
+            { name: 'release', payload: 'y' },
+            { idempotencyKey: 'sos-cas-purged' },
+          ),
         ),
-      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+      ).toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1620,15 +1659,17 @@ describe('engine.startOrSignal', () => {
       );
 
       expect(
-        resolveWinnerWithSignal(
-          getInternals(engine),
-          'missing-winner',
-          { name: 'release', payload: 'x', signalId: 'sig-remapped' },
-          'sig-remapped',
-          unexpectedStartOrSignalCallbacks(),
-          'sos-remapped',
+        await throwingRejectionOf(
+          resolveWinnerWithSignal(
+            getInternals(engine),
+            'missing-winner',
+            { name: 'release', payload: 'x', signalId: 'sig-remapped' },
+            'sig-remapped',
+            unexpectedStartOrSignalCallbacks(),
+            'sos-remapped',
+          ),
         ),
-      ).rejects.toThrow(/record never became readable after 5 attempts/);
+      ).toThrow(/record never became readable after 5 attempts/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1637,9 +1678,9 @@ describe('engine.startOrSignal', () => {
   it('throws when the winner idempotency mapping vanishes after a lost compare-and-swap', async () => {
     const engine = createEngine();
     try {
-      expect(requireWinnerId(getInternals(engine), 'missing-key')).rejects.toThrow(
-        /vanished after a lost compare-and-swap/,
-      );
+      expect(
+        await throwingRejectionOf(requireWinnerId(getInternals(engine), 'missing-key')),
+      ).toThrow(/vanished after a lost compare-and-swap/);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1718,7 +1759,7 @@ describe('engine.startOrSignal', () => {
       // The winner's start rejects with the injected abort; the loser recovers by
       // retrying its own create (the wrapper lets the second conditionalBatch
       // through) and resolves to a real run.
-      expect(winnerPromise).rejects.toThrow(/injected winner abort/);
+      expect(await throwingRejectionOf(winnerPromise)).toThrow(/injected winner abort/);
       const { handle: loser } = await loserPromise;
       expect(loser.id).toBe('sos-abort');
       expect(await countWorkflowRecords(engine)).toBe(1);
@@ -1748,13 +1789,15 @@ describe('engine.startOrSignal', () => {
     getInternals(engine).pendingStarts.add('sos-cap');
     try {
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'x', signalId: 'sig-cap' },
-          { id: 'sos-cap' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'x', signalId: 'sig-cap' },
+            { id: 'sos-cap' },
+          ),
         ),
-      ).rejects.toThrow(/after 5 attempts/);
+      ).toThrow(/after 5 attempts/);
     } finally {
       getInternals(engine).pendingStarts.delete('sos-cap');
       await engine[Symbol.asyncDispose]();
@@ -1879,13 +1922,15 @@ describe('engine.startOrSignal', () => {
       storage.failNextPlainCreate('buffered-batch-failure');
 
       expect(
-        engine.startOrSignal(
-          'wait-for-release',
-          null,
-          { name: 'release', payload: 'loser', signalId: 'sig-batch' },
-          { id: 'buffered-batch-failure' },
+        await throwingRejectionOf(
+          engine.startOrSignal(
+            'wait-for-release',
+            null,
+            { name: 'release', payload: 'loser', signalId: 'sig-batch' },
+            { id: 'buffered-batch-failure' },
+          ),
         ),
-      ).rejects.toThrow('injected plain create batch failure');
+      ).toThrow('injected plain create batch failure');
     } finally {
       await engine[Symbol.asyncDispose]();
     }

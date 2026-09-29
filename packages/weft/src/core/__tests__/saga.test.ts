@@ -12,6 +12,7 @@ import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowInterceptor } from '../interceptor.ts';
 import type { ActivityContext, ActivityDefinition, WorkflowContext } from '../types.ts';
@@ -71,7 +72,7 @@ describe('ctx.saga()', () => {
     engine.register(sagaReverseWorkflow);
 
     const handle = await engine.start('saga-reverse', null);
-    expect(handle.result()).rejects.toThrow('step-three failed');
+    expect(await throwingRejectionOf(handle.result())).toThrow('step-three failed');
 
     // Compensators run in reverse order: step 2 first, then step 1.
     // step 3 (the failing step) must never be compensated.
@@ -115,7 +116,7 @@ describe('ctx.saga()', () => {
     engine.register(noCompensateFailingStepWorkflow);
 
     const handle = await engine.start('no-compensate-failing-step', null);
-    expect(handle.result()).rejects.toThrow('expected failure');
+    expect(await throwingRejectionOf(handle.result())).toThrow('expected failure');
 
     expect(failingStepCompensatorCalls).toBe(0);
 
@@ -224,7 +225,7 @@ describe('ctx.saga()', () => {
     registerWorkflow(engine1);
 
     const handle1 = await engine1.start('three-step-saga', null, { id: 'saga-restart-wf' });
-    expect(handle1.result()).rejects.toThrow('activity-three failed');
+    expect(await throwingRejectionOf(handle1.result())).toThrow('activity-three failed');
 
     // Compensators for steps 1 and 2 ran exactly once on the first engine.
     expect(step1CompensatorCalls).toBe(1);
@@ -291,7 +292,7 @@ describe('ctx.saga()', () => {
     engine.register(argCheckSagaWorkflow);
 
     const handle = await engine.start('arg-check-saga', null);
-    expect(handle.result()).rejects.toThrow('forced failure');
+    expect(await throwingRejectionOf(handle.result())).toThrow('forced failure');
 
     // Compensators run in reverse (beta first, then alpha).
     expect(compensatorArgs).toHaveLength(2);
@@ -339,7 +340,7 @@ describe('ctx.saga()', () => {
 
     const handle = await engine.start('compensator-failure-saga', null);
     // The original error — not the compensator error — must surface to the caller.
-    expect(handle.result()).rejects.toThrow('original saga error');
+    expect(await throwingRejectionOf(handle.result())).toThrow('original saga error');
 
     engine[Symbol.dispose]();
   });
@@ -487,7 +488,7 @@ describe('ctx.saga()', () => {
     engine.register(interceptedSagaWorkflow);
 
     const handle = await engine.start('intercepted-saga', null);
-    expect(handle.result()).resolves.toBe('processed:orders');
+    expect(await handle.result()).toBe('processed:orders');
     expect(observedInputs).toEqual([{ queue: 'orders' }]);
 
     engine[Symbol.dispose]();

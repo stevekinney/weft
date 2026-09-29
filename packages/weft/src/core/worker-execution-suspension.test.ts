@@ -3,6 +3,7 @@ import { withTimeout } from '../testing/fake-timers.test-support.ts';
 
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { deserializeCheckpoint } from './checkpoint/serialization.ts';
 import {
   Engine,
@@ -175,7 +176,7 @@ describe('worker execution signal suspension', () => {
     // `cancel()` awaits `terminateWorkflow`, whose terminal cleanup drops the
     // workflow's signal waiters before it resolves.
     expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
-    await expect(result).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(result)).toThrow('Workflow cancelled');
 
     await workerEngine.signal('worker-cancelled', 'resume', { status: 'late' });
     expect(await countStoredSignals(storage, 'worker-cancelled', 'resume')).toBe(0);
@@ -207,12 +208,14 @@ describe('worker execution signal suspension', () => {
     });
 
     expect(
-      withTimeout(
-        loopingHandle.result(),
-        LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
-        'infinite-loop timeout',
+      await throwingRejectionOf(
+        withTimeout(
+          loopingHandle.result(),
+          LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
+          'infinite-loop timeout',
+        ),
       ),
-    ).rejects.toThrow('Worker workflow turn timed out');
+    ).toThrow('Worker workflow turn timed out');
 
     const simpleHandle = await workerEngine.start(
       'simple',
@@ -411,7 +414,7 @@ describe('worker execution isolation boundary', () => {
     // so a left-alive waiter cannot be silently cleaned up by the afterEach
     // dispose and mask a stuck workflow (mirrors the existing cancel test above).
     expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
-    await expect(cancelResult).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(cancelResult)).toThrow('Workflow cancelled');
 
     // The invariant: across start, resume, and cancel, neither engine-side
     // handler ever stepped in the engine isolate.

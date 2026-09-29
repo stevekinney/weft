@@ -112,11 +112,11 @@ describe('checkpoint persistence callbacks', () => {
       return await observation.promise;
     }
 
-    expect(observePendingTimeline(persistCheckpointForDataOperation)).resolves.toEqual({
+    expect(await observePendingTimeline(persistCheckpointForDataOperation)).toEqual({
       committed: true,
       preservedPendingTimeline: true,
     });
-    expect(observePendingTimeline(persistCheckpointForEngine)).resolves.toEqual({
+    expect(await observePendingTimeline(persistCheckpointForEngine)).toEqual({
       committed: true,
       preservedPendingTimeline: false,
     });

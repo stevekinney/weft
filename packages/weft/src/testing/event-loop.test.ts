@@ -12,7 +12,7 @@ describe('flushPortableMicrotasks', () => {
   });
 
   it('accepts a custom number of turns', async () => {
-    expect(flushPortableMicrotasks(1)).resolves.toBeUndefined();
+    expect(await flushPortableMicrotasks(1)).toBeUndefined();
   });
 });
 
@@ -47,7 +47,7 @@ describe('yieldToPortableEventLoop', () => {
       return;
     }
     try {
-      expect(yieldToPortableEventLoop()).resolves.toBeUndefined();
+      expect(await yieldToPortableEventLoop()).toBeUndefined();
     } finally {
       if (hadMessageChannel) {
         globalThis.MessageChannel = original;

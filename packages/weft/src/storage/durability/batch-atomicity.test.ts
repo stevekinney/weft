@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { StorageCapabilities } from '../interface.ts';
 import {
   availableAdapterSpecs,
@@ -92,7 +93,7 @@ for (const spec of availableAdapterSpecs()) {
 
         // Build a 5-entry batch that fails at index 2.
         const operations = writer.makeFailingBatch(2, 5);
-        expect(writer.storage.batch(operations)).rejects.toBeInstanceOf(Error);
+        expect(await rejectionOf(writer.storage.batch(operations))).toBeInstanceOf(Error);
 
         // The transaction must have rolled back: no `mid:` entries at all,
         // including the ones that came before the failing index.

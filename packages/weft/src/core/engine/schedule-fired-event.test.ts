@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleSummary, WorkflowContext } from '../types.ts';
@@ -274,9 +275,11 @@ describe('schedule test support', () => {
     using engine = createEngine(clock);
 
     expect(
-      tickToNextFire(engine, clock, {
-        describe: async () => null,
-      }),
-    ).rejects.toThrow('Schedule no longer exists');
+      await throwingRejectionOf(
+        tickToNextFire(engine, clock, {
+          describe: async () => null,
+        }),
+      ),
+    ).toThrow('Schedule no longer exists');
   });
 });

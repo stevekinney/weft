@@ -15,6 +15,7 @@ import { BunSQLiteStorage } from '../../storage/bun-sql.ts';
 import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow } from '../types.ts';
 import {
   Engine,
@@ -191,7 +192,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const engine = new Engine({ storage, ownership: 'lease' });
     engine.register(pingWorkflow);
 
-    expect(engine.recoverAll()).rejects.toBeInstanceOf(Error);
+    expect(await rejectionOf(engine.recoverAll())).toBeInstanceOf(Error);
     // The failed acquire left no manager — the field is null, so a retry re-acquires.
     expect(getInternals(engine).leaseManager).toBeNull();
 
@@ -288,7 +289,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // resolve — otherwise recovery would proceed on a disposed engine that never
     // held the lease (the bug this asserts against).
     await second[Symbol.asyncDispose]();
-    expect(secondRecover).rejects.toBeInstanceOf(Error);
+    expect(await rejectionOf(secondRecover)).toBeInstanceOf(Error);
 
     // The first engine's holder is intact at epoch 1 — the second never stole it.
     const holderAfter = await readHolder(storage);
@@ -383,7 +384,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
     await engine[Symbol.asyncDispose]();
 
-    expect(engine.recoverAll()).rejects.toBeInstanceOf(Error);
+    expect(await rejectionOf(engine.recoverAll())).toBeInstanceOf(Error);
     storage[Symbol.dispose]?.();
   });
 
@@ -632,7 +633,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       throw new Error('storage offline');
     };
     try {
-      expect(engine.shutdown()).resolves.toBe(false);
+      expect(await engine.shutdown()).toBe(false);
     } finally {
       storage.conditionalBatch = originalConditionalBatch;
       storage[Symbol.dispose]?.();
@@ -650,7 +651,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const drainError = new Error('drain failed');
     failNextQueuedStartDrain(engine, drainError);
 
-    expect(engine.shutdown()).rejects.toMatchObject({
+    expect(await rejectionOf(engine.shutdown())).toMatchObject({
       name: 'EngineDisposalError',
       cause: drainError,
       leaseReleased: true,
@@ -674,7 +675,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     failNextQueuedStartDrain(engine, drainError);
 
     try {
-      expect(engine.shutdown()).rejects.toMatchObject({
+      expect(await rejectionOf(engine.shutdown())).toMatchObject({
         name: 'EngineDisposalError',
         cause: drainError,
         leaseReleased: false,
@@ -693,7 +694,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       ownership: 'lease',
     });
 
-    expect(engine.shutdown()).resolves.toBe(true);
+    expect(await engine.shutdown()).toBe(true);
     expect(await readHolder(storage)).toBeNull();
     expect(await readEpoch(storage)).toBe(1);
     storage[Symbol.dispose]?.();
@@ -744,7 +745,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const shutdown = engine.shutdown();
     releaseStorage.resolve();
 
-    expect(shutdown).resolves.toBe(false);
+    expect(await shutdown).toBe(false);
     expect(await readHolder(storage)).not.toBeNull();
     storage[Symbol.dispose]?.();
   });
@@ -783,8 +784,8 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(shutdownSettled).toBe(false);
 
     finishAcquisition.resolve();
-    expect(recovery).rejects.toThrow('disposed');
-    expect(shutdown).resolves.toBe(false);
+    expect(await throwingRejectionOf(recovery)).toThrow('disposed');
+    expect(await shutdown).toBe(false);
     expect(await readHolder(storage)).not.toBeNull();
     storage[Symbol.dispose]?.();
   });
@@ -830,7 +831,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     await drainStarted.promise;
     engine[Symbol.dispose]();
 
-    expect(shutdown).resolves.toBe(true);
+    expect(await shutdown).toBe(true);
     expect(signalObserved).toBe(true);
     expect(signalObservedBeforeRelease).toBe(true);
     expect(releaseCalls).toBe(1);
@@ -859,7 +860,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const shutdown = engine.shutdown();
 
     await bodyEntered.promise;
-    expect(shutdown).resolves.toBe(true);
+    expect(await shutdown).toBe(true);
     expect(await readHolder(storage)).toBeNull();
 
     // Settle the deliberately non-cooperative body after disposal so the test
@@ -890,7 +891,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
 
     await engine.start('cooperative', null, { id: 'queued-cooperative-shutdown' });
-    expect(engine.shutdown()).resolves.toBe(true);
+    expect(await engine.shutdown()).toBe(true);
     expect(signalObserved).toBe(true);
     expect(await readHolder(storage)).toBeNull();
     storage[Symbol.dispose]?.();
@@ -939,7 +940,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
 
     expect(await readHolder(storage)).not.toBeNull();
     releaseTerminalWrite.resolve();
-    expect(shutdown).resolves.toBe(true);
+    expect(await shutdown).toBe(true);
     expect(await readHolder(storage)).toBeNull();
     storage[Symbol.dispose]?.();
   });
@@ -993,7 +994,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
     await engine.start('cooperative-sibling', null, { id: 'queued-cooperative-sibling' });
 
-    expect(engine.shutdown()).resolves.toBe(true);
+    expect(await engine.shutdown()).toBe(true);
     expect(cooperativeStatusBeforeRelease).toBe('completed');
     expect(await readHolder(storage)).toBeNull();
 
@@ -1042,7 +1043,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     });
 
     await engine.start('shutdown-parent', null, { id: 'queued-shutdown-parent' });
-    expect(engine.shutdown()).resolves.toBe(true);
+    expect(await engine.shutdown()).toBe(true);
 
     expect(parentSignalObserved).toBe(true);
     expect(childSignalObserved).toBe(false);
@@ -1070,7 +1071,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
 
     getInternals(engine).tearDownAfterDeposition?.();
 
-    expect(engine.shutdown()).resolves.toBe(false);
+    expect(await engine.shutdown()).toBe(false);
     expect(releaseCalls).toBe(1);
     expect(await readHolder(storage)).not.toBeNull();
     storage[Symbol.dispose]?.();
@@ -1125,7 +1126,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(shutdownSettled).toBe(false);
 
     finishRelease.resolve();
-    expect(shutdown).resolves.toBe(false);
+    expect(await shutdown).toBe(false);
     expect(await readHolder(storage)).not.toBeNull();
     storage[Symbol.dispose]?.();
   });
@@ -1146,7 +1147,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     const engine = new HandlingOverrideEngine();
     failNextQueuedStartDrain(engine, new Error('handled drain failure'));
 
-    expect(engine.shutdown()).resolves.toBe(true);
+    expect(await engine.shutdown()).toBe(true);
     expect(overrideCalls).toBe(1);
   });
 });

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { encode } from './codec.ts';
 import {
   beginOne,
@@ -223,7 +224,7 @@ describe('Outbox maintenance scan', () => {
     await claimOne(outbox);
     await storage.put(KEYS.applicationDelivery('bureau', 'agent-7', 'zzz'), encode({ nope: 1 }));
     clock.advance(100);
-    expect(outbox.runMaintenance()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(outbox.runMaintenance())).toThrow(PersistedDataCorruptError);
     await storage.delete(KEYS.applicationDelivery('bureau', 'agent-7', 'zzz'));
     expect(await outbox.runMaintenance()).toMatchObject({ rescheduled: 1 });
     expect(await fieldOf(outbox.receipt(deliveryId), 'state')).toBe('retry-scheduled');
@@ -232,7 +233,7 @@ describe('Outbox maintenance scan', () => {
 
   it('rejects an invalid maintenance instant', async () => {
     const { outbox } = createOutboxFixture();
-    expect(outbox.runMaintenance(Number.NaN)).rejects.toThrow(/runMaintenance/);
+    expect(await throwingRejectionOf(outbox.runMaintenance(Number.NaN))).toThrow(/runMaintenance/);
     outbox.dispose();
   });
 });

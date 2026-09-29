@@ -18,6 +18,7 @@ import type { WorkflowContext, WorkflowState } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { serve, type WeftServer } from './index.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
@@ -53,7 +54,7 @@ async function startSplitFailureCategoryWorkflow(
   id: string,
 ): Promise<void> {
   const handle = await engine.start('crash', null, { id });
-  expect(handle.result()).rejects.toThrow('workflow failure');
+  expect(await throwingRejectionOf(handle.result())).toThrow('workflow failure');
 
   const stateBytes = await storage.get(KEYS.workflow(id));
   expect(stateBytes).not.toBeNull();

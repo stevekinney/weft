@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { PayloadSizeExceededError } from '../payload-size.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
@@ -89,16 +90,18 @@ describe('payload-size cap — signal payload', () => {
     };
 
     expect(
-      bufferSignalPayloads(
-        internals as never,
-        'wf-batch',
-        [
-          { signalName: 'a', payload: 'small' },
-          { signalName: 'b', payload: 'x'.repeat(1024) },
-        ],
-        callbacks,
+      await rejectionOf(
+        bufferSignalPayloads(
+          internals as never,
+          'wf-batch',
+          [
+            { signalName: 'a', payload: 'small' },
+            { signalName: 'b', payload: 'x'.repeat(1024) },
+          ],
+          callbacks,
+        ),
       ),
-    ).rejects.toBeInstanceOf(PayloadSizeExceededError);
+    ).toBeInstanceOf(PayloadSizeExceededError);
 
     // The small delivery that preceded the oversize one was not written either.
     expect(await countSignalKeys(storage, 'wf-batch')).toBe(0);

@@ -22,6 +22,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { encodeStorageKeyComponent } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
@@ -213,7 +214,7 @@ describe('#456 ctx.race / ctx.all with sleep branches', () => {
       SUB_OPERATION_CALLBACKS,
     );
     internals.abortController.abort();
-    expect(sleepBranch).rejects.toThrow();
+    expect(await throwingRejectionOf(sleepBranch)).toThrow();
     engine[Symbol.dispose]();
   });
 
@@ -231,7 +232,7 @@ describe('#456 ctx.race / ctx.all with sleep branches', () => {
       } as never,
       SUB_OPERATION_CALLBACKS,
     );
-    expect(sleepBranch).rejects.toThrow();
+    expect(await throwingRejectionOf(sleepBranch)).toThrow();
     engine[Symbol.dispose]();
   });
 
@@ -254,7 +255,7 @@ describe('#456 ctx.race / ctx.all with sleep branches', () => {
       } as never,
       SUB_OPERATION_CALLBACKS,
     );
-    expect(sleepBranch).rejects.toThrow();
+    expect(await throwingRejectionOf(sleepBranch)).toThrow();
     engine[Symbol.dispose]();
   });
 });
@@ -395,21 +396,23 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     );
 
     expect(
-      executeRaceSubOperations(
-        internals,
-        'preflight-failure',
-        [
-          { type: 'wait-signal', operationId: 'wait', signalName: 'ev' },
-          {
-            type: 'sleep',
-            operationId: 'sleep',
-            duration: 0,
-            scheduledFireAt: 0,
-          },
-        ],
-        () => Promise.resolve(undefined),
+      await throwingRejectionOf(
+        executeRaceSubOperations(
+          internals,
+          'preflight-failure',
+          [
+            { type: 'wait-signal', operationId: 'wait', signalName: 'ev' },
+            {
+              type: 'sleep',
+              operationId: 'sleep',
+              duration: 0,
+              scheduledFireAt: 0,
+            },
+          ],
+          () => Promise.resolve(undefined),
+        ),
       ),
-    ).rejects.toThrow('signal scan failed');
+    ).toThrow('signal scan failed');
   });
 
   it('race([waitForSignal, sleep]) — signal wins and the workflow sees its payload', async () => {
@@ -498,7 +501,7 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     );
 
     const handle = await engine.start('dup-signal-race', null);
-    expect(handle.result()).rejects.toThrow(/same signal "ev"/);
+    expect(await throwingRejectionOf(handle.result())).toThrow(/same signal "ev"/);
   });
 });
 
@@ -748,13 +751,15 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     );
 
     expect(
-      executeSubOperation(
-        internals,
-        'wf-fail',
-        { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
-        SUB_OPERATION_CALLBACKS,
+      await throwingRejectionOf(
+        executeSubOperation(
+          internals,
+          'wf-fail',
+          { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
+          SUB_OPERATION_CALLBACKS,
+        ),
       ),
-    ).rejects.toThrow('storage exploded');
+    ).toThrow('storage exploded');
     expect(internals.signalWaiters.size).toBe(0);
     expect(internals.signalWaitersByWorkflow.size).toBe(0);
   });
@@ -768,13 +773,15 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     internals.abortController.abort();
 
     expect(
-      executeSubOperation(
-        internals,
-        'wf-aborted',
-        { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
-        SUB_OPERATION_CALLBACKS,
+      await throwingRejectionOf(
+        executeSubOperation(
+          internals,
+          'wf-aborted',
+          { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
+          SUB_OPERATION_CALLBACKS,
+        ),
       ),
-    ).rejects.toThrow();
+    ).toThrow();
     expect(internals.signalWaiters.size).toBe(0);
   });
 
@@ -804,7 +811,7 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     const teardownReason = new Error('engine disposed mid-wait');
     internals.abortController.abort(teardownReason);
 
-    expect(branch).rejects.toBe(teardownReason);
+    expect(await rejectionOf(branch)).toBe(teardownReason);
     expect(internals.signalWaiters.size).toBe(0);
     expect(internals.signalWaitersByWorkflow.size).toBe(0);
   });
@@ -844,7 +851,7 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
 
     // Delivering the signal lets the all settle; the failing branch then surfaces.
     await engine.signal('all-unbounded', 'ev', 'unblock');
-    expect(handle.result()).rejects.toThrow('branch failed');
+    expect(await throwingRejectionOf(handle.result())).toThrow('branch failed');
   });
 
   it('does not consume the signal while a slower sibling is still pending (deferred finalize)', async () => {
@@ -1259,7 +1266,7 @@ describe('#456 nested ctx.all releases parked siblings when a branch rejects', (
 
     const handle = await engine.start('nested-all-reject-releases', null, { id: 'narr' });
     // The race rejects (both branches fail); the workflow surfaces the error.
-    expect(handle.result()).rejects.toThrow('nested branch failed');
+    expect(await throwingRejectionOf(handle.result())).toThrow('nested branch failed');
 
     // The parked wait-signal sibling inside the nested all was released — not leaked.
     const internals = getInternals(engine);
@@ -1334,7 +1341,7 @@ describe('#456 ctx.speculate enforces the same-signal-name branch rejection', ()
     );
 
     const handle = await engine.start('speculate-race-dup-signal', null, { id: 'srd' });
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'cannot have two branches waiting on the same signal "ev"',
     );
     // No waiter was leaked by the rejected validation.
@@ -1357,7 +1364,7 @@ describe('#456 ctx.speculate enforces the same-signal-name branch rejection', ()
     );
 
     const handle = await engine.start('speculate-all-dup-signal', null, { id: 'sad' });
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'cannot have two branches waiting on the same signal "ev"',
     );
     expect(getInternals(engine).signalWaiters.size).toBe(0);
@@ -1383,7 +1390,7 @@ describe('#456 ctx.speculate enforces the same-signal-name branch rejection', ()
     );
 
     const handle = await engine.start('speculate-nested-dup-signal', null, { id: 'snd' });
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'cannot have two branches waiting on the same signal "ev"',
     );
     expect(getInternals(engine).signalWaiters.size).toBe(0);

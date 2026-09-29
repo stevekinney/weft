@@ -4,6 +4,7 @@ import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { faultToHttpResponse } from '../fault-to-http.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -80,7 +81,7 @@ async function expectJsonError(
 ): Promise<void> {
   expect(response.status).toBe(status);
   expect(response.headers.get('content-type')).toBe('application/json');
-  expect(response.json()).resolves.toEqual(data === undefined ? { error } : { error, data });
+  expect(await response.json()).toEqual(data === undefined ? { error } : { error, data });
 }
 
 describe('operation coverage regressions', () => {
@@ -278,46 +279,58 @@ describe('operation coverage regressions', () => {
     };
 
     expect(
-      bulkCancelWorkflowsOperation.invoke({
-        ...context,
-        input: { tags: [''] },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        bulkCancelWorkflowsOperation.invoke({
+          ...context,
+          input: { tags: [''] },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     expect(
-      bulkDeleteWorkflowsOperation.invoke({
-        ...context,
-        input: { tags: [''] },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        bulkDeleteWorkflowsOperation.invoke({
+          ...context,
+          input: { tags: [''] },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     expect(
-      bulkSignalWorkflowsOperation.invoke({
-        ...context,
-        input: { tags: [''], name: 'continue' },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        bulkSignalWorkflowsOperation.invoke({
+          ...context,
+          input: { tags: [''], name: 'continue' },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     expect(
-      bulkMutateWorkflowTagsOperation.invoke({
-        ...context,
-        input: { filter: { tags: [''] }, tags: ['selected'], operation: 'add' },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        bulkMutateWorkflowTagsOperation.invoke({
+          ...context,
+          input: { filter: { tags: [''] }, tags: ['selected'], operation: 'add' },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     expect(
-      bulkMutateWorkflowTagsOperation.invoke({
-        ...context,
-        input: { filter: { tags: ['selected'] }, tags: [''], operation: 'add' },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        bulkMutateWorkflowTagsOperation.invoke({
+          ...context,
+          input: { filter: { tags: ['selected'] }, tags: [''], operation: 'add' },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     expect(
-      purgeWorkflowsOperation.invoke({
-        ...context,
-        input: { tags: [''] },
-      }),
-    ).rejects.toMatchObject({ code: 'InvalidParams' });
+      await rejectionOf(
+        purgeWorkflowsOperation.invoke({
+          ...context,
+          input: { tags: [''] },
+        }),
+      ),
+    ).toMatchObject({ code: 'InvalidParams' });
 
     engine[Symbol.dispose]();
   });
@@ -397,23 +410,23 @@ describe('operation coverage regressions', () => {
     };
 
     expect(
-      getStreamChunksOperation.invoke({
+      await getStreamChunksOperation.invoke({
         input: { workflowId: 'wf-stream', key: 'tokens', after: 7 },
         engine: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),
-    ).resolves.toEqual({ chunks: [] });
+    ).toEqual({ chunks: [] });
     expect(capturedAfter).toBe(7);
 
     expect(
-      streamWorkflowSseOperation.invoke({
+      await streamWorkflowSseOperation.invoke({
         input: { workflowId: 'wf-stream', after: 9 },
         engine: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),
-    ).resolves.toEqual({ chunks: [] });
+    ).toEqual({ chunks: [] });
     expect(capturedAfter).toBe(9);
   });
 

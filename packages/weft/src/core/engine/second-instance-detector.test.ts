@@ -311,7 +311,7 @@ describe('createSecondInstanceDetector', () => {
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
 
     // Best-effort: a failed heartbeat write must not surface to the engine.
-    expect(detector.tick()).resolves.toBeUndefined();
+    expect(await detector.tick()).toBeUndefined();
   });
 
   it('swallows a delete failure during stop and during sweep', async () => {
@@ -324,9 +324,9 @@ describe('createSecondInstanceDetector', () => {
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
 
     // Sweep delete throws internally; tick still resolves.
-    expect(detector.tick()).resolves.toBeUndefined();
+    expect(await detector.tick()).toBeUndefined();
     // stop() delete throws internally; stop still resolves.
-    expect(detector.stop()).resolves.toBeUndefined();
+    expect(await detector.stop()).toBeUndefined();
   });
 
   it('swallows a SYNCHRONOUS throw from storage (put, sweep delete, and stop delete)', async () => {
@@ -349,10 +349,10 @@ describe('createSecondInstanceDetector', () => {
 
     // tick(): the first-tick sweep delete AND the heartbeat put both throw
     // synchronously; the tick must still resolve.
-    expect(detector.tick()).resolves.toBeUndefined();
+    expect(await detector.tick()).toBeUndefined();
     // stop(): the delete throws synchronously; stop() is fire-and-forget and must
     // never reject.
-    expect(detector.stop()).resolves.toBeUndefined();
+    expect(await detector.stop()).toBeUndefined();
   });
 
   it('two real detectors over one shared store each warn about the other (autoscaling=2)', async () => {
@@ -627,7 +627,7 @@ describe('createSecondInstanceDetector', () => {
     releasePut();
 
     // The tick resolves despite the finally-delete throwing.
-    expect(inFlight).resolves.toBeUndefined();
+    expect(await inFlight).toBeUndefined();
   });
 
   it('sweeps by the scanned key, never a key rebuilt from a spoofed instanceId', async () => {

@@ -16,6 +16,7 @@ import {
   ChaosTransientError,
   withChaos,
 } from '../chaos.ts';
+import { throwingRejectionOf } from '../promise-outcome.test-support.ts';
 import type { RunNResult } from '../test-engine.ts';
 import { TestEngine } from '../test-engine.ts';
 
@@ -56,7 +57,7 @@ describe('withChaos', () => {
     const scenario: ChaosScenario = { faultRate: 1, faults: ['error'] };
     const wrapped = withChaos(base, scenario);
 
-    expect(wrapped(5)).rejects.toThrow();
+    expect(await throwingRejectionOf(wrapped(5))).toThrow();
   });
 
   it('injects faults probabilistically', async () => {

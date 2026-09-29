@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { NeonStorage } from './neon.ts';
 import { createPGliteTestFixture, pgliteAsPostgresPool } from './pglite.test-support.ts';
 import type { PostgresPool } from './postgres.ts';
@@ -244,7 +245,7 @@ describe('NeonStorage', () => {
 
   it('query rejects non-read-only SQL', async () => {
     await using storage = await createPgliteBackedNeonStorage();
-    expect(storage.query('DELETE FROM kv')).rejects.toThrow();
+    expect(await throwingRejectionOf(storage.query('DELETE FROM kv'))).toThrow();
   });
 
   it('query runs read-only passthrough SQL', async () => {
@@ -261,8 +262,10 @@ describe('NeonStorage', () => {
     await using storage = await createPgliteBackedNeonStorage();
     await storage.put('cte:1', encode('keep'));
     expect(
-      storage.query('WITH removed AS (DELETE FROM kv RETURNING key) SELECT key FROM removed'),
-    ).rejects.toThrow();
+      await throwingRejectionOf(
+        storage.query('WITH removed AS (DELETE FROM kv RETURNING key) SELECT key FROM removed'),
+      ),
+    ).toThrow();
     // The row must still be present — the CTE delete was blocked.
     expect(decodeText((await storage.get('cte:1'))!)).toBe('keep');
   });
@@ -286,7 +289,7 @@ describe('NeonStorage', () => {
       // The pool is injected, so it stays caller-owned and disposal never calls
       // end(); close the dedicated instance directly in finally.
       await using storage = new NeonStorage({ url: 'pglite://memory', pool });
-      expect(storage.put('k', encode('v'))).rejects.toThrow('COLLATE "C"');
+      expect(await throwingRejectionOf(storage.put('k', encode('v')))).toThrow('COLLATE "C"');
     } finally {
       await database.close();
     }
@@ -301,7 +304,7 @@ describe('NeonStorage', () => {
       end: async () => {},
     };
     await using storage = new NeonStorage({ url: 'stub://', pool });
-    expect(storage.put('k', encode('v'))).rejects.toThrow('no such table');
+    expect(await throwingRejectionOf(storage.put('k', encode('v')))).toThrow('no such table');
   });
 
   it('retries initialization after a transient failure rather than wedging on a cached rejection', async () => {
@@ -333,7 +336,9 @@ describe('NeonStorage', () => {
       await using storage = new NeonStorage({ url: 'pglite://memory', pool: failingPool });
 
       // First operation triggers init, which fails on the CREATE.
-      expect(storage.put('k', encode('v'))).rejects.toThrow('connection dropped mid-CREATE');
+      expect(await throwingRejectionOf(storage.put('k', encode('v')))).toThrow(
+        'connection dropped mid-CREATE',
+      );
       // Second operation must retry init (proving the rejected promise was cleared)
       // and succeed end-to-end.
       await storage.put('k', encode('v'));
@@ -366,9 +371,9 @@ describe('NeonStorage', () => {
       end: async () => {},
     };
     await using storage = new NeonStorage({ url: 'stub://', pool });
-    expect(storage.batch([{ type: 'put', key: 'k', value: encode('v') }])).rejects.toThrow(
-      operationError,
-    );
+    expect(
+      await throwingRejectionOf(storage.batch([{ type: 'put', key: 'k', value: encode('v') }])),
+    ).toThrow(operationError);
   });
 
   it('scoped() returns a prefix-namespaced view backed by the same store', async () => {
@@ -428,7 +433,7 @@ describe('NeonStorage', () => {
       url: 'postgresql://user:pass@nonexistent.invalid/db',
     });
     // pool.end() on a never-queried lazy pool resolves cleanly.
-    expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+    expect(await storage[Symbol.asyncDispose]()).toBeUndefined();
   });
 
   it('disposal is idempotent: a real owned pool is ended exactly once across repeated dispose', async () => {
@@ -441,15 +446,15 @@ describe('NeonStorage', () => {
     storage[Symbol.dispose]();
     expect(() => storage[Symbol.dispose]()).not.toThrow();
     // A following async dispose awaits the same memoized shutdown and resolves.
-    expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+    expect(await storage[Symbol.asyncDispose]()).toBeUndefined();
   });
 
   it('async disposal is idempotent across repeated calls', async () => {
     const storage = new NeonStorage({
       url: 'postgresql://user:pass@nonexistent.invalid/db',
     });
-    expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
-    expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+    expect(await storage[Symbol.asyncDispose]()).toBeUndefined();
+    expect(await storage[Symbol.asyncDispose]()).toBeUndefined();
   });
 
   it('swallows a teardown error from an owned pool on synchronous dispose', async () => {
@@ -488,8 +493,12 @@ describe('NeonStorage', () => {
       },
     };
     const storage = new NeonStorage({ url: 'stub://' }, () => failingOwnedPool);
-    expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
-    expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
+    expect(await throwingRejectionOf(storage[Symbol.asyncDispose]())).toThrow(
+      'pool teardown failed',
+    );
+    expect(await throwingRejectionOf(storage[Symbol.asyncDispose]())).toThrow(
+      'pool teardown failed',
+    );
     expect(endCalls).toBe(1);
   });
 });

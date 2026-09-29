@@ -153,7 +153,11 @@ function buildWorkflowStateCommit(
   hasPendingSideEffects: boolean;
 } {
   const pendingSideEffects = options.includePendingAtomicSideEffects
-    ? takePendingAtomicWorkflowCommitSideEffects(internals, workflowId)
+    ? takePendingAtomicWorkflowCommitSideEffects(
+        internals,
+        workflowId,
+        internals.checkpoints?.get(workflowId)?.workflowExecutionToken,
+      )
     : undefined;
   const operationsWithSideEffects =
     pendingSideEffects === undefined

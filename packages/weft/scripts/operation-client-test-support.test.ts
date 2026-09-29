@@ -15,13 +15,13 @@ describe('snapshotTestOperation', () => {
   it('its invoke handler resolves null', async () => {
     const operation = snapshotTestOperation('weft.test.invokesupport', { kind: 'public' });
 
-    await expect(
-      operation.invoke({
+    expect(
+      await operation.invoke({
         input: {},
         principal: anonymousPrincipal(),
         engine: undefined,
         transport: 'http-rest',
       }),
-    ).resolves.toBeNull();
+    ).toBeNull();
   });
 });

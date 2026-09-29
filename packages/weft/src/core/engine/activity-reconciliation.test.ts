@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import {
@@ -86,9 +87,9 @@ describe('activity reconciliation helpers', () => {
       }),
     );
 
-    expect(readActivityReconciliationRecord(storage, reference.key)).rejects.toThrow(
-      'Activity reconciliation record has an unsupported status.',
-    );
+    expect(
+      await throwingRejectionOf(readActivityReconciliationRecord(storage, reference.key)),
+    ).toThrow('Activity reconciliation record has an unsupported status.');
   });
 
   it('rejects unsupported verifier normalization results', () => {
@@ -110,16 +111,18 @@ describe('activity reconciliation helpers', () => {
     );
 
     expect(
-      resolveStartedActivityReconciliationRecord(
-        internals,
-        'workflow-id',
-        operation,
-        reference,
-        undefined,
-        'activity-key',
-        1,
+      await throwingRejectionOf(
+        resolveStartedActivityReconciliationRecord(
+          internals,
+          'workflow-id',
+          operation,
+          reference,
+          undefined,
+          'activity-key',
+          1,
+        ),
       ),
-    ).rejects.toThrow('claim conflicted but no record could be read');
+    ).toThrow('claim conflicted but no record could be read');
   });
 
   it('surfaces fenced-write ownership loss when committing a reconciliation transition', async () => {
@@ -145,19 +148,21 @@ describe('activity reconciliation helpers', () => {
     await storage.put(reference.key, encode(expectedRecord));
 
     expect(
-      commitActivityReconciliationTransitionWithFencedWrite(
-        internals,
-        'workflow-id',
-        reference,
-        expectedRecord,
-        {
-          ...expectedRecord,
-          status: 'completed',
-          result: 'done',
-          updatedAt: 2,
-        },
+      await throwingRejectionOf(
+        commitActivityReconciliationTransitionWithFencedWrite(
+          internals,
+          'workflow-id',
+          reference,
+          expectedRecord,
+          {
+            ...expectedRecord,
+            status: 'completed',
+            result: 'done',
+            updatedAt: 2,
+          },
+        ),
       ),
-    ).rejects.toThrow('Activity reconciliation completion lost compare-and-set ownership.');
+    ).toThrow('Activity reconciliation completion lost compare-and-set ownership.');
   });
 
   it('writes a reconciliation transition directly when the compare-and-set succeeds', async () => {
@@ -188,7 +193,7 @@ describe('activity reconciliation helpers', () => {
       updatedAt: 2,
     });
 
-    expect(readActivityReconciliationRecord(storage, reference.key)).resolves.toEqual({
+    expect(await readActivityReconciliationRecord(storage, reference.key)).toEqual({
       ...expectedRecord,
       status: 'completed',
       result: 'done',
@@ -217,12 +222,14 @@ describe('activity reconciliation helpers', () => {
     };
 
     expect(
-      writeActivityReconciliationTransition(storage, reference, expectedRecord, {
-        ...expectedRecord,
-        status: 'completed',
-        result: 'done',
-        updatedAt: 2,
-      }),
-    ).rejects.toThrow('Activity reconciliation completion lost compare-and-set ownership.');
+      await throwingRejectionOf(
+        writeActivityReconciliationTransition(storage, reference, expectedRecord, {
+          ...expectedRecord,
+          status: 'completed',
+          result: 'done',
+          updatedAt: 2,
+        }),
+      ),
+    ).toThrow('Activity reconciliation completion lost compare-and-set ownership.');
   });
 });
