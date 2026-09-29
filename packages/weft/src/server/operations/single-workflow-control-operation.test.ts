@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { anonymousPrincipal } from '../principal.ts';
 import {
   createSingleWorkflowControlOperation,
@@ -38,7 +39,7 @@ describe('single-workflow control operation helpers', () => {
       transport: 'http-rest',
     });
 
-    expect(result).rejects.toEqual({
+    expect(await rejectionOf(result)).toEqual({
       code: 'NotFound',
       message: 'workflow not found',
       data: { resource: 'workflow', identifier: 'missing-workflow' },
@@ -75,7 +76,7 @@ describe('single-workflow control operation helpers', () => {
       transport: 'http-rest',
     });
 
-    expect(result).rejects.toEqual({
+    expect(await rejectionOf(result)).toEqual({
       code: 'Conflict',
       message: 'Cannot resume completed workflow',
       data: { reason: 'Cannot resume completed workflow' },

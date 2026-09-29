@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { removeCatalogEntry } from '../catalog/index.ts';
 import { encode } from '../codec.ts';
@@ -1210,7 +1211,7 @@ describe('getWorkflowRevisionDiagnostics — dynamic-source extension (WFT-15/16
       ),
     );
 
-    expect(engine.start('lazy-checkout', null)).rejects.toThrow();
+    expect(await throwingRejectionOf(engine.start('lazy-checkout', null))).toThrow();
 
     const diagnosticsAfter = await getWorkflowRevisionDiagnostics(
       engine,
@@ -1262,6 +1263,10 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     // in, so engine A (registered) and engine B (an empty registry) infer
     // structurally different phantom workflow registries even though both
     // are ordinary, fully-functional engines at runtime.
+    // Manual background tasks: the renewal/reclaim interval is bound to the
+    // registry `Engine.create` built, not the one installed below, so an
+    // automatic tick could claim a workflow under an engine id the test
+    // never controls. Nothing here needs the interval.
     const engine = (await Engine.create({
       storage,
       workflows,
@@ -1269,6 +1274,7 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
       workflowClaimTtl: '1m',
       workflowClaimRenewInterval: '5s',
       recover: false,
+      backgroundTasks: 'manual',
     })) as unknown as Engine;
     getInternals(engine).workflowClaimRegistry = new WorkflowClaimRegistry({
       storage,
@@ -1474,7 +1480,7 @@ describe('removeWorkflowRevision vs. a concurrent start() — cross-process race
     );
 
     gate.resolve();
-    expect(startPromise).rejects.toThrow(WorkflowRevisionUnavailableError);
+    expect(await throwingRejectionOf(startPromise)).toThrow(WorkflowRevisionUnavailableError);
 
     const state = await engineA.get('race-fail-closed-new');
     expect(state).toBeNull();

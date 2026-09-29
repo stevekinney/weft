@@ -18,6 +18,7 @@ import {
   type ConditionalBatchCondition,
 } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { encode } from '../../codec.ts';
 import { PayloadSizeExceededError } from '../../payload-size.ts';
 import {
@@ -180,7 +181,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     expect(await restarted.result()).toBe('never runs');
 
     // abandon() is idempotent once already abandoned.
-    await expect(prepared.abandon()).resolves.toBeUndefined();
+    expect(await prepared.abandon()).toBeUndefined();
   });
 
   it('rejects a second launch() and rejects abandon() after launch()', async () => {
@@ -197,8 +198,8 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     const handle = await prepared.launch();
     await handle.result();
 
-    await expect(prepared.launch()).rejects.toThrow(/already launched/);
-    await expect(prepared.abandon()).rejects.toThrow(/already launched/);
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(/already launched/);
+    expect(await throwingRejectionOf(prepared.abandon())).toThrow(/already launched/);
   });
 
   it('same ownership/lease semantics as start(): a caller-provided id collides while prepared, exactly like an active start', async () => {
@@ -211,9 +212,11 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
 
     await engine.prepare('cor-75-duplicate-id', null, { id: 'cor-75-duplicate-id-1' });
 
-    await expect(
-      engine.start('cor-75-duplicate-id', null, { id: 'cor-75-duplicate-id-1' }),
-    ).rejects.toThrow(WorkflowAlreadyExistsError);
+    expect(
+      await throwingRejectionOf(
+        engine.start('cor-75-duplicate-id', null, { id: 'cor-75-duplicate-id-1' }),
+      ),
+    ).toThrow(WorkflowAlreadyExistsError);
   });
 
   it('rejects options.startAt/startAfter and options.idempotencyKey', async () => {
@@ -228,14 +231,16 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     // past that to prove the RUNTIME guard also rejects them (e.g. a plain-JS
     // caller, or one that built `options` from a wider-typed value).
     const withStartAt = { startAt: Date.now() + 60_000 } as StartWorkflowOptions;
-    await expect(engine.prepare('cor-75-rejected-options', null, withStartAt)).rejects.toThrow(
-      /incompatible with engine.prepare/,
-    );
+    expect(
+      await throwingRejectionOf(engine.prepare('cor-75-rejected-options', null, withStartAt)),
+    ).toThrow(/incompatible with engine.prepare/);
 
     const withIdempotencyKey = { idempotencyKey: 'some-key' } as StartWorkflowOptions;
-    await expect(
-      engine.prepare('cor-75-rejected-options', null, withIdempotencyKey),
-    ).rejects.toThrow(/idempotencyKey is not supported/);
+    expect(
+      await throwingRejectionOf(
+        engine.prepare('cor-75-rejected-options', null, withIdempotencyKey),
+      ),
+    ).toThrow(/idempotencyKey is not supported/);
   });
 
   it('throws WorkflowAlreadyExistsError when a second prepare() races the first for the same in-flight id', async () => {
@@ -264,7 +269,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
       id: 'cor-1283-in-flight-1',
     });
 
-    await expect(second).rejects.toThrow(WorkflowAlreadyExistsError);
+    expect(await throwingRejectionOf(second)).toThrow(WorkflowAlreadyExistsError);
     await first;
   });
 
@@ -299,12 +304,14 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
       }),
     );
 
-    await expect(
-      engine.prepare('cor-1283-bad-execution-timeout', null, {
-        id: 'cor-1283-bad-execution-timeout-1',
-        executionTimeout: 'not-a-duration',
-      }),
-    ).rejects.toThrow(/options\.executionTimeout/);
+    expect(
+      await throwingRejectionOf(
+        engine.prepare('cor-1283-bad-execution-timeout', null, {
+          id: 'cor-1283-bad-execution-timeout-1',
+          executionTimeout: 'not-a-duration',
+        }),
+      ),
+    ).toThrow(/options\.executionTimeout/);
 
     // No orphaned pending record: prepare() failed before ever committing.
     expect(await engine.get('cor-1283-bad-execution-timeout-1')).toBeNull();
@@ -321,11 +328,13 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
       }),
     );
 
-    await expect(
-      engine.prepare('cor-1283-oversized-payload', 'x'.repeat(1024), {
-        id: 'cor-1283-oversized-payload-1',
-      }),
-    ).rejects.toThrow(PayloadSizeExceededError);
+    expect(
+      await throwingRejectionOf(
+        engine.prepare('cor-1283-oversized-payload', 'x'.repeat(1024), {
+          id: 'cor-1283-oversized-payload-1',
+        }),
+      ),
+    ).toThrow(PayloadSizeExceededError);
 
     // The reservation was released, not left held: a fresh prepare() for the
     // same id proceeds rather than colliding with an orphaned pendingStarts
@@ -386,9 +395,11 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
 
     const handle = await prepared.launch();
 
-    await expect(
-      engine.start('cor-1283-concurrency', null, { id: 'cor-1283-concurrency-2' }),
-    ).rejects.toMatchObject({
+    expect(
+      await rejectionOf(
+        engine.start('cor-1283-concurrency', null, { id: 'cor-1283-concurrency-2' }),
+      ),
+    ).toMatchObject({
       code: 'WorkflowConcurrencyLimitExceededError',
       workflowType: 'cor-1283-concurrency',
       limit: 1,
@@ -441,7 +452,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     const internals = getInternals(engine);
     internals.workflowServices.delete('cor-1283-services-unavailable-1');
 
-    await expect(prepared.launch()).rejects.toThrow(
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(
       /its recorded services could not be re-provided/,
     );
 
@@ -469,7 +480,9 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     const recordAfterCancel = await engine.get('cor-1283-cancelled-1');
     expect(recordAfterCancel?.status).toBe('cancelled');
 
-    await expect(prepared.launch()).rejects.toThrow(/no longer pending \(status: cancelled\)/);
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(
+      /no longer pending \(status: cancelled\)/,
+    );
   });
 
   it('throws when the checkpoint is missing at launch time', async () => {
@@ -487,7 +500,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     const internals = getInternals(engine);
     await internals.storage.delete(KEYS.checkpoint('cor-1283-missing-checkpoint-1'));
 
-    await expect(prepared.launch()).rejects.toThrow(/its checkpoint is missing/);
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(/its checkpoint is missing/);
   });
 
   it('throws when a concurrent cancel lands between the pending check and the serialized commit reload', async () => {
@@ -507,7 +520,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     // race window this test is targeting inside launch().
     storage.armRaceOnSecondRead(KEYS.workflow('cor-1283-launch-race-1'));
 
-    await expect(prepared.launch()).rejects.toThrow(/it is no longer pending\.$/);
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(/it is no longer pending\.$/);
   });
 
   it('throws the plain CAS-race error (not EngineDeposedError) when the launch commit sees a transient conditionalBatch failure but the epoch re-read still matches', async () => {
@@ -543,7 +556,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     // failure.
     storage.armTransientGlitch(KEYS.workflowOwnerEpoch(workflowId));
 
-    await expect(prepared.launch()).rejects.toThrow(
+    expect(await throwingRejectionOf(prepared.launch())).toThrow(
       `Launch transition for workflow "${workflowId}" lost its CAS race.`,
     );
     expect(internals.deposed).toBe(false);

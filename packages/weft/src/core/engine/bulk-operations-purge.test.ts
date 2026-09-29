@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -217,7 +218,7 @@ describe('bulk purge helpers', () => {
     };
     internals.tearDownAfterDeposition = null;
 
-    expect(purgeWorkflow(internals as never, state, () => {})).rejects.toThrow(
+    expect(await throwingRejectionOf(purgeWorkflow(internals as never, state, () => {}))).toThrow(
       `Purge commit for workflow "${state.id}" lost its precondition.`,
     );
   });
@@ -284,7 +285,7 @@ describe('bulk purge helpers', () => {
       return realConditionalBatch(conditions, operations);
     };
 
-    expect(purgeWorkflow(internals, state, () => {})).rejects.toThrow(
+    expect(await throwingRejectionOf(purgeWorkflow(internals, state, () => {}))).toThrow(
       `Purge commit for workflow "${state.id}" lost its precondition.`,
     );
     // The concurrent purge's generation 2 must survive untouched.

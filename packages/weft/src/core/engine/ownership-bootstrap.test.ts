@@ -11,6 +11,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { workflowSource } from '../source/index.ts';
 import { workflow, type WorkflowState } from '../types.ts';
@@ -100,21 +101,23 @@ describe('createWorkflowClaimRenewalTarget', () => {
     const registry = new CannedRenewRegistry({ status: 'renewed', workflowId: 'wf-1' });
     const target = createWorkflowClaimRenewalTarget(registry);
 
-    expect(target.renewWorkflowClaim('wf-1')).resolves.toBeUndefined();
+    expect(await target.renewWorkflowClaim('wf-1')).toBeUndefined();
   });
 
   it('resolves (does not reject) on a "not-held" result — the benign release race', async () => {
     const registry = new CannedRenewRegistry({ status: 'not-held', workflowId: 'wf-1' });
     const target = createWorkflowClaimRenewalTarget(registry);
 
-    expect(target.renewWorkflowClaim('wf-1')).resolves.toBeUndefined();
+    expect(await target.renewWorkflowClaim('wf-1')).toBeUndefined();
   });
 
   it('rejects on a "lost" result', async () => {
     const registry = new CannedRenewRegistry({ status: 'lost', workflowId: 'wf-1' });
     const target = createWorkflowClaimRenewalTarget(registry);
 
-    expect(target.renewWorkflowClaim('wf-1')).rejects.toThrow(/lost its ownership claim/);
+    expect(await throwingRejectionOf(target.renewWorkflowClaim('wf-1'))).toThrow(
+      /lost its ownership claim/,
+    );
   });
 
   it('delegates listHeldWorkflowIds to the registry', async () => {
@@ -206,13 +209,15 @@ describe('bootstrapWorkflowLeaseOwnership', () => {
     };
 
     expect(
-      bootstrapWorkflowLeaseOwnership({
-        storage: noCasStorage,
-        getNow: () => 0,
-        claimTtlMs: TTL_MS,
-        claimRenewIntervalMs: RENEW_MS,
-      }),
-    ).rejects.toThrow(/conditionalBatch/);
+      await throwingRejectionOf(
+        bootstrapWorkflowLeaseOwnership({
+          storage: noCasStorage,
+          getNow: () => 0,
+          claimTtlMs: TTL_MS,
+          claimRenewIntervalMs: RENEW_MS,
+        }),
+      ),
+    ).toThrow(/conditionalBatch/);
 
     // No marker was stamped — Gate 1 fails before Gate 2 ever touches storage.
     expect(await base.get(KEYS.ownershipModeMarker())).toBeNull();
@@ -226,13 +231,15 @@ describe('bootstrapWorkflowLeaseOwnership', () => {
     );
 
     expect(
-      bootstrapWorkflowLeaseOwnership({
-        storage,
-        getNow: () => 0,
-        claimTtlMs: TTL_MS,
-        claimRenewIntervalMs: RENEW_MS,
-      }),
-    ).rejects.toThrow(OwnershipModeMismatchError);
+      await throwingRejectionOf(
+        bootstrapWorkflowLeaseOwnership({
+          storage,
+          getNow: () => 0,
+          claimTtlMs: TTL_MS,
+          claimRenewIntervalMs: RENEW_MS,
+        }),
+      ),
+    ).toThrow(OwnershipModeMismatchError);
   });
 
   it('bridges a "lost" renewal outcome and the registry active-claim count into the metrics recorder', async () => {
@@ -631,7 +638,9 @@ describe('createWorkflowClaimReclaimTarget · redrive retry on a failed onReclai
 
     // First pass: takeover succeeds, drive throws. The claim IS held (durable
     // ownership moved); the error is rethrown rather than swallowed.
-    expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow('drive failed');
+    expect(await throwingRejectionOf(reclaimTarget.attemptWorkflowClaimTakeover('wf-1'))).toThrow(
+      'drive failed',
+    );
     expect(driveCalls).toBe(1);
     expect(registry.currentEpoch('wf-1')).not.toBeNull();
 
@@ -676,7 +685,7 @@ describe('createWorkflowClaimReclaimTarget · redrive retry on a failed onReclai
         throw new Error('drive failed');
       },
     );
-    expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    expect(await throwingRejectionOf(reclaimTarget.attemptWorkflowClaimTakeover('wf-1'))).toThrow();
     expect(registry.currentEpoch('wf-1')).not.toBeNull();
 
     // The workflow reaches a terminal state (e.g. an external cancel landed
@@ -713,7 +722,7 @@ describe('createWorkflowClaimReclaimTarget · redrive retry on a failed onReclai
         throw new Error('drive failed');
       },
     );
-    expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    expect(await throwingRejectionOf(reclaimTarget.attemptWorkflowClaimTakeover('wf-1'))).toThrow();
     expect(registry.currentEpoch('wf-1')).not.toBeNull(); // marked pending-redrive
 
     // A third engine takes the claim over (e.g. this engine's own renewal
@@ -768,7 +777,7 @@ describe('createWorkflowClaimReclaimTarget · redrive retry on a failed onReclai
     );
     // First pass: takeover succeeds under epoch E1, drive throws — wf-1 is
     // now pending-redrive at E1.
-    expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    expect(await throwingRejectionOf(reclaimTarget.attemptWorkflowClaimTakeover('wf-1'))).toThrow();
     const originalEpoch = registry.currentEpoch('wf-1');
     expect(originalEpoch).not.toBeNull();
     expect(driven).toEqual(['wf-1']);
@@ -1670,7 +1679,7 @@ describe('createWorkflowClaimReclaimTarget · candidate dedup across discovery a
 
     // Mark wf-1 pending-redrive: this engine holds the claim, but the drive
     // callback throws.
-    expect(reclaimTarget.attemptWorkflowClaimTakeover('wf-1')).rejects.toThrow();
+    expect(await throwingRejectionOf(reclaimTarget.attemptWorkflowClaimTakeover('wf-1'))).toThrow();
     const candidatesWhileHeld = await reclaimTarget.listReclaimCandidateWorkflowIds();
     // Excluded from ordinary discovery (this engine's own held id), present
     // only via pending-redrive.

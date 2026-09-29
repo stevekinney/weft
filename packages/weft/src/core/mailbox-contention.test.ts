@@ -19,6 +19,7 @@ import { collectKeys } from '../testing/storage-backends.test-support.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { MailboxContentionError } from './mailbox-internals.ts';
 import { ApplicationCommandValidationError } from './mailbox-validation.ts';
 import {
@@ -54,8 +55,10 @@ class ContendedStorage extends MemoryStorage {
 describe('Mailbox sustained contention', () => {
   it('gives up loudly on admission rather than spinning', async () => {
     const { mailbox } = createMailboxFixture({ storage: new ContendedStorage(0) });
-    expect(mailbox.admit(commandInput())).rejects.toThrow(MailboxContentionError);
-    expect(mailbox.admit(commandInput())).rejects.toThrow(/after 25 attempts/);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(
+      MailboxContentionError,
+    );
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(/after 25 attempts/);
     mailbox.dispose();
   });
 
@@ -63,7 +66,7 @@ describe('Mailbox sustained contention', () => {
     const storage = new ContendedStorage(1);
     const { mailbox } = createMailboxFixture({ storage });
     await admitOne(mailbox);
-    expect(mailbox.claim()).rejects.toThrow(MailboxContentionError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(MailboxContentionError);
     mailbox.dispose();
   });
 
@@ -95,8 +98,8 @@ describe('Mailbox sustained contention', () => {
     const claim = await claimOne(mailbox);
 
     const failure = run(mailbox, commandId, claim.attemptToken);
-    expect(failure).rejects.toThrow(MailboxContentionError);
-    expect(run(mailbox, commandId, claim.attemptToken)).rejects.toThrow(
+    expect(await throwingRejectionOf(failure)).toThrow(MailboxContentionError);
+    expect(await throwingRejectionOf(run(mailbox, commandId, claim.attemptToken))).toThrow(
       new RegExp(`${operation} for command "${commandId}"`),
     );
     mailbox.dispose();
@@ -109,8 +112,8 @@ describe('Mailbox sustained contention', () => {
     await claimOne(mailbox);
 
     clock.advance(101);
-    expect(mailbox.runMaintenance()).rejects.toThrow(MailboxContentionError);
-    expect(mailbox.runMaintenance()).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.runMaintenance())).toThrow(MailboxContentionError);
+    expect(await throwingRejectionOf(mailbox.runMaintenance())).toThrow(
       new RegExp(`maintenance for command "${commandId}"`),
     );
     mailbox.dispose();
@@ -139,7 +142,9 @@ describe('Mailbox event-sink failure classification', () => {
     await admitOne(mailbox);
 
     events.failure = new Error('the feed is unreachable');
-    expect(mailbox.admit(commandInput())).rejects.toThrow('the feed is unreachable');
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(
+      'the feed is unreachable',
+    );
 
     // Nothing new was written, so this really was the sink's failure, not a race.
     const persisted = await collectKeys(
@@ -174,9 +179,11 @@ describe('Mailbox event-sink failure classification', () => {
       return originalAppend(event, options);
     };
 
-    expect(mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
-      /corrupt/,
-    );
+    expect(
+      await throwingRejectionOf(
+        mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken }),
+      ),
+    ).toThrow(/corrupt/);
     mailbox.dispose();
   });
 
@@ -206,9 +213,11 @@ describe('Mailbox event-sink failure classification', () => {
     // The record is now unreadable garbage, so the retry surfaces corruption —
     // proving the mailbox re-read durable state instead of reporting the sink
     // error it was handed.
-    expect(mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken })).rejects.toThrow(
-      /corrupt/,
-    );
+    expect(
+      await throwingRejectionOf(
+        mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken }),
+      ),
+    ).toThrow(/corrupt/);
     mailbox.dispose();
   });
 });
@@ -225,8 +234,10 @@ describe('Mailbox digest failures', () => {
     try {
       // The payload is perfectly valid; blaming the caller here would send an
       // operator hunting for a bug in their command.
-      expect(mailbox.admit(commandInput())).rejects.toThrow(failure);
-      expect(mailbox.admit(commandInput())).rejects.not.toThrow(ApplicationCommandValidationError);
+      expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(failure);
+      expect(await throwingRejectionOf(mailbox.admit(commandInput()))).not.toThrow(
+        ApplicationCommandValidationError,
+      );
     } finally {
       Object.defineProperty(crypto.subtle, 'digest', {
         configurable: true,
@@ -262,10 +273,10 @@ describe('Mailbox persisted causation', () => {
     const record = decode((await storage.get(key))!) as Record<string, unknown>;
 
     await storage.put(key, encode({ ...record, causation: 'conv-7' }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(/corrupt/);
 
     await storage.put(key, encode({ ...record, causation: { correlationId: 42 } }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(/corrupt/);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(/corrupt/);
     mailbox.dispose();
   });
 });
@@ -289,17 +300,19 @@ describe('Mailbox reference payload without a declared size', () => {
   it('rejects a negative declared size', async () => {
     const { mailbox } = createMailboxFixture();
     expect(
-      mailbox.admit(
-        commandInput({
-          payload: {
-            form: 'reference',
-            reference: 's3://assets/1',
-            digest: 'c'.repeat(64),
-            byteLength: -1,
-          },
-        }),
+      await throwingRejectionOf(
+        mailbox.admit(
+          commandInput({
+            payload: {
+              form: 'reference',
+              reference: 's3://assets/1',
+              digest: 'c'.repeat(64),
+              byteLength: -1,
+            },
+          }),
+        ),
       ),
-    ).rejects.toThrow(/byteLength/);
+    ).toThrow(/byteLength/);
     mailbox.dispose();
   });
 });

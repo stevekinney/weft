@@ -120,8 +120,8 @@ describe('weft.workflows.bulk.signal', () => {
         requestId: 'bulk-signal-request',
       }),
     });
-    expect(firstHandle.result()).resolves.toBe('first:released');
-    expect(secondHandle.result()).resolves.toBe('second:released');
+    expect(await firstHandle.result()).toBe('first:released');
+    expect(await secondHandle.result()).toBe('second:released');
     const untouchedState = await engine.get(otherHandle.id);
     expect(untouchedState?.status).toBe('running');
 

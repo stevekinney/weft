@@ -37,10 +37,14 @@ describe('search attribute record readers', () => {
 
     await storage.put(KEYS.attribute('workflow-1'), encode({ segment: 'enterprise' }));
 
-    expect(readSearchAttributesForFilter(internals, 'workflow-1', undefined)).resolves.toBe(null);
+    expect(await readSearchAttributesForFilter(internals, 'workflow-1', undefined)).toBe(null);
     expect(
-      readSearchAttributesForStates(internals, [encode(workflowState('workflow-1'))], undefined),
-    ).resolves.toEqual(new Map());
+      await readSearchAttributesForStates(
+        internals,
+        [encode(workflowState('workflow-1'))],
+        undefined,
+      ),
+    ).toEqual(new Map());
   });
 
   it('reads and decodes attribute records for filtered workflows', async () => {
@@ -49,9 +53,9 @@ describe('search attribute record readers', () => {
 
     await storage.put(KEYS.attribute('workflow-1'), encode({ segment: 'enterprise' }));
 
-    expect(
-      readSearchAttributesForFilter(internals, 'workflow-1', attributeFilter),
-    ).resolves.toEqual({ segment: 'enterprise' });
+    expect(await readSearchAttributesForFilter(internals, 'workflow-1', attributeFilter)).toEqual({
+      segment: 'enterprise',
+    });
 
     const attributesByWorkflowId = await readSearchAttributesForStates(
       internals,

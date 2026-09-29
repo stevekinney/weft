@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { readBoundedNdjsonResponse } from './bounded-ndjson-response.ts';
 
 const textEncoder = new TextEncoder();
@@ -9,23 +10,25 @@ describe('readBoundedNdjsonResponse', () => {
     const boundaryResponse = new Response(textEncoder.encode('one\ntwo'));
 
     expect(
-      Array.fromAsync(
+      await Array.fromAsync(
         readBoundedNdjsonResponse(boundaryResponse, {
           maximumBytes: 7,
           sizeLimitError: () => new Error('response too large'),
         }),
       ),
-    ).resolves.toEqual(['one', 'two']);
+    ).toEqual(['one', 'two']);
 
     const oversizedResponse = new Response(textEncoder.encode('one\ntwo!'));
     expect(
-      Array.fromAsync(
-        readBoundedNdjsonResponse(oversizedResponse, {
-          maximumBytes: 7,
-          sizeLimitError: () => new Error('response too large'),
-        }),
+      await throwingRejectionOf(
+        Array.fromAsync(
+          readBoundedNdjsonResponse(oversizedResponse, {
+            maximumBytes: 7,
+            sizeLimitError: () => new Error('response too large'),
+          }),
+        ),
       ),
-    ).rejects.toThrow('response too large');
+    ).toThrow('response too large');
   });
 
   it('decodes partial lines and split multibyte characters across chunks', async () => {
@@ -42,13 +45,13 @@ describe('readBoundedNdjsonResponse', () => {
     );
 
     expect(
-      Array.fromAsync(
+      await Array.fromAsync(
         readBoundedNdjsonResponse(response, {
           maximumBytes: encoded.byteLength,
           sizeLimitError: () => new Error('response too large'),
         }),
       ),
-    ).resolves.toEqual(['first', 'second-😀', 'third']);
+    ).toEqual(['first', 'second-😀', 'third']);
   });
 
   it('cancels and releases the reader when iteration stops early', async () => {
@@ -66,7 +69,7 @@ describe('readBoundedNdjsonResponse', () => {
       sizeLimitError: () => new Error('response too large'),
     })[Symbol.asyncIterator]();
 
-    expect(iterator.next()).resolves.toEqual({ done: false, value: 'first' });
+    expect(await iterator.next()).toEqual({ done: false, value: 'first' });
     await iterator.return?.();
 
     expect(cancelled).toBe(true);

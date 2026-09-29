@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { RevisionRealmRegistry } from './revision-realm-registry.ts';
 import type { RevisionRealm } from './revision-realm.ts';
 import type { WorkerRealm, WorkerRealmActivation } from './worker-realm.ts';
@@ -123,29 +124,33 @@ describe('RevisionRealmRegistry', () => {
       const b = await registry.acquireForExecution('order-workflow', 'revision-b', 'execution-b');
       if (!a.ok || !b.ok) throw new Error('unreachable');
 
-      await expect(
-        a.realm.dispatchTurn(
-          {
-            workflowRevision: 'revision-b',
-            realmGeneration: realmGenerationOf(a.realm),
-            executionToken: 'execution-a',
-            turnId: 1,
-          },
-          {},
+      expect(
+        await throwingRejectionOf(
+          a.realm.dispatchTurn(
+            {
+              workflowRevision: 'revision-b',
+              realmGeneration: realmGenerationOf(a.realm),
+              executionToken: 'execution-a',
+              turnId: 1,
+            },
+            {},
+          ),
         ),
-      ).rejects.toThrow('Realm turn envelope mismatch');
+      ).toThrow('Realm turn envelope mismatch');
 
-      await expect(
-        b.realm.dispatchTurn(
-          {
-            workflowRevision: 'revision-a',
-            realmGeneration: realmGenerationOf(b.realm),
-            executionToken: 'execution-b',
-            turnId: 1,
-          },
-          {},
+      expect(
+        await throwingRejectionOf(
+          b.realm.dispatchTurn(
+            {
+              workflowRevision: 'revision-a',
+              realmGeneration: realmGenerationOf(b.realm),
+              executionToken: 'execution-b',
+              turnId: 1,
+            },
+            {},
+          ),
         ),
-      ).rejects.toThrow('Realm turn envelope mismatch');
+      ).toThrow('Realm turn envelope mismatch');
 
       registry.releaseAfterExecution('order-workflow', 'revision-a', a.realm);
       registry.releaseAfterExecution('order-workflow', 'revision-b', b.realm);
@@ -227,7 +232,7 @@ describe('RevisionRealmRegistry', () => {
       registry.releaseAfterExecution('order-workflow', 'revision-a', acquired.realm);
 
       expect(acquired.realm.lifecycle.state).toBe('terminated');
-      await expect(pending).rejects.toThrow('realm-not-active');
+      expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
 
       // A late result from the (already-terminated) realm's worker cannot
       // resurrect the turn -- it is simply dropped.

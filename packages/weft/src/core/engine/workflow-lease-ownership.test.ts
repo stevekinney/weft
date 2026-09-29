@@ -17,6 +17,7 @@ import { describe, expect, it } from 'bun:test';
 import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,
@@ -170,9 +171,9 @@ describe('ownership-mode marker cross-mode exclusivity', () => {
     // The whole point of the marker: the two fencing modes cannot share a
     // store. If only workflow-lease engines stamped it, a lease engine could
     // coexist undetected, which is the mixed-mode hazard the ADR exists to close.
-    expect(Engine.create({ storage, ownership: 'workflow-lease' })).rejects.toThrow(
-      OwnershipModeMismatchError,
-    );
+    expect(
+      await throwingRejectionOf(Engine.create({ storage, ownership: 'workflow-lease' })),
+    ).toThrow(OwnershipModeMismatchError);
     void leaseEngine;
   });
 
@@ -183,7 +184,7 @@ describe('ownership-mode marker cross-mode exclusivity', () => {
     await using claimEngine = await Engine.create({ storage, ownership: 'workflow-lease' });
     expect(await storage.get(KEYS.ownershipModeMarker())).not.toBeNull();
 
-    expect(Engine.create({ storage, ownership: 'lease' })).rejects.toThrow(
+    expect(await throwingRejectionOf(Engine.create({ storage, ownership: 'lease' }))).toThrow(
       OwnershipModeMismatchError,
     );
     void claimEngine;
@@ -228,12 +229,14 @@ describe("Engine.create({ ownership: 'workflow-lease' })", () => {
     const noCasStorage = noConditionalBatchStorage(scanCountedStorage);
 
     expect(
-      Engine.create({
-        storage: noCasStorage,
-        workflows: { ping: pingWorkflow },
-        ownership: 'workflow-lease',
-      }),
-    ).rejects.toThrow(/conditionalBatch/);
+      await throwingRejectionOf(
+        Engine.create({
+          storage: noCasStorage,
+          workflows: { ping: pingWorkflow },
+          ownership: 'workflow-lease',
+        }),
+      ),
+    ).toThrow(/conditionalBatch/);
 
     // Recovery's only way to find running workflows is `storage.scan(...)`. A
     // Gate 1 failure that truly runs before recovery means recovery's scan
@@ -256,12 +259,14 @@ describe("Engine.create({ ownership: 'workflow-lease' })", () => {
     const { storage: scanCountedStorage, scanCalls } = withScanCounter(storage);
 
     expect(
-      Engine.create({
-        storage: scanCountedStorage,
-        workflows: { ping: pingWorkflow },
-        ownership: 'workflow-lease',
-      }),
-    ).rejects.toThrow(OwnershipModeMismatchError);
+      await throwingRejectionOf(
+        Engine.create({
+          storage: scanCountedStorage,
+          workflows: { ping: pingWorkflow },
+          ownership: 'workflow-lease',
+        }),
+      ),
+    ).toThrow(OwnershipModeMismatchError);
 
     expect(scanCalls()).toBe(0);
     expect(await storage.get(KEYS.ownershipModeMarker())).toEqual(markerBefore);
@@ -295,7 +300,7 @@ describe("new Engine({ ownership: 'workflow-lease' }) + recoverAll()", () => {
     });
     engine.register(pingWorkflow);
 
-    expect(engine.recoverAll()).rejects.toThrow(/conditionalBatch/);
+    expect(await throwingRejectionOf(engine.recoverAll())).toThrow(/conditionalBatch/);
 
     expect(getInternals(engine).workflowClaimRegistry).toBeNull();
     expect(getInternals(engine).workflowClaimRenewalTask).toBeNull();
@@ -317,7 +322,7 @@ describe("new Engine({ ownership: 'workflow-lease' }) + recoverAll()", () => {
     engine[Symbol.dispose](); // Disposal wins the race.
     releaseMarkerRead(); // Only now do the gates (and the disposed-check after them) resolve.
 
-    expect(recoverAllPromise).rejects.toThrow(EngineDisposedError);
+    expect(await throwingRejectionOf(recoverAllPromise)).toThrow(EngineDisposedError);
     // Nothing durable-and-per-engine was assigned: the freshly built registry
     // and renewal task were discarded rather than published on a disposed engine.
     expect(getInternals(engine).workflowClaimRegistry).toBeNull();
@@ -341,7 +346,7 @@ describe("new Engine({ ownership: 'workflow-lease' }) + recoverAll()", () => {
     const second = engine.recoverAll(); // races in while the first is still in flight
     releaseMarkerRead();
 
-    expect(Promise.all([first, second])).resolves.toBeDefined();
+    expect(await Promise.all([first, second])).toBeDefined();
     // Gate 2's marker CAS ran exactly once — the second caller awaited the
     // first's in-flight bootstrap rather than attempting its own.
     expect(markerConditionalBatchCalls()).toBe(1);
@@ -359,7 +364,7 @@ describe("new Engine({ ownership: 'workflow-lease' }) + recoverAll()", () => {
     });
     await engine[Symbol.asyncDispose]();
 
-    expect(engine.recoverAll()).rejects.toThrow(EngineDisposedError);
+    expect(await throwingRejectionOf(engine.recoverAll())).toThrow(EngineDisposedError);
   });
 });
 
@@ -490,7 +495,7 @@ describe('dispose releases held workflow-lease claims', () => {
       throw new Error('storage unavailable during release');
     };
     try {
-      expect(engine[Symbol.asyncDispose]()).resolves.toBeUndefined();
+      expect(await engine[Symbol.asyncDispose]()).toBeUndefined();
     } finally {
       WorkflowClaimRegistry.prototype.releaseAll = originalReleaseAll;
     }

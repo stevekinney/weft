@@ -7,6 +7,7 @@ import {
   type StorageCapabilities,
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { EMPTY_EVENT_HEAD } from '../event-log.ts';
@@ -184,14 +185,16 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
 
     expect(
-      persistCheckpoint(
-        staleSecondOwner,
-        initialCheckpoint.workflowId,
-        checkpointOperation,
-        serializeCheckpointBuffer(secondNext),
-        createPersistCallbacks(),
+      await throwingRejectionOf(
+        persistCheckpoint(
+          staleSecondOwner,
+          initialCheckpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer(secondNext),
+          createPersistCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('Checkpoint commit for workflow "checkpoint-workflow" lost its CAS race');
+    ).toThrow('Checkpoint commit for workflow "checkpoint-workflow" lost its CAS race');
 
     const committed = await storage.get(KEYS.checkpoint(initialCheckpoint.workflowId));
     expect(committed).toEqual(serializeCheckpoint(firstNext));
@@ -217,14 +220,16 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
 
     expect(
-      persistCheckpoint(
-        staleSecondOwner,
-        initialCheckpoint.workflowId,
-        checkpointOperation,
-        serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 3_000 }),
-        createPersistCallbacks(),
+      await throwingRejectionOf(
+        persistCheckpoint(
+          staleSecondOwner,
+          initialCheckpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 3_000 }),
+          createPersistCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('lost its CAS race');
+    ).toThrow('lost its CAS race');
 
     expect(staleSecondOwner.checkpoints.get(initialCheckpoint.workflowId)).toEqual(
       initialCheckpoint,
@@ -330,14 +335,16 @@ describe('checkpoint commit compare-and-swap guard', () => {
       workflowExecutionToken: 'worker-forged-token',
     };
     expect(
-      persistCheckpoint(
-        internals,
-        checkpoint.workflowId,
-        checkpointOperation,
-        serializeCheckpointBuffer(workerClaimedCheckpoint),
-        createPersistCallbacks(),
+      await throwingRejectionOf(
+        persistCheckpoint(
+          internals,
+          checkpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer(workerClaimedCheckpoint),
+          createPersistCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('targets a different execution generation');
+    ).toThrow('targets a different execution generation');
 
     // Nothing was written.
     expect(await storage.get(KEYS.checkpoint('checkpoint-workflow'))).toEqual(
@@ -365,14 +372,16 @@ describe('checkpoint commit compare-and-swap guard', () => {
     expect(workerCheckpointNoToken.workflowExecutionToken).toBeUndefined();
 
     expect(
-      persistCheckpoint(
-        internals,
-        checkpoint.workflowId,
-        checkpointOperation,
-        serializeCheckpointBuffer(workerCheckpointNoToken),
-        createPersistCallbacks(),
+      await throwingRejectionOf(
+        persistCheckpoint(
+          internals,
+          checkpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer(workerCheckpointNoToken),
+          createPersistCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('targets a different execution generation');
+    ).toThrow('targets a different execution generation');
 
     expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-omitted-token'))).toEqual(
       serializeCheckpoint(checkpoint),
@@ -446,14 +455,16 @@ describe('checkpoint commit compare-and-swap guard', () => {
       workflowExecutionToken: 'worker-forged-token',
     };
     expect(
-      persistCheckpoint(
-        internals,
-        checkpoint.workflowId,
-        checkpointOperation,
-        serializeCheckpointBuffer(workerClaimedCheckpoint),
-        createPersistCallbacks(),
+      await throwingRejectionOf(
+        persistCheckpoint(
+          internals,
+          checkpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer(workerClaimedCheckpoint),
+          createPersistCallbacks(),
+        ),
       ),
-    ).rejects.toThrow('targets a generation that no longer exists');
+    ).toThrow('targets a generation that no longer exists');
 
     // Nothing was written — the stale worker checkpoint never landed.
     expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-torn-down'))).toEqual(

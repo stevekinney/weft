@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import type { EngineInternals } from './internals.ts';
 import { driveSpeculativeGenerator, executeSpeculativeBranch } from './operations-speculate.ts';
@@ -22,15 +23,17 @@ describe('speculative operation helpers', () => {
     });
 
     expect(
-      executeSpeculativeBranch(
-        { inlineStrategy: null } as unknown as EngineInternals,
-        'workflow-id',
-        operation,
-        {
-          executeSubOperation: async () => 'unused',
-        },
+      await throwingRejectionOf(
+        executeSpeculativeBranch(
+          { inlineStrategy: null } as unknown as EngineInternals,
+          'workflow-id',
+          operation,
+          {
+            executeSubOperation: async () => 'unused',
+          },
+        ),
       ),
-    ).rejects.toThrow('ctx.speculate() requires inline execution mode');
+    ).toThrow('ctx.speculate() requires inline execution mode');
   });
 
   it('rejects speculative execution when no inline context exists', async () => {
@@ -39,19 +42,21 @@ describe('speculative operation helpers', () => {
     });
 
     expect(
-      executeSpeculativeBranch(
-        {
-          inlineStrategy: {
-            getContext: () => undefined,
+      await throwingRejectionOf(
+        executeSpeculativeBranch(
+          {
+            inlineStrategy: {
+              getContext: () => undefined,
+            },
+          } as unknown as EngineInternals,
+          'workflow-id',
+          operation,
+          {
+            executeSubOperation: async () => 'unused',
           },
-        } as unknown as EngineInternals,
-        'workflow-id',
-        operation,
-        {
-          executeSubOperation: async () => 'unused',
-        },
+        ),
       ),
-    ).rejects.toThrow('No active inline context for workflow "workflow-id"');
+    ).toThrow('No active inline context for workflow "workflow-id"');
   });
 
   it('rethrows non-Error branch failures into the generator as Errors', async () => {

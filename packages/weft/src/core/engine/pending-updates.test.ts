@@ -56,8 +56,8 @@ describe('pending update helpers', () => {
     const handler = mock((payload: unknown) => (payload as { approved: boolean }).approved);
 
     expect(
-      invokeUpdateHandler(harness.internals, 'approve', handler, { approved: true }),
-    ).resolves.toBe(true);
+      await invokeUpdateHandler(harness.internals, 'approve', handler, { approved: true }),
+    ).toBe(true);
     expect(handler).toHaveBeenCalledWith({ approved: true });
   });
 

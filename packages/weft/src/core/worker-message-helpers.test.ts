@@ -20,12 +20,12 @@ describe('emitWorkerMessageToEngine', () => {
 
   it('returns false for a synchronous success and maps async success or failure to booleans', async () => {
     expect(emitWorkerMessageToEngine(() => {}, message)).toBe(false);
-    expect(emitWorkerMessageToEngine(async () => {}, message)).resolves.toBe(false);
+    expect(await emitWorkerMessageToEngine(async () => {}, message)).toBe(false);
     expect(
-      emitWorkerMessageToEngine(async () => {
+      await emitWorkerMessageToEngine(async () => {
         throw new Error('boom');
       }, message),
-    ).resolves.toBe(true);
+    ).toBe(true);
   });
 });
 

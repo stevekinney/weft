@@ -31,6 +31,7 @@ import type { OperationWithCallerStack } from './operations-router.ts';
 import type { StateOperationCallbacks } from './operations-state.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callMemoFunction } from './state-utilities.ts';
+import { workflowExecutionTokenForWorkflow } from './strategy-helpers.ts';
 
 type SubOperationCallbacks = {
   createActivityOperationCallbacks: () => ActivityOperationCallbacks;
@@ -45,17 +46,28 @@ type WaitReviewOperationCallbacks = {
     operation: OperationWithCallerStack,
     execute: () => Promise<void>,
   ) => Promise<void>;
-  processReviewOperation: (workflowId: string, options: HumanReviewOptions) => Promise<void>;
+  processReviewOperation: (
+    workflowId: string,
+    options: HumanReviewOptions,
+    operationId: string,
+    workflowExecutionToken: string | undefined,
+  ) => Promise<void>;
 };
 
 export async function processWaitReviewOperation(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   workflowId: string,
   operation: Extract<ContextOperationRequest, { type: 'wait-review' }>,
   callbacks: WaitReviewOperationCallbacks,
 ): Promise<void> {
+  const workflowExecutionToken = workflowExecutionTokenForWorkflow(internals, workflowId);
   return callbacks.runOperationWithoutResult(workflowId, operation, () =>
-    callbacks.processReviewOperation(workflowId, operation.reviewOptions),
+    callbacks.processReviewOperation(
+      workflowId,
+      operation.reviewOptions,
+      operation.operationId,
+      workflowExecutionToken,
+    ),
   );
 }
 

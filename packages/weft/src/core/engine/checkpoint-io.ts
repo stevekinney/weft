@@ -380,7 +380,11 @@ async function commitCheckpoint(
           retentionWindow,
           commit.operations,
         );
-  const pendingSideEffects = takePendingAtomicWorkflowCommitSideEffects(internals, workflowId);
+  const pendingSideEffects = takePendingAtomicWorkflowCommitSideEffects(
+    internals,
+    workflowId,
+    commit.checkpoint.workflowExecutionToken,
+  );
   if (pendingSideEffects !== undefined) {
     commit.operations.push(...pendingSideEffects.operations);
   }

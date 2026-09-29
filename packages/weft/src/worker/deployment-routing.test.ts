@@ -11,6 +11,7 @@ import {
   workerDeploymentRoutingRestBinding,
 } from '../server/operations/worker-deployment-routing.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   selectWorkerDeployment,
   WorkerDeploymentCatalog,
@@ -193,31 +194,37 @@ describe('revision-aware worker deployment routing', () => {
     expect(await catalog.reference('billing', 'missing', 1)).toBeNull();
     expect(await catalog.markDraining('billing', 'missing')).toBeNull();
     expect(await catalog.removeVersion('billing', 'missing')).toBe(false);
-    await expect(
-      catalog.setRouting({
-        deploymentName: 'billing',
-        currentBuildId: 'build-a',
-        rampBasisPoints: 10_001,
-        updatedAt: 3,
-      }),
-    ).rejects.toThrow('rampBasisPoints');
-    await expect(
-      catalog.setRouting({
-        deploymentName: 'billing',
-        currentBuildId: 'missing',
-        rampBasisPoints: 0,
-        updatedAt: 4,
-      }),
-    ).rejects.toThrow('not eligible');
-    await expect(
-      catalog.setRouting({
-        deploymentName: 'billing',
-        currentBuildId: 'build-a',
-        rampingBuildId: 'build-a',
-        rampBasisPoints: 1,
-        updatedAt: 5,
-      }),
-    ).rejects.toThrow('differ');
+    expect(
+      await throwingRejectionOf(
+        catalog.setRouting({
+          deploymentName: 'billing',
+          currentBuildId: 'build-a',
+          rampBasisPoints: 10_001,
+          updatedAt: 3,
+        }),
+      ),
+    ).toThrow('rampBasisPoints');
+    expect(
+      await throwingRejectionOf(
+        catalog.setRouting({
+          deploymentName: 'billing',
+          currentBuildId: 'missing',
+          rampBasisPoints: 0,
+          updatedAt: 4,
+        }),
+      ),
+    ).toThrow('not eligible');
+    expect(
+      await throwingRejectionOf(
+        catalog.setRouting({
+          deploymentName: 'billing',
+          currentBuildId: 'build-a',
+          rampingBuildId: 'build-a',
+          rampBasisPoints: 1,
+          updatedAt: 5,
+        }),
+      ),
+    ).toThrow('differ');
 
     const invoke = (operation: { invoke: (context: never) => Promise<unknown> }, input: unknown) =>
       operation.invoke({ input } as never);
@@ -228,9 +235,9 @@ describe('revision-aware worker deployment routing', () => {
       rampBasisPoints: 500,
       expectedGeneration: 0,
     };
-    await expect(
-      invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), routingInput),
-    ).resolves.toMatchObject({ valid: true });
+    expect(
+      await invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), routingInput),
+    ).toMatchObject({ valid: true });
     const set = await invoke(createSetWorkerDeploymentRoutingOperation({ catalog }), routingInput);
     expect(set).toMatchObject({ generation: 1, rampingBuildId: 'build-b' });
     expect(
@@ -248,33 +255,41 @@ describe('revision-aware worker deployment routing', () => {
     expect(await invoke(createWorkerDeploymentDiagnosticsOperation({ catalog }), {})).toMatchObject(
       { routing: null },
     );
-    await expect(invoke(createSetWorkerDeploymentRoutingOperation(), routingInput)).rejects.toThrow(
-      'live worker deployment catalog',
-    );
-    await expect(
-      invoke(createPromoteWorkerDeploymentOperation({ catalog }), {
-        deploymentName: 'billing',
-        buildId: 'missing',
-      }),
-    ).rejects.toThrow('does not exist');
-    await expect(
-      invoke(createRollbackWorkerDeploymentOperation({ catalog }), {
-        deploymentName: 'billing',
-        buildId: 'missing',
-      }),
-    ).rejects.toThrow('does not exist');
-    await expect(
-      invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), {
-        ...routingInput,
-        rampingBuildId: 'missing',
-      }),
-    ).rejects.toThrow('does not exist');
-    await expect(
-      invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), {
-        ...routingInput,
-        currentBuildId: 'missing',
-      }),
-    ).rejects.toThrow('does not exist');
+    expect(
+      await throwingRejectionOf(invoke(createSetWorkerDeploymentRoutingOperation(), routingInput)),
+    ).toThrow('live worker deployment catalog');
+    expect(
+      await throwingRejectionOf(
+        invoke(createPromoteWorkerDeploymentOperation({ catalog }), {
+          deploymentName: 'billing',
+          buildId: 'missing',
+        }),
+      ),
+    ).toThrow('does not exist');
+    expect(
+      await throwingRejectionOf(
+        invoke(createRollbackWorkerDeploymentOperation({ catalog }), {
+          deploymentName: 'billing',
+          buildId: 'missing',
+        }),
+      ),
+    ).toThrow('does not exist');
+    expect(
+      await throwingRejectionOf(
+        invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), {
+          ...routingInput,
+          rampingBuildId: 'missing',
+        }),
+      ),
+    ).toThrow('does not exist');
+    expect(
+      await throwingRejectionOf(
+        invoke(createPreviewWorkerDeploymentRoutingOperation({ catalog }), {
+          ...routingInput,
+          currentBuildId: 'missing',
+        }),
+      ),
+    ).toThrow('does not exist');
     const extracted = await workerDeploymentRoutingRestBinding.extractInput(
       new Request('http://localhost/v1/worker-deployments/routing', {
         method: 'POST',
@@ -284,20 +299,20 @@ describe('revision-aware worker deployment routing', () => {
       {},
     );
     expect(extracted).toEqual(routingInput);
-    await expect(
-      workerDeploymentDiagnosticsRestBinding.extractInput(
+    expect(
+      await workerDeploymentDiagnosticsRestBinding.extractInput(
         new Request('http://localhost/v1/worker-deployments/diagnostics'),
         {},
         {},
       ),
-    ).resolves.toEqual({});
-    await expect(
-      workerDeploymentDiagnosticsRestBinding.extractInput(
+    ).toEqual({});
+    expect(
+      await workerDeploymentDiagnosticsRestBinding.extractInput(
         new Request('http://localhost/v1/worker-deployments/diagnostics?deploymentName=billing'),
         {},
         {},
       ),
-    ).resolves.toEqual({ deploymentName: 'billing' });
+    ).toEqual({ deploymentName: 'billing' });
   });
   it('recovers immutable versions and routing pointers from durable storage', async () => {
     const storage = new MemoryStorage();

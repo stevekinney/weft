@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import {
@@ -217,9 +218,9 @@ describe('createRecoveryScopedRevisionCallbacks', () => {
 
     const scoped = createRecoveryScopedRevisionCallbacks(callbacks, classifications);
 
-    expect(scoped.resolveExecutableRegistrationForRevision('dynamic-type', 'rev-a')).rejects.toBe(
-      error,
-    );
+    expect(
+      await rejectionOf(scoped.resolveExecutableRegistrationForRevision('dynamic-type', 'rev-a')),
+    ).toBe(error);
     expect(realCalls).toBe(0);
   });
 

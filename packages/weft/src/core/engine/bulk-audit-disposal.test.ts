@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow } from '../types.ts';
 import { EngineDisposedError } from './errors.ts';
@@ -88,7 +89,7 @@ describe('bulk-operation audit write and engine disposal', () => {
     engine[Symbol.dispose]();
     storage.release();
 
-    await expect(deletion).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(deletion)).toBeInstanceOf(EngineDisposedError);
     expect(await storage.get(KEYS.workflow(WORKFLOW_ID))).toBeNull();
     expect(await auditKeys(storage)).toEqual([]);
   });

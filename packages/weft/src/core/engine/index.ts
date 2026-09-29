@@ -781,6 +781,7 @@ export class Engine<
     getInternals(this).sleepTimerAcknowledgementWaiters = new Map();
     getInternals(this).durableInlineOperations = new Map();
     getInternals(this).sleepTimersFiredWithoutResolver = new Map();
+    getInternals(this).sleepTimerTokensFiredWithoutResolver = new Map();
     getInternals(this).interceptors = resolveEngineInterceptors(options);
     getInternals(this).composedWorkflowInterceptor = undefined;
     getInternals(this).composedActivityInterceptor = undefined;
@@ -891,6 +892,7 @@ export class Engine<
     getInternals(this).pendingResultPollTimers = new Set();
     getInternals(this).pendingTimelineEntries = new Map();
     getInternals(this).pendingAtomicWorkflowCommitSideEffects = new Map();
+    getInternals(this).pendingOperationAtomicWorkflowCommitSideEffects = new Map();
     getInternals(this).cleanupIntervalDisposalTracker = null;
     const cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker = {
       disposed: false,
@@ -2692,8 +2694,21 @@ export class Engine<
    */
   async completeAsyncActivity(token: string, result: unknown): Promise<void> {
     await completeAsyncActivityFromInternals(getInternals(this), token, result, {
-      feedOperationResult: (workflowId, outcome) =>
-        feedOperationResult(getInternals(this), workflowId, outcome),
+      feedOperationResult: (
+        workflowId,
+        outcome,
+        _originalReason,
+        operationId,
+        workflowExecutionToken,
+      ) =>
+        feedOperationResult(
+          getInternals(this),
+          workflowId,
+          outcome,
+          undefined,
+          operationId,
+          workflowExecutionToken,
+        ),
       finalizeTimeline: (workflowId, status, output) =>
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     });
@@ -2727,8 +2742,21 @@ export class Engine<
    */
   async failAsyncActivity(token: string, error: unknown): Promise<void> {
     await failAsyncActivityFromInternals(getInternals(this), token, error, {
-      feedOperationResult: (workflowId, outcome, originalReason) =>
-        feedOperationResult(getInternals(this), workflowId, outcome, originalReason),
+      feedOperationResult: (
+        workflowId,
+        outcome,
+        originalReason,
+        operationId,
+        workflowExecutionToken,
+      ) =>
+        feedOperationResult(
+          getInternals(this),
+          workflowId,
+          outcome,
+          originalReason,
+          operationId,
+          workflowExecutionToken,
+        ),
       finalizeTimeline: (workflowId, status, output) =>
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     });

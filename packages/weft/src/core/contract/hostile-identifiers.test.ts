@@ -20,11 +20,11 @@ describe('unsafe identifiers and descriptions cannot inject generated TypeScript
 
   it('contractHash and canonicalWorkflowContractJson round-trip without throwing', async () => {
     expect(() => canonicalWorkflowContractJson(contract)).not.toThrow();
-    expect(contractHash(contract)).resolves.toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(await contractHash(contract)).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it('buildWorkflowRevisionManifest round-trips the hostile contract without throwing', async () => {
-    expect(buildWorkflowRevisionManifest(contract)).resolves.toBeDefined();
+    expect(await buildWorkflowRevisionManifest(contract)).toBeDefined();
   });
 
   it('a __proto__-named signal survives as an own enumerable property, never prototype pollution', () => {

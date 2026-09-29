@@ -772,7 +772,7 @@ describe('TaskQueue', () => {
       controller.abort();
 
       // Resolves to null immediately — the 60s timer is never advanced.
-      expect(pollPromise).resolves.toBeNull();
+      expect(await pollPromise).toBeNull();
       expect(queue.hasWaiter('q', 'charge')).toBe(false);
 
       // A task enqueued afterwards is queued, not handed to the aborted waiter.
@@ -796,7 +796,7 @@ describe('TaskQueue', () => {
 
       queue[Symbol.dispose]();
 
-      expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+      expect(await Promise.all([first, second])).toEqual([null, null]);
       expect(queue.hasWaiter('q1', 'x')).toBe(false);
       expect(queue.hasWaiter('q2', 'y')).toBe(false);
     });
@@ -808,7 +808,7 @@ describe('TaskQueue', () => {
       queue[Symbol.dispose]();
       expect(() => queue[Symbol.dispose]()).not.toThrow();
 
-      expect(pollPromise).resolves.toBeNull();
+      expect(await pollPromise).toBeNull();
     });
 
     describe('with fake timers', () => {

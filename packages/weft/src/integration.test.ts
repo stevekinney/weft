@@ -3,6 +3,7 @@ import { sleepForTesting } from './testing/fake-timers.test-support.ts';
 
 import { workflow } from './core/types/workflow-function.ts';
 import { Engine, MemoryStorage, WorkflowCompletedEvent, WorkflowStartedEvent } from './index.ts';
+import { throwingRejectionOf } from './testing/promise-outcome.test-support.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
@@ -64,7 +65,7 @@ describe('integration: full workflow lifecycle', () => {
     const handle = await engine.start('long-running', {});
     await handle.cancel();
 
-    expect(handle.result()).rejects.toThrow();
+    expect(await throwingRejectionOf(handle.result())).toThrow();
   });
 
   it('events fire for complete lifecycle', async () => {

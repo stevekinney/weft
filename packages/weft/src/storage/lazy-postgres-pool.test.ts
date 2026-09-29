@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { createLazyPostgresPool } from './lazy-postgres-pool.ts';
 import type { PostgresPool } from './postgres-key-value-storage.ts';
 
@@ -95,7 +96,9 @@ describe('createLazyPostgresPool', () => {
     // The regression this guards: without a disposed flag, this call would import
     // a NEW pool that no future end() can reach — a connection leak that also keeps
     // the "disposed" adapter silently working.
-    expect(pool.query('SELECT 2')).rejects.toThrow(/disposed and cannot be reused/);
+    expect(await throwingRejectionOf(pool.query('SELECT 2'))).toThrow(
+      /disposed and cannot be reused/,
+    );
     expect(loads).toBe(1); // no second pool was built
   });
 
@@ -112,7 +115,7 @@ describe('createLazyPostgresPool', () => {
       },
     });
 
-    expect(pool.query('SELECT 1')).rejects.toThrow(
+    expect(await throwingRejectionOf(pool.query('SELECT 1'))).toThrow(
       /PostgresStorage requires the optional peer dependency "pg".*bun add pg.*npm install pg/s,
     );
 
@@ -132,6 +135,6 @@ describe('createLazyPostgresPool', () => {
       },
     });
 
-    expect(pool.query('SELECT 1')).rejects.toBe(boom);
+    expect(await rejectionOf(pool.query('SELECT 1'))).toBe(boom);
   });
 });

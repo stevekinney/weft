@@ -39,8 +39,8 @@ describe('pumpSubscriptionIterable — a rejecting closeSubscription is swallowe
     const emitted: Record<string, unknown>[] = [];
     let completed = false;
 
-    await expect(
-      pumpSubscriptionIterable({
+    expect(
+      await pumpSubscriptionIterable({
         subscriptionId: 'sub-pre-aborted',
         iterable: oneItem(),
         signal: controller.signal,
@@ -53,7 +53,7 @@ describe('pumpSubscriptionIterable — a rejecting closeSubscription is swallowe
           completed = true;
         },
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     // Aborted before anything could be delivered, and no error surfaced.
     expect(emitted).toEqual([]);
@@ -103,7 +103,7 @@ describe('pumpSubscriptionIterable — a rejecting closeSubscription is swallowe
     controller.abort();
     continueGenerator.resolve();
 
-    await expect(pump).resolves.toBeUndefined();
+    expect(await pump).toBeUndefined();
     expect(emitted).toEqual([
       {
         jsonrpc: JSON_RPC_VERSION,
@@ -124,8 +124,8 @@ describe('pumpSubscriptionIterable — a rejecting closeSubscription is swallowe
 
     let completed = false;
 
-    await expect(
-      pumpSubscriptionIterable({
+    expect(
+      await pumpSubscriptionIterable({
         subscriptionId: 'sub-clean-completion',
         iterable: noItems(),
         signal: controller.signal,
@@ -138,7 +138,7 @@ describe('pumpSubscriptionIterable — a rejecting closeSubscription is swallowe
           completed = true;
         },
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     expect(completed).toBe(true);
   });

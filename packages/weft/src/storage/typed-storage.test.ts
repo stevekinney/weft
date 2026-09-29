@@ -11,6 +11,7 @@ import type { JSONValue } from '../core/json.ts';
 import type { JSONValue as JSONValueFromRoot } from '../index.ts';
 import type { JSONValue as JSONValueFromStorageBarrel } from './index.ts';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { MemoryStorage } from './memory.ts';
 import {
   collect,
@@ -271,7 +272,7 @@ describe('withCodec', () => {
       ),
     );
 
-    expect(typedStorage.get('profile')).rejects.toThrow();
+    expect(await throwingRejectionOf(typedStorage.get('profile'))).toThrow();
   });
 
   it('forwards put, delete, has, and dispose through the codec wrapper', async () => {

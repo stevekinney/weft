@@ -5,6 +5,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ChildProcessRealm } from './child-process-realm.ts';
 import type { RevisionRealmActivation } from './revision-realm.ts';
 
@@ -96,9 +97,11 @@ describe('ChildProcessRealm', () => {
     const realm = makeRealm({ workerName: 'digest-a' });
     const activation = await readyAndActive(realm);
 
-    await expect(
-      realm.dispatchTurn({ ...activation, workflowRevision: 'revision-b', turnId: 1 }, {}),
-    ).rejects.toThrow('Realm turn envelope mismatch');
+    expect(
+      await throwingRejectionOf(
+        realm.dispatchTurn({ ...activation, workflowRevision: 'revision-b', turnId: 1 }, {}),
+      ),
+    ).toThrow('Realm turn envelope mismatch');
     expect(realm.pendingTurnCount).toBe(0);
     realm.discard();
     await realm.whenReclaimed();
@@ -111,7 +114,7 @@ describe('ChildProcessRealm', () => {
     const pending = realm.dispatchTurn({ ...activation, turnId: 1 }, {});
     realm.postRawMessageForTesting({ type: 'test-fail', turnId: 1, error: 'boom' });
 
-    await expect(pending).rejects.toThrow('boom');
+    expect(await throwingRejectionOf(pending)).toThrow('boom');
     realm.discard();
     await realm.whenReclaimed();
   });
@@ -128,8 +131,14 @@ describe('ChildProcessRealm', () => {
 
     expect(realm.lifecycle.state).toBe('crashed');
     expect(realm.pendingTurnCount).toBe(0);
-    await expect(first).rejects.toThrow('realm-not-active');
-    await expect(second).rejects.toThrow('realm-not-active');
+    // Both turns reject at the crash; observe them together so neither is
+    // left without a handler while the other is awaited.
+    const [firstRejection, secondRejection] = await Promise.all([
+      throwingRejectionOf(first),
+      throwingRejectionOf(second),
+    ]);
+    expect(firstRejection).toThrow('realm-not-active');
+    expect(secondRejection).toThrow('realm-not-active');
     await realm.whenReclaimed();
   });
 
@@ -142,7 +151,7 @@ describe('ChildProcessRealm', () => {
     realm.terminate();
 
     expect(realm.lifecycle.state).toBe('terminated');
-    await expect(pending).rejects.toThrow('realm-not-active');
+    expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
     await realm.whenReclaimed();
   });
 
@@ -231,7 +240,7 @@ describe('ChildProcessRealm', () => {
       const pending = realm.dispatchTurn({ ...activation, turnId: 1 }, {});
 
       realm.crash();
-      await expect(pending).rejects.toThrow('realm-not-active');
+      expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
       expect(() => realm.crash()).not.toThrow();
 
       expect(realm.lifecycle.state).toBe('crashed');
@@ -247,7 +256,7 @@ describe('ChildProcessRealm', () => {
       realm.beginDrain();
 
       realm.terminate();
-      await expect(pending).rejects.toThrow('realm-not-active');
+      expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
       expect(() => realm.terminate()).not.toThrow();
 
       expect(realm.lifecycle.state).toBe('terminated');

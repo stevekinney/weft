@@ -11,11 +11,31 @@ export function stageAtomicWorkflowCommitSideEffects(
   internals: EngineInternals,
   workflowId: string,
   sideEffects: AtomicWorkflowCommitSideEffects,
+  workflowExecutionToken?: string,
+  bindToExecutionGeneration = false,
 ): void {
   if (sideEffects.conditions.length === 0 && sideEffects.operations.length === 0) {
     return;
   }
 
+  if (bindToExecutionGeneration) {
+    internals.pendingOperationAtomicWorkflowCommitSideEffects ??= new Map();
+    const byToken =
+      internals.pendingOperationAtomicWorkflowCommitSideEffects.get(workflowId) ?? new Map();
+    const tokenKey = workflowExecutionToken ?? '';
+    const pending = byToken.get(tokenKey);
+    if (pending === undefined) {
+      byToken.set(tokenKey, {
+        conditions: [...sideEffects.conditions],
+        operations: [...sideEffects.operations],
+      });
+    } else {
+      pending.conditions.push(...sideEffects.conditions);
+      pending.operations.push(...sideEffects.operations);
+    }
+    internals.pendingOperationAtomicWorkflowCommitSideEffects.set(workflowId, byToken);
+    return;
+  }
   const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
   if (pending === undefined) {
     internals.pendingAtomicWorkflowCommitSideEffects.set(workflowId, {
@@ -32,13 +52,28 @@ export function stageAtomicWorkflowCommitSideEffects(
 export function takePendingAtomicWorkflowCommitSideEffects(
   internals: EngineInternals,
   workflowId: string,
+  workflowExecutionToken?: string,
 ): AtomicWorkflowCommitSideEffects | undefined {
-  const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
-  if (pending === undefined) {
-    return undefined;
+  const pendingEntries = [] as AtomicWorkflowCommitSideEffects[];
+  const unbound = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
+  if (unbound !== undefined) {
+    internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+    pendingEntries.push(unbound);
   }
-
-  internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+  const byToken = internals.pendingOperationAtomicWorkflowCommitSideEffects?.get(workflowId);
+  if (byToken !== undefined) {
+    internals.pendingOperationAtomicWorkflowCommitSideEffects.delete(workflowId);
+    const bound = byToken.get(workflowExecutionToken ?? '');
+    if (bound !== undefined) pendingEntries.push(bound);
+  }
+  if (pendingEntries.length === 0) return undefined;
+  const pending = pendingEntries.reduce(
+    (combined, entry) => ({
+      conditions: [...combined.conditions, ...entry.conditions],
+      operations: [...combined.operations, ...entry.operations],
+    }),
+    { conditions: [], operations: [] } as AtomicWorkflowCommitSideEffects,
+  );
   if (pending.conditions.length === 0 && pending.operations.length === 0) {
     return undefined;
   }
@@ -54,6 +89,12 @@ export function clearPendingAtomicWorkflowCommitSideEffects(
   workflowId: string,
 ): void {
   internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+  internals.pendingOperationAtomicWorkflowCommitSideEffects?.delete(workflowId);
+}
+
+export function clearAllPendingAtomicWorkflowCommitSideEffects(internals: EngineInternals): void {
+  internals.pendingAtomicWorkflowCommitSideEffects.clear();
+  internals.pendingOperationAtomicWorkflowCommitSideEffects?.clear();
 }
 
 /**

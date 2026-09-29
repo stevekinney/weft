@@ -10,6 +10,7 @@ import {
   nextAsyncPendingToken,
 } from '../testing/async-activity.test-support.ts';
 import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
@@ -862,9 +863,9 @@ describe('HttpClient', () => {
       const handle = await client.start('echo', 'done', { id: 'wf-http-missing-replay' });
       await handle.result();
 
-      expect(client.getTimeline('missing-workflow')).resolves.toEqual([]);
-      expect(client.replayTo('missing-workflow', 1)).resolves.toBeNull();
-      expect(client.replayTo('wf-http-missing-replay', 1)).resolves.toBeNull();
+      expect(await client.getTimeline('missing-workflow')).toEqual([]);
+      expect(await client.replayTo('missing-workflow', 1)).toBeNull();
+      expect(await client.replayTo('wf-http-missing-replay', 1)).toBeNull();
     });
   });
 
@@ -1314,7 +1315,7 @@ describe('HttpClient request surface', () => {
 
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
 
-    expect(httpClient.signalAll({ tags: ['nightly'] }, '')).rejects.toThrow(
+    expect(await throwingRejectionOf(httpClient.signalAll({ tags: ['nightly'] }, ''))).toThrow(
       'Field "name" must be a non-empty string',
     );
     expect(fetchCalls).toEqual([]);
@@ -1385,11 +1386,11 @@ describe('HttpClient request surface', () => {
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
     const handle = await httpClient.start('echo', null);
 
-    expect(handle.query(statusQuery)).resolves.toBe('ready');
-    expect(httpClient.query('wf/1', echoInputQuery, { detail: true })).resolves.toEqual({
+    expect(await handle.query(statusQuery)).toBe('ready');
+    expect(await httpClient.query('wf/1', echoInputQuery, { detail: true })).toEqual({
       detail: true,
     });
-    expect(handle.query(echoInputQuery, { source: 'handle' })).resolves.toEqual({
+    expect(await handle.query(echoInputQuery, { source: 'handle' })).toEqual({
       source: 'handle',
     });
 
@@ -1463,7 +1464,7 @@ describe('HttpClient request surface', () => {
       updateId: '',
       error: 'business rejection',
     });
-    expect(httpClient.submitCoordinatedUpdate('wf-1', 'rename')).rejects.toMatchObject({
+    expect(await rejectionOf(httpClient.submitCoordinatedUpdate('wf-1', 'rename'))).toMatchObject({
       status: 401,
       message: 'Unauthorized',
     });
@@ -1481,7 +1482,7 @@ describe('HttpClient request surface', () => {
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
     const handle = await httpClient.start('echo', 'hello');
 
-    expect(handle.result()).rejects.toBeInstanceOf(HttpClientError);
+    expect(await rejectionOf(handle.result())).toBeInstanceOf(HttpClientError);
   });
 
   it('pushes handle events over the watch channel and closes on terminal events', async () => {

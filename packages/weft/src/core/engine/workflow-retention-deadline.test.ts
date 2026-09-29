@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -77,6 +78,6 @@ describe('getWorkflowRetentionDeadline', () => {
     engine[Symbol.dispose]();
     releaseLoader.resolve();
 
-    await expect(deadline).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(deadline)).toBeInstanceOf(EngineDisposedError);
   });
 });

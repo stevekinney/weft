@@ -1,8 +1,9 @@
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { encodeStorageKeyComponent } from '../../storage/interface.ts';
+import { KEYS, encodeStorageKeyComponent } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
 import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
 import type { CompletedReviewEntry, ReviewListFilter } from '../types.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { parseCompletedReviewEntry, toCompletedReviewEntry } from './review-list-entries.ts';
@@ -11,6 +12,21 @@ type ReviewListFilterableEntry = {
   workflowId?: string;
   reviewType?: string;
 };
+
+export function stageTimedOutReviewDeletion(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+  workflowExecutionToken?: string,
+): void {
+  stageAtomicWorkflowCommitSideEffects(
+    internals,
+    workflowId,
+    { operations: [{ type: 'delete', key: KEYS.review(workflowId, reviewId) }], conditions: [] },
+    workflowExecutionToken,
+    true,
+  );
+}
 
 export function matchesReviewListFilter(
   review: ReviewListFilterableEntry,

@@ -12,7 +12,7 @@ async function loadHelloWorldModule() {
 
 describe('bundled examples', () => {
   it('trims greeting subjects before formatting the hello-world example output', async () => {
-    expect(formatGreetingActivity.execute('  John  ')).resolves.toEqual({
+    expect(await formatGreetingActivity.execute('  John  ')).toEqual({
       greeting: 'hello John',
     });
   });
@@ -30,14 +30,14 @@ describe('bundled examples', () => {
       '  Jane  ',
     );
 
-    expect(iterator.next()).resolves.toEqual({
+    expect(await iterator.next()).toEqual({
       value: { greeting: 'hello Jane' },
       done: true,
     });
   });
 
   it('loads a customer profile through the bundled customer-profile activity', async () => {
-    expect(loadCustomerProfileActivity.execute({ customerId: '42' })).resolves.toEqual({
+    expect(await loadCustomerProfileActivity.execute({ customerId: '42' })).toEqual({
       customerId: '42',
       loyaltyTier: 'gold',
     });
@@ -54,7 +54,7 @@ describe('bundled examples', () => {
       { customerId: '42' },
     );
 
-    expect(iterator.next()).resolves.toEqual({
+    expect(await iterator.next()).toEqual({
       value: { customerId: '42', loyaltyTier: 'gold' },
       done: true,
     });
@@ -67,13 +67,13 @@ describe('bundled examples', () => {
       runHelloWorldExample,
     } = await loadHelloWorldModule();
 
-    expect(publishedFormatGreetingActivity.execute('  Ada  ')).resolves.toEqual({
+    expect(await publishedFormatGreetingActivity.execute('  Ada  ')).toEqual({
       greeting: 'hello Ada',
     });
 
     expect(publishedHelloWorldWorkflow.name).toBe('helloWorld');
 
-    expect(runHelloWorldExample('Linus')).resolves.toEqual({
+    expect(await runHelloWorldExample('Linus')).toEqual({
       greeting: 'hello Linus',
     });
   });
@@ -85,14 +85,14 @@ describe('bundled examples', () => {
       runCustomerProfileExample,
     } = await loadHelloWorldModule();
 
-    expect(publishedLoadCustomerProfileActivity.execute({ customerId: '84' })).resolves.toEqual({
+    expect(await publishedLoadCustomerProfileActivity.execute({ customerId: '84' })).toEqual({
       customerId: '84',
       loyaltyTier: 'gold',
     });
 
     expect(publishedCustomerProfileWorkflow.name).toBe('customerProfile');
 
-    expect(runCustomerProfileExample('84')).resolves.toEqual({
+    expect(await runCustomerProfileExample('84')).toEqual({
       customerId: '84',
       loyaltyTier: 'gold',
     });

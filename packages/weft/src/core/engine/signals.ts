@@ -422,14 +422,23 @@ export async function consumeSignalWithAtomicWorkflowCommit(
   internals: EngineInternals,
   workflowId: string,
   signalName: string,
+  canConsume?: () => boolean,
+  workflowExecutionToken?: string,
 ): Promise<ConsumedSignalResult> {
   const record = await findBufferedSignalRecord(internals, workflowId, signalName);
   if (record === null) return { found: false };
+  if (canConsume !== undefined && !canConsume()) return { found: false };
 
-  stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
-    conditions: [{ key: record.key, expectedValue: new Uint8Array(record.value) }],
-    operations: [{ type: 'delete', key: record.key }],
-  });
+  stageAtomicWorkflowCommitSideEffects(
+    internals,
+    workflowId,
+    {
+      conditions: [{ key: record.key, expectedValue: new Uint8Array(record.value) }],
+      operations: [{ type: 'delete', key: record.key }],
+    },
+    workflowExecutionToken,
+    true,
+  );
   return { found: true, payload: decode(record.value) };
 }
 

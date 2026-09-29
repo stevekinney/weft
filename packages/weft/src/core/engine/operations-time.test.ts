@@ -891,14 +891,14 @@ describe('processSleepOperation', () => {
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
     expect(
-      processSleepOperation(
+      await processSleepOperation(
         createSleepInternals(storage, scheduler, firedWithoutResolver),
         workflowId,
         { type: 'sleep', operationId, duration: 3_600_000, scheduledFireAt: 3_600_000 },
         { completeOperation, loadWorkflowState },
       ),
-    ).resolves.toBeUndefined();
-    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
+    ).toBeUndefined();
+    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined, operationId, undefined);
     // Marker consumed — no leak into sleepTimersFiredWithoutResolver.
     expect(firedWithoutResolver.size).toBe(0);
   });
@@ -947,13 +947,13 @@ describe('processSleepOperation', () => {
     });
     const { loadWorkflowState } = createSleepCallbacks(workflowId);
     expect(
-      processSleepOperation(
+      await processSleepOperation(
         internals,
         workflowId,
         { type: 'sleep', operationId, duration: thisRunFireAt, scheduledFireAt: thisRunFireAt },
         { completeOperation, loadWorkflowState },
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
     expect(completeOperation).toHaveBeenCalledTimes(1);
     // Stale marker consumed — it cannot leak into a later replay.
     expect(firedWithoutResolver.size).toBe(0);
@@ -987,14 +987,14 @@ describe('processSleepOperation', () => {
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
     expect(
-      processSleepOperation(
+      await processSleepOperation(
         createSleepInternals(storage, scheduler, firedWithoutResolver),
         workflowId,
         { type: 'sleep', operationId, duration: 3_600_000, scheduledFireAt: 3_600_000 },
         { completeOperation, loadWorkflowState },
       ),
-    ).resolves.toBeUndefined();
-    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
+    ).toBeUndefined();
+    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined, operationId, undefined);
     // Marker consumed — no leak into sleepTimersFiredWithoutResolver.
     expect(firedWithoutResolver.size).toBe(0);
   });
@@ -1035,15 +1035,15 @@ describe('processSleepOperation', () => {
 
     const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
     expect(
-      processSleepOperation(
+      await processSleepOperation(
         internals,
         workflowId,
         { type: 'sleep', operationId, duration: 3_600_000, scheduledFireAt: 3_600_000 },
         { completeOperation, loadWorkflowState },
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
-    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
+    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined, operationId, undefined);
     // The tick settled the resolver normally — no spurious marker must remain.
     expect(firedWithoutResolver.size).toBe(0);
   });
@@ -1111,7 +1111,7 @@ describe('handleTimerFired "wait-condition" + Scheduler: WFT-79 findings 1 & 2 r
     // the predicate never became true, so the deadline resolves `false` — and
     // this time actually deletes the durable timer key.
     await owner.scheduler.tick(now);
-    expect(handle.result()).resolves.toBe(false);
+    expect(await handle.result()).toBe(false);
     expect(await countConditionTimerIndexKeys(storage)).toBe(0);
   });
 

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS, type ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -181,7 +182,7 @@ describe('throwWorkflowClaimUnavailable', () => {
     // `await` here (fixed alongside the timer-leak cleanup below): without
     // it the test function could return — and this engine get disposed —
     // before the rejection assertion actually ran.
-    await expect(throwWorkflowClaimUnavailable(internals, 'wf-held')).rejects.toMatchObject({
+    expect(await rejectionOf(throwWorkflowClaimUnavailable(internals, 'wf-held'))).toMatchObject({
       name: 'WorkflowClaimUnavailableError',
       workflowId: 'wf-held',
       heldBy: 'holder-engine',
@@ -191,7 +192,9 @@ describe('throwWorkflowClaimUnavailable', () => {
 
   it('reports heldBy: null when the holder record is absent', async () => {
     const { engine, internals } = await createTestEngine();
-    await expect(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')).rejects.toMatchObject({
+    expect(
+      await rejectionOf(throwWorkflowClaimUnavailable(internals, 'wf-no-holder')),
+    ).toMatchObject({
       workflowId: 'wf-no-holder',
       heldBy: null,
     });

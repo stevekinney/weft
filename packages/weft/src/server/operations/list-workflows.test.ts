@@ -10,6 +10,7 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -56,7 +57,7 @@ async function startFailedWorkflowWithSplitFailureCategory(
   id: string,
 ): Promise<void> {
   const handle = await engine.start('crash', null, { id });
-  expect(handle.result()).rejects.toThrow('workflow failure');
+  expect(await throwingRejectionOf(handle.result())).toThrow('workflow failure');
 
   const stateBytes = await storage.get(KEYS.workflow(id));
   expect(stateBytes).not.toBeNull();

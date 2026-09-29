@@ -212,7 +212,7 @@ describe('handleTaskResultRequest', () => {
     const response = await handleTaskResultRequest(context, options, request, makeUrl());
 
     expect(response?.status).toBe(413);
-    expect(response?.json()).resolves.toEqual({ error: 'Payload Too Large' });
+    expect(await response?.json()).toEqual({ error: 'Payload Too Large' });
   });
 
   it('returns 400 when operationId is missing', async () => {

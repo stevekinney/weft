@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
@@ -70,9 +71,9 @@ describe('WorkflowCatalog.install', () => {
 
     await catalog.install(manifest, fakeDefinition('checkout'));
 
-    expect(catalog.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
-      WorkflowCatalogConflictError,
-    );
+    expect(
+      await throwingRejectionOf(catalog.install(conflicting, fakeDefinition('checkout'))),
+    ).toThrow(WorkflowCatalogConflictError);
   });
 
   it('rejects conflicting metadata for an existing key even when the conflict is only visible durably, from a DIFFERENT WorkflowCatalog instance sharing storage', async () => {
@@ -90,9 +91,9 @@ describe('WorkflowCatalog.install', () => {
     // `reader` has never seen `pinned-1` in its own cache, but durable
     // storage already holds different content under that exact key —
     // `install()` must read through and reject, not silently last-write-win.
-    expect(reader.install(conflicting, fakeDefinition('checkout'))).rejects.toThrow(
-      WorkflowCatalogConflictError,
-    );
+    expect(
+      await throwingRejectionOf(reader.install(conflicting, fakeDefinition('checkout'))),
+    ).toThrow(WorkflowCatalogConflictError);
 
     // The durable record is untouched by the rejected write.
     const third = new WorkflowCatalog(storage);
@@ -130,9 +131,9 @@ describe('WorkflowCatalog.install', () => {
       new TextEncoder().encode(JSON.stringify({ manifest, installedAt: Date.now() })),
     );
 
-    expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
-      WorkflowRevisionTombstonedError,
-    );
+    expect(
+      await throwingRejectionOf(catalog.install(manifest, fakeDefinition('checkout'))),
+    ).toThrow(WorkflowRevisionTombstonedError);
     // No entry was resurrected.
     expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
     expect(await storage.get(KEYS.catalogEntry('checkout', 'pinned-1'))).toBeNull();
@@ -170,8 +171,10 @@ describe('WorkflowCatalog.install', () => {
     };
 
     expect(
-      catalog.install(manifest, fakeDefinition('checkout'), { removalGeneration: null }),
-    ).rejects.toThrow(WorkflowCatalogConflictError);
+      await throwingRejectionOf(
+        catalog.install(manifest, fakeDefinition('checkout'), { removalGeneration: null }),
+      ),
+    ).toThrow(WorkflowCatalogConflictError);
   });
 
   it('defensively rejects an invalid workflow name even for a hand-built manifest', async () => {
@@ -180,7 +183,9 @@ describe('WorkflowCatalog.install', () => {
     const manifest = await manifestFor('checkout', '1.0.0');
     const invalid = { ...manifest, name: '1invalid' } as WorkflowRevisionManifest;
 
-    expect(catalog.install(invalid, fakeDefinition('1invalid'))).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(catalog.install(invalid, fakeDefinition('1invalid'))),
+    ).toThrow();
   });
 
   it('revalidates a cache hit against durable storage rather than trusting it outright — a peer that durably removed and tombstoned this exact entry is not masked by a stale cache hit (WFT-21, Codex review round 14, P1 item TYR4)', async () => {
@@ -206,9 +211,9 @@ describe('WorkflowCatalog.install', () => {
     // finds the entry durably absent, evicts the stale cache entry, and
     // falls through to the ordinary not-cached path — which fails closed on
     // the tombstone exactly like a genuinely fresh install would.
-    expect(catalog.install(manifest, fakeDefinition('checkout'))).rejects.toThrow(
-      WorkflowRevisionTombstonedError,
-    );
+    expect(
+      await throwingRejectionOf(catalog.install(manifest, fakeDefinition('checkout'))),
+    ).toThrow(WorkflowRevisionTombstonedError);
     expect(catalog.getEntry('checkout', 'pinned-1')).toBeUndefined();
   });
 });
@@ -298,8 +303,10 @@ describe('WorkflowCatalog.activateRegistered', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      catalog.activateRegistered('checkout', manifest, fakeDefinition('checkout')),
-    ).rejects.toThrow(WorkflowCatalogActivationConflictError);
+      await throwingRejectionOf(
+        catalog.activateRegistered('checkout', manifest, fakeDefinition('checkout')),
+      ),
+    ).toThrow(WorkflowCatalogActivationConflictError);
   });
 
   it("fences the active-pointer CAS on the candidate entry's own bytes and reinstalls (rather than fails) when a peer removes it mid-activation (WFT-21, Codex review round 14, P1 item UXP7)", async () => {
@@ -505,9 +512,9 @@ describe('WorkflowCatalog.activateCandidate', () => {
     const v2 = await manifestFor('checkout', '2.0.0');
     const fresh = new WorkflowCatalog(storage);
 
-    expect(fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 })).rejects.toThrow(
-      WorkflowCatalogActiveEntryMissingError,
-    );
+    expect(
+      await throwingRejectionOf(fresh.activateCandidate('checkout', v2, { expectedGeneration: 1 })),
+    ).toThrow(WorkflowCatalogActiveEntryMissingError);
   });
 
   it('refuses an omitted expectedGeneration on a 2nd-or-later activation: two refreshers cannot silently last-write-win', async () => {
@@ -577,7 +584,7 @@ describe('WorkflowCatalog.activateCandidate', () => {
       return originalConditionalBatch(conditions, operations);
     };
 
-    expect(catalog.activateCandidate('checkout', manifest)).rejects.toThrow(
+    expect(await throwingRejectionOf(catalog.activateCandidate('checkout', manifest))).toThrow(
       WorkflowRevisionNotInstalledError,
     );
     expect(catalog.resolveActive('checkout')).toBeUndefined();

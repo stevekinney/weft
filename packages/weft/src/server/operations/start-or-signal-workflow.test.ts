@@ -7,6 +7,7 @@ import { activity, workflow } from '../../core/types.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { serve, type WeftServer } from '../index.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -207,7 +208,7 @@ describe('weft.workflows.startorsignal', () => {
     });
     await waitForRecordedFinalizerState(engine, 'sos-rest-teardown-pending');
     await engine.cancel(handle.id);
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     const drive = engine.scheduler.tick(now);
     await finalizer.started;

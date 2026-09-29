@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
@@ -113,11 +114,13 @@ describe('delayed workflow start', () => {
     engine.register(delayedWorkflow3);
 
     expect(
-      engine.start('delayed', null, {
-        startAt: 2_000,
-        startAfter: '1s',
-      }),
-    ).rejects.toThrow('Provide only one of startAt or startAfter');
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAt: 2_000,
+          startAfter: '1s',
+        }),
+      ),
+    ).toThrow('Provide only one of startAt or startAfter');
 
     engine[Symbol.dispose]();
   });
@@ -131,22 +134,28 @@ describe('delayed workflow start', () => {
     engine.register(delayedWorkflow4);
 
     expect(
-      engine.start('delayed', null, {
-        startAt: -1,
-      }),
-    ).rejects.toThrow('options.startAt must be a non-negative integer millisecond timestamp');
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAt: -1,
+        }),
+      ),
+    ).toThrow('options.startAt must be a non-negative integer millisecond timestamp');
 
     expect(
-      engine.start('delayed', null, {
-        startAt: Number.POSITIVE_INFINITY,
-      }),
-    ).rejects.toThrow('options.startAt must be a non-negative integer millisecond timestamp');
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAt: Number.POSITIVE_INFINITY,
+        }),
+      ),
+    ).toThrow('options.startAt must be a non-negative integer millisecond timestamp');
 
     expect(
-      engine.start('delayed', null, {
-        startAt: 1_500.5,
-      }),
-    ).rejects.toThrow('options.startAt must be a non-negative integer millisecond timestamp');
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAt: 1_500.5,
+        }),
+      ),
+    ).toThrow('options.startAt must be a non-negative integer millisecond timestamp');
 
     engine[Symbol.dispose]();
   });
@@ -160,10 +169,12 @@ describe('delayed workflow start', () => {
     engine.register(delayedWorkflow5);
 
     expect(
-      engine.start('delayed', null, {
-        startAfter: -1,
-      }),
-    ).rejects.toThrow(
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAfter: -1,
+        }),
+      ),
+    ).toThrow(
       'options.startAfter must be a finite, non-negative number or a valid duration string',
     );
 
@@ -209,11 +220,13 @@ describe('delayed workflow start', () => {
     engine.register(delayedWorkflow7);
 
     expect(
-      engine.start('delayed', null, {
-        startAfter: '5s',
-        executionTimeout: -1,
-      }),
-    ).rejects.toThrow(
+      await throwingRejectionOf(
+        engine.start('delayed', null, {
+          startAfter: '5s',
+          executionTimeout: -1,
+        }),
+      ),
+    ).toThrow(
       'options.executionTimeout must be a finite, non-negative number or a valid duration string',
     );
 
@@ -261,7 +274,7 @@ describe('delayed workflow start', () => {
     const recoveredHandle = secondEngine.getHandle('wf-restart');
     await secondEngine.scheduler.tick(now);
 
-    expect(recoveredHandle.result()).resolves.toBe('done:work');
+    expect(await recoveredHandle.result()).toBe('done:work');
     expect(executions).toBe(1);
 
     secondEngine[Symbol.dispose]();
@@ -324,7 +337,7 @@ describe('delayed workflow start', () => {
     now += 5_000;
     await secondEngine.scheduler.tick(now);
 
-    expect(secondEngine.getHandle('wf-restart-headers').result()).resolves.toBe('child-complete');
+    expect(await secondEngine.getHandle('wf-restart-headers').result()).toBe('child-complete');
     expect(capturedParentHeaders).toHaveLength(1);
     expect(capturedParentHeaders[0]?.get('traceparent')).toBe(
       '00-abcd1234abcd1234abcd1234abcd1234-ef56ef56ef56ef56-01',
@@ -374,7 +387,7 @@ describe('delayed workflow start', () => {
     now += 5_000;
     await secondEngine.scheduler.tick(now);
 
-    expect(recoveredHandles[0]!.result()).resolves.toBe('done:recover-all');
+    expect(await recoveredHandles[0]!.result()).toBe('done:recover-all');
 
     secondEngine[Symbol.dispose]();
   });
@@ -396,7 +409,7 @@ describe('delayed workflow start', () => {
 
     await handle.cancel();
 
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(await engine.get(handle.id)).toMatchObject({ status: 'cancelled' });
     expect(await collectDelayedEntries(engine.storage)).toEqual([]);
 
@@ -425,7 +438,7 @@ describe('delayed workflow start', () => {
     );
 
     await handle.cancel();
-    expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
 
     expect(await engine.storage.get(KEYS.review(workflowId, 'review-1'))).toBeNull();
 
@@ -466,7 +479,7 @@ describe('delayed workflow start', () => {
     const resultPromise = handle.result();
     void resultPromise.catch(() => {});
     await engine.advanceTime('1s');
-    expect(resultPromise).rejects.toThrow('execution timeout');
+    expect(await throwingRejectionOf(resultPromise)).toThrow('execution timeout');
     expect(await engine.get(handle.id)).toMatchObject({ status: 'timed-out' });
 
     engine[Symbol.dispose]();

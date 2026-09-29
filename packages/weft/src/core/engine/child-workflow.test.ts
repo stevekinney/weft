@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { ChildWorkflowInterception } from '../interceptor/interception-contexts.ts';
 import { StartWorkflowValidationError } from '../start-workflow-validation.ts';
@@ -78,28 +79,30 @@ describe('engine child workflow helpers', () => {
     const collision = new WorkflowAlreadyExistsError('child-id');
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:1',
-          options: { id: 'child-id' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'cached' }) as never,
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent' ? createWorkflowState('parent') : null,
-          start: async () => {
-            throw collision;
+      await rejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:1',
+            options: { id: 'child-id' },
+            type: 'child-workflow',
+            workflowType: 'child',
           },
-        },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'cached' }) as never,
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent' ? createWorkflowState('parent') : null,
+            start: async () => {
+              throw collision;
+            },
+          },
+        ),
       ),
-    ).rejects.toBe(collision);
+    ).toBe(collision);
 
     expect(internals.pendingNestingDepth).toBeUndefined();
     expect(internals.pendingParentHeaders).toBeUndefined();
@@ -112,7 +115,7 @@ describe('engine child workflow helpers', () => {
     const childHandle = { id: 'child-id', result: mock(async () => 'cached-child-result') };
 
     expect(
-      executeChildWorkflow(
+      await executeChildWorkflow(
         internals as never,
         'parent',
         {
@@ -135,7 +138,7 @@ describe('engine child workflow helpers', () => {
           },
         },
       ),
-    ).resolves.toBe('cached-child-result');
+    ).toBe('cached-child-result');
 
     // Deliberately NOT `expect(childHandle.result).toHaveBeenCalled()`. The
     // parent now awaits the child through the generator-owned waiter so the
@@ -148,30 +151,32 @@ describe('engine child workflow helpers', () => {
     const internals = createInternals();
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:3',
-          options: { id: 'child-id' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'cached' }) as never,
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent'
-              ? createWorkflowState('parent')
-              : createWorkflowState('child-id', { input: { value: 2 } }),
-          start: async () => {
-            throw new WorkflowAlreadyExistsError('child-id');
+      await throwingRejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:3',
+            options: { id: 'child-id' },
+            type: 'child-workflow',
+            workflowType: 'child',
           },
-        },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'cached' }) as never,
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent'
+                ? createWorkflowState('parent')
+                : createWorkflowState('child-id', { input: { value: 2 } }),
+            start: async () => {
+              throw new WorkflowAlreadyExistsError('child-id');
+            },
+          },
+        ),
       ),
-    ).rejects.toThrow(
+    ).toThrow(
       'Child workflow id collision for "child-id" does not match the requested child workflow',
     );
   });
@@ -181,27 +186,29 @@ describe('engine child workflow helpers', () => {
     const failure = new Error('start failed');
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:non-collision',
-          options: { id: 'child-id' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'cached' }) as never,
-          loadWorkflowState: async () => createWorkflowState('parent'),
-          start: async () => {
-            throw failure;
+      await rejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:non-collision',
+            options: { id: 'child-id' },
+            type: 'child-workflow',
+            workflowType: 'child',
           },
-        },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'cached' }) as never,
+            loadWorkflowState: async () => createWorkflowState('parent'),
+            start: async () => {
+              throw failure;
+            },
+          },
+        ),
       ),
-    ).rejects.toBe(failure);
+    ).toBe(failure);
   });
 
   it('wraps child workflow execution with the composed workflow interceptor', async () => {
@@ -209,7 +216,7 @@ describe('engine child workflow helpers', () => {
     seedChildResult(internals, 'child-id', 'child-result');
 
     expect(
-      executeChildWorkflow(
+      await executeChildWorkflow(
         internals as never,
         'parent',
         {
@@ -237,7 +244,7 @@ describe('engine child workflow helpers', () => {
           start: async () => ({ id: 'child-id', result: async () => 'child-result' }) as never,
         },
       ),
-    ).resolves.toEqual({
+    ).toEqual({
       headers: [['traceparent', '00-parent']],
       result: 'child-result',
     });
@@ -256,26 +263,28 @@ describe('engine child workflow helpers', () => {
     } satisfies ChildWorkflowOptions & { onTerminalConflict: 'start-new' };
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:terminal-conflict',
-          options: smuggledOptions,
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'never' }) as never,
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent' ? createWorkflowState('parent') : null,
-          start,
-        },
+      await throwingRejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:terminal-conflict',
+            options: smuggledOptions,
+            type: 'child-workflow',
+            workflowType: 'child',
+          },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'never' }) as never,
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent' ? createWorkflowState('parent') : null,
+            start,
+          },
+        ),
       ),
-    ).rejects.toThrow('ctx.startChild does not support options.onTerminalConflict');
+    ).toThrow('ctx.startChild does not support options.onTerminalConflict');
 
     // The guard fires before the start is dispatched — no replacement run is created.
     expect(start).not.toHaveBeenCalled();
@@ -296,7 +305,7 @@ describe('engine child workflow helpers', () => {
     let startCallCount = 0;
 
     expect(
-      executeChildWorkflow(
+      await executeChildWorkflow(
         internals as never,
         'parent',
         {
@@ -327,7 +336,7 @@ describe('engine child workflow helpers', () => {
           },
         },
       ),
-    ).resolves.toBe('historical-child-result');
+    ).toBe('historical-child-result');
 
     expect(startCallCount).toBe(2);
     // Deliberately NOT `expect(childHandle.result).toHaveBeenCalled()` — see
@@ -343,28 +352,30 @@ describe('engine child workflow helpers', () => {
     });
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:fresh-dot',
-          options: { id: '.' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'never' }) as never,
-          // No persisted child under "." exists yet — this is a genuinely
-          // fresh admission, not a crash-reattach replay.
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent' ? createWorkflowState('parent') : null,
-          start,
-        },
+      await rejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:fresh-dot',
+            options: { id: '.' },
+            type: 'child-workflow',
+            workflowType: 'child',
+          },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'never' }) as never,
+            // No persisted child under "." exists yet — this is a genuinely
+            // fresh admission, not a crash-reattach replay.
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent' ? createWorkflowState('parent') : null,
+            start,
+          },
+        ),
       ),
-    ).rejects.toBe(admissionError);
+    ).toBe(admissionError);
 
     // Strict admission stands: no retry with the bypass was attempted.
     expect(start).toHaveBeenCalledTimes(1);
@@ -378,31 +389,33 @@ describe('engine child workflow helpers', () => {
     });
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:mismatched-dot',
-          options: { id: '.' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'never' }) as never,
-          // A "." workflow exists, but for a different type/input — it is not
-          // this parent's child, so it must not be hijacked as a reattach
-          // target. The original strict-admission rejection stands.
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent'
-              ? createWorkflowState('parent')
-              : createWorkflowState('.', { type: 'unrelated-workflow' }),
-          start,
-        },
+      await rejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:mismatched-dot',
+            options: { id: '.' },
+            type: 'child-workflow',
+            workflowType: 'child',
+          },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'never' }) as never,
+            // A "." workflow exists, but for a different type/input — it is not
+            // this parent's child, so it must not be hijacked as a reattach
+            // target. The original strict-admission rejection stands.
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent'
+                ? createWorkflowState('parent')
+                : createWorkflowState('.', { type: 'unrelated-workflow' }),
+            start,
+          },
+        ),
       ),
-    ).rejects.toBe(admissionError);
+    ).toBe(admissionError);
 
     // No retry with the bypass was attempted — the mismatch was caught before
     // ever calling `start()` again.
@@ -416,35 +429,37 @@ describe('engine child workflow helpers', () => {
     let startCallCount = 0;
 
     expect(
-      executeChildWorkflow(
-        internals as never,
-        'parent',
-        {
-          input: { value: 1 },
-          operationId: 'child:retry-failure',
-          options: { id: '.' },
-          type: 'child-workflow',
-          workflowType: 'child',
-        },
-        0,
-        {
-          getComposedWorkflowInterceptor: () => null,
-          getHandle: () => ({ result: async () => 'never' }) as never,
-          loadWorkflowState: async (workflowId) =>
-            workflowId === 'parent' ? createWorkflowState('parent') : createWorkflowState('.'),
-          start: async () => {
-            startCallCount += 1;
-            if (startCallCount === 1) {
-              throw admissionError;
-            }
-            // The confirmed-reattach retry hits something other than the
-            // expected duplicate-id conflict — that failure must propagate,
-            // not be swallowed as though it were a successful reattach.
-            throw retryFailure;
+      await rejectionOf(
+        executeChildWorkflow(
+          internals as never,
+          'parent',
+          {
+            input: { value: 1 },
+            operationId: 'child:retry-failure',
+            options: { id: '.' },
+            type: 'child-workflow',
+            workflowType: 'child',
           },
-        },
+          0,
+          {
+            getComposedWorkflowInterceptor: () => null,
+            getHandle: () => ({ result: async () => 'never' }) as never,
+            loadWorkflowState: async (workflowId) =>
+              workflowId === 'parent' ? createWorkflowState('parent') : createWorkflowState('.'),
+            start: async () => {
+              startCallCount += 1;
+              if (startCallCount === 1) {
+                throw admissionError;
+              }
+              // The confirmed-reattach retry hits something other than the
+              // expected duplicate-id conflict — that failure must propagate,
+              // not be swallowed as though it were a successful reattach.
+              throw retryFailure;
+            },
+          },
+        ),
       ),
-    ).rejects.toBe(retryFailure);
+    ).toBe(retryFailure);
 
     expect(startCallCount).toBe(2);
   });
@@ -527,7 +542,7 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     expect(result).toBe('historical-child-result');
     // No duplicate/replacement run was created under "." — the seeded record
     // is untouched.
-    expect(engine.get('.')).resolves.toMatchObject({
+    expect(await engine.get('.')).toMatchObject({
       status: 'completed',
       result: 'historical-child-result',
     });
@@ -624,11 +639,11 @@ describe('WFT-95: real engine child-workflow crash-reattach replay', () => {
     // The fence rejects the retry with the same strict-admission error a
     // genuinely fresh `ctx.startChild({ id: '.' })` would get — a clean
     // rejection, not a silently created fresh run under the reserved id.
-    expect(executePromise).rejects.toThrow('options.id must not be "." or ".."');
+    expect(await throwingRejectionOf(executePromise)).toThrow('options.id must not be "." or ".."');
 
     // No replacement run was created under "." — the race left it absent,
     // and it must STAY absent rather than get backfilled by a bypassed create.
-    expect(engine.get('.')).resolves.toBeNull();
+    expect(await engine.get('.')).toBeNull();
     // `pendingStarts`/`inFlightRevision` bookkeeping unwound via `finally`.
     expect(getInternals(engine).pendingStarts.has('.')).toBe(false);
 
@@ -675,7 +690,17 @@ describe('WFT-79: cross-engine parent/child completion (ownership: "workflow-lea
     };
 
     // Engine B claims and resumes the CHILD only — it never touches the parent.
-    await using engineB = await Engine.create({ storage, workflows, ...ownershipOptions });
+    // B registers only the child type: every `workflow-lease` engine's reclaim
+    // pass adopts an ownerless `running` workflow it is eligible to run (ADR
+    // 0002's rolling handoff), so a B that could run the parent would take its
+    // claim on a renewal tick before A resumes it. A needs both types, since
+    // its replay of `ctx.startChild()` resolves the child definition locally;
+    // it cannot adopt the child because B already holds and renews that claim.
+    await using engineB = await Engine.create({
+      storage,
+      workflows: { 'wft-79-child': childWorkflow },
+      ...ownershipOptions,
+    });
     await engineB.resume('wft-79-child-1');
 
     // Engine A claims and resumes the PARENT. Replay re-runs `ctx.startChild()`
@@ -702,10 +727,10 @@ describe('WFT-79: cross-engine parent/child completion (ownership: "workflow-lea
     // Complete the child on its OWNING engine (B) only — A's `resultResolvers`
     // map is never touched by B's termination commit.
     await engineB.getHandle('wft-79-child-1').signal('go');
-    expect(engineB.getHandle('wft-79-child-1').result()).resolves.toBe('child-done');
+    expect(await engineB.getHandle('wft-79-child-1').result()).toBe('child-done');
 
     // The parent — owned by A, which never claimed the child — must still
     // observe completion instead of hanging forever.
-    expect(parentHandle.result()).resolves.toBe('child-done');
+    expect(await parentHandle.result()).toBe('child-done');
   });
 });

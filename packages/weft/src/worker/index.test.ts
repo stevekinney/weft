@@ -5,6 +5,7 @@ import {
   sleepForTesting,
   waitForCondition,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { RemoteWorker } from './index.ts';
 
 // ---------------------------------------------------------------------------
@@ -445,7 +446,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    expect(worker.connect()).rejects.toThrow('Unsupported protocol');
+    expect(await throwingRejectionOf(worker.connect())).toThrow('Unsupported protocol');
     worker[Symbol.dispose]();
   });
 
@@ -470,7 +471,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    expect(worker.connect()).rejects.toThrow(
+    expect(await throwingRejectionOf(worker.connect())).toThrow(
       'WebSocket closed before worker registration completed',
     );
     worker[Symbol.dispose]();
@@ -508,7 +509,7 @@ describe('RemoteWorker', () => {
       throw new Error('connect() remained pending after worker disposal');
     });
 
-    expect(Promise.race([connectPromise, pendingTimeout])).rejects.toThrow(
+    expect(await throwingRejectionOf(Promise.race([connectPromise, pendingTimeout]))).toThrow(
       'Worker disposed before worker registration completed',
     );
   });
@@ -595,7 +596,7 @@ describe('RemoteWorker', () => {
       }),
     });
 
-    expect(worker.connect()).rejects.toThrow();
+    expect(await throwingRejectionOf(worker.connect())).toThrow();
     worker[Symbol.dispose]();
   });
 
@@ -1453,7 +1454,9 @@ describe('RemoteWorker', () => {
 
     // Disposal is terminal: a disposed worker cannot be revived. Reconnection
     // is supported only via disconnect() + connect(), not after dispose.
-    expect(worker.connect()).rejects.toThrow('RemoteWorker has been disposed and cannot reconnect');
+    expect(await throwingRejectionOf(worker.connect())).toThrow(
+      'RemoteWorker has been disposed and cannot reconnect',
+    );
     expect(worker.connected).toBe(false);
   });
 
@@ -2745,7 +2748,9 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     const firstHang = sleepForTesting(250).then(() => {
       throw new Error('first connect() remained pending after supersession');
     });
-    expect(Promise.race([first, firstHang])).rejects.toThrow('Superseded by a new connect() call');
+    expect(await throwingRejectionOf(Promise.race([first, firstHang]))).toThrow(
+      'Superseded by a new connect() call',
+    );
 
     await waitForCondition(() => registerCount === 2 && ackSocket !== undefined, {
       timeoutMs: 1_000,
@@ -2764,7 +2769,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
       }),
     );
 
-    expect(second).resolves.toBeUndefined();
+    expect(await second).toBeUndefined();
     expect(worker.connected).toBe(true);
 
     await worker.disconnect();
@@ -2840,7 +2845,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     expect(tracking.sockets.length).toBe(1);
 
     // Redundant connect() must not open a second socket or close the live one.
-    expect(worker.connect()).resolves.toBeUndefined();
+    expect(await worker.connect()).toBeUndefined();
     // Give any stray socket activity a chance to surface.
     await sleepForTesting(50);
     expect(tracking.sockets.length).toBe(1);
@@ -2924,7 +2929,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
         sessionGeneration: 1,
       }),
     );
-    expect(second).resolves.toBeUndefined();
+    expect(await second).toBeUndefined();
     expect(worker.connected).toBe(true);
 
     await worker.disconnect();
@@ -3531,7 +3536,9 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await sleepForTesting(50);
 
     // Post-dispose connect() rejects (terminal contract); nothing flushes.
-    expect(worker.connect()).rejects.toThrow('RemoteWorker has been disposed and cannot reconnect');
+    expect(await throwingRejectionOf(worker.connect())).toThrow(
+      'RemoteWorker has been disposed and cannot reconnect',
+    );
     await sleepForTesting(50);
     expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
   });
@@ -3579,7 +3586,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // A disposed worker cannot reconnect, so the discarded entry can never
     // resend — this is the intentional difference from disconnect()/
     // #gracefulShutdown(), which preserve the outbox for the next connect().
-    await expect(worker.connect()).rejects.toThrow(
+    expect(await throwingRejectionOf(worker.connect())).toThrow(
       'RemoteWorker has been disposed and cannot reconnect',
     );
   });
@@ -3726,7 +3733,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     // Registration 1: ack arrives, but the flush send throws → connect() rejects.
     armThrow();
-    expect(worker.connect()).rejects.toThrow(
+    expect(await throwingRejectionOf(worker.connect())).toThrow(
       'reconnect required: result flush failed during registration',
     );
     expect(worker.connected).toBe(false);

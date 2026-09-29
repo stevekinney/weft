@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { resolveDefaultStorage } from './auto.ts';
 
 async function withActualGlobals(
@@ -184,21 +185,23 @@ describe('resolveDefaultStorage', () => {
   });
 
   it('describes missing runtime globals when no default adapter is available', async () => {
-    expect(resolveDefaultStorage({})).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveDefaultStorage({}))).toThrow(
       'resolveDefaultStorage: requires Bun, Node, WebExtension storage, or IndexedDB.',
     );
   });
 
   it('rejects incomplete injected IndexedDB runtime globals', async () => {
     expect(
-      resolveDefaultStorage({
-        indexedDB: {
-          open: () => {
-            throw new Error('should not be called');
+      await throwingRejectionOf(
+        resolveDefaultStorage({
+          indexedDB: {
+            open: () => {
+              throw new Error('should not be called');
+            },
           },
-        },
-      }),
-    ).rejects.toThrow(
+        }),
+      ),
+    ).toThrow(
       'resolveDefaultStorage: IndexedDB resolution requires both indexedDB and IDBKeyRange.',
     );
   });

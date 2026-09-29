@@ -76,7 +76,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.json()).resolves.toEqual({ status: 'ok' });
+    expect(await response.json()).toEqual({ status: 'ok' });
   });
 
   it('returns 400 when a conflicting REST binding path parameter cannot be decoded', async () => {
@@ -113,7 +113,7 @@ describe('handleRequest coverage regressions', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(response.json()).resolves.toEqual({ error: 'Malformed route parameter encoding' });
+    expect(await response.json()).toEqual({ error: 'Malformed route parameter encoding' });
   });
 
   it('maps malformed fault-like throws to internal server errors', async () => {
@@ -148,7 +148,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(500);
-    expect(response.text()).resolves.toBe('{"error":"Internal server error"}');
+    expect(await response.text()).toBe('{"error":"Internal server error"}');
   });
 
   it('maps schedule error messages to their canonical HTTP fault statuses', async () => {

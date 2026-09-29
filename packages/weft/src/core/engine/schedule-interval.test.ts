@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { getNextIntervalOccurrence } from '../schedule/interval-occurrence.ts';
 import {
@@ -365,13 +366,15 @@ describe('interval schedules', () => {
       return 'done';
     });
 
-    expect(engine.schedule('interval-invalid', null, { every: 'not-a-duration' })).rejects.toThrow(
-      'Invalid schedule interval "every"',
-    );
+    expect(
+      await throwingRejectionOf(
+        engine.schedule('interval-invalid', null, { every: 'not-a-duration' }),
+      ),
+    ).toThrow('Invalid schedule interval "every"');
 
-    expect(engine.schedule('interval-invalid', null, { every: 0 })).rejects.toThrow(
-      'Schedule interval "every" must resolve to a positive number of milliseconds',
-    );
+    expect(
+      await throwingRejectionOf(engine.schedule('interval-invalid', null, { every: 0 })),
+    ).toThrow('Schedule interval "every" must resolve to a positive number of milliseconds');
   });
 });
 

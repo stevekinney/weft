@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   createPostgresTestServer,
   openPostgresTestDatabase,
@@ -104,7 +105,9 @@ describe('choosing where the live suites get a database', () => {
   });
 
   it('names the gate when asked for a database that cannot be obtained', async () => {
-    await expect(createPostgresTestServer(null)).rejects.toThrow('postgresTestDatabase');
+    expect(await throwingRejectionOf(createPostgresTestServer(null))).toThrow(
+      'postgresTestDatabase',
+    );
   });
 
   it('opens nothing at load, rather than throwing, when a runner has no database', async () => {
@@ -146,13 +149,15 @@ describe('the disposable cluster failure path', () => {
     // `/usr/bin/false` is a real, always-present executable that exits 1
     // immediately — no real PostgreSQL install required to exercise the
     // startDisposablePostgres catch block deterministically.
-    await expect(
-      createPostgresTestServer({
-        kind: 'cluster',
-        initialize: '/usr/bin/false',
-        control: '/usr/bin/false',
-      }),
-    ).rejects.toThrow('Could not start disposable PostgreSQL:');
+    expect(
+      await throwingRejectionOf(
+        createPostgresTestServer({
+          kind: 'cluster',
+          initialize: '/usr/bin/false',
+          control: '/usr/bin/false',
+        }),
+      ),
+    ).toThrow('Could not start disposable PostgreSQL:');
   });
 });
 

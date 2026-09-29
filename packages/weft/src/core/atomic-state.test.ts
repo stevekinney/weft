@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { DEFAULT_SCOPE, KEYS } from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createCoreStorageAdapter } from '../storage/storage-adapter.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   AtomicState,
   AtomicStateChangeEvent,
@@ -27,7 +28,7 @@ describe('AtomicState capability gate', () => {
       initial: 0,
     });
 
-    expect(state.set(1)).rejects.toThrow(
+    expect(await throwingRejectionOf(state.set(1))).toThrow(
       'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
     );
   });
@@ -38,7 +39,7 @@ describe('AtomicState capability gate', () => {
       initial: 0,
     });
 
-    expect(state.delete()).rejects.toThrow(
+    expect(await throwingRejectionOf(state.delete())).toThrow(
       'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
     );
   });
@@ -108,7 +109,7 @@ describe('AtomicState', () => {
       },
     });
 
-    expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
+    expect(await throwingRejectionOf(state.increment())).toThrow(AtomicStateConflictError);
     expect(sleepCalls).toHaveLength(2);
   });
 
@@ -199,7 +200,7 @@ describe('AtomicState', () => {
     state.addEventListener('conflict', (event) => events.push(event));
     state.addEventListener('exhausted', (event) => events.push(event));
 
-    expect(state.delete()).rejects.toMatchObject({
+    expect(await rejectionOf(state.delete())).toMatchObject({
       stateKey: key,
       attempts: 3,
       message: `AtomicState conflict: failed to update "${key}" after 3 attempts`,
@@ -275,7 +276,7 @@ describe('AtomicState', () => {
     state.addEventListener('exhausted', (event) => events.push(event));
     storage.conditionalBatch = async () => false;
 
-    expect(state.increment()).rejects.toThrow(AtomicStateConflictError);
+    expect(await throwingRejectionOf(state.increment())).toThrow(AtomicStateConflictError);
 
     expect(events[0]).toBeInstanceOf(AtomicStateConflictEvent);
     expect(events[1]).toBeInstanceOf(AtomicStateExhaustedEvent);

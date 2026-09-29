@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -144,7 +145,7 @@ describe('engine.resolveWorkflowSource()', () => {
     await waitUntil(() => loader.mock.calls.length > 0);
     controller.abort('a plain string reason, not an Error');
 
-    expect(call).rejects.toThrow('resolveWorkflowSource() aborted');
+    expect(await throwingRejectionOf(call)).toThrow('resolveWorkflowSource() aborted');
 
     deferred.resolve({ checkout: checkoutDefinition });
 
@@ -159,8 +160,10 @@ describe('engine.resolveWorkflowSource()', () => {
     controller.abort();
 
     expect(
-      engine.resolveWorkflowSource('checkout', checkoutRevision, { signal: controller.signal }),
-    ).rejects.toBeTruthy();
+      await rejectionOf(
+        engine.resolveWorkflowSource('checkout', checkoutRevision, { signal: controller.signal }),
+      ),
+    ).toBeTruthy();
     expect(loader).not.toHaveBeenCalled();
 
     engine[Symbol.dispose]();
@@ -183,7 +186,7 @@ describe('engine.resolveWorkflowSource()', () => {
     await waitUntil(() => loader.mock.calls.length > 0);
     controller.abort();
 
-    expect(aborting).rejects.toBeTruthy();
+    expect(await rejectionOf(aborting)).toBeTruthy();
 
     deferred.resolve({ checkout: checkoutDefinition });
     const siblingResult = await sibling;
@@ -203,10 +206,10 @@ describe('engine.resolveWorkflowSource()', () => {
 
     engine[Symbol.dispose]();
 
-    expect(inFlight).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(inFlight)).toBeInstanceOf(EngineDisposedError);
 
     const afterDispose = engine.resolveWorkflowSource('checkout', checkoutRevision);
-    expect(afterDispose).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(afterDispose)).toBeInstanceOf(EngineDisposedError);
     expect(loader).toHaveBeenCalledTimes(1);
 
     deferred.resolve({ checkout: checkoutDefinition });
@@ -220,9 +223,9 @@ describe('engine.resolveWorkflowSource()', () => {
       return attempt === 1 ? {} : { checkout: checkoutDefinition };
     });
 
-    expect(engine.resolveWorkflowSource('checkout', checkoutRevision)).rejects.toBeInstanceOf(
-      WorkflowSourceValidationError,
-    );
+    expect(
+      await rejectionOf(engine.resolveWorkflowSource('checkout', checkoutRevision)),
+    ).toBeInstanceOf(WorkflowSourceValidationError);
 
     const retried = await engine.resolveWorkflowSource('checkout', checkoutRevision);
     expect(retried.manifest.name).toBe('checkout');
@@ -336,7 +339,7 @@ describe('engine.resolveWorkflowSource()', () => {
     controller.abort();
     gate.resolve();
 
-    expect(call).rejects.toBeTruthy();
+    expect(await rejectionOf(call)).toBeTruthy();
     expect(loader).not.toHaveBeenCalled();
 
     engine[Symbol.dispose]();
@@ -376,7 +379,7 @@ describe('engine.resolveWorkflowSource()', () => {
     // Abort wins the race while the removal-generation read is still
     // in flight — this caller observes its own abort rejection immediately.
     controller.abort();
-    expect(call).rejects.toBeTruthy();
+    expect(await rejectionOf(call)).toBeTruthy();
     expect(loader).not.toHaveBeenCalled();
 
     // Only now does the gated read actually settle — by rejecting, well
@@ -393,7 +396,9 @@ describe('engine.resolveWorkflowSource()', () => {
   it('throws WorkflowSourceNotRegisteredError when resolving a (name, revision) that was never registerSource()-d', async () => {
     const engine = new Engine();
 
-    expect(engine.resolveWorkflowSource('neverRegistered', 'r1')).rejects.toThrow(/registerSource/);
+    expect(
+      await throwingRejectionOf(engine.resolveWorkflowSource('neverRegistered', 'r1')),
+    ).toThrow(/registerSource/);
 
     engine[Symbol.dispose]();
   });
@@ -412,9 +417,9 @@ describe('engine.resolveWorkflowSource()', () => {
     // documented programmer-error contract instead of silently succeeding
     // off a different process's install.
     const resolver = new Engine({ storage });
-    expect(resolver.resolveWorkflowSource('checkout', checkoutRevision)).rejects.toThrow(
-      /registerSource/,
-    );
+    expect(
+      await throwingRejectionOf(resolver.resolveWorkflowSource('checkout', checkoutRevision)),
+    ).toThrow(/registerSource/);
 
     resolver[Symbol.dispose]();
   });
@@ -504,7 +509,7 @@ describe('engine.resolveWorkflowSource()', () => {
     controller.abort();
     gate.resolve();
 
-    expect(call).rejects.toBeTruthy();
+    expect(await rejectionOf(call)).toBeTruthy();
     // The fast path never invokes this engine's own loader either way.
     expect(loader).not.toHaveBeenCalled();
 
@@ -533,7 +538,7 @@ describe('engine.resolveWorkflowSource()', () => {
     engine[Symbol.dispose]();
     gate.resolve();
 
-    expect(inFlight).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(inFlight)).toBeInstanceOf(EngineDisposedError);
     expect(loader).toHaveBeenCalledTimes(1);
 
     // `disposeSourceResolutionState()` already cleared this map; the

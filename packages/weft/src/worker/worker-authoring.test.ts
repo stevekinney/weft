@@ -36,8 +36,8 @@ describe('worker authoring primitives', () => {
 
     expect(worker.workflows.welcome.name).toBe('welcome');
     const table = buildQualifiedActivityTable(worker.workflows);
-    await expect(table['welcome.formatGreeting']?.({ name: 'Ada' })).resolves.toBe('Hi, Ada');
-    await expect(table['welcome.loadCount']?.(undefined)).resolves.toBe(7);
+    expect(await table['welcome.formatGreeting']?.({ name: 'Ada' })).toBe('Hi, Ada');
+    expect(await table['welcome.loadCount']?.(undefined)).toBe(7);
   });
 
   it('declares remote activities without an execute fallback', () => {

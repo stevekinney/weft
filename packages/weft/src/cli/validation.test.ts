@@ -14,6 +14,7 @@ import { join } from 'node:path';
 
 import type { ActivityDefinition, WorkflowDefinition } from '../index.ts';
 import { workflow } from '../index.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   formatValidationReport,
   loadRegistrationsFromModule,
@@ -281,7 +282,7 @@ export const sendEmail = fn;
 
     const { activities } = await loadRegistrationsFromModule(filePath);
     expect(activities.some((a) => a.name === 'sendEmail')).toBe(true);
-    expect(activities[0]!.execute('payload')).resolves.toEqual({ sent: true });
+    expect(await activities[0]!.execute('payload')).toEqual({ sent: true });
   });
 
   it('keys named workflow definitions by their canonical name', async () => {
@@ -300,7 +301,7 @@ export const greet = {
     const { registrations } = await loadRegistrationsFromModule(filePath);
     expect('greet' in registrations).toBe(false);
     const iterator = registrations['canonical-greet']!.handler({} as never, undefined);
-    expect(iterator.next()).resolves.toEqual({ value: 'hi', done: true });
+    expect(await iterator.next()).toEqual({ value: 'hi', done: true });
   });
 
   it('preserves workflow definitions whose canonical names are inherited object keys', async () => {
@@ -351,7 +352,7 @@ export default { defaultDefinition };
     const { registrations } = await loadRegistrationsFromModule(filePath);
     const iterator = registrations['toString']!.handler({} as never, undefined);
 
-    expect(iterator.next()).resolves.toEqual({ value: 'default', done: true });
+    expect(await iterator.next()).toEqual({ value: 'default', done: true });
   });
 
   it('loads a single default-exported workflow definition', async () => {
@@ -398,8 +399,8 @@ export default {
     expect(result.registrations['greet']).toBeDefined();
     expect(result.activities.some((activity) => activity.name === 'sendEmail')).toBe(true);
     const iterator = result.registrations['greet']!.handler({} as never, undefined);
-    expect(iterator.next()).resolves.toEqual({ value: 'hi', done: true });
-    expect(result.activities[0]!.execute('payload')).resolves.toEqual({ sent: true });
+    expect(await iterator.next()).toEqual({ value: 'hi', done: true });
+    expect(await result.activities[0]!.execute('payload')).toEqual({ sent: true });
   });
 
   it('loads an activity named handler from a default export object', async () => {
@@ -422,7 +423,7 @@ export default { handler };
     const result = await loadRegistrationsFromModule(filePath);
 
     expect(result.activities.map((activity) => activity.name)).toEqual(['handler']);
-    expect(result.activities[0]!.execute('payload')).resolves.toEqual({ handled: true });
+    expect(await result.activities[0]!.execute('payload')).toEqual({ handled: true });
   });
 
   it('keeps default-export definitions when a named export uses the same canonical name', async () => {
@@ -439,7 +440,7 @@ export default { greet: defaultGreet };
 
     const { registrations } = await loadRegistrationsFromModule(filePath);
     const iterator = registrations['greet']!.handler({} as never, undefined);
-    expect(iterator.next()).resolves.toEqual({ value: 'default', done: true });
+    expect(await iterator.next()).toEqual({ value: 'default', done: true });
   });
 
   it('rejects the removed bare handler registration shape', async () => {
@@ -454,7 +455,7 @@ export const greet = {
 `,
     );
 
-    expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+    expect(await throwingRejectionOf(loadRegistrationsFromModule(filePath))).toThrow(
       'Workflow export "greet" must be a builder-produced workflow definition with its own name',
     );
   });
@@ -473,7 +474,7 @@ export default {
 `,
     );
 
-    expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+    expect(await throwingRejectionOf(loadRegistrationsFromModule(filePath))).toThrow(
       'Workflow export "removedMetadata" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });
@@ -491,7 +492,7 @@ export const greet = {
 `,
     );
 
-    expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+    expect(await throwingRejectionOf(loadRegistrationsFromModule(filePath))).toThrow(
       'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });
@@ -511,7 +512,7 @@ export default {
 `,
     );
 
-    expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+    expect(await throwingRejectionOf(loadRegistrationsFromModule(filePath))).toThrow(
       'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });
@@ -604,7 +605,7 @@ export const greet = {
 `,
     );
 
-    expect(loadRegistrationsFromModule(filePath)).rejects.toThrow(
+    expect(await throwingRejectionOf(loadRegistrationsFromModule(filePath))).toThrow(
       'Workflow export "greet" must be a builder-produced workflow definition with its own name. Create it with `workflow({ name }).execute(handler)`.',
     );
   });

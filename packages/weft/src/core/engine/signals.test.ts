@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { SignalReceivedInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -86,25 +87,27 @@ describe('engine signals', () => {
     const internals = createSignalInternals(storage);
 
     expect(
-      signal(internals as never, 'workflow-delivered-before-throw', 'release', 'payload', {
-        ...createSignalCallbacks(),
-        getComposedInterceptor: () =>
-          ({
-            signalReceived: (
-              _interception: SignalReceivedInterception,
-              next: (interception: SignalReceivedInterception) => void,
-            ) => {
-              next({
-                headers: new Map<string, string>(),
-                payload: 'changed',
-                signalName: 'release',
-                workflowId: 'workflow-delivered-before-throw',
-              });
-              throw new Error('interceptor failed');
-            },
-          }) as never,
-      }),
-    ).rejects.toThrow('interceptor failed');
+      await throwingRejectionOf(
+        signal(internals as never, 'workflow-delivered-before-throw', 'release', 'payload', {
+          ...createSignalCallbacks(),
+          getComposedInterceptor: () =>
+            ({
+              signalReceived: (
+                _interception: SignalReceivedInterception,
+                next: (interception: SignalReceivedInterception) => void,
+              ) => {
+                next({
+                  headers: new Map<string, string>(),
+                  payload: 'changed',
+                  signalName: 'release',
+                  workflowId: 'workflow-delivered-before-throw',
+                });
+                throw new Error('interceptor failed');
+              },
+            }) as never,
+        }),
+      ),
+    ).toThrow('interceptor failed');
 
     expect(
       await consumeSignal(internals as never, 'workflow-delivered-before-throw', 'release'),
@@ -118,20 +121,22 @@ describe('engine signals', () => {
     const internals = createSignalInternals();
 
     expect(
-      signal(internals as never, 'workflow-double-next', 'release', 'payload', {
-        ...createSignalCallbacks(),
-        getComposedInterceptor: () =>
-          ({
-            signalReceived: (
-              interception: SignalReceivedInterception,
-              next: (interception: SignalReceivedInterception) => void,
-            ) => {
-              next(interception);
-              next(interception);
-            },
-          }) as never,
-      }),
-    ).rejects.toThrow('signalReceived interceptor called next() more than once');
+      await throwingRejectionOf(
+        signal(internals as never, 'workflow-double-next', 'release', 'payload', {
+          ...createSignalCallbacks(),
+          getComposedInterceptor: () =>
+            ({
+              signalReceived: (
+                interception: SignalReceivedInterception,
+                next: (interception: SignalReceivedInterception) => void,
+              ) => {
+                next(interception);
+                next(interception);
+              },
+            }) as never,
+        }),
+      ),
+    ).toThrow('signalReceived interceptor called next() more than once');
   });
 
   it('ignores empty and terminal signal deliveries', async () => {
@@ -263,10 +268,12 @@ describe('engine signals', () => {
     const callbacks = createSignalCallbacks();
 
     expect(
-      signal(internals as never, 'workflow-no-conditional-batch', 'release', 'first', callbacks, {
-        signalId: 'no-conditional-batch',
-      }),
-    ).rejects.toThrow('requires storage capability "conditionalBatch"');
+      await throwingRejectionOf(
+        signal(internals as never, 'workflow-no-conditional-batch', 'release', 'first', callbacks, {
+          signalId: 'no-conditional-batch',
+        }),
+      ),
+    ).toThrow('requires storage capability "conditionalBatch"');
 
     expect(internals.workflowsNeedingTerminalCleanup.has('workflow-no-conditional-batch')).toBe(
       false,
@@ -416,10 +423,12 @@ describe('engine signals', () => {
     const oversizeSignalId = 'x'.repeat(129);
 
     expect(
-      signal(internals as never, 'workflow-oversize-signal-id', 'release', 'first', callbacks, {
-        signalId: oversizeSignalId,
-      }),
-    ).rejects.toThrow('signalId must be at most 128 bytes');
+      await throwingRejectionOf(
+        signal(internals as never, 'workflow-oversize-signal-id', 'release', 'first', callbacks, {
+          signalId: oversizeSignalId,
+        }),
+      ),
+    ).toThrow('signalId must be at most 128 bytes');
     expect(
       await storage.get(
         KEYS.signalAcceptedResponse('workflow-oversize-signal-id', 'release', oversizeSignalId),
@@ -438,10 +447,12 @@ describe('engine signals', () => {
     const callbacks = createSignalCallbacks();
 
     expect(
-      signal(internals as never, 'workflow-empty-signal-id', 'release', 'first', callbacks, {
-        signalId: '',
-      }),
-    ).rejects.toThrow('signalId must be non-empty');
+      await throwingRejectionOf(
+        signal(internals as never, 'workflow-empty-signal-id', 'release', 'first', callbacks, {
+          signalId: '',
+        }),
+      ),
+    ).toThrow('signalId must be non-empty');
     expect(await consumeSignal(internals as never, 'workflow-empty-signal-id', 'release')).toEqual({
       found: false,
     });
@@ -454,17 +465,19 @@ describe('engine signals', () => {
     const oversizeSignalId = 'x'.repeat(129);
 
     expect(
-      bufferSignalPayloads(
-        internals as never,
-        'workflow-oversize-default-signal-id',
-        [
-          { signalName: 'first', payload: 'one' },
-          { signalName: 'second', payload: 'two' },
-        ],
-        callbacks,
-        { signalId: oversizeSignalId },
+      await throwingRejectionOf(
+        bufferSignalPayloads(
+          internals as never,
+          'workflow-oversize-default-signal-id',
+          [
+            { signalName: 'first', payload: 'one' },
+            { signalName: 'second', payload: 'two' },
+          ],
+          callbacks,
+          { signalId: oversizeSignalId },
+        ),
       ),
-    ).rejects.toThrow('signalId must be at most 128 bytes');
+    ).toThrow('signalId must be at most 128 bytes');
     expect(
       await consumeSignal(internals as never, 'workflow-oversize-default-signal-id', 'first'),
     ).toEqual({

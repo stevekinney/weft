@@ -6,6 +6,7 @@ import {
 } from '../../../scripts/lib/workflow-visibility-backfill.ts';
 import { KEYS, type ScanOptions } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { buildIndexOperations } from '../search-attributes.ts';
@@ -86,13 +87,13 @@ async function createFailedWorkflows(engine: Engine): Promise<void> {
   const applicationHandle = await engine.start('application-failure', null, {
     id: 'application-1',
   });
-  expect(applicationHandle.result()).rejects.toThrow('application failed');
+  expect(await throwingRejectionOf(applicationHandle.result())).toThrow('application failed');
 
   const resourceHandle = await engine.start('resource-failure', null, { id: 'resource-1' });
-  expect(resourceHandle.result()).rejects.toThrow('resource exhausted');
+  expect(await throwingRejectionOf(resourceHandle.result())).toThrow('resource exhausted');
 
   const timeoutHandle = await engine.start('timeout-failure', null, { id: 'timeout-1' });
-  expect(timeoutHandle.result()).rejects.toThrow('timed out');
+  expect(await throwingRejectionOf(timeoutHandle.result())).toThrow('timed out');
 }
 
 describe('resolveListCandidateIds', () => {

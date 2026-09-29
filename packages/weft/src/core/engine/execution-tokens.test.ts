@@ -83,7 +83,7 @@ describe('workflow and activity execution tokens', () => {
     expect(secondToken).toBeString();
     expect(secondToken).not.toBe(firstToken);
     expect(await engine.storage.get(KEYS.teardownSucceeded('stable-token-id'))).toBeNull();
-    expect(engine.getFinalizerStatus('stable-token-id')).resolves.toBeNull();
+    expect(await engine.getFinalizerStatus('stable-token-id')).toBeNull();
   });
 
   it('exposes workflow and finalizer attempt tokens to finalizers', async () => {

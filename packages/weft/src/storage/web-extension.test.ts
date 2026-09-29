@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { assertDurableStorageForRecovery, type BatchOperation } from './interface.ts';
 import { assertCapabilitiesShape } from './storage-adapter.test-support.ts';
 import { WebExtensionStorage } from './web-extension.ts';
@@ -294,7 +295,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', failingArea);
     try {
       const storage = new WebExtensionStorage();
-      expect(storage.put('key', encode('value'))).rejects.toThrow('set failed');
+      expect(await throwingRejectionOf(storage.put('key', encode('value')))).toThrow('set failed');
     } finally {
       restore();
     }
@@ -330,16 +331,20 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage();
-      expect(storage.get('__weftStorageKeyspace')).rejects.toThrow('reserved for adapter metadata');
-      expect(storage.put('__weftStorageKeyspace', encode('value'))).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.get('__weftStorageKeyspace'))).toThrow(
         'reserved for adapter metadata',
       );
       expect(
-        storage.batch([
-          { type: 'put', key: 'safe', value: encode('safe') },
-          { type: 'delete', key: '__weftStorageKeyspace' },
-        ]),
-      ).rejects.toThrow('reserved for adapter metadata');
+        await throwingRejectionOf(storage.put('__weftStorageKeyspace', encode('value'))),
+      ).toThrow('reserved for adapter metadata');
+      expect(
+        await throwingRejectionOf(
+          storage.batch([
+            { type: 'put', key: 'safe', value: encode('safe') },
+            { type: 'delete', key: '__weftStorageKeyspace' },
+          ]),
+        ),
+      ).toThrow('reserved for adapter metadata');
 
       expect(await collect(storage.keys(''))).toEqual([]);
       expect(area.setCallCount).toBe(0);
@@ -393,7 +398,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
-      expect(storage.put('key', encode('value'))).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.put('key', encode('value')))).toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
     } finally {
@@ -414,11 +419,11 @@ describe('WebExtensionStorage', () => {
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
 
-      expect(storage.deletePrefix('wf:')).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.deletePrefix('wf:'))).toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
       // An empty prefix is still a write attempt and must be rejected up front.
-      expect(storage.deletePrefix('missing:')).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.deletePrefix('missing:'))).toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
 
@@ -459,12 +464,14 @@ describe('WebExtensionStorage', () => {
     try {
       const storage = new WebExtensionStorage({ area: 'managed' });
 
-      expect(storage.deleteRange('ev:wf:', { lt: 'ev:wf:02' })).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.deleteRange('ev:wf:', { lt: 'ev:wf:02' }))).toThrow(
         'WebExtensionStorage area "managed" is read-only.',
       );
 
       // Invalid options still throw the validation error, never silently no-op.
-      expect(storage.deleteRange('ev:wf:', {})).rejects.toThrow(/at least one of gt\/gte\/lt\/lte/);
+      expect(await throwingRejectionOf(storage.deleteRange('ev:wf:', {}))).toThrow(
+        /at least one of gt\/gte\/lt\/lte/,
+      );
 
       expect(area.data.has('ev:wf:01')).toBe(true);
       expect(area.removeCallCount).toBe(0);
@@ -522,7 +529,7 @@ describe('WebExtensionStorage', () => {
     const restore = installStorageNamespace('browser', area);
     try {
       const storage = new WebExtensionStorage({ area: 'sync' });
-      expect(storage.put('large', encode('x'.repeat(128)))).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.put('large', encode('x'.repeat(128))))).toThrow(
         'WebExtensionStorage sync item quota exceeded',
       );
     } finally {
@@ -537,7 +544,7 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage({ area: 'sync' });
       await storage.put('small', encode('ok'));
 
-      expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.put('large', encode('x'.repeat(120))))).toThrow(
         'WebExtensionStorage sync total quota exceeded',
       );
     } finally {
@@ -561,7 +568,7 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage({ area: 'sync' });
       await storage.put('small', encode('ok'));
 
-      expect(storage.put('large', encode('x'.repeat(120)))).rejects.toThrow(
+      expect(await throwingRejectionOf(storage.put('large', encode('x'.repeat(120))))).toThrow(
         'WebExtensionStorage sync total quota exceeded',
       );
     } finally {

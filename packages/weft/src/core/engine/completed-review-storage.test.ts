@@ -2,6 +2,7 @@ import { describe, expect, it, mock, spyOn } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
 import {
@@ -113,19 +114,21 @@ describe('completed review storage helpers', () => {
     storage.conditionalBatch = mock(async () => false);
 
     expect(
-      persistCompletedReviewRecord(
-        {
-          deposed: false,
-          engine: {},
-          leaseManager: { currentEpochBytes: () => epochBytes },
-          options: { ownershipMode: 'lease' },
-          storage,
-          tearDownAfterDeposition: null,
-        } as never,
-        'review:workflow-1:review-1',
-        createReviewRequest(),
-        createDecision(),
+      await throwingRejectionOf(
+        persistCompletedReviewRecord(
+          {
+            deposed: false,
+            engine: {},
+            leaseManager: { currentEpochBytes: () => epochBytes },
+            options: { ownershipMode: 'lease' },
+            storage,
+            tearDownAfterDeposition: null,
+          } as never,
+          'review:workflow-1:review-1',
+          createReviewRequest(),
+          createDecision(),
+        ),
       ),
-    ).rejects.toThrow('Completed review commit for review "review-1" lost its precondition.');
+    ).toThrow('Completed review commit for review "review-1" lost its precondition.');
   });
 });

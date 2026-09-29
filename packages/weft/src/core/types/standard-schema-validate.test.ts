@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import * as v from 'valibot';
 import { z } from 'zod';
 
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { DefinitionSchema, StandardSchemaV1 } from './definition-schema.ts';
 import {
   StandardSchemaValidationError,
@@ -66,11 +67,13 @@ describe('validateStandardSchema', () => {
 
   it('throws StandardSchemaValidationError on failure', async () => {
     expect(
-      validateStandardSchema(stringSchema, 123, {
-        fieldName: 'payload',
-        operation: 'weft.workflows.signal',
-      }),
-    ).rejects.toBeInstanceOf(StandardSchemaValidationError);
+      await rejectionOf(
+        validateStandardSchema(stringSchema, 123, {
+          fieldName: 'payload',
+          operation: 'weft.workflows.signal',
+        }),
+      ),
+    ).toBeInstanceOf(StandardSchemaValidationError);
   });
 
   it('propagates async validator throws', async () => {
@@ -84,9 +87,9 @@ describe('validateStandardSchema', () => {
       },
     };
 
-    expect(validateStandardSchema(throwingSchema, 1, { fieldName: 'input' })).rejects.toThrow(
-      /validator blew up/,
-    );
+    expect(
+      await throwingRejectionOf(validateStandardSchema(throwingSchema, 1, { fieldName: 'input' })),
+    ).toThrow(/validator blew up/);
   });
 
   it('attaches fieldName, operation, and issues on the thrown error', async () => {
@@ -185,8 +188,8 @@ describe('validateStandardSchema', () => {
     };
 
     expect(
-      validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'input' }),
-    ).rejects.toBeInstanceOf(TypeError);
+      await rejectionOf(validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'input' })),
+    ).toBeInstanceOf(TypeError);
   });
 
   it('includes the field name in the TypeError message for JSON-Schema-only schemas', async () => {
@@ -202,8 +205,10 @@ describe('validateStandardSchema', () => {
     };
 
     expect(
-      validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'workflow.input' }),
-    ).rejects.toThrow(/workflow\.input/);
+      await throwingRejectionOf(
+        validateStandardSchema(jsonSchemaOnly, {}, { fieldName: 'workflow.input' }),
+      ),
+    ).toThrow(/workflow\.input/);
   });
 });
 

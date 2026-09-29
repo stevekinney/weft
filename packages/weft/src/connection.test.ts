@@ -11,6 +11,7 @@ import {
   writeRunLockfile,
 } from './connection.ts';
 import { setPortableRuntimeTestOverridesForTesting } from './runtime/portable.ts';
+import { throwingRejectionOf } from './testing/promise-outcome.test-support.ts';
 
 const created: string[] = [];
 
@@ -345,7 +346,7 @@ describe('writeRunLockfile / removeRunLockfile', () => {
   it('throws when neither Bun nor Node process.getBuiltinModule is available (browser/edge)', async () => {
     setPortableRuntimeTestOverridesForTesting({ process: undefined });
     try {
-      expect(writeRunLockfile('http://127.0.0.1:8888')).rejects.toThrow(
+      expect(await throwingRejectionOf(writeRunLockfile('http://127.0.0.1:8888'))).toThrow(
         /requires Bun or Node 22\.5\+ \(process\.getBuiltinModule\)/,
       );
     } finally {

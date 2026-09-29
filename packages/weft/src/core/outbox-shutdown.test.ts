@@ -14,6 +14,7 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   beginOne,
   claimOne,
@@ -137,7 +138,7 @@ describe('Outbox drain', () => {
 
   it('validates the drain budget', async () => {
     const { outbox } = createOutboxFixture();
-    expect(outbox.drain({ timeoutMs: Number.NaN })).rejects.toThrow(/timeoutMs/);
+    expect(await throwingRejectionOf(outbox.drain({ timeoutMs: Number.NaN }))).toThrow(/timeoutMs/);
     outbox.dispose();
   });
 });
@@ -175,7 +176,7 @@ describe('Outbox disposal', () => {
       using outbox = new Outbox({ storage, namespace: 'n', ownerId: 'o' });
       captured = outbox;
     }
-    expect(captured.receipt('x')).rejects.toThrow(/disposed/);
+    expect(await throwingRejectionOf(captured.receipt('x'))).toThrow(/disposed/);
     captured.dispose();
     // The default id source mints usable delivery ids.
     using fresh = new Outbox({ storage, namespace: 'n', ownerId: 'o' });

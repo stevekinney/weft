@@ -18,6 +18,29 @@ import type { EngineInternals } from './internals.ts';
  */
 export type CapturedRejectionReason = { value: unknown };
 
+export type OperationIdentity = {
+  operationId: string;
+  workflowExecutionToken?: string;
+};
+
+export function workflowExecutionTokenForWorkflow(
+  internals: EngineInternals,
+  workflowId: string,
+): string | undefined {
+  return (
+    internals.durableInlineOperations?.get(workflowId)?.workflowExecutionToken ??
+    internals.checkpoints?.get(workflowId)?.workflowExecutionToken
+  );
+}
+
+export function isCurrentWorkflowExecutionToken(
+  internals: EngineInternals,
+  workflowId: string,
+  workflowExecutionToken: string | undefined,
+): boolean {
+  return workflowExecutionTokenForWorkflow(internals, workflowId) === workflowExecutionToken;
+}
+
 /**
  * Feed an operation outcome back to the strategy. For failures, callers
  * pass the original thrown reason via a `CapturedRejectionReason`
@@ -29,6 +52,41 @@ export type CapturedRejectionReason = { value: unknown };
  * from the outcome message.
  */
 export function feedOperationResult(
+  internals: EngineInternals,
+  workflowId: string,
+  outcome: OperationOutcome,
+  originalReason: CapturedRejectionReason | undefined,
+  operationId: string,
+  workflowExecutionToken?: string,
+): void {
+  if (!isCurrentOperation(internals, workflowId, operationId, workflowExecutionToken)) {
+    return;
+  }
+  if (internals.inlineStrategy) {
+    if (outcome.status === 'completed') {
+      internals.inlineStrategy.continueWorkflow(workflowId, outcome.value);
+    } else {
+      internals.inlineStrategy.throwIntoWorkflow(
+        workflowId,
+        originalReason !== undefined
+          ? originalReason.value
+          : errorFromFailedOperationOutcome(outcome),
+        outcome.failureCategory,
+      );
+    }
+    return;
+  }
+
+  const checkpoint = internals.checkpoints.get(workflowId);
+  const serialized = checkpoint ? serializeCheckpoint(checkpoint) : new ArrayBuffer(0);
+  internals.strategy.resumeWorkflow({
+    workflowId,
+    checkpoint: serialized,
+    operationResult: outcome,
+  });
+}
+
+export function feedWorkflowResult(
   internals: EngineInternals,
   workflowId: string,
   outcome: OperationOutcome,
@@ -56,6 +114,19 @@ export function feedOperationResult(
     checkpoint: serialized,
     operationResult: outcome,
   });
+}
+
+export function isCurrentOperation(
+  internals: EngineInternals,
+  workflowId: string,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
+): boolean {
+  const current = internals.durableInlineOperations?.get(workflowId);
+  const currentToken =
+    current?.workflowExecutionToken ??
+    internals.checkpoints?.get(workflowId)?.workflowExecutionToken;
+  return current?.operationId === operationId && currentToken === workflowExecutionToken;
 }
 
 export async function swallowPromiseRejection(

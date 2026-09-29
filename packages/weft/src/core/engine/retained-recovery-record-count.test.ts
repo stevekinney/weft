@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { countTeardownDeadLettersForRevision } from './retained-recovery-record-count.ts';
 import type { TeardownDeadLetterRecord } from './termination/finalizer-claim.ts';
@@ -102,7 +103,9 @@ describe('countTeardownDeadLettersForRevision', () => {
     // `removeWorkflowRevision()` treat a revision an undecodable-but-real
     // dead letter still pins as safe to remove. It must now reject outright,
     // regardless of which OTHER records in the same scan were decodable.
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it('fails the whole scan closed on a history record that decodes successfully but is structurally malformed, rather than silently skipping it AND letting it suppress a legitimate legacy single-slot sibling (WFT-21, Codex review round 13, P2)', async () => {
@@ -133,7 +136,9 @@ describe('countTeardownDeadLettersForRevision', () => {
       ),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it("retains an earlier generation's dead-letter revision reference after the workflow id is reused (WFT-21, Codex review round 3, P2)", async () => {
@@ -261,7 +266,9 @@ describe('countTeardownDeadLettersForRevision', () => {
     // cannot be determined at all and could be exactly the queried type.
     await storage.put(KEYS.teardownDeadLetter('wf-malformed-single-slot'), encode(null));
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it('fails the whole scan closed on a single-slot record that decodes successfully as an object but is missing a string `type` field (WFT-21, Codex review round 14, P2 item TYSB)', async () => {
@@ -271,7 +278,9 @@ describe('countTeardownDeadLettersForRevision', () => {
       encode({ lastError: 'boom', attempts: 1, deadLetteredAt: 1 }),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 });
 
@@ -283,7 +292,9 @@ describe('hasValidDeadLetterDiscriminant fail-closed coverage (WFT-21, Codex rev
       encode({ revision: 'rev-a' }),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it('fails the whole scan closed on a history record whose type field is present but not a string', async () => {
@@ -293,7 +304,9 @@ describe('hasValidDeadLetterDiscriminant fail-closed coverage (WFT-21, Codex rev
       encode({ type: 123, revision: 'rev-a' }),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it('fails the whole scan closed on a history record with a valid type but a non-string revision', async () => {
@@ -303,7 +316,9 @@ describe('hasValidDeadLetterDiscriminant fail-closed coverage (WFT-21, Codex rev
       encode({ type: 'checkout', revision: 42 }),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 
   it('fails the whole scan closed on a single-slot record with a valid type but a non-string revision', async () => {
@@ -313,6 +328,8 @@ describe('hasValidDeadLetterDiscriminant fail-closed coverage (WFT-21, Codex rev
       encode({ type: 'checkout', revision: 42 }),
     );
 
-    expect(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(countTeardownDeadLettersForRevision(storage, 'checkout', 'rev-a')),
+    ).toThrow();
   });
 });

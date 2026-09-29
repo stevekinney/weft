@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -276,17 +277,19 @@ describe('termination helpers', () => {
     });
 
     expect(
-      failWorkflow(
-        internals,
-        handle.id,
-        workflowError,
-        createTerminationCallbacks({
-          cleanupReviews: async () => {
-            throw cleanupError;
-          },
-        }),
+      await rejectionOf(
+        failWorkflow(
+          internals,
+          handle.id,
+          workflowError,
+          createTerminationCallbacks({
+            cleanupReviews: async () => {
+              throw cleanupError;
+            },
+          }),
+        ),
       ),
-    ).rejects.toBe(cleanupError);
+    ).toBe(cleanupError);
 
     expect(reject).toHaveBeenCalledWith(workflowError);
     expect(internals.resultResolvers.has(handle.id)).toBe(false);
@@ -373,16 +376,18 @@ describe('termination helpers', () => {
     });
 
     expect(
-      cancelWorkflow(
-        internals,
-        handle.id,
-        createTerminationCallbacks({
-          cleanupReviews: async () => {
-            throw cleanupError;
-          },
-        }),
+      await rejectionOf(
+        cancelWorkflow(
+          internals,
+          handle.id,
+          createTerminationCallbacks({
+            cleanupReviews: async () => {
+              throw cleanupError;
+            },
+          }),
+        ),
       ),
-    ).rejects.toBe(cleanupError);
+    ).toBe(cleanupError);
 
     expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'Workflow cancelled' }));
     expect(internals.resultResolvers.has(handle.id)).toBe(false);

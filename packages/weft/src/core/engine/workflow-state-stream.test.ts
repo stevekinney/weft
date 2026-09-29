@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { flush } from '../../testing/storage-backends.test-support.ts';
 import type { ListFilter, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -134,7 +135,7 @@ describe('streamMatchingWorkflowStates', () => {
       await otherHandle.result();
       await secondHandle.result();
 
-      expect(collectMatchingWorkflowIds(engine, { tags: ['selected'] })).resolves.toEqual([
+      expect(await collectMatchingWorkflowIds(engine, { tags: ['selected'] })).toEqual([
         'stream-selected-a',
         'stream-selected-b',
       ]);
@@ -224,16 +225,16 @@ describe('workflow reverse-index scan caps', () => {
     await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
 
     expect(
-      queryChildWorkflowIndex(getInternals(engine), 'parent-id', 'parent-token'),
-    ).rejects.toBeInstanceOf(WorkflowListScanCapExceededError);
+      await rejectionOf(queryChildWorkflowIndex(getInternals(engine), 'parent-id', 'parent-token')),
+    ).toBeInstanceOf(WorkflowListScanCapExceededError);
   });
 
   it('rejects a schedule-run index that exceeds the bounded scan cap', async () => {
     const prefix = KEYS.scheduleRunBySchedulePrefix('schedule-id');
     await using engine = new Engine({ storage: new OversizedIndexStorage(prefix) });
 
-    expect(queryScheduleRunIndex(getInternals(engine), 'schedule-id')).rejects.toBeInstanceOf(
-      WorkflowListScanCapExceededError,
-    );
+    expect(
+      await rejectionOf(queryScheduleRunIndex(getInternals(engine), 'schedule-id')),
+    ).toBeInstanceOf(WorkflowListScanCapExceededError);
   });
 });

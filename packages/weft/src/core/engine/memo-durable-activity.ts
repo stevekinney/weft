@@ -19,8 +19,9 @@ import {
   executeActivityOperationResult,
   type ActivityOperationCallbacks,
 } from './operations-activity.ts';
-import { registerSleepResolver } from './operations-time.ts';
+import { registerSleepResolver } from './sleep-resolver-registration.ts';
 import { callMemoFunction } from './state-utilities.ts';
+import { workflowExecutionTokenForWorkflow } from './strategy-helpers.ts';
 
 type MemoOperation = Extract<ContextOperationRequest, { type: 'memo' }>;
 type SleepOperation = Extract<ContextOperationRequest, { type: 'sleep' }>;
@@ -275,6 +276,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
       operation.operationId,
       resolve,
       operation.scheduledFireAt,
+      workflowExecutionTokenForWorkflow(this.#internals, this.#workflowId),
     );
     await promise;
   }

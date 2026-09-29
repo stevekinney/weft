@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   computeIdentityDigest,
   computePayloadDigest,
@@ -86,7 +87,7 @@ describe('computePayloadDigest ordering', () => {
       value: () => Promise.reject(failure),
     });
     try {
-      expect(computePayloadDigest({ ok: true })).rejects.toThrow(failure);
+      expect(await throwingRejectionOf(computePayloadDigest({ ok: true }))).toThrow(failure);
     } finally {
       Object.defineProperty(crypto.subtle, 'digest', {
         configurable: true,
@@ -149,18 +150,18 @@ describe('computePayloadDigest fail-closed behavior', () => {
   it('rejects a cycle rather than looping', async () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
-    expect(computePayloadDigest(cyclic)).rejects.toThrow(PayloadDigestError);
-    expect(computePayloadDigest(cyclic)).rejects.toThrow(/cycle/);
+    expect(await throwingRejectionOf(computePayloadDigest(cyclic))).toThrow(PayloadDigestError);
+    expect(await throwingRejectionOf(computePayloadDigest(cyclic))).toThrow(/cycle/);
   });
 
   it('rejects a cycle reached through an array or a Set', async () => {
     const array: unknown[] = [];
     array.push(array);
-    expect(computePayloadDigest(array)).rejects.toThrow(/cycle/);
+    expect(await throwingRejectionOf(computePayloadDigest(array))).toThrow(/cycle/);
 
     const set = new Set<unknown>();
     set.add(set);
-    expect(computePayloadDigest(set)).rejects.toThrow(/cycle/);
+    expect(await throwingRejectionOf(computePayloadDigest(set))).toThrow(/cycle/);
   });
 
   it('allows the same object to appear twice, which is sharing rather than a cycle', async () => {
@@ -169,21 +170,27 @@ describe('computePayloadDigest fail-closed behavior', () => {
   });
 
   it('rejects a function or symbol value', async () => {
-    expect(computePayloadDigest({ run: () => 1 })).rejects.toThrow(/non-cloneable function/);
-    expect(computePayloadDigest({ tag: Symbol('x') })).rejects.toThrow(/non-cloneable symbol/);
+    expect(await throwingRejectionOf(computePayloadDigest({ run: () => 1 }))).toThrow(
+      /non-cloneable function/,
+    );
+    expect(await throwingRejectionOf(computePayloadDigest({ tag: Symbol('x') }))).toThrow(
+      /non-cloneable symbol/,
+    );
   });
 
   it('rejects a class instance it cannot order', async () => {
     class Ticket {
       constructor(readonly id: string) {}
     }
-    expect(computePayloadDigest({ ticket: new Ticket('t-1') })).rejects.toThrow(/class instance/);
+    expect(await throwingRejectionOf(computePayloadDigest({ ticket: new Ticket('t-1') }))).toThrow(
+      /class instance/,
+    );
   });
 
   it('rejects nesting past the depth ceiling', async () => {
     let deep: unknown = 'leaf';
     for (let level = 0; level < 70; level += 1) deep = { deep };
-    expect(computePayloadDigest(deep)).rejects.toThrow(/nesting exceeds/);
+    expect(await throwingRejectionOf(computePayloadDigest(deep))).toThrow(/nesting exceeds/);
 
     // Just inside the ceiling still digests.
     let shallow: unknown = 'leaf';

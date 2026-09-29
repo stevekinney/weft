@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import {
   createGatedLeaseHolderWriteStorage,
@@ -44,7 +45,7 @@ describe('lease test-support helpers', () => {
     expect(await baseStorage.get(KEYS.leaseHolder())).toBeNull();
 
     gated.release();
-    expect(holderWrite).resolves.toBe(true);
+    expect(await holderWrite).toBe(true);
     expect(await baseStorage.get(KEYS.leaseHolder())).toEqual(holderValue);
 
     await gated.storage.delete('lease-helper:put');
@@ -67,7 +68,7 @@ describe('lease test-support helpers', () => {
       { gateOnHolderPut: 1, phase: 'beforeCommit' },
     );
 
-    expect(gated.storage.conditionalBatch?.([], [])).rejects.toThrow(
+    expect(await throwingRejectionOf(gated.storage.conditionalBatch?.([], []))).toThrow(
       'Lease holder write gate requires conditionalBatch support.',
     );
   });
@@ -93,9 +94,9 @@ describe('lease test-support helpers', () => {
     await probed.storage.put('lease-probe:put', encode('put'));
     expect(await probed.storage.get('lease-probe:put')).toEqual(encode('put'));
 
-    expect(probed.storage.get(KEYS.leaseHolder())).resolves.toEqual(holderValue);
+    expect(await probed.storage.get(KEYS.leaseHolder())).toEqual(holderValue);
     const parkedPromise = probed.parked;
-    expect(probed.storage.get(KEYS.leaseHolder())).resolves.toEqual(holderValue);
+    expect(await probed.storage.get(KEYS.leaseHolder())).toEqual(holderValue);
     await parkedPromise;
 
     await probed.storage.batch([{ type: 'put', key: 'lease-probe:batch', value: encode('batch') }]);

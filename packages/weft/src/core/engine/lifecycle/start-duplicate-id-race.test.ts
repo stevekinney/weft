@@ -34,6 +34,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../../storage/memory.ts';
+import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { storageBackends } from '../../../testing/storage-backends.test-support.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
@@ -96,7 +97,7 @@ describe('WFT-152: two engines racing the same explicit start id', () => {
         const winner = (
           fulfilled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof engineA.start>>>
         ).value;
-        expect(winner.result()).resolves.toBe('ran');
+        expect(await winner.result()).toBe('ran');
 
         // Assert on the activity's OWN side effect rather than a returned status:
         // a build that let both engines launch a generator and only diverged at
@@ -147,8 +148,8 @@ describe('WFT-152: two engines racing the same explicit start id', () => {
     // Once the first run is durable, the second engine's duplicate-id READ sees
     // it and throws before the batch is ever built. Same error either way — the
     // CAS only covers the window that read cannot.
-    expect(engineB.start('duplicate-id-race', null, { id: workflowId })).rejects.toBeInstanceOf(
-      WorkflowAlreadyExistsError,
-    );
+    expect(
+      await rejectionOf(engineB.start('duplicate-id-race', null, { id: workflowId })),
+    ).toBeInstanceOf(WorkflowAlreadyExistsError);
   });
 });

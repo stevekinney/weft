@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
 import { encodeEpoch } from './lease-codec.ts';
@@ -79,9 +80,9 @@ describe('storage I/O helpers', () => {
     const state = createWorkflowState({ id: 'workflow-still-running' });
     await storage.put(KEYS.workflow(state.id), encode(state));
 
-    expect(loadWorkflowResult({ storage } as never, 'workflow-still-running')).rejects.toThrow(
-      'Workflow "workflow-still-running" is still running',
-    );
+    expect(
+      await throwingRejectionOf(loadWorkflowResult({ storage } as never, 'workflow-still-running')),
+    ).toThrow('Workflow "workflow-still-running" is still running');
   });
 
   it('restores failed, cancelled, timed-out, and missing workflow results distinctly', async () => {
@@ -114,22 +115,24 @@ describe('storage I/O helpers', () => {
       ),
     );
 
-    expect(loadWorkflowResult({ storage } as never, 'workflow-missing')).rejects.toThrow(
-      'Workflow "workflow-missing" not found',
-    );
+    expect(
+      await throwingRejectionOf(loadWorkflowResult({ storage } as never, 'workflow-missing')),
+    ).toThrow('Workflow "workflow-missing" not found');
 
-    expect(loadWorkflowResult({ storage } as never, 'workflow-failed')).rejects.toMatchObject({
+    expect(
+      await rejectionOf(loadWorkflowResult({ storage } as never, 'workflow-failed')),
+    ).toMatchObject({
       message: 'boom',
       stack: 'stack-trace',
     });
 
-    expect(loadWorkflowResult({ storage } as never, 'workflow-cancelled')).rejects.toThrow(
-      'Workflow cancelled',
-    );
+    expect(
+      await throwingRejectionOf(loadWorkflowResult({ storage } as never, 'workflow-cancelled')),
+    ).toThrow('Workflow cancelled');
 
-    expect(loadWorkflowResult({ storage } as never, 'workflow-timeout')).rejects.toThrow(
-      'Workflow "workflow-timeout" exceeded execution timeout after 50ms',
-    );
+    expect(
+      await throwingRejectionOf(loadWorkflowResult({ storage } as never, 'workflow-timeout')),
+    ).toThrow('Workflow "workflow-timeout" exceeded execution timeout after 50ms');
   });
 
   it('loads, requires, writes, and fences schedule state plus workflow start headers', async () => {
@@ -146,21 +149,17 @@ describe('storage I/O helpers', () => {
       encodeWorkflowStartHeaders(headers),
     );
 
-    expect(loadScheduleState({ storage } as never, scheduleState.id)).resolves.toEqual(
+    expect(await loadScheduleState({ storage } as never, scheduleState.id)).toEqual(scheduleState);
+    expect(await requireScheduleState({ storage } as never, scheduleState.id)).toEqual(
       scheduleState,
-    );
-    expect(requireScheduleState({ storage } as never, scheduleState.id)).resolves.toEqual(
-      scheduleState,
-    );
-    expect(requireScheduleState({ storage } as never, 'missing-schedule')).rejects.toThrow(
-      'Schedule "missing-schedule" not found',
     );
     expect(
-      loadWorkflowStartHeaders({ storage } as never, 'workflow-with-headers'),
-    ).resolves.toEqual(headers);
-    expect(loadWorkflowStartHeaders({ storage } as never, 'missing-headers')).resolves.toBe(
-      undefined,
+      await throwingRejectionOf(requireScheduleState({ storage } as never, 'missing-schedule')),
+    ).toThrow('Schedule "missing-schedule" not found');
+    expect(await loadWorkflowStartHeaders({ storage } as never, 'workflow-with-headers')).toEqual(
+      headers,
     );
+    expect(await loadWorkflowStartHeaders({ storage } as never, 'missing-headers')).toBe(undefined);
 
     await writeScheduleState(
       {
@@ -182,19 +181,19 @@ describe('storage I/O helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      writeScheduleState(
-        {
-          deposed: false,
-          leaseManager: { currentEpochBytes: () => epochBytes },
-          options: { ownershipMode: 'lease' },
-          storage,
-          tearDownAfterDeposition: null,
-        } as never,
-        createScheduleState({ id: 'schedule-fenced' }),
+      await throwingRejectionOf(
+        writeScheduleState(
+          {
+            deposed: false,
+            leaseManager: { currentEpochBytes: () => epochBytes },
+            options: { ownershipMode: 'lease' },
+            storage,
+            tearDownAfterDeposition: null,
+          } as never,
+          createScheduleState({ id: 'schedule-fenced' }),
+        ),
       ),
-    ).rejects.toThrow(
-      'Schedule state commit for schedule "schedule-fenced" lost its precondition.',
-    );
+    ).toThrow('Schedule state commit for schedule "schedule-fenced" lost its precondition.');
   });
 
   // WFT-20: writeScheduleState's `extraConditions` branch.
@@ -220,23 +219,25 @@ describe('storage I/O helpers', () => {
     storage.conditionalBatch = async () => false;
 
     expect(
-      writeScheduleState(
-        {
-          deposed: false,
-          leaseManager: null,
-          options: { ownershipMode: 'none' },
-          storage,
-        } as never,
-        createScheduleState({ id: 'schedule-extra-fenced-2' }),
-        {
-          // The key is genuinely absent, and `expectedValue: null` matches
-          // that — the re-check finds nothing stale, so the lost CAS must
-          // have come from some OTHER precondition (e.g. a lease-epoch
-          // fence), and the generic error is correct.
-          extraConditions: [{ key: 'catalog-entry:checkout:rev-b', expectedValue: null }],
-        },
+      await throwingRejectionOf(
+        writeScheduleState(
+          {
+            deposed: false,
+            leaseManager: null,
+            options: { ownershipMode: 'none' },
+            storage,
+          } as never,
+          createScheduleState({ id: 'schedule-extra-fenced-2' }),
+          {
+            // The key is genuinely absent, and `expectedValue: null` matches
+            // that — the re-check finds nothing stale, so the lost CAS must
+            // have come from some OTHER precondition (e.g. a lease-epoch
+            // fence), and the generic error is correct.
+            extraConditions: [{ key: 'catalog-entry:checkout:rev-b', expectedValue: null }],
+          },
+        ),
       ),
-    ).rejects.toThrow(
+    ).toThrow(
       'Schedule state commit for schedule "schedule-extra-fenced-2" lost its precondition.',
     );
   });
@@ -320,19 +321,21 @@ describe('ADR 0002 self vs. external-terminal workflow-state commits', () => {
     });
 
     expect(
-      commitExternalTerminalWorkflowStateOperations(
-        internals,
-        rotationTestWorkflowState,
-        [
-          {
-            type: 'put',
-            key: KEYS.workflow(rotationTestWorkflowState.id),
-            value: new Uint8Array([9]),
-          },
-        ],
-        { includePendingAtomicSideEffects: true },
+      await throwingRejectionOf(
+        commitExternalTerminalWorkflowStateOperations(
+          internals,
+          rotationTestWorkflowState,
+          [
+            {
+              type: 'put',
+              key: KEYS.workflow(rotationTestWorkflowState.id),
+              value: new Uint8Array([9]),
+            },
+          ],
+          { includePendingAtomicSideEffects: true },
+        ),
       ),
-    ).rejects.toThrow(/lost a commit precondition/);
+    ).toThrow(/lost a commit precondition/);
   });
 
   it('commitExternalTerminalWorkflowStateOperations under "lease" fences on the global lease epoch, never the workflow epoch', async () => {
@@ -415,14 +418,16 @@ describe('ADR 0002 self vs. external-terminal workflow-state commits', () => {
     // its stale cached epoch (1), loses its CAS and is deposed for just this
     // workflow (never a global halt — EngineDeposedError carries the id).
     expect(
-      commitSelfWorkflowStateOperations(
-        createCommitInternals(storage, 'workflow-lease', {
-          workflowClaimRegistry: previousOwnerRegistry,
-        }),
-        state,
-        [{ type: 'put', key: KEYS.workflow(workflowId), value: new Uint8Array([6]) }],
+      await rejectionOf(
+        commitSelfWorkflowStateOperations(
+          createCommitInternals(storage, 'workflow-lease', {
+            workflowClaimRegistry: previousOwnerRegistry,
+          }),
+          state,
+          [{ type: 'put', key: KEYS.workflow(workflowId), value: new Uint8Array([6]) }],
+        ),
       ),
-    ).rejects.toMatchObject({
+    ).toMatchObject({
       code: 'EngineDeposedError',
       workflowId,
     });
@@ -464,16 +469,16 @@ describe('ADR 0002 self vs. external-terminal workflow-state commits', () => {
     });
 
     expect(
-      buildExternalTerminalRotationFragment(
+      await buildExternalTerminalRotationFragment(
         createCommitInternals(explodingStorage, 'none'),
         'wf-short-circuit',
       ),
-    ).resolves.toEqual({ conditions: [], operations: [] });
+    ).toEqual({ conditions: [], operations: [] });
     expect(
-      buildExternalTerminalRotationFragment(
+      await buildExternalTerminalRotationFragment(
         createCommitInternals(explodingStorage, 'lease'),
         'wf-short-circuit',
       ),
-    ).resolves.toEqual({ conditions: [], operations: [] });
+    ).toEqual({ conditions: [], operations: [] });
   });
 });

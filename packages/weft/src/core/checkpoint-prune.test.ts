@@ -5,6 +5,7 @@ import { BunSQLiteStorage } from '../storage/bun-sql.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS, MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { serializeCheckpoint } from './checkpoint.ts';
 import { Engine } from './engine.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION, type Checkpoint, workflow } from './types.ts';
@@ -348,7 +349,7 @@ describe('Engine.pruneCheckpoints', () => {
           }),
         );
 
-        expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+        expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: 1 }))).toThrow(
           'storage refused the prune batch',
         );
         // The rejected batch never committed — all three entries remain.
@@ -376,7 +377,7 @@ describe('Engine.pruneCheckpoints', () => {
           }),
         );
 
-        expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+        expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: 1 }))).toThrow(
           'lost its race against a concurrent run replacement',
         );
         // The replacement's different execution token failed the guard before
@@ -429,8 +430,10 @@ describe('Engine.pruneCheckpoints', () => {
         controller.abort();
 
         expect(
-          engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
-        ).rejects.toThrow();
+          await throwingRejectionOf(
+            engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
+          ),
+        ).toThrow();
         expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
       });
 
@@ -530,7 +533,7 @@ describe('Engine.pruneCheckpoints', () => {
     // The fence anchor is captured before the scan starts, so even though the
     // replacement's rewrite happens mid-scan (not merely after it), the
     // destructive batch still fails closed against the pre-scan token.
-    expect(engine.pruneCheckpoints('wf-1', { keepLast: 1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: 1 }))).toThrow(
       'lost its race against a concurrent run replacement',
     );
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2, 3]);
@@ -571,7 +574,7 @@ describe('Engine.pruneCheckpoints', () => {
           await writeCheckpointHistory(storage, 'wf-1', step);
         }
         engine = new Engine({ storage });
-        expect(engine.pruneCheckpoints('wf-1', { keepLast: 0 })).rejects.toThrow(
+        expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: 0 }))).toThrow(
           'lost its CAS race',
         );
         expect(deleteBatches).toBe(replacementBatch);
@@ -598,8 +601,10 @@ describe('Engine.pruneCheckpoints', () => {
     await writeCheckpointHistory(storage, 'wf-1', 2);
     engine = new Engine({ storage });
     expect(
-      engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
-    ).rejects.toThrow('cancelled during preflight');
+      await throwingRejectionOf(
+        engine.pruneCheckpoints('wf-1', { keepLast: 1, signal: controller.signal }),
+      ),
+    ).toThrow('cancelled during preflight');
     expect(await listHistorySteps(storage, 'wf-1')).toEqual([1, 2]);
   });
 
@@ -625,10 +630,10 @@ describe('Engine.pruneCheckpoints', () => {
       }),
     );
 
-    expect(engine.pruneCheckpoints('wf-1', { keepLast: -1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: -1 }))).toThrow(
       'keepLast must be a non-negative integer',
     );
-    expect(engine.pruneCheckpoints('wf-1', { keepLast: 1.5 })).rejects.toThrow(
+    expect(await throwingRejectionOf(engine.pruneCheckpoints('wf-1', { keepLast: 1.5 }))).toThrow(
       'keepLast must be a non-negative integer',
     );
   });

@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,
@@ -168,7 +169,7 @@ describe('engine + workflow-builder integration', () => {
     // carries the bounded {workflowType, activityName} context. Direct
     // construction in another test pins the structured fields on the class
     // itself.
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'No activity registered with name "unknownActivity" for workflow type "broken"',
     );
   });

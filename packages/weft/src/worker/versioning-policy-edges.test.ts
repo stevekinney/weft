@@ -4,6 +4,7 @@ import { encode } from '../core/codec.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { WorkerDeploymentCatalog } from './deployment-routing.ts';
 import type { WorkerManifest } from './manifest/types.ts';
 import {
@@ -25,16 +26,18 @@ describe('workflow worker versioning edge policies', () => {
   it('rejects starts when no accepted routed deployment provides the workflow revision', async () => {
     using storage = new MemoryStorage();
 
-    await expect(
-      resolveWorkflowWorkerStartBinding(storage, {
-        workflowId: WORKFLOW_ID,
-        workflowType: WORKFLOW_TYPE,
-        workflowRevision: WORKFLOW_REVISION,
-        policy: { mode: 'pinned' },
-        checkpointId: WORKFLOW_ID,
-        boundAt: 1,
-      }),
-    ).rejects.toThrow('No accepted routed worker deployment provides workflow');
+    expect(
+      await throwingRejectionOf(
+        resolveWorkflowWorkerStartBinding(storage, {
+          workflowId: WORKFLOW_ID,
+          workflowType: WORKFLOW_TYPE,
+          workflowRevision: WORKFLOW_REVISION,
+          policy: { mode: 'pinned' },
+          checkpointId: WORKFLOW_ID,
+          boundAt: 1,
+        }),
+      ),
+    ).toThrow('No accepted routed worker deployment provides workflow');
   });
 
   it('uses the workflow contract as the binding activity contract when no activities are declared', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';
 import { activity, workflow } from './types.ts';
@@ -103,7 +104,7 @@ describe('Engine with activity worker execution', () => {
       engine.register(workerSagaWorkflow);
 
       const handle = await engine.start('worker-saga', null);
-      expect(handle.result()).resolves.toBe(42);
+      expect(await handle.result()).toBe(42);
 
       engine[Symbol.dispose]();
     });
@@ -183,7 +184,7 @@ describe('Engine with activity worker execution', () => {
 
       const handle = await engine.start('failing-workflow', null);
 
-      expect(handle.result()).rejects.toThrow();
+      expect(await throwingRejectionOf(handle.result())).toThrow();
 
       engine[Symbol.dispose]();
     });
@@ -212,7 +213,7 @@ describe('Engine with activity worker execution', () => {
 
       const handle = await engine.start('unknown-activity-workflow', null);
 
-      expect(handle.result()).rejects.toThrow();
+      expect(await throwingRejectionOf(handle.result())).toThrow();
 
       engine[Symbol.dispose]();
     });

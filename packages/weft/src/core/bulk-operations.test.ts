@@ -10,6 +10,7 @@ import {
   type ScanOptions,
 } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { BULK_WORKFLOW_FILTER_ERROR_MESSAGE } from './bulk-workflow-filter.ts';
 import { decode, encode } from './codec.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError, Engine } from './engine.ts';
@@ -601,7 +602,7 @@ describe('bulk workflow operations', () => {
     await storage.put(KEYS.deadline(state.executionDeadline, workflowId), new Uint8Array([1]));
     await storage.put(`timer-idx:deadline:${workflowId}`, new Uint8Array([1]));
 
-    expect(engine.deleteAll({ status: 'completed' })).resolves.toEqual({
+    expect(await engine.deleteAll({ status: 'completed' })).toEqual({
       deleted: 1,
     });
 
@@ -623,8 +624,10 @@ describe('bulk workflow operations', () => {
       storage.failedWorkflowId = 'bulk-delete-failure';
 
       expect(
-        engine.deleteAll({ tags: ['bulk-delete-partial'] }, { bulkConcurrency: 2 }),
-      ).rejects.toThrow('Bulk delete failed for 1 workflow(s) after deleting 1 workflow(s)');
+        await throwingRejectionOf(
+          engine.deleteAll({ tags: ['bulk-delete-partial'] }, { bulkConcurrency: 2 }),
+        ),
+      ).toThrow('Bulk delete failed for 1 workflow(s) after deleting 1 workflow(s)');
 
       expect(await engine.get('bulk-delete-success')).toBeNull();
       expect(await engine.get('bulk-delete-failure')).not.toBeNull();
@@ -805,13 +808,13 @@ describe('bulk workflow operations', () => {
       const result = await engine.signalAll({ tags: ['bulk-signal'] }, 'continue', 'released');
 
       expect(result).toEqual({ signalled: 2, failed: 0 });
-      expect(firstHandle.result()).resolves.toBe('first:released');
-      expect(secondHandle.result()).resolves.toBe('second:released');
+      expect(await firstHandle.result()).toBe('first:released');
+      expect(await secondHandle.result()).toBe('second:released');
       const untouchedState = await engine.get(untouchedHandle.id);
       expect(untouchedState?.status).toBe('running');
 
       await engine.signal(untouchedHandle.id, 'continue', 'cleanup');
-      expect(untouchedHandle.result()).resolves.toBe('other:cleanup');
+      expect(await untouchedHandle.result()).toBe('other:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -843,7 +846,7 @@ describe('bulk workflow operations', () => {
       );
 
       expect(result).toEqual({ signalled: 1, failed: 0 });
-      expect(handle.result()).resolves.toEqual(payload);
+      expect(await handle.result()).toEqual(payload);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -886,14 +889,14 @@ describe('bulk workflow operations', () => {
       );
 
       expect(result).toEqual({ signalled: 2, failed: 1 });
-      expect(firstHandle.result()).resolves.toBe('first:released');
-      expect(thirdHandle.result()).resolves.toBe('third:released');
+      expect(await firstHandle.result()).toBe('first:released');
+      expect(await thirdHandle.result()).toBe('third:released');
       const failedState = await engine.get(failedHandle.id);
       expect(failedState?.status).toBe('running');
 
       storage.workflowIdToFail = null;
       await engine.signal(failedHandle.id, 'continue', 'cleanup');
-      expect(failedHandle.result()).resolves.toBe('second:cleanup');
+      expect(await failedHandle.result()).toBe('second:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -994,8 +997,12 @@ describe('bulk workflow operations', () => {
       await waitForWorkflowStatus(engine, runningHandle.id, 'running');
 
       const deletePromise = engine.deleteAll({ tags: ['bulk-delete'] });
-      expect(deletePromise).rejects.toBeInstanceOf(BulkDeleteRequiresTerminalWorkflowsError);
-      expect(deletePromise).rejects.toThrow('Bulk delete matches non-terminal workflows');
+      expect(await rejectionOf(deletePromise)).toBeInstanceOf(
+        BulkDeleteRequiresTerminalWorkflowsError,
+      );
+      expect(await throwingRejectionOf(deletePromise)).toThrow(
+        'Bulk delete matches non-terminal workflows',
+      );
 
       expect(await engine.get('bulk-delete-completed')).not.toBeNull();
       expect(await engine.get('bulk-delete-failed')).not.toBeNull();
@@ -1030,7 +1037,7 @@ describe('bulk workflow operations', () => {
       storage.workflowStateGetCount = 0;
       storage.shouldFailWorkflowStateGet = true;
 
-      expect(engine.deleteAll({ status: 'completed' }, { dryRun: true })).resolves.toEqual(
+      expect(await engine.deleteAll({ status: 'completed' }, { dryRun: true })).toEqual(
         expect.objectContaining({
           action: 'delete',
           dryRun: true,
@@ -1054,9 +1061,9 @@ describe('bulk workflow operations', () => {
       await createCompletedWorkflow(engine, 'bulk-delete-reload-race', ['bulk-delete-reload-race']);
       storage.workflowIdToFlip = 'bulk-delete-reload-race';
 
-      expect(engine.deleteAll({ tags: ['bulk-delete-reload-race'] })).rejects.toBeInstanceOf(
-        BulkDeleteRequiresTerminalWorkflowsError,
-      );
+      expect(
+        await rejectionOf(engine.deleteAll({ tags: ['bulk-delete-reload-race'] })),
+      ).toBeInstanceOf(BulkDeleteRequiresTerminalWorkflowsError);
       expect(await engine.get('bulk-delete-reload-race')).not.toBeNull();
     } finally {
       await engine[Symbol.asyncDispose]();
@@ -1071,18 +1078,26 @@ describe('bulk workflow operations', () => {
     try {
       await createCompletedWorkflow(engine, 'bulk-invalid-pagination', ['bulk-invalid-pagination']);
 
-      expect(engine.cancelAll({ tags: ['bulk-invalid-pagination'], limit: -1 })).rejects.toThrow(
-        'filter.limit must be a non-negative number when provided',
-      );
       expect(
-        engine.signalAll({ tags: ['bulk-invalid-pagination'], offset: Number.NaN }, 'continue'),
-      ).rejects.toThrow('filter.offset must be a non-negative number when provided');
+        await throwingRejectionOf(
+          engine.cancelAll({ tags: ['bulk-invalid-pagination'], limit: -1 }),
+        ),
+      ).toThrow('filter.limit must be a non-negative number when provided');
       expect(
-        engine.deleteAll({ tags: ['bulk-invalid-pagination'], limit: Number.POSITIVE_INFINITY }),
-      ).rejects.toThrow('filter.limit must be a non-negative number when provided');
+        await throwingRejectionOf(
+          engine.signalAll({ tags: ['bulk-invalid-pagination'], offset: Number.NaN }, 'continue'),
+        ),
+      ).toThrow('filter.offset must be a non-negative number when provided');
       expect(
-        engine.tagAll({ tags: ['bulk-invalid-pagination'], offset: -1 }, ['bulk']),
-      ).rejects.toThrow('filter.offset must be a non-negative number when provided');
+        await throwingRejectionOf(
+          engine.deleteAll({ tags: ['bulk-invalid-pagination'], limit: Number.POSITIVE_INFINITY }),
+        ),
+      ).toThrow('filter.limit must be a non-negative number when provided');
+      expect(
+        await throwingRejectionOf(
+          engine.tagAll({ tags: ['bulk-invalid-pagination'], offset: -1 }, ['bulk']),
+        ),
+      ).toThrow('filter.offset must be a non-negative number when provided');
 
       expect(await engine.get('bulk-invalid-pagination')).not.toBeNull();
     } finally {
@@ -1094,15 +1109,19 @@ describe('bulk workflow operations', () => {
     const engine = new Engine({ storage: new MemoryStorage() });
 
     try {
-      expect(engine.cancelAll({})).rejects.toThrow(BULK_WORKFLOW_FILTER_ERROR_MESSAGE);
-      expect(engine.cancelAll({ tags: [] })).rejects.toThrow(BULK_WORKFLOW_FILTER_ERROR_MESSAGE);
-      expect(engine.cancelAll({ tags: ['   '] })).rejects.toThrow(
+      expect(await throwingRejectionOf(engine.cancelAll({}))).toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
-      expect(engine.cancelAll({ attributes: [] })).rejects.toThrow(
+      expect(await throwingRejectionOf(engine.cancelAll({ tags: [] }))).toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
-      expect(engine.cancelAll({ attributes: [{ key: '   ' }] })).rejects.toThrow(
+      expect(await throwingRejectionOf(engine.cancelAll({ tags: ['   '] }))).toThrow(
+        BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
+      );
+      expect(await throwingRejectionOf(engine.cancelAll({ attributes: [] }))).toThrow(
+        BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
+      );
+      expect(await throwingRejectionOf(engine.cancelAll({ attributes: [{ key: '   ' }] }))).toThrow(
         BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
       );
     } finally {
@@ -1312,8 +1331,8 @@ describe('bulk workflow operations', () => {
         const result = await engine.signalAll({ status: 'running' }, 'continue', 'released');
 
         expect(result).toEqual({ signalled: 1_001, failed: 0 });
-        expect(handles[0]?.result()).resolves.toBe('bulk-signal-input-0:released');
-        expect(handles[1_000]?.result()).resolves.toBe('bulk-signal-input-1000:released');
+        expect(await handles[0]?.result()).toBe('bulk-signal-input-0:released');
+        expect(await handles[1_000]?.result()).toBe('bulk-signal-input-1000:released');
         const lastWorkflow = await engine.get('bulk-signal-scan-1000');
         expect(lastWorkflow?.status).toBe('completed');
       } finally {
@@ -1527,11 +1546,13 @@ describe('bulk workflow operations', () => {
       });
 
       expect(
-        engine.cancelAll(
-          { tags: ['stale-token'] },
-          { confirmationToken: preview.confirmationToken },
+        await throwingRejectionOf(
+          engine.cancelAll(
+            { tags: ['stale-token'] },
+            { confirmationToken: preview.confirmationToken },
+          ),
         ),
-      ).rejects.toThrow('Bulk confirmation token does not match the current dry-run scope');
+      ).toThrow('Bulk confirmation token does not match the current dry-run scope');
       const firstStaleWorkflow = await engine.get('bulk-stale-selected-a');
       const secondStaleWorkflow = await engine.get('bulk-stale-selected-b');
       expect(firstStaleWorkflow?.status).toBe('pending');
@@ -1571,11 +1592,11 @@ describe('bulk workflow operations', () => {
       );
 
       expect(
-        engine.cancelAll(
+        await engine.cancelAll(
           { tags: ['stable-token'] },
           { confirmationToken: preview.confirmationToken },
         ),
-      ).resolves.toEqual(
+      ).toEqual(
         expect.objectContaining({
           cancelled: 1,
           failed: 0,
@@ -1612,15 +1633,17 @@ describe('bulk workflow operations', () => {
       );
 
       expect(
-        engine.signalAll({ tags: ['stale-signal-token'] }, 'continue', 'changed', {
-          confirmationToken: preview.confirmationToken,
-        }),
-      ).rejects.toThrow('Bulk confirmation token does not match the current dry-run scope');
+        await throwingRejectionOf(
+          engine.signalAll({ tags: ['stale-signal-token'] }, 'continue', 'changed', {
+            confirmationToken: preview.confirmationToken,
+          }),
+        ),
+      ).toThrow('Bulk confirmation token does not match the current dry-run scope');
       const workflowState = await engine.get(handle.id);
       expect(workflowState?.status).toBe('running');
 
       await engine.signal(handle.id, 'continue', 'cleanup');
-      expect(handle.result()).resolves.toBe('first:cleanup');
+      expect(await handle.result()).toBe('first:cleanup');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1637,15 +1660,19 @@ describe('bulk workflow operations', () => {
       const preview = await engine.tagAll({ tags: ['selected'] }, ['archived'], { dryRun: true });
 
       expect(
-        engine.tagAll({ tags: ['selected'] }, ['different'], {
-          confirmationToken: preview.confirmationToken,
-        }),
-      ).rejects.toThrow('Bulk confirmation token does not match the current dry-run scope');
+        await throwingRejectionOf(
+          engine.tagAll({ tags: ['selected'] }, ['different'], {
+            confirmationToken: preview.confirmationToken,
+          }),
+        ),
+      ).toThrow('Bulk confirmation token does not match the current dry-run scope');
       expect(
-        engine.untagAll({ tags: ['selected'] }, ['archived'], {
-          confirmationToken: preview.confirmationToken,
-        }),
-      ).rejects.toThrow('Bulk confirmation token does not match the current dry-run scope');
+        await throwingRejectionOf(
+          engine.untagAll({ tags: ['selected'] }, ['archived'], {
+            confirmationToken: preview.confirmationToken,
+          }),
+        ),
+      ).toThrow('Bulk confirmation token does not match the current dry-run scope');
 
       const workflowState = await engine.get('bulk-stale-tag-action');
       expect(workflowState?.tags).toEqual(['selected']);

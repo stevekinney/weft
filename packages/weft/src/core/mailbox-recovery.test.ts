@@ -12,6 +12,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import {
   admitOne,
@@ -375,7 +376,7 @@ describe('Mailbox maintenance', () => {
       KEYS.applicationCommand('bureau', 'agent-7', commandId),
       new Uint8Array([0xc1, 0xc1]),
     );
-    expect(mailbox.runMaintenance()).rejects.toThrow(/corrupt/);
+    expect(await throwingRejectionOf(mailbox.runMaintenance())).toThrow(/corrupt/);
     mailbox.dispose();
   });
 });

@@ -36,6 +36,7 @@ import {
   waitForCondition,
   waitForRealTimersForTesting,
 } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   Engine,
@@ -314,8 +315,8 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
 
       // Negative control: an explicit resume() this early loses the CAS —
       // proves the workflow is genuinely stranded, not just idle.
-      expect(engineB.resume(id)).rejects.toBeInstanceOf(WorkflowClaimUnavailableError);
-      expect(engineB.resume(id)).rejects.toMatchObject({
+      expect(await rejectionOf(engineB.resume(id))).toBeInstanceOf(WorkflowClaimUnavailableError);
+      expect(await rejectionOf(engineB.resume(id))).toMatchObject({
         workflowId: id,
         heldBy: holderBeforeCrash?.engineId,
       });
@@ -585,7 +586,7 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
 
       // The successor completes it normally, consuming the durably-buffered signal.
       const handle = await engineB.resume(id);
-      expect(handle.result()).resolves.toBe('ran');
+      expect(await handle.result()).toBe('ran');
       expect(runCountFor(id, 'before')).toBe(1);
       expect(runCountFor(id, 'after')).toBe(1);
 
@@ -601,9 +602,9 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       const engineA = await createDeploymentEngine(storage, () => now);
       expect(await storage.get(KEYS.ownershipModeMarker())).not.toBeNull();
 
-      expect(Engine.create({ storage, workflows, ownership: 'lease' })).rejects.toThrow(
-        OwnershipModeMismatchError,
-      );
+      expect(
+        await throwingRejectionOf(Engine.create({ storage, workflows, ownership: 'lease' })),
+      ).toThrow(OwnershipModeMismatchError);
 
       // 'none' never touches the marker, so it is NOT rejected — but it also
       // does not run concurrently with a live workflow-lease engine in this

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type {
   ActivityExecutionInterception,
   ActivityInterception,
@@ -1123,10 +1124,12 @@ describe('composeWorkflowInterceptors — signalReceived hook', () => {
       const composed = composeWorkflowInterceptors([interceptor]);
 
       expect(
-        composed.childWorkflow(makeChildWorkflowInterception(), async () => {
-          throw new Error('child workflow failed');
-        }),
-      ).rejects.toThrow('child workflow failed');
+        await throwingRejectionOf(
+          composed.childWorkflow(makeChildWorkflowInterception(), async () => {
+            throw new Error('child workflow failed');
+          }),
+        ),
+      ).toThrow('child workflow failed');
     });
   });
 });

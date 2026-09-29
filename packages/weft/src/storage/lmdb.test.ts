@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import * as lmdb from 'lmdb';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
 import { assertDurableStorageForRecovery } from './capabilities.ts';
 import { LMDBStorage } from './lmdb.ts';
@@ -104,7 +105,7 @@ describe('LMDBStorage', () => {
     const storage = createStorage();
     storage[Symbol.dispose]();
     // After dispose, reads should throw because the environment is closed.
-    expect(storage.get('key')).rejects.toThrow('LMDBStorage is closed');
+    expect(await throwingRejectionOf(storage.get('key'))).toThrow('LMDBStorage is closed');
   });
 
   it('reads are synchronous zero-copy (get returns without awaiting disk)', async () => {

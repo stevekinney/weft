@@ -12,6 +12,7 @@ import { ensureWorkflowCatalogReady } from '../../core/engine/catalog-readiness.
 import { getWorkflowCatalog } from '../../core/engine/index.ts';
 import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -225,13 +226,15 @@ describe('weft.catalog.diagnostics — REST GET /v1/catalog/:name/revisions/:rev
   });
 
   it('throws when invoked directly with a context whose engine is not a concrete Engine instance', async () => {
-    await expect(
-      getCatalogDiagnosticsOperation.invoke({
-        engine: {},
-        principal: { method: 'unauthenticated' },
-        transport: 'jsonRpcStdio',
-        input: { name: 'anything', revision: 'anything' },
-      }),
-    ).rejects.toThrow('Catalog diagnostics requires a concrete Engine instance.');
+    expect(
+      await throwingRejectionOf(
+        getCatalogDiagnosticsOperation.invoke({
+          engine: {},
+          principal: { method: 'unauthenticated' },
+          transport: 'jsonRpcStdio',
+          input: { name: 'anything', revision: 'anything' },
+        }),
+      ),
+    ).toThrow('Catalog diagnostics requires a concrete Engine instance.');
   });
 });

@@ -111,7 +111,7 @@ describe('executeValidate', () => {
         'throw new Error("node_modules should be ignored");',
       );
 
-      expect(expandGlobEntryPaths([join(workspacePath, 'examples/**/*.ts')])).resolves.toEqual([
+      expect(await expandGlobEntryPaths([join(workspacePath, 'examples/**/*.ts')])).toEqual([
         join(workspacePath, 'examples/order-processing/src.ts'),
       ]);
     } finally {
@@ -128,9 +128,9 @@ describe('executeValidate', () => {
       await Bun.write(join(examplePath, 'src.ts'), 'export const workflow = "clean";');
       await Bun.write(join(examplePath, 'src.test.ts'), 'export const testWorkflow = "clean";');
 
-      expect(expandGlobEntryPaths([join(workspacePath, 'examples/**/*.test.ts')])).resolves.toEqual(
-        [join(workspacePath, 'examples/order-processing/src.test.ts')],
-      );
+      expect(await expandGlobEntryPaths([join(workspacePath, 'examples/**/*.test.ts')])).toEqual([
+        join(workspacePath, 'examples/order-processing/src.test.ts'),
+      ]);
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }
@@ -148,10 +148,8 @@ describe('executeValidate', () => {
       );
 
       expect(
-        expandGlobEntryPaths([join(workspacePath, 'examples/**/tests/**/*.ts')]),
-      ).resolves.toEqual([
-        join(workspacePath, 'examples/order-processing/tests/order-processing.test.ts'),
-      ]);
+        await expandGlobEntryPaths([join(workspacePath, 'examples/**/tests/**/*.ts')]),
+      ).toEqual([join(workspacePath, 'examples/order-processing/tests/order-processing.test.ts')]);
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }
@@ -169,10 +167,10 @@ describe('executeValidate', () => {
       );
 
       expect(
-        expandGlobEntryPaths([join(workspacePath, 'examples/order-processing/tests/**/*.ts')]),
-      ).resolves.toEqual([
-        join(workspacePath, 'examples/order-processing/tests/order-processing.test.ts'),
-      ]);
+        await expandGlobEntryPaths([
+          join(workspacePath, 'examples/order-processing/tests/**/*.ts'),
+        ]),
+      ).toEqual([join(workspacePath, 'examples/order-processing/tests/order-processing.test.ts')]);
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }
@@ -187,7 +185,7 @@ describe('executeValidate', () => {
       await Bun.write(join(examplePath, 'src.ts'), 'export const workflow = "clean";');
       await Bun.write(join(examplePath, 'src.test.ts'), 'export const testWorkflow = "clean";');
 
-      expect(expandGlobEntryPaths([join(workspacePath, 'examples/**/*.ts')])).resolves.toEqual([
+      expect(await expandGlobEntryPaths([join(workspacePath, 'examples/**/*.ts')])).toEqual([
         join(workspacePath, 'examples/order-processing/src.ts'),
       ]);
     } finally {

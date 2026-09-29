@@ -1,6 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { EngineInternals } from './internals.ts';
 import type { CoordinationOperationCallbacks } from './operations-coordination.ts';
+import { isCurrentOperation } from './strategy-helpers.ts';
 
 type WaitConditionOperation = Extract<ContextOperationRequest, { type: 'wait-condition' }>;
 
@@ -14,7 +15,12 @@ export type ConditionOperationCallbacks = Pick<
    * throws — a throwing predicate must surface as a catchable workflow failure,
    * not park the run forever.
    */
-  failOperation: (workflowId: string, operation: WaitConditionOperation, error: unknown) => void;
+  failOperation: (
+    workflowId: string,
+    operation: WaitConditionOperation,
+    error: unknown,
+    workflowExecutionToken?: string,
+  ) => void;
   /** Whether the workflow is still running — gates completion after a wake. */
   isWorkflowRunning: (workflowId: string) => Promise<boolean>;
   /** Schedule the deterministic deadline timer (`cond:${workflowId}:${step}`). */
@@ -76,13 +82,16 @@ export async function processWaitConditionOperation(
   callbacks: ConditionOperationCallbacks,
 ): Promise<void> {
   const abortSignal = internals.abortController.signal;
+  const workflowExecutionToken =
+    internals.durableInlineOperations?.get(workflowId)?.workflowExecutionToken;
   const { predicate, deadline } = operation;
 
   let settled = false;
+  let registeredWaiter: (() => void) | undefined;
   const complete = (value: boolean | undefined): void => {
     if (settled) return;
     settled = true;
-    callbacks.completeOperation(workflowId, value);
+    callbacks.completeOperation(workflowId, value, operation.operationId, workflowExecutionToken);
   };
 
   if (abortSignal.aborted) return;
@@ -106,16 +115,42 @@ export async function processWaitConditionOperation(
     }
 
     try {
-      let step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
+      let step = await runConditionWaitStep(
+        internals,
+        workflowId,
+        predicate,
+        deadline,
+        callbacks,
+        operation.operationId,
+        workflowExecutionToken,
+        (waiter) => {
+          registeredWaiter = waiter;
+        },
+      );
       while (step.status === 'continue') {
-        step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
+        step = await runConditionWaitStep(
+          internals,
+          workflowId,
+          predicate,
+          deadline,
+          callbacks,
+          operation.operationId,
+          workflowExecutionToken,
+          (waiter) => {
+            registeredWaiter = waiter;
+          },
+        );
       }
       if (step.status === 'complete') complete(step.value);
     } finally {
-      releaseConditionWaiter(internals, workflowId);
-      if (deadline !== undefined) {
-        await callbacks.cancelConditionDeadline(workflowId, operation.step);
-      }
+      releaseConditionWaiter(internals, workflowId, registeredWaiter);
+      await cancelCurrentConditionDeadline(
+        internals,
+        workflowId,
+        operation,
+        workflowExecutionToken,
+        callbacks,
+      );
     }
   } catch (error) {
     // A user predicate is arbitrary code and can throw on its initial evaluation
@@ -133,7 +168,22 @@ export async function processWaitConditionOperation(
     // generator (`if (!generator) return`) and is absorbed — the workflow stays
     // completed. So no `settled` guard is needed here. Pinned by the "no
     // double-settle" test.
-    callbacks.failOperation(workflowId, operation, error);
+    callbacks.failOperation(workflowId, operation, error, workflowExecutionToken);
+  }
+}
+
+async function cancelCurrentConditionDeadline(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: WaitConditionOperation,
+  workflowExecutionToken: string | undefined,
+  callbacks: Pick<ConditionOperationCallbacks, 'cancelConditionDeadline'>,
+): Promise<void> {
+  if (
+    operation.deadline !== undefined &&
+    isTrackedCurrentOperation(internals, workflowId, operation.operationId, workflowExecutionToken)
+  ) {
+    await callbacks.cancelConditionDeadline(workflowId, operation.step);
   }
 }
 
@@ -153,12 +203,19 @@ async function runConditionWaitStep(
   predicate: () => boolean,
   deadline: number | undefined,
   callbacks: Pick<ConditionOperationCallbacks, 'isWorkflowRunning'>,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
+  onWaiterRegistered: (waiter: () => void) => void,
 ): Promise<ConditionWaitStepResult> {
   const abortSignal = internals.abortController.signal;
   if (abortSignal.aborted) return { status: 'stop' };
 
   const { promise, resolve } = Promise.withResolvers<void>();
+  if (!isTrackedCurrentOperation(internals, workflowId, operationId, workflowExecutionToken)) {
+    return { status: 'stop' };
+  }
   internals.conditionWaiters.set(workflowId, resolve);
+  onWaiterRegistered(resolve);
 
   // Lost-wakeup guard (the wait-signal second-consume analog): a poke between the
   // pre-registration eval and registering the waiter would otherwise be a no-op,
@@ -168,7 +225,7 @@ async function runConditionWaitStep(
     ? { done: true as const, value: undefined, aborted: true }
     : { ...evaluateConditionOutcome(internals, predicate, deadline), aborted: false };
   if (outcome.done) {
-    releaseConditionWaiter(internals, workflowId);
+    releaseConditionWaiter(internals, workflowId, resolve);
     return outcome.aborted ? { status: 'stop' } : { status: 'complete', value: outcome.value };
   }
 
@@ -190,6 +247,25 @@ async function runConditionWaitStep(
  * `finally` teardown — so an unconditional delete is correct (no stale-resolver
  * clobber is possible).
  */
-function releaseConditionWaiter(internals: EngineInternals, workflowId: string): void {
-  internals.conditionWaiters.delete(workflowId);
+function releaseConditionWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  expectedResolve?: () => void,
+): void {
+  if (
+    expectedResolve === undefined ||
+    internals.conditionWaiters.get(workflowId) === expectedResolve
+  ) {
+    internals.conditionWaiters.delete(workflowId);
+  }
+}
+
+function isTrackedCurrentOperation(
+  internals: EngineInternals,
+  workflowId: string,
+  operationId: string,
+  workflowExecutionToken: string | undefined,
+): boolean {
+  if (internals.durableInlineOperations === undefined) return true;
+  return isCurrentOperation(internals, workflowId, operationId, workflowExecutionToken);
 }

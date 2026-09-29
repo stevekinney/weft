@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { registerPendingAsyncActivity } from './async-activity-records.ts';
 import { encodeEpoch } from './lease-codec.ts';
 
@@ -13,26 +14,28 @@ describe('async activity registration', () => {
     storage.conditionalBatch = mock(async () => false);
 
     expect(
-      registerPendingAsyncActivity(
-        {
-          deposed: false,
-          engine: { dispatchEvent: () => true },
-          leaseManager: { currentEpochBytes: () => epochBytes },
-          options: { ownershipMode: 'lease' },
-          pendingAsyncActivities: new Map(),
-          storage,
-          tearDownAfterDeposition: null,
-        } as never,
-        {
-          token: 'token-1',
-          workflowId: 'workflow-1',
-          activityName: 'await-callback',
-          operationId: 'operation-1',
-          step: 1,
-          attempt: 1,
-          createdAt: 1_000,
-        },
+      await throwingRejectionOf(
+        registerPendingAsyncActivity(
+          {
+            deposed: false,
+            engine: { dispatchEvent: () => true },
+            leaseManager: { currentEpochBytes: () => epochBytes },
+            options: { ownershipMode: 'lease' },
+            pendingAsyncActivities: new Map(),
+            storage,
+            tearDownAfterDeposition: null,
+          } as never,
+          {
+            token: 'token-1',
+            workflowId: 'workflow-1',
+            activityName: 'await-callback',
+            operationId: 'operation-1',
+            step: 1,
+            attempt: 1,
+            createdAt: 1_000,
+          },
+        ),
       ),
-    ).rejects.toThrow('Async activity registration for token "token-1" lost its precondition.');
+    ).toThrow('Async activity registration for token "token-1" lost its precondition.');
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';
 import { workflow } from './types.ts';
@@ -260,7 +261,7 @@ describe('child workflows', () => {
     const handle = await engine.start('recursive', { depth: 15 });
 
     // The parent should fail because nesting depth is exceeded
-    expect(handle.result()).rejects.toThrow('nesting depth exceeded');
+    expect(await throwingRejectionOf(handle.result())).toThrow('nesting depth exceeded');
   });
 
   it('custom maxNestingDepth limits nesting', async () => {
@@ -282,7 +283,7 @@ describe('child workflows', () => {
     // Starting at level 0, it will try to nest: 0 -> 1 -> 2 -> 3
     // At depth 0->1 (depth 1), 1->2 (depth 2), 2->3 (depth 3 > max 2) should fail
     const handle = await engine.start('nested', { level: 0 });
-    expect(handle.result()).rejects.toThrow('nesting depth exceeded');
+    expect(await throwingRejectionOf(handle.result())).toThrow('nesting depth exceeded');
   });
 
   it('succeeds within custom maxNestingDepth', async () => {
@@ -406,14 +407,14 @@ describe('child workflows', () => {
       id: 'abandoned-completion-parent',
     });
 
-    expect(parentHandle.result()).resolves.toEqual({ id: childWorkflowId });
+    expect(await parentHandle.result()).toEqual({ id: childWorkflowId });
     await waitForWorkflowStatus(engine, childWorkflowId, 'running');
 
     const childState = await engine.get(childWorkflowId);
     expect(childState?.executionStateOwnerId).toBeUndefined();
 
     await engine.signal(childWorkflowId, 'finish', 'completed');
-    expect(engine.getHandle(childWorkflowId).result()).resolves.toBe('child:completed');
+    expect(await engine.getHandle(childWorkflowId).result()).toBe('child:completed');
   });
 
   it('abandoned child survives parent cancellation without parent execution ownership', async () => {
@@ -445,14 +446,14 @@ describe('child workflows', () => {
 
     await waitForWorkflowStatus(engine, childWorkflowId, 'running');
     await parentHandle.cancel();
-    expect(parentHandle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(parentHandle.result())).toThrow('Workflow cancelled');
 
     const childStateAfterParentCancel = await engine.get(childWorkflowId);
     expect(childStateAfterParentCancel?.status).toBe('running');
     expect(childStateAfterParentCancel?.executionStateOwnerId).toBeUndefined();
 
     await engine.signal(childWorkflowId, 'finish', 'after-parent-cancel');
-    expect(engine.getHandle(childWorkflowId).result()).resolves.toBe('child:after-parent-cancel');
+    expect(await engine.getHandle(childWorkflowId).result()).toBe('child:after-parent-cancel');
   });
 
   it('request-cancel child receives cancellation when the parent cancels', async () => {
@@ -483,9 +484,11 @@ describe('child workflows', () => {
 
     await waitForWorkflowStatus(engine, childWorkflowId, 'running');
     await parentHandle.cancel();
-    expect(parentHandle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(parentHandle.result())).toThrow('Workflow cancelled');
     await waitForWorkflowStatus(engine, childWorkflowId, 'cancelled');
-    expect(engine.getHandle(childWorkflowId).result()).rejects.toThrow('Workflow cancelled');
+    expect(await throwingRejectionOf(engine.getHandle(childWorkflowId).result())).toThrow(
+      'Workflow cancelled',
+    );
   });
 
   it('request-cancel child receives cancellation after parent recovery', async () => {
@@ -526,7 +529,7 @@ describe('child workflows', () => {
     await recoveredEngine.cancel(parentWorkflowId);
     await waitForWorkflowStatus(recoveredEngine, parentWorkflowId, 'cancelled');
     await waitForWorkflowStatus(recoveredEngine, childWorkflowId, 'cancelled');
-    expect(recoveredEngine.getHandle(childWorkflowId).result()).rejects.toThrow(
+    expect(await throwingRejectionOf(recoveredEngine.getHandle(childWorkflowId).result())).toThrow(
       'Workflow cancelled',
     );
     await recoveredEngine[Symbol.asyncDispose]();
@@ -558,7 +561,7 @@ describe('child workflows', () => {
       id: parentWorkflowId,
     });
 
-    expect(parentHandle.result()).resolves.toBe('child-result');
+    expect(await parentHandle.result()).toBe('child-result');
     const childState = await engine.get(childWorkflowId);
     expect(childState?.executionStateOwnerId).toBe(parentWorkflowId);
   });

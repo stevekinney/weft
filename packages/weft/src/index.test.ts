@@ -15,6 +15,7 @@ import {
   WorkflowAlreadyExistsError,
   WorkflowTeardownPendingError,
 } from './index.ts';
+import { rejectionOf } from './testing/promise-outcome.test-support.ts';
 
 describe('weft', () => {
   it('exports storage key helpers used by workspace consumers', () => {
@@ -71,9 +72,9 @@ describe('weft', () => {
 
     try {
       await engine.start('duplicate-id', null, { id: 'duplicate-id' });
-      expect(engine.start('duplicate-id', null, { id: 'duplicate-id' })).rejects.toBeInstanceOf(
-        WorkflowAlreadyExistsError,
-      );
+      expect(
+        await rejectionOf(engine.start('duplicate-id', null, { id: 'duplicate-id' })),
+      ).toBeInstanceOf(WorkflowAlreadyExistsError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -90,13 +91,15 @@ describe('weft', () => {
       const handle = await engine.start('startorsignal-terminal', null, { id: 'sos-export' });
       await handle.result();
       expect(
-        engine.startOrSignal(
-          'startorsignal-terminal',
-          null,
-          { name: 'noop', signalId: 'x' },
-          { id: 'sos-export' },
+        await rejectionOf(
+          engine.startOrSignal(
+            'startorsignal-terminal',
+            null,
+            { name: 'noop', signalId: 'x' },
+            { id: 'sos-export' },
+          ),
         ),
-      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+      ).toBeInstanceOf(StartOrSignalConflictError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -119,8 +122,10 @@ describe('weft', () => {
       await engine.purge({ idPrefix: handle.id });
       // The key now maps to a workflow that no longer exists.
       expect(
-        engine.start('idempotency-purged', null, { idempotencyKey: 'spent-key' }),
-      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+        await rejectionOf(
+          engine.start('idempotency-purged', null, { idempotencyKey: 'spent-key' }),
+        ),
+      ).toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode, encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -70,7 +71,7 @@ describe('attribute and tag helpers', () => {
     await cleanupAttributeIndex(internals, workflowId);
     expect(await storage.get(KEYS.attribute(workflowId))).toBeNull();
 
-    expect(cleanupAttributeIndex(internals, 'missing-attributes')).resolves.toBeUndefined();
+    expect(await cleanupAttributeIndex(internals, 'missing-attributes')).toBeUndefined();
   });
 
   it('returns false when tag mutation receives no runtime tags and removes the final tag on delete', async () => {
@@ -83,10 +84,8 @@ describe('attribute and tag helpers', () => {
 
     const internals = createInternals(storage);
 
-    expect(mutateWorkflowTags(internals, workflowId, undefined as never, 'add')).resolves.toBe(
-      false,
-    );
-    expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
+    expect(await mutateWorkflowTags(internals, workflowId, undefined as never, 'add')).toBe(false);
+    expect(await mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).toBe(true);
 
     const updatedState = await readWorkflowState(storage, workflowId);
     expect(updatedState?.tags).toBeUndefined();
@@ -101,17 +100,17 @@ describe('attribute and tag helpers', () => {
     }
 
     expect(
-      bulkMutateWorkflowTags(internals, { status: 'completed', limit: 0 }, ['bulk'], 'add'),
-    ).resolves.toEqual({ modified: 0 });
+      await bulkMutateWorkflowTags(internals, { status: 'completed', limit: 0 }, ['bulk'], 'add'),
+    ).toEqual({ modified: 0 });
 
     expect(
-      bulkMutateWorkflowTags(
+      await bulkMutateWorkflowTags(
         internals,
         { status: 'completed', offset: 1, limit: 1 },
         ['bulk'],
         'add',
       ),
-    ).resolves.toEqual({ modified: 1 });
+    ).toEqual({ modified: 1 });
 
     const bulkTagAState = await readWorkflowState(storage, 'bulk-tag-a');
     const bulkTagBState = await readWorkflowState(storage, 'bulk-tag-b');
@@ -130,8 +129,8 @@ describe('attribute and tag helpers', () => {
     }
 
     expect(
-      bulkMutateWorkflowTags(internals, { status: 'completed', limit: 1 }, ['bulk'], 'add'),
-    ).resolves.toEqual({ modified: 1 });
+      await bulkMutateWorkflowTags(internals, { status: 'completed', limit: 1 }, ['bulk'], 'add'),
+    ).toEqual({ modified: 1 });
     const bulkLimitAState = await readWorkflowState(storage, 'bulk-limit-a');
     const bulkLimitBState = await readWorkflowState(storage, 'bulk-limit-b');
     expect(bulkLimitAState?.tags).toEqual(['bulk']);
@@ -148,10 +147,12 @@ describe('attribute and tag helpers', () => {
     };
 
     expect(
-      bulkMutateWorkflowTags(explodingInternals, { status: 'completed' }, ['bulk'], 'add', [
-        'bulk-explode',
-      ]),
-    ).rejects.toThrow('unexpected read failure');
+      await throwingRejectionOf(
+        bulkMutateWorkflowTags(explodingInternals, { status: 'completed' }, ['bulk'], 'add', [
+          'bulk-explode',
+        ]),
+      ),
+    ).toThrow('unexpected read failure');
   });
 
   it('routes "category" to the matching ADR 0002 commit shape: "external-terminal" rotates wf-owner-epoch under workflow-lease, "self" fences on this engine\'s own (absent) claim and fails closed', async () => {
@@ -170,8 +171,13 @@ describe('attribute and tag helpers', () => {
     });
 
     expect(
-      updateWorkflowState(internals, workflowId, { status: 'cancelled' }, 'external-terminal'),
-    ).resolves.not.toBeNull();
+      await updateWorkflowState(
+        internals,
+        workflowId,
+        { status: 'cancelled' },
+        'external-terminal',
+      ),
+    ).not.toBeNull();
     expect(decodeEpoch((await storage.get(KEYS.workflowOwnerEpoch(workflowId)))!)).toBe(1);
 
     await storage.put(
@@ -179,8 +185,8 @@ describe('attribute and tag helpers', () => {
       encode(createWorkflowState(workflowId, { status: 'running' })),
     );
     expect(
-      updateWorkflowState(internals, workflowId, { status: 'failed' }, 'self'),
-    ).rejects.toMatchObject({ code: 'EngineDeposedError' });
+      await rejectionOf(updateWorkflowState(internals, workflowId, { status: 'failed' }, 'self')),
+    ).toMatchObject({ code: 'EngineDeposedError' });
   });
 
   it('mutateWorkflowTags never rotates wf-owner-epoch — non-terminal external mutations do not end the run (ADR 0002)', async () => {
@@ -197,7 +203,7 @@ describe('attribute and tag helpers', () => {
       options: { getNow: () => 2_000, ownershipMode: 'workflow-lease' },
     });
 
-    expect(mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).resolves.toBe(true);
+    expect(await mutateWorkflowTags(internals, workflowId, ['solo'], 'remove')).toBe(true);
 
     expect(await storage.get(KEYS.workflowOwnerEpoch(workflowId))).toEqual(seededEpochBytes);
   });

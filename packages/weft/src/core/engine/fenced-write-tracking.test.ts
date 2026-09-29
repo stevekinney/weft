@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import type { Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow } from '../types.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
@@ -91,7 +92,7 @@ async function expectOnlyTheWriteTracked(
   expect(await Promise.allSettled(tracked)).toEqual([{ status: 'fulfilled', value: false }]);
 
   held.release();
-  await expect(commit).rejects.toThrow('lost race');
+  expect(await throwingRejectionOf(commit)).toThrow('lost race');
   internals.storage = base;
 }
 

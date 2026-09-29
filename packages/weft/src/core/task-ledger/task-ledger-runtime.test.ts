@@ -12,6 +12,7 @@ import { describe, expect, it } from 'bun:test';
 
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { commitTaskLedgerDelete } from './task-ledger-runtime.ts';
 import { canDeleteRetainedTerminalTask } from './task-ledger-transitions.ts';
 import {
@@ -162,13 +163,15 @@ describe('commitTaskLedgerDelete', () => {
     // dropped, so the guard must fire before either is ever called.
     const storageWithoutCapabilities = { get: (key: string) => backing.get(key) };
 
-    await expect(
-      commitTaskLedgerDelete(
-        storageWithoutCapabilities,
-        record.operationId,
-        (current) => canDeleteRetainedTerminalTask(current, { expectedRetentionGeneration: 0 }),
-        1,
+    expect(
+      await throwingRejectionOf(
+        commitTaskLedgerDelete(
+          storageWithoutCapabilities,
+          record.operationId,
+          (current) => canDeleteRetainedTerminalTask(current, { expectedRetentionGeneration: 0 }),
+          1,
+        ),
       ),
-    ).rejects.toThrow('Task ledger deletion requires storage capabilities.');
+    ).toThrow('Task ledger deletion requires storage capabilities.');
   });
 });

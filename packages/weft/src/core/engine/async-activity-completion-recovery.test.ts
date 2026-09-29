@@ -1,14 +1,19 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
 import { withTimeout } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
-import { recoverPendingAsyncActivities } from './async-activity-records.ts';
+import { AsyncActivityDeferral, parkDeferredAsyncActivity } from './async-activity-completion.ts';
+import {
+  buildAsyncActivityResolutionWrite,
+  recoverPendingAsyncActivities,
+} from './async-activity-records.ts';
 import { getInternals } from './internals.ts';
 
 const awaitCallback = activity({
@@ -46,7 +51,7 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    expect(withTimeout(handle.result(), 500, 'early async completion')).resolves.toEqual({
+    expect(await withTimeout(handle.result(), 500, 'early async completion')).toEqual({
       approval: { decision: 'arrived-before-adoption' },
     });
 
@@ -86,14 +91,14 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    expect(withTimeout(handle.result(), 500, 'early async failure')).resolves.toBe(
+    expect(await withTimeout(handle.result(), 500, 'early async failure')).toBe(
       'caught:arrived-before-adoption',
     );
 
     recoveredEngine[Symbol.dispose]();
   });
 
-  it('ignores malformed persisted resolution outcomes while recovering records', async () => {
+  it('fails closed on legacy persisted resolutions without run identity', async () => {
     await using storage = new MemoryStorage();
     await storage.put(
       KEYS.asyncActivityResolution('workflow-1', 'token-1'),
@@ -107,10 +112,76 @@ describe('async activity completion recovery buffering', () => {
     );
 
     const engine = new Engine({ storage });
-    await recoverPendingAsyncActivities(getInternals(engine));
+    expect(await throwingRejectionOf(recoverPendingAsyncActivities(getInternals(engine)))).toThrow(
+      'legacy async-activity resolution record without run identity',
+    );
 
-    expect(getInternals(engine).pendingAsyncActivityResolutions?.size ?? 0).toBe(0);
+    engine[Symbol.dispose]();
+  });
 
+  it('skips persisted resolutions with an unsupported outcome status', async () => {
+    await using storage = new MemoryStorage();
+    await storage.put(
+      KEYS.asyncActivityResolution('workflow-invalid-outcome', 'token-invalid'),
+      encode({
+        version: 2,
+        kind: 'resolution',
+        token: 'token-invalid',
+        workflowId: 'workflow-invalid-outcome',
+        operationId: 'operation-invalid',
+        outcome: { status: 'cancelled', error: 'unsupported' },
+      }),
+    );
+
+    const engine = new Engine({ storage });
+    const internals = getInternals(engine);
+    await recoverPendingAsyncActivities(internals);
+    expect(internals.pendingAsyncActivities.size).toBe(0);
+    engine[Symbol.dispose]();
+  });
+
+  it('drops a recovered acknowledgement whose persisted token belongs to a stale run', async () => {
+    await using storage = new MemoryStorage();
+    const workflowId = 'recovered-stale-resolution';
+    const token = 'async-token';
+    const write = buildAsyncActivityResolutionWrite(
+      workflowId,
+      token,
+      { status: 'completed', value: 'stale' },
+      'operation-reused',
+      'old-run',
+    );
+    if (write.type !== 'put' || !(write.value instanceof Uint8Array)) {
+      throw new Error('expected encoded resolution write');
+    }
+    await storage.put(write.key, write.value);
+
+    const engine = new Engine({ storage });
+    const internals = getInternals(engine);
+    await recoverPendingAsyncActivities(internals);
+    internals.durableInlineOperations.set(workflowId, {
+      operationId: 'operation-reused',
+      type: 'activity',
+      workflowExecutionToken: 'successor-run',
+    });
+    const feedOperationResult = mock(() => {});
+    const finalizeTimeline = mock(() => {});
+    void parkDeferredAsyncActivity(
+      internals,
+      new AsyncActivityDeferral(token),
+      {
+        workflowId,
+        activityName: 'awaitCallback',
+        operationId: 'operation-reused',
+        step: 0,
+        attempt: 1,
+      },
+      { feedOperationResult, finalizeTimeline },
+    );
+    await Promise.resolve();
+
+    expect(feedOperationResult).not.toHaveBeenCalled();
+    expect(finalizeTimeline).not.toHaveBeenCalled();
     engine[Symbol.dispose]();
   });
   it('reloads only the requested workflow when scoped to a single id', async () => {

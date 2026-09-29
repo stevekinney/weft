@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { buildWorkflowContract } from './build.ts';
 import { MAX_CONTRACT_MESSAGE_COUNT, MAX_NORMALIZED_CONTRACT_BYTES } from './limits.ts';
 import { parseWorkflowRevisionManifest } from './manifest-parse.ts';
@@ -41,16 +42,18 @@ describe('buildWorkflowRevisionManifest', () => {
 
   it('rejects an empty supplied revision', async () => {
     const contract = buildWorkflowContract({ name: 'checkout' });
-    expect(buildWorkflowRevisionManifest(contract, { revision: '' })).rejects.toThrow(
-      /must not be an empty string/,
-    );
+    expect(
+      await throwingRejectionOf(buildWorkflowRevisionManifest(contract, { revision: '' })),
+    ).toThrow(/must not be an empty string/);
   });
 
   it('rejects an oversized supplied revision', async () => {
     const contract = buildWorkflowContract({ name: 'checkout' });
-    expect(buildWorkflowRevisionManifest(contract, { revision: 'x'.repeat(600) })).rejects.toThrow(
-      /exceeding the maximum identifier size/,
-    );
+    expect(
+      await throwingRejectionOf(
+        buildWorkflowRevisionManifest(contract, { revision: 'x'.repeat(600) }),
+      ),
+    ).toThrow(/exceeding the maximum identifier size/);
   });
 
   it('revision changes when description changes, even though contractHash does not', async () => {
@@ -93,7 +96,9 @@ describe('buildWorkflowRevisionManifest', () => {
         activities,
       };
 
-      expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/too-many-entries/);
+      expect(await throwingRejectionOf(buildWorkflowRevisionManifest(contract))).toThrow(
+        /too-many-entries/,
+      );
     });
 
     it('rejects, at build time, tags large enough to overflow MAX_NORMALIZED_CONTRACT_BYTES — the same bound parseWorkflowRevisionManifest enforces', async () => {
@@ -103,7 +108,9 @@ describe('buildWorkflowRevisionManifest', () => {
         tags: ['x'.repeat(MAX_NORMALIZED_CONTRACT_BYTES + 1)],
       };
 
-      expect(buildWorkflowRevisionManifest(contract)).rejects.toThrow(/manifest-too-large/);
+      expect(await throwingRejectionOf(buildWorkflowRevisionManifest(contract))).toThrow(
+        /manifest-too-large/,
+      );
     });
   });
 });

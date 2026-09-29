@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { removeCatalogEntry } from '../catalog/removal.ts';
 import { WorkflowCatalog } from '../catalog/workflow-catalog.ts';
 import { encode } from '../codec.ts';
@@ -61,7 +62,7 @@ async function simulateCrashedRemoval(
 describe('resolveOrphanedCatalogTombstones', () => {
   it('is a no-op when no tombstones are present', async () => {
     const storage = new MemoryStorage();
-    expect(resolveOrphanedCatalogTombstones(storage)).resolves.toBeUndefined();
+    expect(await resolveOrphanedCatalogTombstones(storage)).toBeUndefined();
   });
 
   it('finalizes an orphaned tombstone with zero durable non-terminal references', async () => {
@@ -246,7 +247,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
     const storage = new MemoryStorage();
     await storage.put('catalog-tombstone:onlyonepart', new TextEncoder().encode('{}'));
 
-    expect(resolveOrphanedCatalogTombstones(storage)).rejects.toThrow(
+    expect(await throwingRejectionOf(resolveOrphanedCatalogTombstones(storage))).toThrow(
       /does not match the expected/,
     );
   });
@@ -276,10 +277,10 @@ describe('resolveOrphanedCatalogTombstones', () => {
 
     const isolated: Array<{ name: string; revision: string }> = [];
     expect(
-      resolveOrphanedCatalogTombstones(storage, (name, revision) => {
+      await resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     // Before the fix, the `checkout` tombstone's decode failure propagated
     // out of the whole sweep, so the `shipping` tombstone below was NEVER
@@ -324,10 +325,10 @@ describe('resolveOrphanedCatalogTombstones', () => {
 
     const isolated: Array<{ name: string; revision: string }> = [];
     expect(
-      resolveOrphanedCatalogTombstones(storage, (name, revision) => {
+      await resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     // Restored, not finalized: since the reference count could not be
     // proven zero, the conservative default is to keep the revision
@@ -374,10 +375,10 @@ describe('resolveOrphanedCatalogTombstones', () => {
     // exactly as it was (neither restored nor finalized), and the sweep
     // still reports the isolated failure and completes normally.
     expect(
-      resolveOrphanedCatalogTombstones(storage, (name, revision) => {
+      await resolveOrphanedCatalogTombstones(storage, (name, revision) => {
         isolated.push({ name, revision });
       }),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
 
     storage.conditionalBatch = originalConditionalBatch;
     expect(await storage.get(tombstoneKey)).not.toBeNull();
@@ -390,8 +391,8 @@ describe('resolveCatalogTombstoneIfPresent', () => {
   it('is a no-op when no tombstone exists for the exact (name, revision) key', async () => {
     const storage = new MemoryStorage();
     expect(
-      resolveCatalogTombstoneIfPresent(storage, 'checkout', 'no-such-revision'),
-    ).resolves.toBeUndefined();
+      await resolveCatalogTombstoneIfPresent(storage, 'checkout', 'no-such-revision'),
+    ).toBeUndefined();
   });
 
   it('resolves a tombstone present for the exact (name, revision) key', async () => {

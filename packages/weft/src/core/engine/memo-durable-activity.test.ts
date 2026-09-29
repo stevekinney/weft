@@ -7,6 +7,7 @@ import {
   waitForCondition,
   waitForever,
 } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { decode } from '../codec.ts';
 import { durableActivity } from '../context/durable-activity.ts';
 import type { Context } from '../context/index.ts';
@@ -110,7 +111,7 @@ async function setupPendingHelper(scenario: PendingHelperScenario): Promise<Pend
 
 describe('ctx.memo durableActivity helper', () => {
   it('throws a targeted error outside a workflow activation', async () => {
-    expect(durableActivity('executeTool', { tool: 'outside' })).rejects.toThrow(
+    expect(await throwingRejectionOf(durableActivity('executeTool', { tool: 'outside' }))).toThrow(
       'durableActivity() can only be called from a ctx.memo() callback',
     );
   });
@@ -174,7 +175,7 @@ describe('ctx.memo durableActivity helper', () => {
     recoveredEngine.register(definition);
     const [recoveredHandle] = await recoveredEngine.recoverAll();
 
-    expect(recoveredHandle!.result()).resolves.toEqual({
+    expect(await recoveredHandle!.result()).toEqual({
       toolResult: { execution: 1, tool: 'lookup' },
     });
     expect(executeCount).toBe(1);
@@ -229,7 +230,7 @@ describe('ctx.memo durableActivity helper', () => {
     recoveredEngine.register(definition);
     const [recoveredHandle] = await recoveredEngine.recoverAll();
 
-    expect(recoveredHandle!.result()).resolves.toEqual({
+    expect(await recoveredHandle!.result()).toEqual({
       toolResult: { execution: 2, tool: 'lookup' },
     });
     expect(executeCount).toBe(2);
@@ -273,7 +274,7 @@ describe('ctx.memo durableActivity helper', () => {
     engine.register(definition);
     const handle = await engine.start('helper-retry', null, { id: 'helper-retry-1' });
 
-    expect(handle.result()).resolves.toEqual({
+    expect(await handle.result()).toEqual({
       afterResult: 'after-memo',
       stepIndex: 2,
       toolResult: { attempts: 2, tool: 'lookup' },
@@ -348,7 +349,7 @@ describe('ctx.memo durableActivity helper', () => {
     now = 1_000;
     await recoveredEngine.scheduler.tick(now);
 
-    expect(recoveredHandle!.result()).resolves.toEqual({ attempts: 2 });
+    expect(await recoveredHandle!.result()).toEqual({ attempts: 2 });
     expect(attempts).toBe(2);
     recoveredEngine[Symbol.dispose]();
   });
@@ -375,7 +376,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'typed-helper-callable-1',
     });
 
-    expect(handle.result()).resolves.toEqual({ echoed: 'typed-input' });
+    expect(await handle.result()).toEqual({ echoed: 'typed-input' });
     expect(
       hasCompletedActivityRecord(await readActivityReconciliationRecords(storage, handle.id)),
     ).toBe(true);
@@ -407,7 +408,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'no-input-helper-callable-1',
     });
 
-    expect(handle.result()).resolves.toEqual({ calls: 1 });
+    expect(await handle.result()).toEqual({ calls: 1 });
     const [record] = await readActivityReconciliationRecords(storage, handle.id);
     expect(record).toMatchObject({
       activityName: 'noInputTool',
@@ -439,7 +440,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'no-input-bare-helper-1',
     });
 
-    expect(handle.result()).resolves.toEqual({ calls: 1 });
+    expect(await handle.result()).toEqual({ calls: 1 });
     const [record] = await readActivityReconciliationRecords(storage, handle.id);
     expect(record).toMatchObject({
       activityName: 'noInputBareTool',
@@ -469,7 +470,7 @@ describe('ctx.memo durableActivity helper', () => {
     engine.register(definition);
     const handle = await engine.start('pending-on-return', null, { id: 'pending-on-return-1' });
 
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'durableActivity() calls started inside ctx.memo() must be awaited',
     );
     const records = await readActivityReconciliationRecords(storage, 'pending-on-return-1');
@@ -523,7 +524,7 @@ describe('ctx.memo durableActivity helper', () => {
       id: 'helper-complete-async-1',
     });
 
-    expect(handle.result()).rejects.toThrow(
+    expect(await throwingRejectionOf(handle.result())).toThrow(
       'ActivityContext.completeAsync() is not supported from durableActivity()',
     );
   });
@@ -569,7 +570,7 @@ describe('ctx.memo durableActivity helper', () => {
     } as unknown as EngineInternals;
 
     expect(
-      callMemoFunctionWithDurableActivityScope(
+      await callMemoFunctionWithDurableActivityScope(
         internals,
         'listener-cleanup-1',
         {
@@ -584,7 +585,7 @@ describe('ctx.memo durableActivity helper', () => {
           persistCheckpoint: async () => {},
         },
       ),
-    ).resolves.toBe('memo-result');
+    ).toBe('memo-result');
     expect(addAbortListenerCount).toBe(1);
     expect(removeAbortListenerCount).toBe(1);
   });
@@ -607,24 +608,26 @@ describe('ctx.memo durableActivity helper', () => {
       } as unknown as EngineInternals;
 
       expect(
-        callMemoFunctionWithDurableActivityScope(
-          internals,
-          'non-error-memo-failure-1',
-          {
-            fn: () => {
-              throw thrownValue;
+        await throwingRejectionOf(
+          callMemoFunctionWithDurableActivityScope(
+            internals,
+            'non-error-memo-failure-1',
+            {
+              fn: () => {
+                throw thrownValue;
+              },
+              key: 'step-0',
+              operationId: 'memo-non-error-failure',
+              step: 0,
+              type: 'memo',
             },
-            key: 'step-0',
-            operationId: 'memo-non-error-failure',
-            step: 0,
-            type: 'memo',
-          },
-          {
-            getActivityOperationCallbacks: () => ({}) as never,
-            persistCheckpoint: async () => {},
-          },
+            {
+              getActivityOperationCallbacks: () => ({}) as never,
+              persistCheckpoint: async () => {},
+            },
+          ),
         ),
-      ).rejects.toThrow(expectedMessage);
+      ).toThrow(expectedMessage);
     },
   );
 });

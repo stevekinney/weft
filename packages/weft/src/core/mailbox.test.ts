@@ -12,6 +12,7 @@ import { collectKeys } from '../testing/storage-backends.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { decode, encode } from './codec.ts';
 import { ApplicationCommandValidationError } from './mailbox-validation.ts';
 import {
@@ -316,7 +317,7 @@ describe('Mailbox payload identity', () => {
     const record = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...record, payload: { form: 'inline', value: 'tampered' } }));
 
-    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -335,7 +336,7 @@ describe('Mailbox payload identity', () => {
     ],
   ])('rejects %s at the boundary', async (_name, override) => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.admit(commandInput(override))).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.admit(commandInput(override)))).toThrow(
       ApplicationCommandValidationError,
     );
     mailbox.dispose();
@@ -344,8 +345,10 @@ describe('Mailbox payload identity', () => {
   it('rejects an inline payload over the configured ceiling', async () => {
     const { mailbox } = createMailboxFixture({ maxInlinePayloadBytes: 64 });
     expect(
-      mailbox.admit(commandInput({ payload: { form: 'inline', value: 'x'.repeat(512) } })),
-    ).rejects.toThrow(/inline ceiling/);
+      await throwingRejectionOf(
+        mailbox.admit(commandInput({ payload: { form: 'inline', value: 'x'.repeat(512) } })),
+      ),
+    ).toThrow(/inline ceiling/);
     mailbox.dispose();
   });
 
@@ -354,8 +357,10 @@ describe('Mailbox payload identity', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic['self'] = cyclic;
     expect(
-      mailbox.admit(commandInput({ payload: { form: 'inline', value: cyclic } })),
-    ).rejects.toThrow(/not encodable by the structured-clone codec/);
+      await throwingRejectionOf(
+        mailbox.admit(commandInput({ payload: { form: 'inline', value: cyclic } })),
+      ),
+    ).toThrow(/not encodable by the structured-clone codec/);
     mailbox.dispose();
   });
 
@@ -365,8 +370,10 @@ describe('Mailbox payload identity', () => {
     let deep: unknown = 'leaf';
     for (let level = 0; level < 70; level += 1) deep = { deep };
     expect(
-      mailbox.admit(commandInput({ payload: { form: 'inline', value: deep } })),
-    ).rejects.toThrow(/cannot be digested/);
+      await throwingRejectionOf(
+        mailbox.admit(commandInput({ payload: { form: 'inline', value: deep } })),
+      ),
+    ).toThrow(/cannot be digested/);
     mailbox.dispose();
   });
 });
@@ -387,7 +394,7 @@ describe('Mailbox input validation', () => {
     ['causation.correlationId', { causation: { correlationId: 'c'.repeat(257) } }],
   ])('rejects an invalid %s', async (_name, override) => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.admit(commandInput(override))).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.admit(commandInput(override)))).toThrow(
       ApplicationCommandValidationError,
     );
     mailbox.dispose();
@@ -395,7 +402,9 @@ describe('Mailbox input validation', () => {
 
   it('rejects a non-object command', async () => {
     const { mailbox } = createMailboxFixture();
-    expect(mailbox.admit(null as never)).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.admit(null as never))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 
@@ -492,8 +501,12 @@ describe('Mailbox observation', () => {
     await admitOne(mailbox);
     const listed = await mailbox.list({ limit: 50_000 });
     expect(listed.length).toBe(1);
-    expect(mailbox.list({ limit: 0 })).rejects.toThrow(ApplicationCommandValidationError);
-    expect(mailbox.list({ limit: 1.5 })).rejects.toThrow(ApplicationCommandValidationError);
+    expect(await throwingRejectionOf(mailbox.list({ limit: 0 }))).toThrow(
+      ApplicationCommandValidationError,
+    );
+    expect(await throwingRejectionOf(mailbox.list({ limit: 1.5 }))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 });
@@ -572,9 +585,11 @@ describe('Mailbox hostile persisted records', () => {
     const key = keyFor(commandId);
     await storage.put(key, new Uint8Array([0xc1, 0xc1, 0xc1]));
 
-    expect(_name === 'command' ? mailbox.receipt(commandId) : mailbox.capacity()).rejects.toThrow(
-      PersistedDataCorruptError,
-    );
+    expect(
+      await throwingRejectionOf(
+        _name === 'command' ? mailbox.receipt(commandId) : mailbox.capacity(),
+      ),
+    ).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -585,7 +600,7 @@ describe('Mailbox hostile persisted records', () => {
       KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'k'),
       encode({ recordVersion: 1, commandId: 42 }),
     );
-    expect(mailbox.admit(commandInput({ idempotencyKey: 'k' }))).rejects.toThrow(
+    expect(await throwingRejectionOf(mailbox.admit(commandInput({ idempotencyKey: 'k' })))).toThrow(
       PersistedDataCorruptError,
     );
     mailbox.dispose();
@@ -595,7 +610,7 @@ describe('Mailbox hostile persisted records', () => {
     const { mailbox, storage } = createMailboxFixture();
     await admitOne(mailbox);
     await storage.put(KEYS.applicationCommandReady('bureau', 'agent-7', 0), encode(42));
-    expect(mailbox.claim()).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(PersistedDataCorruptError);
     mailbox.dispose();
   });
 
@@ -606,7 +621,9 @@ describe('Mailbox hostile persisted records', () => {
     const stored = await storage.get(key);
     const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, recordVersion: 2 }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 
@@ -617,7 +634,9 @@ describe('Mailbox hostile persisted records', () => {
     const stored = await storage.get(key);
     const decoded = decode(stored!) as Record<string, unknown>;
     await storage.put(key, encode({ ...decoded, state: 'levitating' }));
-    expect(mailbox.receipt(commandId)).rejects.toThrow(PersistedDataCorruptError);
+    expect(await throwingRejectionOf(mailbox.receipt(commandId))).toThrow(
+      PersistedDataCorruptError,
+    );
     mailbox.dispose();
   });
 
@@ -641,15 +660,17 @@ describe('Mailbox disposal', () => {
     mailbox.dispose();
     mailbox.dispose(); // idempotent
 
-    expect(mailbox.admit(commandInput())).rejects.toThrow(/disposed/);
-    expect(mailbox.receipt('x')).rejects.toThrow(/disposed/);
-    expect(mailbox.list()).rejects.toThrow(/disposed/);
-    expect(mailbox.capacity()).rejects.toThrow(/disposed/);
-    expect(mailbox.claim()).rejects.toThrow(/disposed/);
-    expect(mailbox.runMaintenance()).rejects.toThrow(/disposed/);
-    expect(mailbox.cleanupState('x')).rejects.toThrow(/disposed/);
-    expect(mailbox.waitForAvailable()).rejects.toThrow(/disposed/);
-    expect(mailbox.requestCancellation({ commandId: 'x' })).rejects.toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.admit(commandInput()))).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.receipt('x'))).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.list())).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.capacity())).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.claim())).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.runMaintenance())).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.cleanupState('x'))).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.waitForAvailable())).toThrow(/disposed/);
+    expect(await throwingRejectionOf(mailbox.requestCancellation({ commandId: 'x' }))).toThrow(
+      /disposed/,
+    );
   });
 
   it('supports `using` disposal', async () => {

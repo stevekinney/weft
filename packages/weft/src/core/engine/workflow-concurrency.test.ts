@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { WorkflowConcurrencyLimitExceededError } from './errors.ts';
@@ -44,7 +45,7 @@ describe('workflow definition concurrency', () => {
 
     const first = await engine.start('limited-global', { value: 'first' });
 
-    expect(engine.start('limited-global', { value: 'second' })).rejects.toMatchObject({
+    expect(await rejectionOf(engine.start('limited-global', { value: 'second' }))).toMatchObject({
       code: 'WorkflowConcurrencyLimitExceededError',
       workflowType: 'limited-global',
       limit: 1,
@@ -59,11 +60,11 @@ describe('workflow definition concurrency', () => {
     }
 
     await engine.signal(first.id, 'release', 'done');
-    expect(first.result()).resolves.toBe('first:done');
+    expect(await first.result()).toBe('first:done');
 
     const second = await engine.start('limited-global', { value: 'second' });
     await engine.signal(second.id, 'release', 'done');
-    expect(second.result()).resolves.toBe('second:done');
+    expect(await second.result()).toBe('second:done');
   });
 
   it('limits starts independently per user-defined partition key', async () => {
@@ -84,7 +85,9 @@ describe('workflow definition concurrency', () => {
     const firstAlpha = await engine.start('limited-by-customer', { customerId: 'alpha' });
     const firstBeta = await engine.start('limited-by-customer', { customerId: 'beta' });
 
-    expect(engine.start('limited-by-customer', { customerId: 'alpha' })).rejects.toMatchObject({
+    expect(
+      await rejectionOf(engine.start('limited-by-customer', { customerId: 'alpha' })),
+    ).toMatchObject({
       code: 'WorkflowConcurrencyLimitExceededError',
       workflowType: 'limited-by-customer',
       limit: 1,
@@ -92,14 +95,14 @@ describe('workflow definition concurrency', () => {
     });
 
     await engine.signal(firstAlpha.id, 'release', 'done');
-    expect(firstAlpha.result()).resolves.toBe('alpha:done');
+    expect(await firstAlpha.result()).toBe('alpha:done');
 
     const secondAlpha = await engine.start('limited-by-customer', { customerId: 'alpha' });
 
     await engine.signal(firstBeta.id, 'release', 'done');
     await engine.signal(secondAlpha.id, 'release', 'done');
-    expect(firstBeta.result()).resolves.toBe('beta:done');
-    expect(secondAlpha.result()).resolves.toBe('alpha:done');
+    expect(await firstBeta.result()).toBe('beta:done');
+    expect(await secondAlpha.result()).toBe('alpha:done');
   });
 
   it('wraps thrown workflow concurrency key errors with workflow context', async () => {
@@ -116,7 +119,9 @@ describe('workflow definition concurrency', () => {
       }).execute(waitForRelease),
     );
 
-    expect(engine.start('limited-by-throwing-key', { value: 'first' })).rejects.toThrow(
+    expect(
+      await throwingRejectionOf(engine.start('limited-by-throwing-key', { value: 'first' })),
+    ).toThrow(
       'workflow("limited-by-throwing-key").concurrency.key threw while resolving the partition key: missing customer id',
     );
   });
@@ -140,11 +145,13 @@ describe('workflow definition concurrency', () => {
 
     expect(duplicate.id).toBe(first.id);
     expect(
-      engine.start('limited-idempotent', { value: 'second' }, { idempotencyKey: 'other-key' }),
-    ).rejects.toBeInstanceOf(WorkflowConcurrencyLimitExceededError);
+      await rejectionOf(
+        engine.start('limited-idempotent', { value: 'second' }, { idempotencyKey: 'other-key' }),
+      ),
+    ).toBeInstanceOf(WorkflowConcurrencyLimitExceededError);
 
     await engine.signal(first.id, 'release', 'done');
-    expect(first.result()).resolves.toBe('first:done');
+    expect(await first.result()).toBe('first:done');
   });
 
   it('releases a recovered running workflow slot when that workflow completes', async () => {
@@ -165,10 +172,10 @@ describe('workflow definition concurrency', () => {
     expect(recoveredHandle?.id).toBe(originalHandle.id);
 
     await disposableRecovered.signal(originalHandle.id, 'release', 'done');
-    expect(recoveredHandle?.result()).resolves.toBe('first:done');
+    expect(await recoveredHandle?.result()).toBe('first:done');
 
     const next = await disposableRecovered.start('limited-recovered', { value: 'second' });
     await disposableRecovered.signal(next.id, 'release', 'done');
-    expect(next.result()).resolves.toBe('second:done');
+    expect(await next.result()).toBe('second:done');
   });
 });

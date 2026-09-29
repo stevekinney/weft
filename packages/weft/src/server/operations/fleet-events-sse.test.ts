@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   createFleetEventFeed,
   type FleetEventEnvelope,
@@ -388,13 +389,15 @@ describe('weft.events.sse', () => {
 
   it('throws UnsupportedTransport when invoked without an object context', async () => {
     expect(
-      fleetEventsSseOperation.invoke({
-        input: {},
-        principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
-        engine: null,
-        transport: 'http-rest',
-      }),
-    ).rejects.toMatchObject({
+      await rejectionOf(
+        fleetEventsSseOperation.invoke({
+          input: {},
+          principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
+          engine: null,
+          transport: 'http-rest',
+        }),
+      ),
+    ).toMatchObject({
       code: 'UnsupportedTransport',
       message: 'fleet event SSE requires a fleet event feed',
     });

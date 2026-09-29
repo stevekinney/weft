@@ -27,6 +27,7 @@ import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
 
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import type { ServerContext } from './context.ts';
 
 const createMinimalContext = minimalServerContext;
@@ -274,13 +275,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-no-workflow-type',
-        activityName: 'doWork',
-        workflowType: '',
-        input: null,
-      }),
-    ).rejects.toThrow('is missing required field "workflowType"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-no-workflow-type',
+          activityName: 'doWork',
+          workflowType: '',
+          input: null,
+        }),
+      ),
+    ).toThrow('is missing required field "workflowType"');
   });
 
   it('throws when a qualified activityName does not agree with workflowType', async () => {
@@ -288,13 +291,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-qualifier-mismatch',
-        activityName: 'otherWorkflow.doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-      }),
-    ).rejects.toThrow('whose qualifier does not match workflowType');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-qualifier-mismatch',
+          activityName: 'otherWorkflow.doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        }),
+      ),
+    ).toThrow('whose qualifier does not match workflowType');
   });
 
   it('throws when input is not JSON-serializable', async () => {
@@ -302,13 +307,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-non-json-input',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: () => {},
-      }),
-    ).rejects.toThrow('non-JSON-serializable');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-non-json-input',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: () => {},
+        }),
+      ),
+    ).toThrow('non-JSON-serializable');
   });
 
   it('throws when operationId is the exact string "." (WFT-95)', async () => {
@@ -316,13 +323,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: '.',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-      }),
-    ).rejects.toThrow('invalid "operationId"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: '.',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        }),
+      ),
+    ).toThrow('invalid "operationId"');
   });
 
   it('throws when operationId is the exact string ".." (WFT-95)', async () => {
@@ -330,13 +339,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: '..',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-      }),
-    ).rejects.toThrow('invalid "operationId"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: '..',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        }),
+      ),
+    ).toThrow('invalid "operationId"');
   });
 
   // Regression (WFT-95 review): the operationId "."/".." admission check is
@@ -386,13 +397,13 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
+      await dispatchTaskImpl(context, options, {
         operationId: 'op.v2.retry',
         activityName: 'doWork',
         workflowType: 'testWorkflow',
         input: null,
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
   });
 
   // Regression (WFT-95 review, fourth round): `JSON.stringify()` itself
@@ -404,13 +415,15 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 1n as never,
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-      }),
-    ).rejects.toThrow('invalid "operationId"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 1n as never,
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+        }),
+      ),
+    ).toThrow('invalid "operationId"');
   });
 
   it('throws when workflowRevision is an empty string (WFT-20)', async () => {
@@ -418,14 +431,16 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-empty-revision',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-        workflowRevision: '',
-      }),
-    ).rejects.toThrow('invalid "workflowRevision"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-empty-revision',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+          workflowRevision: '',
+        }),
+      ),
+    ).toThrow('invalid "workflowRevision"');
   });
 
   it('throws when workflowRevision exceeds the bounded identifier byte limit (WFT-20)', async () => {
@@ -433,14 +448,16 @@ describe('dispatchTaskImpl', () => {
     options = createMinimalOptions();
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-oversized-revision',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        input: null,
-        workflowRevision: 'x'.repeat(10_000),
-      }),
-    ).rejects.toThrow('invalid "workflowRevision"');
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-oversized-revision',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          input: null,
+          workflowRevision: 'x'.repeat(10_000),
+        }),
+      ),
+    ).toThrow('invalid "workflowRevision"');
   });
 
   it("reuses the durable ledger record's revision, not the caller's, for an already-queued long-poll hint (WFT-20)", async () => {
@@ -716,16 +733,18 @@ describe('dispatchTaskImpl revision staleness (WFT-20)', () => {
     );
 
     expect(
-      dispatchTaskImpl(context, options, {
-        operationId: 'op-stale-revision',
-        activityName: 'doWork',
-        workflowType: 'testWorkflow',
-        queue: 'default',
-        input: null,
-        workflowId: 'wf-stale',
-        workflowRevision: 'revision-stale',
-      }),
-    ).rejects.toThrow(/revision "revision-stale".*revision "revision-current"|stale/i);
+      await throwingRejectionOf(
+        dispatchTaskImpl(context, options, {
+          operationId: 'op-stale-revision',
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          queue: 'default',
+          input: null,
+          workflowId: 'wf-stale',
+          workflowRevision: 'revision-stale',
+        }),
+      ),
+    ).toThrow(/revision "revision-stale".*revision "revision-current"|stale/i);
 
     // No worker capacity reserved, no ledger record created.
     expect(context.registry.isAssigned('op-stale-revision')).toBe(false);

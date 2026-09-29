@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import type { Engine } from '../core/engine.ts';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { waitForStatus } from './workflow-status.test-support.ts';
 
 describe('waitForStatus test helper', () => {
@@ -10,7 +11,7 @@ describe('waitForStatus test helper', () => {
       get: async () => ({ status: 'running' }),
     } as unknown as Engine;
 
-    expect(waitForStatus(engine, 'wf-timeout', 'completed', 1)).rejects.toThrow(
+    expect(await throwingRejectionOf(waitForStatus(engine, 'wf-timeout', 'completed', 1))).toThrow(
       'Workflow wf-timeout did not reach completed within 1ms',
     );
   });

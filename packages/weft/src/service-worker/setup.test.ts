@@ -8,6 +8,7 @@ import type { EventEnvelope, WorkflowEventFeed } from '../server/workflow-event-
 import { IndexedDBStorage } from '../storage/indexeddb.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { resetSetupServiceWorkerRegistry, setupServiceWorker } from './setup.ts';
 
 interface FakeEvent {
@@ -130,9 +131,9 @@ describe('setupServiceWorker', () => {
     const scope = createFakeServiceWorkerScope();
     await withFakeSelf(scope, async () => {
       const first = await setupServiceWorker({ storage: new MemoryStorage() });
-      expect(setupServiceWorker({ storage: new MemoryStorage() })).rejects.toThrow(
-        /already initialized/,
-      );
+      expect(
+        await throwingRejectionOf(setupServiceWorker({ storage: new MemoryStorage() })),
+      ).toThrow(/already initialized/);
       first.engine[Symbol.dispose]();
     });
   });
@@ -142,13 +143,15 @@ describe('setupServiceWorker', () => {
     const failure = new Error('register exploded');
     await withFakeSelf(scope, async () => {
       expect(
-        setupServiceWorker({
-          storage: new MemoryStorage(),
-          register: async () => {
-            throw failure;
-          },
-        }),
-      ).rejects.toThrow('register exploded');
+        await throwingRejectionOf(
+          setupServiceWorker({
+            storage: new MemoryStorage(),
+            register: async () => {
+              throw failure;
+            },
+          }),
+        ),
+      ).toThrow('register exploded');
       // Subsequent call must reject with the original cause attached.
       let caught: unknown;
       try {
@@ -168,7 +171,9 @@ describe('setupServiceWorker', () => {
       const storageB = new MemoryStorage();
       const engine = new Engine({ storage: storageA });
       try {
-        expect(setupServiceWorker({ engine, storage: storageB })).rejects.toThrow(/same instance/);
+        expect(
+          await throwingRejectionOf(setupServiceWorker({ engine, storage: storageB })),
+        ).toThrow(/same instance/);
       } finally {
         engine[Symbol.dispose]();
       }
@@ -196,9 +201,9 @@ describe('setupServiceWorker', () => {
     delete (globalThis as { self?: unknown }).self;
 
     try {
-      expect(setupServiceWorker({ storage: new MemoryStorage() })).rejects.toThrow(
-        /not running inside a Service Worker scope/,
-      );
+      expect(
+        await throwingRejectionOf(setupServiceWorker({ storage: new MemoryStorage() })),
+      ).toThrow(/not running inside a Service Worker scope/);
     } finally {
       if (previous !== undefined) {
         (globalThis as { self?: unknown }).self = previous;
@@ -297,7 +302,7 @@ describe('setupServiceWorker', () => {
 
       const response = await respondedWith!;
       expect(response.status).toBe(200);
-      expect(response.text()).resolves.toContain('workflow:started');
+      expect(await response.text()).toContain('workflow:started');
       expect(acquireCalls).toBe(1);
       expect(releaseCalls).toBe(1);
       setup.engine[Symbol.dispose]();
@@ -594,7 +599,7 @@ describe('setupServiceWorker recover option', () => {
       // The workflow is now live in the new engine. Signal it and confirm completion.
       await setup.engine.signal('parked-1', 'finish', 'hello');
       const handle = setup.engine.getHandle('parked-1');
-      expect(handle.result()).resolves.toBe('done');
+      expect(await handle.result()).toBe('done');
 
       setup.engine[Symbol.dispose]();
     });
@@ -745,7 +750,7 @@ describe('setupServiceWorker recover option', () => {
           // Intentionally register no workflows.
         },
       });
-      expect(setup.ready).resolves.toBeUndefined();
+      expect(await setup.ready).toBeUndefined();
       setup.engine[Symbol.dispose]();
     });
   });
@@ -884,8 +889,8 @@ describe('setupServiceWorker recover option', () => {
     await setupA.engine.signal('equiv-a', 'finish', 'hello');
     await setupB.engine.signal('equiv-b', 'finish', 'hello');
 
-    expect(setupA.engine.getHandle('equiv-a').result()).resolves.toBe('done');
-    expect(setupB.engine.getHandle('equiv-b').result()).resolves.toBe('done');
+    expect(await setupA.engine.getHandle('equiv-a').result()).toBe('done');
+    expect(await setupB.engine.getHandle('equiv-b').result()).toBe('done');
 
     setupA.engine[Symbol.dispose]();
     setupB.engine[Symbol.dispose]();
@@ -918,7 +923,7 @@ describe('setupServiceWorker recover option', () => {
 
       // The internally-created engine must have recovered the parked workflow.
       await setup.engine.signal('internal-engine-1', 'finish', 'hello');
-      expect(setup.engine.getHandle('internal-engine-1').result()).resolves.toBe('done');
+      expect(await setup.engine.getHandle('internal-engine-1').result()).toBe('done');
 
       setup.engine[Symbol.dispose]();
     });
@@ -952,7 +957,7 @@ describe('setupServiceWorker recover option', () => {
 
       // The workflow must be live after recovery — signal drives it to completion.
       await setup.engine.signal('idb-parked-1', 'finish', 'hello');
-      expect(setup.engine.getHandle('idb-parked-1').result()).resolves.toBe('done');
+      expect(await setup.engine.getHandle('idb-parked-1').result()).toBe('done');
 
       setup.engine[Symbol.dispose]();
     });

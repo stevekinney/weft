@@ -11,6 +11,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
@@ -919,7 +920,7 @@ describe('recoverAll() — per-(type, revision) preload barrier and exact revisi
       ),
     );
 
-    expect(engine.resume('standalone-resume-ghost-1')).rejects.toThrow(
+    expect(await throwingRejectionOf(engine.resume('standalone-resume-ghost-1'))).toThrow(
       WorkflowRevisionUnavailableError,
     );
 

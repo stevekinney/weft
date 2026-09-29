@@ -35,6 +35,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS, type Storage } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
 import { waitForCondition } from '../../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { Engine } from '../index.ts';
@@ -145,7 +146,7 @@ describe('WFT-153: explicit-id start fence pre-CAS ABA (purge between read and c
     // "never used") now loses the CAS.
     stall.release();
 
-    expect(loserPromise).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    expect(await rejectionOf(loserPromise)).toBeInstanceOf(WorkflowAlreadyExistsError);
 
     // No duplicate run was left behind: the id is free again, exactly as the
     // winner's purge left it.

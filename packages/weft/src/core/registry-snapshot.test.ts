@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from './activity-registry.ts';
 import { buildWorkflowContract } from './contract/build.ts';
 import { buildWorkflowRevisionManifest } from './contract/manifest.ts';
@@ -396,7 +397,9 @@ describe('buildRegistrySnapshot', () => {
     }).execute(async function* () {});
     engine.register(brokenWorkflow);
 
-    expect(buildRegistrySnapshot(engine)).rejects.toThrow(RegistrySchemaConversionError);
+    expect(await throwingRejectionOf(buildRegistrySnapshot(engine))).toThrow(
+      RegistrySchemaConversionError,
+    );
     let captured: unknown;
     try {
       await buildRegistrySnapshot(engine);
@@ -738,7 +741,9 @@ describe('buildRegistrySnapshot', () => {
     catalog.resolveActive = (name: string) =>
       name === 'unpointed' ? undefined : originalResolveActive(name);
 
-    expect(buildRegistrySnapshot(engine)).rejects.toThrow(/Registry snapshot invariant violated/);
+    expect(await throwingRejectionOf(buildRegistrySnapshot(engine))).toThrow(
+      /Registry snapshot invariant violated/,
+    );
   });
 });
 

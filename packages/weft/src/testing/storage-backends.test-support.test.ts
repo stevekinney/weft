@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { restoreRealTimers, useFakeTimers } from './fake-timers.test-support.ts';
+import { throwingRejectionOf } from './promise-outcome.test-support.ts';
 import {
   createDiskBackedTestFixture,
   flush,
@@ -26,8 +27,8 @@ describe('waitForWorkflowStatus', () => {
     };
 
     expect(
-      waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 500),
-    ).resolves.toBeUndefined();
+      await waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 500),
+    ).toBeUndefined();
   });
 
   it('throws when the workflow never reaches the requested status before timeout', async () => {
@@ -35,9 +36,11 @@ describe('waitForWorkflowStatus', () => {
       get: mock(async () => ({ status: 'running' })),
     };
 
-    expect(waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 20)).rejects.toThrow(
-      'Expected workflow "workflow-1" to reach status "completed"',
-    );
+    expect(
+      await throwingRejectionOf(
+        waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 20),
+      ),
+    ).toThrow('Expected workflow "workflow-1" to reach status "completed"');
   });
 });
 
@@ -117,7 +120,7 @@ describe('storage backend testing helpers', () => {
   });
 
   it('flush resolves without throwing', async () => {
-    expect(flush()).resolves.toBeUndefined();
+    expect(await flush()).toBeUndefined();
   });
 
   it('flush advances pending zero-delay timers under fake timers', async () => {
@@ -137,9 +140,7 @@ describe('storage backend testing helpers', () => {
     const dispose = mock(() => {});
     const storageCleanup = mock(() => {});
 
-    expect(
-      teardown({ [Symbol.dispose]: dispose } as never, storageCleanup),
-    ).resolves.toBeUndefined();
+    expect(await teardown({ [Symbol.dispose]: dispose } as never, storageCleanup)).toBeUndefined();
 
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(storageCleanup).toHaveBeenCalledTimes(1);

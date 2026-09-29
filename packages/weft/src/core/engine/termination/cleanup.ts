@@ -4,6 +4,7 @@ import { CleanupWarningEvent, RemoteActivityCancellationRequestedEvent } from '.
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { clearPendingAtomicWorkflowCommitSideEffects } from '../checkpoint-side-effects.ts';
 import type { EngineInternals } from '../internals.ts';
 import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
@@ -387,7 +388,7 @@ export function cleanupTerminalWorkflowMemory(
   internals.pendingAsyncActivityResolutions ??= new Map();
   internals.pendingAsyncActivityResolutions.delete(workflowId);
   internals.pendingAtomicWorkflowCommitSideEffects ??= new Map();
-  internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+  clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
   internals.parkedInlineWorkflows.delete(workflowId);
   // Strategy-side twin of parkedInlineWorkflows above: a run that parked retains
   // its Context in the inline strategy so query handlers stay callable. Drop it

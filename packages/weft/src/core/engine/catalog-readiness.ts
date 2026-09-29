@@ -108,9 +108,14 @@ async function drainPendingCatalogInstalls(engine: Engine): Promise<void> {
 }
 
 /**
- * Synchronous fast-path check: `true` once the catalog is restored and
- * nothing is pending, `false` when {@link ensureWorkflowCatalogReady} would
- * need to do real work. Every `ensureWorkflowCatalogReady` call site in
+ * Synchronous fast-path check: `true` once the catalog is restored, nothing
+ * is pending, and no drain is in flight; `false` when
+ * {@link ensureWorkflowCatalogReady} would need to do (or wait for) real
+ * work. The in-flight check matters because `drainPendingCatalogInstalls`
+ * clears the pending queue BEFORE installing its snapshot: without it, a
+ * caller arriving mid-drain would see an empty queue and skip the wait,
+ * then find no `registeredCatalogRevisions` entry for a name the drain has
+ * not reached yet. Every `ensureWorkflowCatalogReady` call site in
  * `index.ts` guards its `await` with this check first — `await`ing an
  * `async` function always costs one microtask tick even when the function's
  * own body takes the fast path internally (JS's `await` semantics, not an
@@ -121,7 +126,11 @@ async function drainPendingCatalogInstalls(engine: Engine): Promise<void> {
  */
 export function isWorkflowCatalogReady(engine: Engine): boolean {
   const internals = getInternals(engine);
-  return internals.catalogRestored && internals.pendingCatalogInstalls.length === 0;
+  return (
+    internals.catalogRestored &&
+    internals.pendingCatalogInstalls.length === 0 &&
+    internals.catalogDrainPromise === null
+  );
 }
 
 /**

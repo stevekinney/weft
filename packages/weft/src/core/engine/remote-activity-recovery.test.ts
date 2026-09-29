@@ -31,6 +31,7 @@ import {
   waitForCondition,
   waitForever,
 } from '../../testing/fake-timers.test-support.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { RemoteWorker } from '../../worker/index.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import { commitTaskLedgerTransition } from '../task-ledger/task-ledger-runtime.ts';
@@ -269,7 +270,7 @@ describe('remote activity recovery (COR-152)', () => {
     engine[Symbol.dispose]();
     engine = undefined;
 
-    await expect(resultBeforeDispose).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(resultBeforeDispose)).toBeInstanceOf(EngineDisposedError);
 
     // Recoverable task state survives disposal: the ledger record is
     // untouched, and so is the durable pending-async-activity token record

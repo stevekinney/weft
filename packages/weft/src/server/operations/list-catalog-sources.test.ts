@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { workflowSource } from '../../core/source/index.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import { principalFromApiKey } from '../principal.ts';
@@ -171,7 +172,7 @@ describe('weft.catalog.sources.list — REST GET /v1/catalog/sources', () => {
       }),
     );
     engine.registerSource(source('invoice', 'second'));
-    expect(engine.workflows.preload('invoice', 'first')).rejects.toThrow();
+    expect(await throwingRejectionOf(engine.workflows.preload('invoice', 'first'))).toThrow();
     const response = await handleRequest(
       new Request('http://localhost/v1/catalog/sources'),
       engine,

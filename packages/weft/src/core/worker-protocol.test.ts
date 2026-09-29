@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type { ContextOperationRequest } from './context.ts';
 import { isValidWorkerLogRecord, isWorkerLogMessage } from './worker-protocol-log.ts';
 import {
@@ -458,29 +459,33 @@ describe('Worker replay operation signatures', () => {
 
   it('rejects unknown operation shapes and oversized signature inputs', async () => {
     expect(
-      createWorkerReplayOperationSignature(
-        {
-          type: 'unknown-operation',
-          operationId: 'unknown-1',
-        } as never,
-        1024,
+      await throwingRejectionOf(
+        createWorkerReplayOperationSignature(
+          {
+            type: 'unknown-operation',
+            operationId: 'unknown-1',
+          } as never,
+          1024,
+        ),
       ),
-    ).rejects.toThrow(WorkerProtocolError);
+    ).toThrow(WorkerProtocolError);
 
     expect(
-      createWorkerReplayOperationSignature(
-        {
-          type: 'state-commit',
-          operationId: 'commit-large',
-          scope: { type: 'workflow', workflowType: 'account' },
-          key: 'large',
-          expectedVersion: 1,
-          mode: 'set',
-          value: 'x'.repeat(1024),
-        },
-        128,
+      await throwingRejectionOf(
+        createWorkerReplayOperationSignature(
+          {
+            type: 'state-commit',
+            operationId: 'commit-large',
+            scope: { type: 'workflow', workflowType: 'account' },
+            key: 'large',
+            expectedVersion: 1,
+            mode: 'set',
+            value: 'x'.repeat(1024),
+          },
+          128,
+        ),
       ),
-    ).rejects.toThrow(WorkerProtocolError);
+    ).toThrow(WorkerProtocolError);
   });
 });
 

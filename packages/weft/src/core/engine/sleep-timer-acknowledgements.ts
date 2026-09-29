@@ -1,5 +1,6 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { TimerEntry, WorkflowState } from '../types.ts';
+import { clearPendingAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type {
   DurableInlineOperation,
   EngineInternals,
@@ -47,6 +48,11 @@ export async function handleSleepTimerWithAcknowledgement(
   }
 
   const operationId = entry.id.replace('sleep:', '');
+  if (sleepTimerGenerationIsStale(internals, entry)) {
+    // The current generation can never adopt this timer. Return normally so
+    // the scheduler collects it instead of retrying the obsolete fire forever.
+    return;
+  }
   if (await shouldIgnoreUnclaimedSleepTimer(internals, entry, operationId, loadWorkflowState))
     return;
 
@@ -60,6 +66,11 @@ export async function handleSleepTimerWithAcknowledgement(
     return;
   }
   await acknowledgement?.promise;
+}
+
+function sleepTimerGenerationIsStale(internals: EngineInternals, entry: TimerEntry): boolean {
+  const currentToken = internals.checkpoints?.get(entry.workflowId)?.workflowExecutionToken;
+  return currentToken !== undefined && entry.workflowExecutionToken !== currentToken;
 }
 
 /** What to do with a durable timer key once a claim-requiring wake has discarded it. */
@@ -211,13 +222,42 @@ export function recordDurableInlineOperation(
   workflowId: string,
   operation: ContextOperationRequest,
 ): void {
+  const previous = internals.durableInlineOperations.get(workflowId);
   const durableOperation: DurableInlineOperation = {
     operationId: operation.operationId,
     type: operation.type,
+    ...workflowExecutionTokenField(internals, workflowId),
     ...(operation.type === 'sleep' && { scheduledFireAt: operation.scheduledFireAt }),
   };
+  clearEffectsOnGenerationReplacement(internals, workflowId, previous, durableOperation);
   internals.durableInlineOperations.set(workflowId, durableOperation);
 
+  settleSupersededSleepWaiters(internals, workflowId, durableOperation);
+}
+
+function clearEffectsOnGenerationReplacement(
+  internals: EngineInternals,
+  workflowId: string,
+  previous: DurableInlineOperation | undefined,
+  current: DurableInlineOperation,
+): void {
+  if (
+    previous?.workflowExecutionToken !== undefined &&
+    current.workflowExecutionToken !== undefined &&
+    previous.workflowExecutionToken !== current.workflowExecutionToken
+  ) {
+    // Side effects staged by a terminated generation must not ride the first
+    // checkpoint of its successor. They were captured under the old run's
+    // identity and are no longer safe to attach to this workflow id alone.
+    clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
+  }
+}
+
+function settleSupersededSleepWaiters(
+  internals: EngineInternals,
+  workflowId: string,
+  durableOperation: DurableInlineOperation,
+): void {
   const workflowWaiters = internals.sleepTimerAcknowledgementWaiters.get(workflowId);
   if (!workflowWaiters) return;
   for (const waiter of workflowWaiters) {
@@ -231,6 +271,14 @@ export function recordDurableInlineOperation(
     removeWaiter(internals, workflowId, waiter);
     waiter.resolve();
   }
+}
+
+function workflowExecutionTokenField(
+  internals: EngineInternals,
+  workflowId: string,
+): { workflowExecutionToken?: string } {
+  const token = internals.checkpoints?.get(workflowId)?.workflowExecutionToken;
+  return token === undefined ? {} : { workflowExecutionToken: token };
 }
 
 export function settleSleepTimerAcknowledgements(
@@ -293,22 +341,7 @@ export function resolveSleepTimer(internals: EngineInternals, entry: TimerEntry)
   const resolverKey = `${entry.workflowId}:${operationId}`;
   const resolver = internals.sleepResolvers.get(resolverKey);
   if (!resolver) {
-    // No resolver registered yet — the tick fired in the window between
-    // schedule() completing and registerSleepResolver() running. Record the
-    // fired timer's deadline so processSleepOperation can self-resolve after
-    // registration (only if that deadline is this run's, not a stale earlier
-    // run's) instead of parking on a promise that will never be called.
-    let workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(entry.workflowId);
-    if (!workflowMarkers) {
-      workflowMarkers = new Map();
-      internals.sleepTimersFiredWithoutResolver.set(entry.workflowId, workflowMarkers);
-    }
-    // Keep the latest (largest) deadline seen for this operation id: only a
-    // timer whose deadline reaches this run's scheduledFireAt should settle it.
-    const existing = workflowMarkers.get(operationId);
-    if (existing === undefined || entry.fireAt > existing) {
-      workflowMarkers.set(operationId, entry.fireAt);
-    }
+    recordSleepTimerFireWithoutResolver(internals, entry, operationId);
     return true;
   }
 
@@ -317,12 +350,80 @@ export function resolveSleepTimer(internals: EngineInternals, entry: TimerEntry)
   // (cleanup only drops the in-memory resolver), so a start-new replacement at
   // the same id+step would otherwise have its sleep resolved early when the old
   // timer fires. The replacement run's own timer fires at its own (>=) deadline.
-  if (entry.fireAt < resolver.fireAt) return false;
+  if (!sleepTimerMatchesResolver(internals, entry, resolver)) return false;
 
   internals.sleepResolvers.delete(resolverKey);
   untrackSleepResolver(internals, entry.workflowId, operationId);
   resolver.resolve();
   return true;
+}
+
+function recordSleepTimerFireWithoutResolver(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  operationId: string,
+): void {
+  // A timer can fire between schedule() and resolver registration. Keep its
+  // deadline and generation together for the post-registration check.
+  let workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(entry.workflowId);
+  if (!workflowMarkers) {
+    workflowMarkers = new Map();
+    internals.sleepTimersFiredWithoutResolver.set(entry.workflowId, workflowMarkers);
+  }
+  const existing = workflowMarkers.get(operationId);
+  const tokenMarkers =
+    internals.sleepTimerTokensFiredWithoutResolver?.get(entry.workflowId) ?? new Map();
+  const incomingIsCurrent = isCurrentFireToken(
+    internals,
+    entry.workflowId,
+    entry.workflowExecutionToken,
+  );
+  const existingIsCurrent = isCurrentFireToken(
+    internals,
+    entry.workflowId,
+    tokenMarkers.get(operationId),
+  );
+  if (shouldReplaceEarlyFireMarker(existing, entry.fireAt, incomingIsCurrent, existingIsCurrent)) {
+    workflowMarkers.set(operationId, entry.fireAt);
+    tokenMarkers.set(operationId, entry.workflowExecutionToken);
+    internals.sleepTimerTokensFiredWithoutResolver?.set(entry.workflowId, tokenMarkers);
+  }
+}
+
+function isCurrentFireToken(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string | undefined,
+): boolean {
+  const currentToken =
+    internals.durableInlineOperations?.get(workflowId)?.workflowExecutionToken ??
+    internals.checkpoints?.get(workflowId)?.workflowExecutionToken;
+  return currentToken !== undefined && token === currentToken;
+}
+
+function shouldReplaceEarlyFireMarker(
+  existingFireAt: number | undefined,
+  incomingFireAt: number,
+  incomingIsCurrent: boolean,
+  existingIsCurrent: boolean,
+): boolean {
+  if (existingFireAt === undefined) return true;
+  if (incomingIsCurrent && !existingIsCurrent) return true;
+  return incomingFireAt > existingFireAt && (!existingIsCurrent || incomingIsCurrent);
+}
+
+function sleepTimerMatchesResolver(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  resolver: { fireAt: number; workflowExecutionToken?: string },
+): boolean {
+  if (entry.fireAt < resolver.fireAt) return false;
+  return (
+    resolver.workflowExecutionToken === undefined ||
+    (entry.workflowExecutionToken === resolver.workflowExecutionToken &&
+      internals.checkpoints?.get(entry.workflowId)?.workflowExecutionToken ===
+        resolver.workflowExecutionToken)
+  );
 }
 
 function untrackSleepResolver(

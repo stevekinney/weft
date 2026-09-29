@@ -70,7 +70,7 @@ describe('weft.schedules.list', () => {
 
     const handle = await engine.start('echo', { ok: true });
 
-    expect(handle.result()).resolves.toEqual({ ok: true });
+    expect(await handle.result()).toEqual({ ok: true });
   });
 
   it('returns 400 when the status query param is not valid', async () => {

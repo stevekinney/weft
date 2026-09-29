@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { removeCatalogEntry } from '../catalog/removal.ts';
 import { WorkflowCatalog } from '../catalog/workflow-catalog.ts';
 import { encode } from '../codec.ts';
@@ -13,7 +14,7 @@ import { RegistryManifestLimitError } from '../registry-workflow-manifest.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
-import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
+import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
 import { EngineDisposedError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog } from './internals.ts';
@@ -83,7 +84,9 @@ describe('ensureWorkflowCatalogReady', () => {
     // `workflowVersion` over MAX_CONTRACT_IDENTIFIER_BYTES (512 bytes).
     engine.register(noopWorkflow('oversized', 'v'.repeat(600)));
 
-    expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
+    expect(await throwingRejectionOf(ensureWorkflowCatalogReady(engine))).toThrow(
+      RegistryManifestLimitError,
+    );
   });
 
   it('the fast path returns synchronously-resolved when nothing is pending and the catalog is restored', async () => {
@@ -94,7 +97,32 @@ describe('ensureWorkflowCatalogReady', () => {
 
     expect(getInternals(engine).catalogRestored).toBe(true);
     expect(getInternals(engine).pendingCatalogInstalls).toHaveLength(0);
-    expect(ensureWorkflowCatalogReady(engine)).resolves.toBeUndefined();
+    expect(await ensureWorkflowCatalogReady(engine)).toBeUndefined();
+  });
+
+  it('reports not-ready while a drain is still installing its snapshot, and a caller arriving mid-drain waits for every name', async () => {
+    await using storage = new MemoryStorage();
+    await using engine = new Engine({ storage, backgroundTasks: 'manual' });
+    engine.register(noopWorkflow('alpha'));
+    engine.register(noopWorkflow('beta'));
+
+    // The drain snapshots and clears the pending queue before installing
+    // anything, so this listener runs after `alpha` is recorded but while
+    // `beta` is still only in the drain's local snapshot.
+    let readyMidDrain: boolean | undefined;
+    let midDrainCaller: Promise<boolean> | undefined;
+    engine.addEventListener(WorkflowRevisionInstalledEvent.type, (event) => {
+      if (event.workflowType !== 'alpha') return;
+      readyMidDrain = isWorkflowCatalogReady(engine);
+      midDrainCaller = ensureWorkflowCatalogReady(engine).then(() =>
+        getInternals(engine).registeredCatalogRevisions.has('beta'),
+      );
+    });
+
+    await ensureWorkflowCatalogReady(engine);
+
+    expect(readyMidDrain).toBe(false);
+    expect(await midDrainCaller).toBe(true);
   });
 
   it('re-queues the failing name AND every name behind it in the drain order, rather than dropping them, when one manifest build fails mid-drain', async () => {
@@ -106,7 +134,9 @@ describe('ensureWorkflowCatalogReady', () => {
     engine.register(noopWorkflow('oversized', 'v'.repeat(600)));
     engine.register(noopWorkflow('good'));
 
-    expect(ensureWorkflowCatalogReady(engine)).rejects.toThrow(RegistryManifestLimitError);
+    expect(await throwingRejectionOf(ensureWorkflowCatalogReady(engine))).toThrow(
+      RegistryManifestLimitError,
+    );
 
     // Neither name was dropped: both are still queued for the next attempt,
     // and `isWorkflowCatalogReady` must not report a false "ready" with
@@ -132,7 +162,9 @@ describe('ensureWorkflowCatalogReady', () => {
     engine.register(noopWorkflow('alpha'));
     engine[Symbol.dispose]();
 
-    expect(ensureWorkflowCatalogReady(engine)).rejects.toBeInstanceOf(EngineDisposedError);
+    expect(await rejectionOf(ensureWorkflowCatalogReady(engine))).toBeInstanceOf(
+      EngineDisposedError,
+    );
     storage[Symbol.dispose]();
   });
 
@@ -326,7 +358,7 @@ describe('ensureWorkflowCatalogReady — boot-time orphaned-tombstone sweep (WFT
       warnings.push(event);
     });
 
-    expect(ensureWorkflowCatalogReady(recovered)).resolves.toBeUndefined();
+    expect(await ensureWorkflowCatalogReady(recovered)).toBeUndefined();
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.source).toBe(`catalog-tombstone-boot-sweep:checkout:${v1.revision}`);

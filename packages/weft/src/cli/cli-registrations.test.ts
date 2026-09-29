@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { loadRegistrationsFromModule } from './validation.ts';
 
 const publicEntryPointUrl = import.meta.resolve('../index.ts');
@@ -63,7 +64,7 @@ describe('loadRegistrationsFromModule', () => {
       expect('myWorkflow' in result.registrations).toBe(true);
       expect(result.activities).toHaveLength(0);
       const iterator = invokeFixtureWorkflow(result.registrations['myWorkflow']!.handler);
-      expect(iterator.next()).resolves.toEqual({ value: 'done', done: true });
+      expect(await iterator.next()).toEqual({ value: 'done', done: true });
     } finally {
       removeTemporaryTypeScriptPath(entryPath);
     }
@@ -85,14 +86,16 @@ describe('loadRegistrationsFromModule', () => {
       const result = await loadRegistrationsFromModule(entryPath);
       expect(result.activities).toHaveLength(1);
       expect(result.activities[0]!.name).toBe('sendEmail');
-      expect(result.activities[0]!.execute('payload')).resolves.toBe('payload');
+      expect(await result.activities[0]!.execute('payload')).toBe('payload');
     } finally {
       removeTemporaryTypeScriptPath(entryPath);
     }
   });
 
   it('rejects with an error for a non-existent file', async () => {
-    expect(loadRegistrationsFromModule('/does/not/exist/workflow.ts')).rejects.toThrow();
+    expect(
+      await throwingRejectionOf(loadRegistrationsFromModule('/does/not/exist/workflow.ts')),
+    ).toThrow();
   });
 
   it('returns empty registrations and activities for a module with no matching exports', async () => {

@@ -139,10 +139,15 @@ export async function reassignOrExpireTask(
       // reasoning as the ordinary completion path
       // (`task-ledger-completion.ts`'s `commitTerminalFromCompleting`).
       ...(nextRecord.state === 'terminal'
-        ? buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
-            status: 'failed',
-            error: nextRecord.error,
-          })
+        ? buildTerminalResolutionWrites(
+            nextRecord.workflowId,
+            nextRecord.operationId,
+            {
+              status: 'failed',
+              error: nextRecord.error,
+            },
+            nextRecord.workflowExecutionToken,
+          )
         : []),
     ],
   );
@@ -351,11 +356,16 @@ export async function scanExpiredTasks(
               })),
               // Acceptance criterion 6: same reasoning as the cooperative
               // cancellation path in `task-ledger-completion.ts`.
-              ...buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
-                status: 'failed',
-                error: nextRecord.cancellationReason,
-                failureCategory: 'cancellation',
-              }),
+              ...buildTerminalResolutionWrites(
+                nextRecord.workflowId,
+                nextRecord.operationId,
+                {
+                  status: 'failed',
+                  error: nextRecord.cancellationReason,
+                  failureCategory: 'cancellation',
+                },
+                nextRecord.workflowExecutionToken,
+              ),
             ],
           );
           if (!settled.ok) {
@@ -485,11 +495,16 @@ export async function reconcileOrphanedRecords(
                   dispositionAt: settleNow,
                   dispositionReason: 'cancellation deadline elapsed with no cooperative result',
                 })),
-                ...buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
-                  status: 'failed',
-                  error: nextRecord.cancellationReason,
-                  failureCategory: 'cancellation',
-                }),
+                ...buildTerminalResolutionWrites(
+                  nextRecord.workflowId,
+                  nextRecord.operationId,
+                  {
+                    status: 'failed',
+                    error: nextRecord.cancellationReason,
+                    failureCategory: 'cancellation',
+                  },
+                  nextRecord.workflowExecutionToken,
+                ),
               ],
             );
             if (settled.ok) {

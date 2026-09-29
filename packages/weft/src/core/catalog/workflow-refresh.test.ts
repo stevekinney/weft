@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
@@ -211,7 +212,7 @@ describe('WorkflowRefreshCoordinator', () => {
       ]),
     });
 
-    await expect(coordinator.refresh('checkout')).rejects.toThrow('digest');
+    expect(await throwingRejectionOf(coordinator.refresh('checkout'))).toThrow('digest');
     expect(warmed).toBe(false);
     expect(await catalog.listInstalledRevisions('checkout')).toHaveLength(0);
     expect(coordinator.diagnostics('checkout')[0]?.state).toBe('failed');
@@ -243,7 +244,7 @@ describe('WorkflowRefreshCoordinator', () => {
     });
     const installed = coordinator.refresh('checkout', { activate: 'never' });
     release();
-    await expect(installed).rejects.toThrow('304');
+    expect(await throwingRejectionOf(installed)).toThrow('304');
     const secondCoordinator = new WorkflowRefreshCoordinator({
       catalog,
       sources: new Map([
@@ -296,7 +297,7 @@ describe('WorkflowRefreshCoordinator', () => {
     const pending = coordinator.refresh('checkout', { signal: caller.signal });
     await coordinator[Symbol.asyncDispose]();
     expect(observedAbort).toBe(true);
-    await expect(pending).rejects.toThrow('aborted');
+    expect(await throwingRejectionOf(pending)).toThrow('aborted');
   });
 
   it('does not coalesce callers with different cancellation signals', async () => {
@@ -330,7 +331,7 @@ describe('WorkflowRefreshCoordinator', () => {
     expect(first).not.toBe(second);
     firstController.abort(new Error('first caller cancelled'));
     release();
-    await expect(first).rejects.toThrow('first caller cancelled');
+    expect(await throwingRejectionOf(first)).toThrow('first caller cancelled');
     const secondResult = await second;
     expect(secondResult.status).toBe('installed');
     await coordinator[Symbol.asyncDispose]();
@@ -384,7 +385,7 @@ describe('WorkflowRefreshCoordinator', () => {
     await aborted;
     release();
     await disposal;
-    await expect(pending).rejects.toBeDefined();
+    expect(await rejectionOf(pending)).toBeDefined();
     expect(await engine.workflows.getRevision('checkout', current.revision)).toBeNull();
   });
 

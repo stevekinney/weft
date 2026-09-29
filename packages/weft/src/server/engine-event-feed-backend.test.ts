@@ -278,7 +278,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
       second.push(envelope);
     });
 
-    expect(engine.signal(handle.id, 'release', 'go')).resolves.toBeUndefined();
+    expect(await engine.signal(handle.id, 'release', 'go')).toBeUndefined();
     await handle.result();
 
     expect(second.length).toBeGreaterThan(0);

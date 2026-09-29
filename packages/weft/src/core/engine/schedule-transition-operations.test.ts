@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow as defineWorkflow } from '../types.ts';
 
@@ -86,13 +87,17 @@ describe('COR-67: schedule transition atomicity', () => {
 
       class ProjectionConflictError extends Error {}
 
-      await expect(
-        engine.pauseSchedule('atomic-failure', {
-          additionalOperations: [{ type: 'put', key: projectionKey, value: encodeText('paused') }],
-          extraConditions: [{ key: projectionKey, expectedValue: encodeText('v1') }],
-          onExtraConditionsLost: () => new ProjectionConflictError('stale projection guard'),
-        }),
-      ).rejects.toThrow(ProjectionConflictError);
+      expect(
+        await throwingRejectionOf(
+          engine.pauseSchedule('atomic-failure', {
+            additionalOperations: [
+              { type: 'put', key: projectionKey, value: encodeText('paused') },
+            ],
+            extraConditions: [{ key: projectionKey, expectedValue: encodeText('v1') }],
+            onExtraConditionsLost: () => new ProjectionConflictError('stale projection guard'),
+          }),
+        ),
+      ).toThrow(ProjectionConflictError);
 
       // Neither side landed: the schedule is still active...
       const summary = await handle.describe();
@@ -114,11 +119,13 @@ describe('COR-67: schedule transition atomicity', () => {
       await engine.schedule('cor-67-noop', null, '0 9 * * *', { id: 'atomic-default-error' });
       await storage.batch([{ type: 'put', key: projectionKey, value: encodeText('changed') }]);
 
-      await expect(
-        engine.pauseSchedule('atomic-default-error', {
-          extraConditions: [{ key: projectionKey, expectedValue: encodeText('v1') }],
-        }),
-      ).rejects.toThrow(/lost its precondition/);
+      expect(
+        await throwingRejectionOf(
+          engine.pauseSchedule('atomic-default-error', {
+            extraConditions: [{ key: projectionKey, expectedValue: encodeText('v1') }],
+          }),
+        ),
+      ).toThrow(/lost its precondition/);
     } finally {
       engine[Symbol.dispose]();
     }

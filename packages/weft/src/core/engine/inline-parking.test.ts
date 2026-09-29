@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec/api.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowState } from '../types.ts';
@@ -75,14 +76,16 @@ describe('engine inline parking helpers', () => {
     const parkedInlineWorkflows = new Set([workflowId]);
 
     expect(
-      resumeParkedInlineWorkflow(
-        { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
-        workflowId,
-        createCallbacks({
-          getParkedWorkflowResumeDisposition: async () => 'resumable',
-        }),
+      await throwingRejectionOf(
+        resumeParkedInlineWorkflow(
+          { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
+          workflowId,
+          createCallbacks({
+            getParkedWorkflowResumeDisposition: async () => 'resumable',
+          }),
+        ),
       ),
-    ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
+    ).toThrow(`Workflow "${workflowId}" not found in storage`);
 
     expect(parkedInlineWorkflows.has(workflowId)).toBe(true);
   });
@@ -92,14 +95,16 @@ describe('engine inline parking helpers', () => {
     const parkedInlineWorkflows = new Set([workflowId]);
 
     expect(
-      resumeParkedInlineWorkflow(
-        { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
-        workflowId,
-        createCallbacks({
-          getParkedWorkflowResumeDisposition: async () => 'corrupt',
-        }),
+      await throwingRejectionOf(
+        resumeParkedInlineWorkflow(
+          { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
+          workflowId,
+          createCallbacks({
+            getParkedWorkflowResumeDisposition: async () => 'corrupt',
+          }),
+        ),
       ),
-    ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
+    ).toThrow(`Workflow "${workflowId}" not found in storage`);
 
     expect(parkedInlineWorkflows.has(workflowId)).toBe(false);
   });
@@ -109,25 +114,25 @@ describe('engine inline parking helpers', () => {
     const terminalizingWorkflows = new Set<string>();
 
     expect(
-      getParkedWorkflowResumeDisposition(
+      await getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
         createCallbacks(),
       ),
-    ).resolves.toBe('terminal-or-missing');
+    ).toBe('terminal-or-missing');
 
     expect(
-      getParkedWorkflowResumeDisposition(
+      await getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
         createCallbacks({
           loadWorkflowState: async () => createWorkflowState(workflowId, { status: 'completed' }),
         }),
       ),
-    ).resolves.toBe('terminal-or-missing');
+    ).toBe('terminal-or-missing');
 
     expect(
-      getParkedWorkflowResumeDisposition(
+      await getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
         createCallbacks({
@@ -135,10 +140,10 @@ describe('engine inline parking helpers', () => {
           readCheckpointBytes: async () => null,
         }),
       ),
-    ).resolves.toBe('corrupt');
+    ).toBe('corrupt');
 
     expect(
-      getParkedWorkflowResumeDisposition(
+      await getParkedWorkflowResumeDisposition(
         { terminalizingWorkflows } as never,
         workflowId,
         createCallbacks({
@@ -146,7 +151,7 @@ describe('engine inline parking helpers', () => {
           readCheckpointBytes: async () => new Uint8Array([1]),
         }),
       ),
-    ).resolves.toBe('resumable');
+    ).toBe('resumable');
   });
 
   it('fails the workflow when replaying a wait-signal operation throws without an inline strategy', async () => {
@@ -186,7 +191,7 @@ describe('engine inline parking helpers', () => {
     );
 
     await sleepForTesting(0);
-    expect(loadWorkflowState(getInternals(engine), workflowId)).resolves.toMatchObject({
+    expect(await loadWorkflowState(getInternals(engine), workflowId)).toMatchObject({
       error: 'inline process failed',
       failureCategory: 'system',
       status: 'failed',

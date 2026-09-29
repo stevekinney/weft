@@ -31,7 +31,10 @@ import { deriveAsyncActivityToken } from './async-activity-records.ts';
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
-import type { CapturedRejectionReason } from './strategy-helpers.ts';
+import {
+  workflowExecutionTokenForWorkflow,
+  type CapturedRejectionReason,
+} from './strategy-helpers.ts';
 
 export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknown) &
   ActivityReconciliationMetadata & {
@@ -80,7 +83,9 @@ export type ActivityOperationCallbacks = {
   feedOperationResult: (
     workflowId: string,
     outcome: OperationOutcome,
-    originalReason?: CapturedRejectionReason,
+    originalReason: CapturedRejectionReason | undefined,
+    operationId: string,
+    workflowExecutionToken?: string,
   ) => void;
   getComposedActivityInterceptor: () => ComposedActivityInterceptor | null;
   getComposedWorkflowInterceptor: () => ComposedWorkflowInterceptor | null;
@@ -588,6 +593,7 @@ export async function processActivityOperation(
   operation: ActivityOperation,
   callbacks: ActivityOperationCallbacks,
 ): Promise<void> {
+  const workflowExecutionToken = workflowExecutionTokenForWorkflow(internals, workflowId);
   // An activity that calls `ActivityContext.completeAsync()` throws
   // `AsyncActivityDeferral`. Catch it here so the operation neither completes
   // nor fails: park the pending token durably and hand `runOperationWithResult`
@@ -607,6 +613,7 @@ export async function processActivityOperation(
             operationId: operation.operationId,
             step: operation.step ?? 0,
             attempt: getActivityAttempt(operation),
+            workflowExecutionToken,
           },
           {
             feedOperationResult: callbacks.feedOperationResult,

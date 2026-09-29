@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityScheduleToCloseTimeoutError } from '../context/activity-schedule-to-close.ts';
 import { isActivityCallOptions } from '../context/session-state.ts';
 import { classifyErrorAsFailureCategory } from '../failure-categories.ts';
@@ -59,7 +60,9 @@ describe('#449 scheduleToCloseTimeout', () => {
     // The error crosses the durable boundary as a message string; assert on it.
     // (The `timeout` failure-category classification is pinned by the dedicated
     // classifyErrorAsFailureCategory unit test below.)
-    expect(handle.result()).rejects.toThrow('exceeded its scheduleToCloseTimeout budget of 1000ms');
+    expect(await throwingRejectionOf(handle.result())).toThrow(
+      'exceeded its scheduleToCloseTimeout budget of 1000ms',
+    );
     // Exactly ONE attempt ran: the retry boundary blocked attempt 2 before
     // dispatch, well short of maxAttempts: 5.
     expect(attempts).toBe(1);
@@ -99,7 +102,7 @@ describe('#449 scheduleToCloseTimeout', () => {
     );
 
     const handle = await engine.start('stc-noretry-wf', null, { id: 'stc-noretry-1' });
-    expect(handle.result()).rejects.toThrow('boom');
+    expect(await throwingRejectionOf(handle.result())).toThrow('boom');
     expect(attempts).toBe(1);
   });
 

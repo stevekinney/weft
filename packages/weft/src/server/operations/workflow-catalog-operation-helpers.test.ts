@@ -23,6 +23,7 @@ import {
 } from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowNotRegisteredError } from '../../core/engine/errors.ts';
 import { WorkflowSourceValidationError } from '../../core/source/errors.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { isOperationFault } from './operation-helpers.ts';
 import {
   activationRefusalToFault,
@@ -132,7 +133,7 @@ describe('validateManifestField', () => {
   });
 
   it('rejects a non-object value with InvalidParams', async () => {
-    expect(validateManifestField('not an object')).rejects.toMatchObject({
+    expect(await rejectionOf(validateManifestField('not an object'))).toMatchObject({
       code: 'InvalidParams',
     });
   });
@@ -142,7 +143,9 @@ describe('validateManifestField', () => {
     const manifest = await buildWorkflowRevisionManifest(contract);
     const tampered = { ...manifest, contractHash: `${manifest.contractHash.slice(0, -1)}0` };
 
-    expect(validateManifestField(tampered)).rejects.toMatchObject({ code: 'InvalidParams' });
+    expect(await rejectionOf(validateManifestField(tampered))).toMatchObject({
+      code: 'InvalidParams',
+    });
   });
 });
 
@@ -346,7 +349,7 @@ describe('readWorkflowCatalogRestBody', () => {
       body: 'not json {',
     });
 
-    expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
+    expect(await rejectionOf(readWorkflowCatalogRestBody(request, {}))).toMatchObject({
       code: 'InvalidParams',
     });
   });
@@ -358,7 +361,7 @@ describe('readWorkflowCatalogRestBody', () => {
       body: JSON.stringify([1, 2, 3]),
     });
 
-    expect(readWorkflowCatalogRestBody(request, {})).rejects.toMatchObject({
+    expect(await rejectionOf(readWorkflowCatalogRestBody(request, {}))).toMatchObject({
       code: 'InvalidParams',
     });
   });

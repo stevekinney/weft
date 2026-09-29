@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { MAX_BATCH_OPERATIONS, StorageBatchOperationLimitExceededError } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
 import {
@@ -37,7 +38,7 @@ describe('MemoryStorage', () => {
       value: encode(String(index)),
     }));
 
-    expect(storage.batch(operations)).rejects.toBeInstanceOf(
+    expect(await rejectionOf(storage.batch(operations))).toBeInstanceOf(
       StorageBatchOperationLimitExceededError,
     );
     expect(await storage.get('oversized:0')).toBeNull();

@@ -57,15 +57,15 @@ describe('weft.workflows.events authorization', () => {
     });
 
     expect(
-      workflowEventsSubscriptionOperation.authorize!(
+      await workflowEventsSubscriptionOperation.authorize!(
         authorizationContext({ workflowId: 'wf-auth', selector: 'events' }, eventsPrincipal),
       ),
-    ).resolves.toEqual({ allowed: true });
+    ).toEqual({ allowed: true });
     expect(
-      workflowEventsSubscriptionOperation.authorize!(
+      await workflowEventsSubscriptionOperation.authorize!(
         authorizationContext({ workflowId: 'wf-auth', selector: 'tokens' }, streamsPrincipal),
       ),
-    ).resolves.toEqual({ allowed: true });
+    ).toEqual({ allowed: true });
     const wrongScopeResult = await workflowEventsSubscriptionOperation.authorize!(
       authorizationContext({ workflowId: 'wf-auth', selector: 'tokens' }, eventsPrincipal),
     );

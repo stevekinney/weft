@@ -320,7 +320,7 @@ describe('EventLog.verify()', () => {
     const storage = makeStorage();
     await storage.put(KEYS.eventHead('wf-invalid-head'), encode({ nope: true }));
 
-    expect(readEventHead(storage, 'wf-invalid-head')).resolves.toEqual(EMPTY_EVENT_HEAD);
+    expect(await readEventHead(storage, 'wf-invalid-head')).toEqual(EMPTY_EVENT_HEAD);
   });
 
   it('reports corruption when the head says the log is empty but surviving entries exist', async () => {
@@ -329,7 +329,7 @@ describe('EventLog.verify()', () => {
     await log.append({ type: 'event', payload: 'x' });
     await storage.put(KEYS.eventHead('wf-head-mismatch'), encode(EMPTY_EVENT_HEAD));
 
-    expect(verifyEventLog(storage, 'wf-head-mismatch')).resolves.toEqual({
+    expect(await verifyEventLog(storage, 'wf-head-mismatch')).toEqual({
       valid: false,
       firstInvalidSequence: 0,
     });
@@ -342,7 +342,7 @@ describe('EventLog.verify()', () => {
       encode({ sequence: 3, lastHash: 'abcdef0123456789' }),
     );
 
-    expect(verifyEventLog(storage, 'wf-missing-tail')).resolves.toEqual({
+    expect(await verifyEventLog(storage, 'wf-missing-tail')).toEqual({
       valid: false,
       firstInvalidSequence: 3,
     });

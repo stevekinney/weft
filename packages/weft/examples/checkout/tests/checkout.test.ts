@@ -33,7 +33,7 @@ describe('checkout example', () => {
       id: sampleCheckoutInput.orderId,
     });
 
-    await expect(handle.result()).resolves.toEqual(expectedCheckoutResult(sampleCheckoutInput));
+    expect(await handle.result()).toEqual(expectedCheckoutResult(sampleCheckoutInput));
   });
 
   it('runs through the root source API with SQLite storage', async () => {
@@ -42,9 +42,7 @@ describe('checkout example', () => {
     const input = createCheckoutInput('checkout-smoke');
 
     try {
-      await expect(runCheckoutExample(input, databasePath)).resolves.toEqual(
-        expectedCheckoutResult(input),
-      );
+      expect(await runCheckoutExample(input, databasePath)).toEqual(expectedCheckoutResult(input));
     } finally {
       await rm(temporaryDirectory, { force: true, recursive: true });
     }

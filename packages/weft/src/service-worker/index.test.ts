@@ -154,7 +154,7 @@ describe('createFetchHandler', () => {
     expect(delegated).not.toBeNull();
     expect(new URL(delegated!.url).pathname).toBe('/v1/workflows');
     expect(delegated!.headers.get('Content-Type')).toBe('application/json');
-    expect(delegated!.json()).resolves.toEqual({
+    expect(await delegated!.json()).toEqual({
       type: 'checkout',
       input: { cartId: 'cart-1' },
     });
@@ -222,7 +222,7 @@ describe('createFetchHandler', () => {
     handler(event);
     const response = await (event.respondWith.mock.calls[0]![0] as Promise<Response>);
     expect(response.status).toBe(200);
-    expect(response.text()).resolves.toContain('workflow:started');
+    expect(await response.text()).toContain('workflow:started');
   });
 });
 

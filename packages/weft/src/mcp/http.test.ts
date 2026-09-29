@@ -536,21 +536,21 @@ describe('MCP Streamable HTTP transport', () => {
       requestId: 'argument-errors',
     };
 
-    expect(callMcpTool('missing_tool', {}, context)).resolves.toMatchObject({
+    expect(await callMcpTool('missing_tool', {}, context)).toMatchObject({
       isError: true,
       content: [{ text: 'Unknown tool: missing_tool' }],
     });
-    expect(callMcpTool('start_workflow', [], context)).resolves.toMatchObject({
+    expect(await callMcpTool('start_workflow', [], context)).toMatchObject({
       isError: true,
       content: [{ text: 'Tool arguments must be a JSON object' }],
     });
-    expect(callMcpTool('greet_customer', [], context)).resolves.toMatchObject({
+    expect(await callMcpTool('greet_customer', [], context)).toMatchObject({
       isError: true,
       content: [{ text: 'Tool arguments must be a JSON object' }],
     });
     expect(
-      callMcpTool('greet_customer', { input: { name: 'Ada' }, timeoutMs: 0 }, context),
-    ).resolves.toMatchObject({
+      await callMcpTool('greet_customer', { input: { name: 'Ada' }, timeoutMs: 0 }, context),
+    ).toMatchObject({
       isError: true,
       content: [{ text: 'Tool argument "timeoutMs" must be an integer from 1 to 2147483647' }],
     });
@@ -878,7 +878,7 @@ describe('MCP Streamable HTTP transport', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('cancelled');
-    expect(engine.list({ type: 'hold-for-cancel' })).resolves.toMatchObject({
+    expect(await engine.list({ type: 'hold-for-cancel' })).toMatchObject({
       total: 0,
       items: [],
     });
@@ -980,7 +980,7 @@ describe('MCP Streamable HTTP transport', () => {
     const payload = parseToolText(response.result) as { workflowId: string; timedOut: boolean };
     expect(payload.timedOut).toBe(true);
     await waitForStatus(engine, payload.workflowId, 'running');
-    expect(engine.query(payload.workflowId, 'input')).resolves.toEqual({
+    expect(await engine.query(payload.workflowId, 'input')).toEqual({
       timeoutMs: 456,
       label: 'parked',
       wait: true,

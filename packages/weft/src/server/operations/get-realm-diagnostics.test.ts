@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import {
@@ -75,14 +76,16 @@ describe('weft.realms.diagnostics — REST GET /v1/realms/diagnostics', () => {
   });
 
   it('throws when invoked directly with a context whose engine is not a concrete Engine instance', async () => {
-    await expect(
-      getRealmDiagnosticsOperation.invoke({
-        engine: {},
-        principal: { method: 'unauthenticated' },
-        transport: 'jsonRpcStdio',
-        input: {},
-      }),
-    ).rejects.toThrow('Realm diagnostics requires a concrete Engine instance.');
+    expect(
+      await throwingRejectionOf(
+        getRealmDiagnosticsOperation.invoke({
+          engine: {},
+          principal: { method: 'unauthenticated' },
+          transport: 'jsonRpcStdio',
+          input: {},
+        }),
+      ),
+    ).toThrow('Realm diagnostics requires a concrete Engine instance.');
   });
 });
 

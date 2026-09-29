@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import type { Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
@@ -68,7 +69,7 @@ describe('textValueStore (MemoryStorage)', () => {
     // Lone continuation byte (0x80) — invalid UTF-8.
     await base.put('corrupt', new Uint8Array([0x80]));
 
-    expect(store.get('corrupt')).rejects.toThrow();
+    expect(await throwingRejectionOf(store.get('corrupt'))).toThrow();
   });
 
   it('lists keys under a prefix as an array', async () => {

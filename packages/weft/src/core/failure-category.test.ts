@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { encode } from './codec/api.ts';
 import { Engine } from './engine.ts';
 import { classifyErrorAsFailureCategory } from './failure-categories.ts';
@@ -62,7 +63,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(timeoutCrashWorkflow);
 
     const handle = await engine.start('timeout-crash', null, { id: 'wf-timeout-fail' });
-    expect(handle.result()).rejects.toThrow('review timed out');
+    expect(await throwingRejectionOf(handle.result())).toThrow('review timed out');
 
     const state = await engine.get('wf-timeout-fail');
     expect(state?.failureCategory).toBe('timeout');
@@ -76,7 +77,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(abortCrashWorkflow);
 
     const handle = await engine.start('abort-crash', null, { id: 'wf-cancellation-fail' });
-    expect(handle.result()).rejects.toThrow('operation aborted');
+    expect(await throwingRejectionOf(handle.result())).toThrow('operation aborted');
 
     const state = await engine.get('wf-cancellation-fail');
     expect(state?.failureCategory).toBe('cancellation');
@@ -97,7 +98,7 @@ describe('failureCategory on WorkflowState', () => {
     engine.register(resourceCrashWorkflow);
 
     const handle = await engine.start('resource-crash', null, { id: 'wf-resource-fail' });
-    expect(handle.result()).rejects.toThrow('resource exhausted');
+    expect(await throwingRejectionOf(handle.result())).toThrow('resource exhausted');
 
     const state = await engine.get('wf-resource-fail');
     expect(state?.failureCategory).toBe('resource');

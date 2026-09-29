@@ -20,6 +20,7 @@ import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
 import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -416,14 +417,16 @@ describe('GET /v1/registry — authorization', () => {
     // `executeOperation`, which always supply a real `Engine`. This guard
     // exists for a caller that constructs the invoke context itself (a
     // non-Engine test double, or a future alternate context builder).
-    await expect(
-      getRegistryOperation.invoke({
-        engine: {},
-        principal: { method: 'unauthenticated' },
-        transport: 'jsonRpcStdio',
-        input: {},
-      }),
-    ).rejects.toThrow('Registry snapshot requires a concrete Engine instance.');
+    expect(
+      await throwingRejectionOf(
+        getRegistryOperation.invoke({
+          engine: {},
+          principal: { method: 'unauthenticated' },
+          transport: 'jsonRpcStdio',
+          input: {},
+        }),
+      ),
+    ).toThrow('Registry snapshot requires a concrete Engine instance.');
   });
 });
 

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import {
   WorkflowCatalogConflictError,
@@ -82,7 +83,9 @@ describe('engine.workflows.install', () => {
     );
     await engine.workflows.install(manifest);
 
-    expect(engine.workflows.install(conflicting)).rejects.toThrow(WorkflowCatalogConflictError);
+    expect(await throwingRejectionOf(engine.workflows.install(conflicting))).toThrow(
+      WorkflowCatalogConflictError,
+    );
   });
 
   it('throws WorkflowNotRegisteredError when the engine has no in-process definition for the manifest name', async () => {
@@ -91,7 +94,9 @@ describe('engine.workflows.install', () => {
       buildWorkflowContract({ name: 'never-registered', version: '1.0.0' }),
     );
 
-    expect(engine.workflows.install(manifest)).rejects.toThrow(WorkflowNotRegisteredError);
+    expect(await throwingRejectionOf(engine.workflows.install(manifest))).toThrow(
+      WorkflowNotRegisteredError,
+    );
   });
 
   it('never returns a `definition` field: only manifest and installedAt reach the caller', async () => {
@@ -137,8 +142,10 @@ describe('engine.workflows.activate', () => {
     engine.register(checkout);
 
     expect(
-      engine.workflows.activate('checkout', 'never-installed', { expectedGeneration: 1 }),
-    ).rejects.toThrow(WorkflowRevisionNotInstalledError);
+      await throwingRejectionOf(
+        engine.workflows.activate('checkout', 'never-installed', { expectedGeneration: 1 }),
+      ),
+    ).toThrow(WorkflowRevisionNotInstalledError);
   });
 
   it('refuses with expected-generation-required when expectedGeneration is omitted after the first activation', async () => {
@@ -354,7 +361,7 @@ describe('engine.workflows.preload', () => {
   it('propagates WorkflowSourceNotRegisteredError for a (name, revision) never registerSource()-registered — identical to resolveWorkflowSource()', async () => {
     const engine = createEngine();
 
-    expect(engine.workflows.preload('never-registered', 'r1')).rejects.toBeInstanceOf(
+    expect(await rejectionOf(engine.workflows.preload('never-registered', 'r1'))).toBeInstanceOf(
       WorkflowSourceNotRegisteredError,
     );
 
@@ -376,8 +383,10 @@ describe('engine.workflows.preload', () => {
     controller.abort();
 
     expect(
-      engine.workflows.preload('lazy-preload', revision, { signal: controller.signal }),
-    ).rejects.toBeTruthy();
+      await rejectionOf(
+        engine.workflows.preload('lazy-preload', revision, { signal: controller.signal }),
+      ),
+    ).toBeTruthy();
 
     deferred.resolve({ lazyPreload: lazy });
     engine[Symbol.dispose]();

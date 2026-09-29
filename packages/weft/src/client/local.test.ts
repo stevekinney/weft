@@ -299,7 +299,7 @@ describe('LocalClient', () => {
 
       // Cancelling an already-completed workflow is fine on some engines,
       // but let's at least verify the method is callable
-      expect(client.cancel('cancel-me')).resolves.toBeUndefined();
+      expect(await client.cancel('cancel-me')).toBeUndefined();
     });
   });
 
@@ -308,7 +308,7 @@ describe('LocalClient', () => {
       const handle = await client.start('echo', 'data');
       await handle.result();
       // Should not throw on a completed workflow
-      expect(handle.cancel()).resolves.toBeUndefined();
+      expect(await handle.cancel()).toBeUndefined();
     });
   });
 
@@ -347,7 +347,7 @@ describe('LocalClient', () => {
     it('delegates to client.signal', async () => {
       const handle = await client.start('echo', 'data');
       // Signal on a completed workflow is a no-throw in the engine
-      expect(handle.signal('test-signal', { key: 'value' })).resolves.toBeUndefined();
+      expect(await handle.signal('test-signal', { key: 'value' })).toBeUndefined();
     });
   });
 
@@ -395,9 +395,9 @@ describe('LocalClient', () => {
       const handle = await client.start('echo', 'done', { id: 'wf-local-missing-replay' });
       await handle.result();
 
-      expect(client.getTimeline('missing-workflow')).resolves.toEqual([]);
-      expect(client.replayTo('missing-workflow', 1)).resolves.toBeNull();
-      expect(client.replayTo('wf-local-missing-replay', 1)).resolves.toBeNull();
+      expect(await client.getTimeline('missing-workflow')).toEqual([]);
+      expect(await client.replayTo('missing-workflow', 1)).toBeNull();
+      expect(await client.replayTo('wf-local-missing-replay', 1)).toBeNull();
     });
   });
 

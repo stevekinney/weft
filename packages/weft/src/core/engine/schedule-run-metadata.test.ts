@@ -70,11 +70,11 @@ describe('schedule-run metadata', () => {
       encodeScheduleRunMetadata('nightly-schedule', 1_767_225_600_000),
     );
 
-    expect(engine.getScheduleProvenance('scheduled-workflow')).resolves.toEqual({
+    expect(await engine.getScheduleProvenance('scheduled-workflow')).toEqual({
       scheduleId: 'nightly-schedule',
       occurrence: 1_767_225_600_000,
     });
-    expect(engine.getScheduleProvenance('ordinary-workflow')).resolves.toBeNull();
+    expect(await engine.getScheduleProvenance('ordinary-workflow')).toBeNull();
   });
 
   it('keeps historical string links readable through the client-facing provenance API', async () => {
@@ -82,7 +82,7 @@ describe('schedule-run metadata', () => {
     await using engine = new Engine({ storage });
     await storage.put(KEYS.scheduleRunLink('historical-workflow'), encode('historical-schedule'));
 
-    expect(engine.getScheduleProvenance('historical-workflow')).resolves.toEqual({
+    expect(await engine.getScheduleProvenance('historical-workflow')).toEqual({
       scheduleId: 'historical-schedule',
     });
   });

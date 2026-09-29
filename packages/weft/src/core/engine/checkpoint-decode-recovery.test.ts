@@ -67,6 +67,6 @@ describe('checkpoint decode failures during recovery', () => {
 
     const healthyHandle = handles[0]!;
     await healthyHandle.signal('continue');
-    expect(healthyHandle.result()).resolves.toBe('resumed');
+    expect(await healthyHandle.result()).toBe('resumed');
   });
 });

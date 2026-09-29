@@ -111,7 +111,7 @@ describe('worker-session runtime handler', () => {
     for (const [body, expectedError] of invalidCases) {
       const response = await postWorkerSession(body);
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toMatchObject({ error: expectedError });
+      expect(await response.json()).toMatchObject({ error: expectedError });
     }
   });
 
@@ -142,7 +142,7 @@ describe('worker-session runtime handler', () => {
       new URL(secondRequest.url),
     );
     expect(secondResponse?.status).toBe(409);
-    await expect(secondResponse?.json()).resolves.toMatchObject({
+    expect(await secondResponse?.json()).toMatchObject({
       error: 'Deployment artifact digest conflict',
       code: 'deployment_conflict',
     });
@@ -167,7 +167,7 @@ describe('worker-session runtime handler', () => {
       new URL(heartbeatRequest.url),
     );
     expect(heartbeatResponse?.status).toBe(200);
-    await expect(heartbeatResponse?.json()).resolves.toEqual({ ok: true });
+    expect(await heartbeatResponse?.json()).toEqual({ ok: true });
     expect(
       context.longPollWorkerSessions.get(registerBody.sessionId)?.lastHeartbeatAt,
     ).toBeGreaterThanOrEqual(sessionBefore.lastHeartbeatAt);
@@ -304,7 +304,7 @@ describe('worker-session runtime handler', () => {
         principal,
       );
       expect(response?.status).toBe(403);
-      await expect(response?.json()).resolves.toMatchObject({
+      expect(await response?.json()).toMatchObject({
         code: 'worker_session_mismatch',
       });
     }
@@ -335,7 +335,7 @@ describe('worker-session runtime handler', () => {
     );
 
     expect(response?.status).toBe(200);
-    await expect(response?.json()).resolves.toEqual({ ok: true });
+    expect(await response?.json()).toEqual({ ok: true });
   });
 
   it('rejects authenticated adoption of an unauthenticated session token', async () => {
@@ -358,7 +358,7 @@ describe('worker-session runtime handler', () => {
     );
 
     expect(response?.status).toBe(403);
-    await expect(response?.json()).resolves.toMatchObject({ code: 'worker_session_mismatch' });
+    expect(await response?.json()).toMatchObject({ code: 'worker_session_mismatch' });
     expect(context.registry.getWorker(session.sessionId)?.lastHeartbeat).toBe(beforeHeartbeat);
   });
 
@@ -381,7 +381,7 @@ describe('worker-session runtime handler', () => {
     );
 
     expect(response?.status).toBe(404);
-    await expect(response?.json()).resolves.toEqual({ error: 'Unknown worker session' });
+    expect(await response?.json()).toEqual({ error: 'Unknown worker session' });
     expect(context.registry.getWorker(session.sessionId)).toBe(beforeWorker);
     expect(context.registry.getWorker('missing-session')).toBeUndefined();
   });
@@ -410,7 +410,7 @@ describe('worker-session runtime handler', () => {
     );
 
     expect(response?.status).toBe(410);
-    await expect(response?.json()).resolves.toMatchObject({ code: 'session_expired' });
+    expect(await response?.json()).toMatchObject({ code: 'session_expired' });
     expect(context.longPollWorkerSessions.has(session.sessionId)).toBe(false);
     expect(context.registry.getWorker(session.sessionId)).toBeUndefined();
   });
@@ -444,7 +444,7 @@ describe('worker-session runtime handler', () => {
     );
 
     expect(response?.status).toBe(409);
-    await expect(response?.json()).resolves.toMatchObject({ code: 'stale_session' });
+    expect(await response?.json()).toMatchObject({ code: 'stale_session' });
     expect(context.registry.getWorker(session.sessionId)?.acceptedManifestDigest).toBe(
       'sha256:superseding',
     );
@@ -470,7 +470,7 @@ describe('worker-session runtime handler', () => {
       new URL(pollRequest.url),
     );
     expect(pollResponse?.status).toBe(409);
-    await expect(pollResponse?.json()).resolves.toMatchObject({ code: 'session_draining' });
+    expect(await pollResponse?.json()).toMatchObject({ code: 'session_draining' });
 
     const retained = await context.taskQueue.poll('default', ['checkout.charge'], 0);
     expect(retained?.operationId).toBe('op-drain');

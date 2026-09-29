@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import { OutboxContentionError } from './outbox-internals.ts';
 import {
@@ -107,7 +108,9 @@ describe('Outbox concurrency', () => {
       }
     }
     const { outbox } = createOutboxFixture({ storage: new LosingStorage() });
-    expect(outbox.enqueue(deliveryInput())).rejects.toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.enqueue(deliveryInput()))).toThrow(
+      OutboxContentionError,
+    );
     outbox.dispose();
   });
 
@@ -127,13 +130,15 @@ describe('Outbox concurrency', () => {
     await enqueueOne(outbox);
     const claim = await beginOne(outbox);
     losing = true;
-    expect(outbox.claim()).rejects.toThrow(OutboxContentionError);
-    expect(outbox.settle({ ...claim, outcome: { status: 'acknowledged' } })).rejects.toThrow(
+    expect(await throwingRejectionOf(outbox.claim())).toThrow(OutboxContentionError);
+    expect(
+      await throwingRejectionOf(outbox.settle({ ...claim, outcome: { status: 'acknowledged' } })),
+    ).toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.heartbeat(claim))).toThrow(OutboxContentionError);
+    expect(await throwingRejectionOf(outbox.requestCancellation({ deliveryId }))).toThrow(
       OutboxContentionError,
     );
-    expect(outbox.heartbeat(claim)).rejects.toThrow(OutboxContentionError);
-    expect(outbox.requestCancellation({ deliveryId })).rejects.toThrow(OutboxContentionError);
-    expect(outbox.retry({ deliveryId: 'x' })).resolves.toEqual({ status: 'unknown' });
+    expect(await outbox.retry({ deliveryId: 'x' })).toEqual({ status: 'unknown' });
     const error = await outbox.runMaintenance().catch((cause: unknown) => cause);
     void error;
     losing = false;

@@ -33,6 +33,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { Engine } from '../engine.ts';
@@ -170,21 +171,23 @@ describe('persistWorkerCheckpoint vs. a start-new replacement — WFT-21 Codex r
       // unrelated timeline/feed error after the write already landed)
       // could never masquerade as the fence itself having worked.
       expect(
-        persistCheckpoint(
-          internals,
-          originalHandle.id,
-          staleWorkerOperation,
-          toExactArrayBuffer(serializeCheckpoint(staleCheckpoint)),
-          createStaleWorkerPersistCallbacks(originalHandle.id),
+        await throwingRejectionOf(
+          persistCheckpoint(
+            internals,
+            originalHandle.id,
+            staleWorkerOperation,
+            toExactArrayBuffer(serializeCheckpoint(staleCheckpoint)),
+            createStaleWorkerPersistCallbacks(originalHandle.id),
+          ),
         ),
-      ).rejects.toThrow('targets a different execution generation');
+      ).toThrow('targets a different execution generation');
 
       // The replacement's own checkpoint is untouched.
       const replacementCheckpointAfter = await storage.get(KEYS.checkpoint(replacedHandle.id));
       expect(replacementCheckpointAfter).toEqual(replacementCheckpointBefore);
 
       await engine.signal(replacedHandle.id, 'go', 'done');
-      expect(replacedHandle.result()).resolves.toBe('done');
+      expect(await replacedHandle.result()).toBe('done');
     } finally {
       engine[Symbol.dispose]();
     }

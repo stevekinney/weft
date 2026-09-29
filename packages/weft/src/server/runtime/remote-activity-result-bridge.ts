@@ -63,9 +63,18 @@ export function buildTerminalResolutionWrites(
   workflowId: string | undefined,
   operationId: string,
   outcome: OperationOutcome,
+  workflowExecutionToken: string | undefined,
 ): readonly BatchOperation[] {
   if (workflowId === undefined) return [];
-  return [buildAsyncActivityResolutionWrite(workflowId, operationId, outcome)];
+  return [
+    buildAsyncActivityResolutionWrite(
+      workflowId,
+      operationId,
+      outcome,
+      operationId,
+      workflowExecutionToken,
+    ),
+  ];
 }
 
 /**

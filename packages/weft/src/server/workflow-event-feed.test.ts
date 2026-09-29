@@ -25,6 +25,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
+import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { ReplayWindowExceededError } from './replay-live-feed-internals.ts';
 import {
@@ -164,16 +165,18 @@ describe('WorkflowEventFeed — replay', () => {
     const feed = createWorkflowEventFeed(backend);
 
     expect(
-      (async () => {
-        for await (const _envelope of feed.replay({
-          workflowId: 'wf-1',
-          selector: 'events',
-          fromCursor: 'not-a-cursor',
-        })) {
-          // The assertion is the thrown cursor validation before any replay value is yielded.
-        }
-      })(),
-    ).rejects.toThrow('Invalid cursor');
+      await throwingRejectionOf(
+        (async () => {
+          for await (const _envelope of feed.replay({
+            workflowId: 'wf-1',
+            selector: 'events',
+            fromCursor: 'not-a-cursor',
+          })) {
+            // The assertion is the thrown cursor validation before any replay value is yielded.
+          }
+        })(),
+      ),
+    ).toThrow('Invalid cursor');
   });
 
   it('rejects negative zero instead of treating it as sequence zero', async () => {
@@ -184,16 +187,18 @@ describe('WorkflowEventFeed — replay', () => {
     const feed = createWorkflowEventFeed(backend);
 
     expect(
-      (async () => {
-        for await (const _envelope of feed.replay({
-          workflowId: 'wf-1',
-          selector: 'events',
-          fromCursor: '-0',
-        })) {
-          // The assertion is the thrown cursor validation before any replay value is yielded.
-        }
-      })(),
-    ).rejects.toThrow('Invalid cursor');
+      await throwingRejectionOf(
+        (async () => {
+          for await (const _envelope of feed.replay({
+            workflowId: 'wf-1',
+            selector: 'events',
+            fromCursor: '-0',
+          })) {
+            // The assertion is the thrown cursor validation before any replay value is yielded.
+          }
+        })(),
+      ),
+    ).toThrow('Invalid cursor');
   });
 });
 
@@ -570,8 +575,8 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
       }
     };
 
-    expect(consume()).rejects.toThrow(ReplayWindowExceededError);
-    expect(consume()).rejects.toMatchObject({
+    expect(await throwingRejectionOf(consume())).toThrow(ReplayWindowExceededError);
+    expect(await rejectionOf(consume())).toMatchObject({
       name: 'ReplayWindowExceededError',
       count: 2,
       limit: 1,

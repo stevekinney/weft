@@ -206,6 +206,7 @@ function commitTerminalFromCompleting(
         input.status === 'completed'
           ? { status: 'completed', value: input.value }
           : { status: 'failed', error: input.error ?? 'Remote activity failed' },
+        nextRecord.workflowExecutionToken,
       ),
     ],
   );
@@ -342,11 +343,16 @@ async function resolveCooperativeCancellation(
         disposition: 'cancelled',
         dispositionAt: now,
       })),
-      ...buildTerminalResolutionWrites(nextRecord.workflowId, nextRecord.operationId, {
-        status: 'failed',
-        error: nextRecord.cancellationReason,
-        failureCategory: 'cancellation',
-      }),
+      ...buildTerminalResolutionWrites(
+        nextRecord.workflowId,
+        nextRecord.operationId,
+        {
+          status: 'failed',
+          error: nextRecord.cancellationReason,
+          failureCategory: 'cancellation',
+        },
+        nextRecord.workflowExecutionToken,
+      ),
     ],
   );
   if (!committed.ok) return committed;

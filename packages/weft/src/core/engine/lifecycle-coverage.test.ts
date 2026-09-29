@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS, MAX_BATCH_OPERATIONS, type BatchOperation } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowStartInterception } from '../interceptor/interception-contexts.ts';
@@ -194,7 +195,7 @@ describe('engine lifecycle coverage helpers', () => {
       createEngineLifecycleCallbacks(engine),
     );
 
-    expect(handle.result()).resolves.toBe('started');
+    expect(await handle.result()).toBe('started');
 
     engine[Symbol.dispose]();
   });
@@ -215,13 +216,15 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      recoverAll(
-        { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
-        createLifecycleCallbacks({
-          getHandle: (workflowId: string) => ({ id: workflowId }),
-        }) as never,
+      await throwingRejectionOf(
+        recoverAll(
+          { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
+          createLifecycleCallbacks({
+            getHandle: (workflowId: string) => ({ id: workflowId }),
+          }) as never,
+        ),
       ),
-    ).rejects.toThrow('Cannot recover 1 running workflow(s)');
+    ).toThrow('Cannot recover 1 running workflow(s)');
 
     const skippedEvents: Event[] = [];
     const handles = await recoverAll(
@@ -328,26 +331,30 @@ describe('engine lifecycle coverage helpers', () => {
     const storage = new MemoryStorage();
 
     expect(
-      fork(
-        { storage } as never,
-        'workflow-missing-source',
-        undefined,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        fork(
+          { storage } as never,
+          'workflow-missing-source',
+          undefined,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow('Workflow "workflow-missing-source" not found');
+    ).toThrow('Workflow "workflow-missing-source" not found');
 
     await storage.put(
       KEYS.workflow('workflow-missing-registration'),
       encode(createWorkflowState('workflow-missing-registration')),
     );
     expect(
-      fork(
-        { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
-        'workflow-missing-registration',
-        undefined,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        fork(
+          { registrations: new Map(), sources: { byName: new Map() }, storage } as never,
+          'workflow-missing-registration',
+          undefined,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow(
+    ).toThrow(
       'No workflow registered with name "workflow" (needed to fork "workflow-missing-registration")',
     );
 
@@ -364,24 +371,26 @@ describe('engine lifecycle coverage helpers', () => {
     ]);
 
     expect(
-      fork(
-        { registrations, storage } as never,
-        'workflow-missing-registration',
-        { fromStep: 3 },
-        createLifecycleCallbacks({}, registrations) as never,
+      await throwingRejectionOf(
+        fork(
+          { registrations, storage } as never,
+          'workflow-missing-registration',
+          { fromStep: 3 },
+          createLifecycleCallbacks({}, registrations) as never,
+        ),
       ),
-    ).rejects.toThrow(
-      'Checkpoint not found at step 3 for workflow "workflow-missing-registration"',
-    );
+    ).toThrow('Checkpoint not found at step 3 for workflow "workflow-missing-registration"');
 
     expect(
-      fork(
-        { registrations, storage } as never,
-        'workflow-missing-registration',
-        undefined,
-        createLifecycleCallbacks({}, registrations) as never,
+      await throwingRejectionOf(
+        fork(
+          { registrations, storage } as never,
+          'workflow-missing-registration',
+          undefined,
+          createLifecycleCallbacks({}, registrations) as never,
+        ),
       ),
-    ).rejects.toThrow('Checkpoint not found for workflow "workflow-missing-registration"');
+    ).toThrow('Checkpoint not found for workflow "workflow-missing-registration"');
   });
 
   it('cleans transient fork state when fork storage writes fail', async () => {
@@ -428,13 +437,15 @@ describe('engine lifecycle coverage helpers', () => {
     };
 
     expect(
-      fork(
-        internals as never,
-        sourceWorkflowId,
-        undefined,
-        createLifecycleCallbacks({}, internals.registrations) as never,
+      await throwingRejectionOf(
+        fork(
+          internals as never,
+          sourceWorkflowId,
+          undefined,
+          createLifecycleCallbacks({}, internals.registrations) as never,
+        ),
       ),
-    ).rejects.toThrow('fork batch failed');
+    ).toThrow('fork batch failed');
 
     expect(internals.checkpoints.size).toBe(0);
     expect(internals.workflowVersionTuples.size).toBe(0);
@@ -488,19 +499,21 @@ describe('engine lifecycle coverage helpers', () => {
       ],
     ]);
     expect(
-      startWorkflow(
-        {
-          options: { getNow: () => 1_000, payloadSizePolicy: { maxBytes: null } },
-          pendingStarts: new Set(['workflow-duplicate-start']),
-          registrations,
-        } as never,
-        'workflow',
-        null,
-        { id: 'workflow-duplicate-start' },
-        undefined,
-        createLifecycleCallbacks({}, registrations) as never,
+      await throwingRejectionOf(
+        startWorkflow(
+          {
+            options: { getNow: () => 1_000, payloadSizePolicy: { maxBytes: null } },
+            pendingStarts: new Set(['workflow-duplicate-start']),
+            registrations,
+          } as never,
+          'workflow',
+          null,
+          { id: 'workflow-duplicate-start' },
+          undefined,
+          createLifecycleCallbacks({}, registrations) as never,
+        ),
       ),
-    ).rejects.toThrow('Workflow with id "workflow-duplicate-start" already exists');
+    ).toThrow('Workflow with id "workflow-duplicate-start" already exists');
   });
 
   it('creates pending workflow state with tuple metadata and tags', () => {
@@ -1192,16 +1205,18 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        {
-          registrations: new Map(),
-          storage,
-        } as never,
-        workflowId,
-        true,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            registrations: new Map(),
+            storage,
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow('Cannot resume workflow "workflow-resume-completed": status is "completed"');
+    ).toThrow('Cannot resume workflow "workflow-resume-completed": status is "completed"');
   });
 
   it('resumeWorkflowFromStorage rejects a stale-cached claim generation before touching the checkpoint (WFT-79)', async () => {
@@ -1227,21 +1242,23 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        {
-          registrations: new Map(),
-          storage,
-          options: { ownershipMode: 'workflow-lease' },
-          workflowClaimRegistry: {
-            engineId: 'stale-engine',
-            currentEpoch: () => 1,
-          },
-        } as never,
-        workflowId,
-        true,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            registrations: new Map(),
+            storage,
+            options: { ownershipMode: 'workflow-lease' },
+            workflowClaimRegistry: {
+              engineId: 'stale-engine',
+              currentEpoch: () => 1,
+            },
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow(WorkflowClaimUnavailableError);
+    ).toThrow(WorkflowClaimUnavailableError);
   });
 
   it('resumeWorkflowFromStorage rejects running states whose workflow type is no longer registered', async () => {
@@ -1255,17 +1272,19 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        {
-          registrations: new Map(),
-          storage,
-          options: { ownershipMode: 'none' },
-        } as never,
-        workflowId,
-        true,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            registrations: new Map(),
+            storage,
+            options: { ownershipMode: 'none' },
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow(
+    ).toThrow(
       'No workflow registered with name "workflow" (needed to resume "workflow-resume-missing-registration")',
     );
   });
@@ -1277,17 +1296,19 @@ describe('engine lifecycle coverage helpers', () => {
     await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
 
     expect(
-      resumeWorkflowFromStorage(
-        {
-          registrations: new Map(),
-          storage,
-          options: { ownershipMode: 'none' },
-        } as never,
-        workflowId,
-        true,
-        createLifecycleCallbacks() as never,
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            registrations: new Map(),
+            storage,
+            options: { ownershipMode: 'none' },
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
       ),
-    ).rejects.toThrow('Checkpoint not found for workflow "workflow-resume-missing-checkpoint"');
+    ).toThrow('Checkpoint not found for workflow "workflow-resume-missing-checkpoint"');
   });
 
   it('resumeWorkflowFromStorage rejects when termination starts during the serialized resume write', async () => {
@@ -1322,21 +1343,23 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        createResumeWorkflowFromStorageInternals({
-          storage,
-          terminalizingWorkflows,
-        }),
-        workflowId,
-        true,
-        createLifecycleCallbacks(
-          {
-            getHandle: () => ({ id: workflowId }),
-          },
-          RESUME_TEST_REGISTRATIONS,
-        ) as never,
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          createResumeWorkflowFromStorageInternals({
+            storage,
+            terminalizingWorkflows,
+          }),
+          workflowId,
+          true,
+          createLifecycleCallbacks(
+            {
+              getHandle: () => ({ id: workflowId }),
+            },
+            RESUME_TEST_REGISTRATIONS,
+          ) as never,
+        ),
       ),
-    ).rejects.toThrow(`Cannot resume workflow "${workflowId}": termination is in progress`);
+    ).toThrow(`Cannot resume workflow "${workflowId}": termination is in progress`);
   });
 
   it('resumeWorkflowFromStorage rejects when state disappears during the serialized resume write', async () => {
@@ -1350,27 +1373,29 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        createResumeWorkflowFromStorageInternals({
-          storage,
-        }),
-        workflowId,
-        true,
-        createLifecycleCallbacks(
-          {
-            getHandle: () => ({ id: workflowId }),
-            runSerializedWorkflowStateWrite: async <Result>(
-              _workflowId: string,
-              writeOperation: () => Promise<Result>,
-            ) => {
-              await storage.delete(KEYS.workflow(workflowId));
-              return writeOperation();
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          createResumeWorkflowFromStorageInternals({
+            storage,
+          }),
+          workflowId,
+          true,
+          createLifecycleCallbacks(
+            {
+              getHandle: () => ({ id: workflowId }),
+              runSerializedWorkflowStateWrite: async <Result>(
+                _workflowId: string,
+                writeOperation: () => Promise<Result>,
+              ) => {
+                await storage.delete(KEYS.workflow(workflowId));
+                return writeOperation();
+              },
             },
-          },
-          RESUME_TEST_REGISTRATIONS,
-        ) as never,
+            RESUME_TEST_REGISTRATIONS,
+          ) as never,
+        ),
       ),
-    ).rejects.toThrow(`Workflow "${workflowId}" not found in storage`);
+    ).toThrow(`Workflow "${workflowId}" not found in storage`);
   });
 
   it('resumeWorkflowFromStorage rejects a start-new replacement landing mid-resume instead of replaying its stale checkpoint (WFT-19 review round 7)', async () => {
@@ -1398,35 +1423,39 @@ describe('engine lifecycle coverage helpers', () => {
     );
 
     expect(
-      resumeWorkflowFromStorage(
-        createResumeWorkflowFromStorageInternals({
-          storage,
-          strategy: { startWorkflow: startWorkflowStrategy },
-        }),
-        workflowId,
-        true,
-        createLifecycleCallbacks(
-          {
-            getHandle: () => ({ id: workflowId }),
-            runSerializedWorkflowStateWrite: async <Result>(
-              _workflowId: string,
-              writeOperation: () => Promise<Result>,
-            ) => {
-              // The replacement: same id, fresh token — as every `start()`
-              // mints (`start-state.ts`'s `buildInitialIdentitySlice`).
-              await storage.put(
-                KEYS.workflow(workflowId),
-                encode(
-                  createWorkflowState(workflowId, { workflowExecutionToken: 'token-replacement' }),
-                ),
-              );
-              return writeOperation();
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          createResumeWorkflowFromStorageInternals({
+            storage,
+            strategy: { startWorkflow: startWorkflowStrategy },
+          }),
+          workflowId,
+          true,
+          createLifecycleCallbacks(
+            {
+              getHandle: () => ({ id: workflowId }),
+              runSerializedWorkflowStateWrite: async <Result>(
+                _workflowId: string,
+                writeOperation: () => Promise<Result>,
+              ) => {
+                // The replacement: same id, fresh token — as every `start()`
+                // mints (`start-state.ts`'s `buildInitialIdentitySlice`).
+                await storage.put(
+                  KEYS.workflow(workflowId),
+                  encode(
+                    createWorkflowState(workflowId, {
+                      workflowExecutionToken: 'token-replacement',
+                    }),
+                  ),
+                );
+                return writeOperation();
+              },
             },
-          },
-          RESUME_TEST_REGISTRATIONS,
-        ) as never,
+            RESUME_TEST_REGISTRATIONS,
+          ) as never,
+        ),
       ),
-    ).rejects.toThrow('changed generation');
+    ).toThrow('changed generation');
 
     // The stale handler must never have been driven against the replacement.
     expect(startWorkflowStrategy).not.toHaveBeenCalled();

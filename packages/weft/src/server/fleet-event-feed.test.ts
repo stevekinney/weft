@@ -9,6 +9,7 @@ import {
   type ScanOptions,
 } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { createFleetEventFeed, type FleetEventEnvelope } from './fleet-event-feed.ts';
 
 class FailingTailReadStorage extends MemoryStorage {
@@ -431,7 +432,7 @@ describe('createFleetEventFeed', () => {
     await Promise.resolve();
     feed.dispose();
 
-    expect(pending).resolves.toEqual({ done: true, value: undefined });
+    expect(await pending).toEqual({ done: true, value: undefined });
   });
 
   it('commits caller-owned operations with the matching event', async () => {
@@ -501,8 +502,8 @@ describe('createFleetEventFeed', () => {
       await feed.append({ kind: 'worker:connected', emittedAtMs: index, payload: { index } });
     }
 
-    expect(feed.retain({ beforeSequence: 3, limit: 10 })).resolves.toBe(2);
-    expect(feed.snapshotRetentionFloor()).resolves.toBe(3);
+    expect(await feed.retain({ beforeSequence: 3, limit: 10 })).toBe(2);
+    expect(await feed.snapshotRetentionFloor()).toBe(3);
     feed.dispose();
   });
 
@@ -510,7 +511,7 @@ describe('createFleetEventFeed', () => {
     const feed = createFleetEventFeed(new ContendedRetentionStorage());
     await feed.append({ kind: 'worker:connected', emittedAtMs: 0, payload: {} });
 
-    expect(feed.retain({ beforeSequence: 1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(feed.retain({ beforeSequence: 1 }))).toThrow(
       'lost its storage precondition after 25 attempts',
     );
     feed.dispose();
@@ -524,9 +525,9 @@ describe('createFleetEventFeed', () => {
 
   it('rejects the reserved retention-gap event kind', async () => {
     const feed = createFleetEventFeed(new MemoryStorage());
-    expect(feed.append({ kind: 'fleet:gap', emittedAtMs: 0, payload: {} })).rejects.toThrow(
-      'reserved',
-    );
+    expect(
+      await throwingRejectionOf(feed.append({ kind: 'fleet:gap', emittedAtMs: 0, payload: {} })),
+    ).toThrow('reserved');
     feed.dispose();
   });
 
@@ -680,13 +681,15 @@ describe('createFleetEventFeed', () => {
 
     try {
       expect(
-        feed.appendWorkflowEventIfPresent({
-          kind: 'workflow:completed',
-          workflowId: 'wf-contended',
-          emittedAtMs: 1,
-          payload: { workflowId: 'wf-contended' },
-        }),
-      ).rejects.toThrow('lost its storage precondition after 25 attempts');
+        await throwingRejectionOf(
+          feed.appendWorkflowEventIfPresent({
+            kind: 'workflow:completed',
+            workflowId: 'wf-contended',
+            emittedAtMs: 1,
+            payload: { workflowId: 'wf-contended' },
+          }),
+        ),
+      ).toThrow('lost its storage precondition after 25 attempts');
 
       expect(storage.conditionalBatchCalls).toBe(25);
       expect(await storage.get(KEYS.workflow('wf-contended'))).not.toBeNull();
@@ -765,10 +768,10 @@ describe('createFleetEventFeed', () => {
       'live poll interval must be positive',
     );
     const feed = createFleetEventFeed(new MemoryStorage());
-    expect(feed.retain({ beforeSequence: -1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(feed.retain({ beforeSequence: -1 }))).toThrow(
       'retention sequence must be a non-negative',
     );
-    expect(feed.retain({ beforeSequence: 1, limit: 0 })).rejects.toThrow(
+    expect(await throwingRejectionOf(feed.retain({ beforeSequence: 1, limit: 0 }))).toThrow(
       'retention limit must be positive',
     );
     feed.dispose();
@@ -788,9 +791,11 @@ describe('createFleetEventFeed', () => {
     );
     const feed = createFleetEventFeed(storage);
     expect(await feed.snapshotTailSequence()).toBe(4);
-    expect(feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} })).rejects.toThrow(
-      KEYS.fleetEventTail(),
-    );
+    expect(
+      await throwingRejectionOf(
+        feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} }),
+      ),
+    ).toThrow(KEYS.fleetEventTail());
     feed.dispose();
   });
 
@@ -817,12 +822,12 @@ describe('createFleetEventFeed', () => {
     const storage = new FailingVirginSentinelStorage();
     const feed = createFleetEventFeed(storage);
 
-    expect(feed.snapshotTailSequence()).resolves.toBe(-1);
+    expect(await feed.snapshotTailSequence()).toBe(-1);
     expect(storage.failNextSentinelWrite).toBe(false);
     // The failed write never landed, so the tail key stays absent.
     expect(await storage.get(KEYS.fleetEventTail())).toBeNull();
     // A later call re-scans (nothing was persisted) but still resolves -1.
-    expect(feed.snapshotTailSequence()).resolves.toBe(-1);
+    expect(await feed.snapshotTailSequence()).toBe(-1);
 
     feed.dispose();
   });
@@ -831,7 +836,7 @@ describe('createFleetEventFeed', () => {
     const malformedKeyStorage = new MemoryStorage();
     await malformedKeyStorage.put(`${KEYS.fleetEventPrefix()}bad`, encode({}));
     const malformedKeyFeed = createFleetEventFeed(malformedKeyStorage);
-    expect(malformedKeyFeed.snapshotTailSequence()).rejects.toThrow(
+    expect(await throwingRejectionOf(malformedKeyFeed.snapshotTailSequence())).toThrow(
       `${KEYS.fleetEventPrefix()}bad`,
     );
 
@@ -839,16 +844,20 @@ describe('createFleetEventFeed', () => {
     await malformedEventStorage.put(KEYS.fleetEvent(0), encode({ sequence: 1 }));
     await malformedEventStorage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
     const malformedEventFeed = createFleetEventFeed(malformedEventStorage);
-    expect(collect(malformedEventFeed.replay(), 10)).rejects.toThrow(KEYS.fleetEvent(0));
-    expect(malformedEventFeed.retain({ beforeSequence: 1 })).rejects.toThrow(KEYS.fleetEvent(0));
+    expect(await throwingRejectionOf(collect(malformedEventFeed.replay(), 10))).toThrow(
+      KEYS.fleetEvent(0),
+    );
+    expect(await throwingRejectionOf(malformedEventFeed.retain({ beforeSequence: 1 }))).toThrow(
+      KEYS.fleetEvent(0),
+    );
 
     const malformedWatermarkStorage = new MemoryStorage();
     await malformedWatermarkStorage.put(KEYS.fleetEventWatermark(), encode({ floor: 1 }));
     const malformedWatermarkFeed = createFleetEventFeed(malformedWatermarkStorage);
-    expect(malformedWatermarkFeed.snapshotRetentionFloor()).rejects.toThrow(
+    expect(await throwingRejectionOf(malformedWatermarkFeed.snapshotRetentionFloor())).toThrow(
       KEYS.fleetEventWatermark(),
     );
-    expect(malformedWatermarkFeed.retain({ beforeSequence: 1 })).rejects.toThrow(
+    expect(await throwingRejectionOf(malformedWatermarkFeed.retain({ beforeSequence: 1 }))).toThrow(
       KEYS.fleetEventWatermark(),
     );
     malformedKeyFeed.dispose();
@@ -871,16 +880,18 @@ describe('createFleetEventFeed', () => {
     await storage.put(KEYS.fleetEventTail(), encode({ sequence: 0 }));
     const feed = createFleetEventFeed(storage);
 
-    expect(feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} })).rejects.toThrow(
-      KEYS.fleetEventTail(),
-    );
+    expect(
+      await throwingRejectionOf(
+        feed.append({ kind: 'worker:connected', emittedAtMs: 2, payload: {} }),
+      ),
+    ).toThrow(KEYS.fleetEventTail());
     feed.dispose();
   });
 
   it('fails loudly when retention never provides a stable replay snapshot', async () => {
     const feed = createFleetEventFeed(new UnstableWatermarkStorage());
 
-    expect(collect(feed.replay(), 10)).rejects.toThrow(
+    expect(await throwingRejectionOf(collect(feed.replay(), 10))).toThrow(
       'could not obtain a stable retention snapshot',
     );
     feed.dispose();
@@ -903,13 +914,15 @@ describe('createFleetEventFeed', () => {
 
     const feed = createFleetEventFeed(storage);
     expect(
-      feed.append({
-        kind: 'workflow:completed',
-        workflowId: 'wf-new',
-        emittedAtMs: 2,
-        payload: { workflowId: 'wf-new' },
-      }),
-    ).rejects.toThrow('fleet-event-tail');
+      await throwingRejectionOf(
+        feed.append({
+          kind: 'workflow:completed',
+          workflowId: 'wf-new',
+          emittedAtMs: 2,
+          payload: { workflowId: 'wf-new' },
+        }),
+      ),
+    ).toThrow('fleet-event-tail');
     expect(await storage.get(KEYS.fleetEvent(5))).toBeNull();
     feed.dispose();
   });
@@ -919,13 +932,15 @@ describe('createFleetEventFeed', () => {
     const feed = createFleetEventFeed(storage);
 
     expect(
-      feed.append({
-        kind: 'workflow:started',
-        workflowId: 'wf-fail',
-        emittedAtMs: 1,
-        payload: { workflowId: 'wf-fail' },
-      }),
-    ).rejects.toThrow('tail read failed');
+      await throwingRejectionOf(
+        feed.append({
+          kind: 'workflow:started',
+          workflowId: 'wf-fail',
+          emittedAtMs: 1,
+          payload: { workflowId: 'wf-fail' },
+        }),
+      ),
+    ).toThrow('tail read failed');
 
     const appended = await feed.append({
       kind: 'workflow:started',
@@ -944,13 +959,15 @@ describe('createFleetEventFeed', () => {
     const feed = createFleetEventFeed(storage);
 
     expect(
-      feed.append({
-        kind: 'workflow:started',
-        workflowId: 'wf-fail',
-        emittedAtMs: 1,
-        payload: { workflowId: 'wf-fail' },
-      }),
-    ).rejects.toThrow('fleet batch failed');
+      await throwingRejectionOf(
+        feed.append({
+          kind: 'workflow:started',
+          workflowId: 'wf-fail',
+          emittedAtMs: 1,
+          payload: { workflowId: 'wf-fail' },
+        }),
+      ),
+    ).toThrow('fleet batch failed');
 
     const appended = await feed.append({
       kind: 'workflow:started',
@@ -961,7 +978,7 @@ describe('createFleetEventFeed', () => {
 
     expect(appended.sequence).toBe(0);
     expect(appended.cursor).toBe('0');
-    expect(feed.snapshotTailSequence()).resolves.toBe(0);
+    expect(await feed.snapshotTailSequence()).toBe(0);
     feed.dispose();
   });
 
@@ -1099,16 +1116,16 @@ describe('createFleetEventFeed', () => {
   it('fails loudly when retention never provides a stable snapshot for a workflow-scoped replay', async () => {
     const feed = createFleetEventFeed(new UnstableWatermarkStorage());
 
-    expect(collect(feed.replay({ workflowId: 'wf-unstable' }), 10)).rejects.toThrow(
-      'could not obtain a stable retention snapshot',
-    );
+    expect(
+      await throwingRejectionOf(collect(feed.replay({ workflowId: 'wf-unstable' }), 10)),
+    ).toThrow('could not obtain a stable retention snapshot');
     feed.dispose();
   });
 
   it('rejects an empty workflowId when replaying the by-workflow index', async () => {
     const feed = createFleetEventFeed(new MemoryStorage());
 
-    expect(collect(feed.replay({ workflowId: '' }), 1)).rejects.toThrow(
+    expect(await throwingRejectionOf(collect(feed.replay({ workflowId: '' }), 1))).toThrow(
       'Fleet event replay workflowId must not be empty.',
     );
     feed.dispose();
@@ -1122,12 +1139,14 @@ describe('createFleetEventFeed', () => {
     // workflow-scoped path has its own private `decodeCursorOrThrow` in
     // fleet-event-feed.ts. Both must reject the same malformed input with the
     // same error, or "identical cursor semantics" would be an unverified claim.
-    expect(collect(feed.replay({ fromCursor: 'not-a-cursor' }), 1)).rejects.toThrow(
-      'Invalid cursor',
-    );
     expect(
-      collect(feed.replay({ workflowId: 'wf-cursor-check', fromCursor: 'not-a-cursor' }), 1),
-    ).rejects.toThrow('Invalid cursor');
+      await throwingRejectionOf(collect(feed.replay({ fromCursor: 'not-a-cursor' }), 1)),
+    ).toThrow('Invalid cursor');
+    expect(
+      await throwingRejectionOf(
+        collect(feed.replay({ workflowId: 'wf-cursor-check', fromCursor: 'not-a-cursor' }), 1),
+      ),
+    ).toThrow('Invalid cursor');
     feed.dispose();
   });
 
@@ -1201,8 +1220,10 @@ describe('createFleetEventFeed', () => {
     // surface as PersistedDataCorruptError rather than being silently
     // skipped.
     expect(
-      collect(feed.replay({ workflowId: 'wf-corrupt', fromCursor: '-1' }), 10),
-    ).rejects.toThrow(PersistedDataCorruptError);
+      await throwingRejectionOf(
+        collect(feed.replay({ workflowId: 'wf-corrupt', fromCursor: '-1' }), 10),
+      ),
+    ).toThrow(PersistedDataCorruptError);
     feed.dispose();
   });
 
@@ -1224,8 +1245,10 @@ describe('createFleetEventFeed', () => {
     await storage.put(KEYS.fleetEventByWorkflow('wf-phantom-owner', 0), new Uint8Array());
 
     expect(
-      collect(feed.replay({ workflowId: 'wf-phantom-owner', fromCursor: '-1' }), 10),
-    ).rejects.toThrow(PersistedDataCorruptError);
+      await throwingRejectionOf(
+        collect(feed.replay({ workflowId: 'wf-phantom-owner', fromCursor: '-1' }), 10),
+      ),
+    ).toThrow(PersistedDataCorruptError);
     feed.dispose();
   });
 
@@ -1246,13 +1269,15 @@ describe('createFleetEventFeed', () => {
 
     const feed = createFleetEventFeed(storage);
     expect(
-      feed.append({
-        kind: 'workflow:completed',
-        workflowId: 'wf-new',
-        emittedAtMs: 2,
-        payload: { workflowId: 'wf-new' },
-      }),
-    ).rejects.toThrow('fleet-event-tail');
+      await throwingRejectionOf(
+        feed.append({
+          kind: 'workflow:completed',
+          workflowId: 'wf-new',
+          emittedAtMs: 2,
+          payload: { workflowId: 'wf-new' },
+        }),
+      ),
+    ).toThrow('fleet-event-tail');
     expect(await storage.get(KEYS.fleetEvent(3))).toBeNull();
     feed.dispose();
   });
@@ -1275,13 +1300,15 @@ describe('createFleetEventFeed', () => {
 
     const feed = createFleetEventFeed(storage);
     expect(
-      feed.append({
-        kind: 'workflow:completed',
-        workflowId: 'wf-new',
-        emittedAtMs: 2,
-        payload: { workflowId: 'wf-new' },
-      }),
-    ).rejects.toThrow('fleet-event-tail');
+      await throwingRejectionOf(
+        feed.append({
+          kind: 'workflow:completed',
+          workflowId: 'wf-new',
+          emittedAtMs: 2,
+          payload: { workflowId: 'wf-new' },
+        }),
+      ),
+    ).toThrow('fleet-event-tail');
     expect(await storage.get(KEYS.fleetEvent(8))).toBeNull();
     feed.dispose();
   });
