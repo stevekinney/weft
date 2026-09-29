@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-09-29
+
+### Fixed
+
+- Export the worker authoring module used by generated worker files from the published package.
+- Deliver buffered signals found after waiter registration and release the waiter when that scan fails.
+- Discard stale operation results from a replaced workflow run across inline and worker execution, including persisted asynchronous activity resolutions.
+- Fail recovery explicitly when an older acknowledged asynchronous activity resolution lacks the run identity needed to deliver it safely.
+
 ## [0.27.0] - 2026-09-28
 
 ### Added
