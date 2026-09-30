@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.8] - 2026-09-29
+
+### Fixed
+
+- Keep host-load-sensitive timing checks in the opt-in benchmark suite while retaining deterministic integrity and worker behavior checks in the default test suite.
+
 ## [0.27.7] - 2026-09-29
 
 ### Fixed
