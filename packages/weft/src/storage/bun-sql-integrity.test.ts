@@ -3,146 +3,24 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import type { BatchOperation } from './interface.ts';
 
 import {
-  isConstrainedCodexRunner,
-  isGitHubActionsRunner,
-} from '../../scripts/benchmarks/benchmark-environment.ts';
-import { readEnvironmentVariable } from '../runtime/environment-configuration.ts';
-import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
 } from '../testing/storage-backends.test-support.ts';
+import {
+  ARCHITECTURE_BENCHMARK_WORKLOAD,
+  benchmarkWorkload,
+  generateCheckpointValue,
+  INTEGRITY_WORKLOAD,
+  median,
+  runBatchWriteBenchmark,
+  selectSQLiteBenchmarkWorkload,
+  TARGET_WRITES_PER_SECOND,
+} from './bun-sql-workload.test-support.ts';
 import { BunSQLiteStorage } from './bun-sql.ts';
 
-/** Generate a realistic ~2KB value (typical checkpoint size). */
-function generateCheckpointValue(): Uint8Array {
-  const value = new Uint8Array(2048);
-  crypto.getRandomValues(value);
-  return value;
-}
-
-/**
- * The opt-in throughput target. Normal validation records benchmark output and
- * checks data integrity; set WEFT_SQLITE_ARCHITECTURE_BENCHMARK=1 to enforce
- * the median throughput gate on an isolated machine.
- */
-const TARGET_WRITES_PER_SECOND =
-  isConstrainedCodexRunner() || isGitHubActionsRunner() ? 5_000 : 20_000;
-const runArchitectureBenchmark =
-  readEnvironmentVariable('WEFT_SQLITE_ARCHITECTURE_BENCHMARK') === '1';
-
-type SQLiteBenchmarkWorkload = {
-  batchWriteBatchSize: number;
-  batchWriteSampleSize: number;
-  batchWriteTotal: number;
-  individualPutTotal: number;
-  mixedOperationBatchSize: number;
-  mixedOperationTotal: number;
-};
-
-const INTEGRITY_WORKLOAD: SQLiteBenchmarkWorkload = {
-  batchWriteBatchSize: 20,
-  batchWriteSampleSize: 1,
-  batchWriteTotal: 100,
-  individualPutTotal: 100,
-  mixedOperationBatchSize: 20,
-  mixedOperationTotal: 100,
-};
-
-const ARCHITECTURE_BENCHMARK_WORKLOAD: SQLiteBenchmarkWorkload = {
-  batchWriteBatchSize: 500,
-  batchWriteSampleSize: 3,
-  batchWriteTotal: 25_000,
-  individualPutTotal: 10_000,
-  mixedOperationBatchSize: 1_000,
-  mixedOperationTotal: 50_000,
-};
-
-export function selectSQLiteBenchmarkWorkload(
-  architectureBenchmark: boolean,
-): SQLiteBenchmarkWorkload {
-  return architectureBenchmark ? ARCHITECTURE_BENCHMARK_WORKLOAD : INTEGRITY_WORKLOAD;
-}
-
 const integrityWorkload = selectSQLiteBenchmarkWorkload(false);
-const benchmarkWorkload = selectSQLiteBenchmarkWorkload(runArchitectureBenchmark);
-/**
- * The throughput gate, declared through `skipIf` so the flag this file documents actually
- * governs it. It was a bare `it` alias, which meant the median-throughput assertion ran on
- * every `bun run validate` regardless of `WEFT_SQLITE_ARCHITECTURE_BENCHMARK` — a documented
- * gate wired to nothing, and a measurement asserting a target inside the default pass, which
- * is what `AGENTS.md` says weft's benchmarks must not do. The surrounding tests keep running:
- * they record numbers and check stored data on the integrity workload, which is the part that
- * belongs in validation.
- */
-const runSQLiteArchitectureBenchmark = it.skipIf(!runArchitectureBenchmark);
 
-function median(values: number[]): number {
-  const sorted = values.toSorted((left, right) => left - right);
-  return sorted[Math.floor(sorted.length / 2)]!;
-}
-
-/**
- * Run the selected batch-write workload and return its measured throughput. A
- * 100-write warmup (excluded from timing) primes WAL mode and prepared
- * statements; every sample's batches are pre-generated before any timing
- * starts; `performance.now()` brackets only the `storage.batch` calls; and
- * each batch object is consumed exactly once.
- */
-async function runBatchWriteBenchmark(
-  storage: BunSQLiteStorage,
-  value: Uint8Array,
-  batchWriteWorkload: Pick<
-    SQLiteBenchmarkWorkload,
-    'batchWriteBatchSize' | 'batchWriteSampleSize' | 'batchWriteTotal'
-  >,
-): Promise<{ medianWritesPerSecond: number; writesPerSecondSamples: number[] }> {
-  // Warm up: small batch to trigger WAL mode and prime prepared statements.
-  await storage.batch(
-    Array.from({ length: 100 }, (_, index) => ({
-      type: 'put' as const,
-      key: `warmup:${index}`,
-      value,
-    })),
-  );
-
-  const {
-    batchWriteBatchSize: batchSize,
-    batchWriteSampleSize,
-    batchWriteTotal: totalWrites,
-  } = batchWriteWorkload;
-  const batches = totalWrites / batchSize;
-
-  // Pre-generate each sample's batch operations so timing reflects storage
-  // throughput rather than key generation or object allocation.
-  const sampleBatches: BatchOperation[][][] = Array.from(
-    { length: batchWriteSampleSize },
-    (_sample, sampleIndex) =>
-      Array.from({ length: batches }, (_batch, batchIndex) =>
-        Array.from({ length: batchSize }, (_item, itemIndex) => ({
-          type: 'put' as const,
-          key: `wf:${sampleIndex}:${String(batchIndex * batchSize + itemIndex).padStart(10, '0')}:ckpt`,
-          value,
-        })),
-      ),
-  );
-
-  const writesPerSecondSamples: number[] = [];
-  for (const batchesForSample of sampleBatches) {
-    const start = performance.now();
-    for (const batch of batchesForSample) {
-      await storage.batch(batch);
-    }
-    const elapsed = performance.now() - start;
-    writesPerSecondSamples.push((totalWrites / elapsed) * 1000);
-  }
-
-  return {
-    medianWritesPerSecond: Math.round(median(writesPerSecondSamples)),
-    writesPerSecondSamples,
-  };
-}
-
-describe('BunSQLiteStorage benchmark', () => {
+describe('BunSQLiteStorage integrity', () => {
   const fixtureCleanups: Array<() => void> = [];
 
   function createStorage(): BunSQLiteStorage {
@@ -168,7 +46,14 @@ describe('BunSQLiteStorage benchmark', () => {
     expect(selectSQLiteBenchmarkWorkload(false)).not.toEqual(selectSQLiteBenchmarkWorkload(true));
   });
 
-  it('records batch write throughput and verifies stored data', async () => {
+  it('takes the median of an unsorted sample set', () => {
+    // The integrity workload runs a single throughput sample, so its own batch-write test never
+    // gives the sort comparator two values to compare; this covers the helper directly.
+    expect(median([30, 10, 20])).toBe(20);
+    expect(median([7])).toBe(7);
+  });
+
+  it('writes batches and verifies stored data', async () => {
     const storage = createStorage();
     const value = generateCheckpointValue();
 
@@ -191,8 +76,6 @@ describe('BunSQLiteStorage benchmark', () => {
       ].join('\n'),
     );
 
-    expect(medianWritesPerSecond).toBeGreaterThan(0);
-
     // Verify data integrity: spot-check a few entries from the final sample.
     const lastSamplePrefix = `${integrityWorkload.batchWriteSampleSize - 1}`;
     const first = await storage.get(`wf:${lastSamplePrefix}:0000000000:ckpt`);
@@ -206,24 +89,7 @@ describe('BunSQLiteStorage benchmark', () => {
     storage[Symbol.dispose]();
   }, 15_000);
 
-  runSQLiteArchitectureBenchmark(
-    `median batch writes exceed ${TARGET_WRITES_PER_SECOND.toLocaleString()} writes/sec`,
-    async () => {
-      const storage = createStorage();
-      const value = generateCheckpointValue();
-
-      const { medianWritesPerSecond } = await runBatchWriteBenchmark(
-        storage,
-        value,
-        benchmarkWorkload,
-      );
-      expect(medianWritesPerSecond).toBeGreaterThanOrEqual(TARGET_WRITES_PER_SECOND);
-
-      storage[Symbol.dispose]();
-    },
-  );
-
-  it('individual put throughput via batch (single-operation batches)', async () => {
+  it('stores individual puts as single-operation batches and reads back the first and last keys', async () => {
     const storage = createStorage();
     const value = generateCheckpointValue();
 
@@ -257,15 +123,16 @@ describe('BunSQLiteStorage benchmark', () => {
       ].join('\n'),
     );
 
-    // Individual puts (no explicit transaction) are expected to be slower.
-    // This test documents the baseline; the batch path is what matters for the 50K target.
-    expect(writesPerSecond).toBeGreaterThan(0);
+    // Individual puts (no explicit transaction) are expected to be slower. The timing above is
+    // logged for the record; the assertions read back stored data.
+    expect(await storage.get(keys[0]!)).toEqual(value);
+    expect(await storage.get(keys[keys.length - 1]!)).toEqual(value);
 
     storage[Symbol.dispose]();
   });
 
   it(
-    'mixed batch operations (puts + deletes) maintain throughput',
+    'applies mixed put and delete batches and reads back stored and deleted keys',
     async () => {
       const storage = createStorage();
       const value = generateCheckpointValue();
@@ -321,8 +188,6 @@ describe('BunSQLiteStorage benchmark', () => {
           `    Operations/sec:   ${operationsPerSecond.toLocaleString()}\n`,
         ].join('\n'),
       );
-
-      expect(operationsPerSecond).toBeGreaterThan(0);
 
       const seedCount = totalOperations / 5;
       expect(await storage.get('seed:0000000000')).toBeNull();

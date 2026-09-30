@@ -26,8 +26,8 @@
  * the browser actually launches, so gating the tests alone would not help.
  *
  * The flag is read through the registered runtime boundary rather than off
- * `Bun.env`, the same way `storage/bun-sql-benchmark.test.ts` reads its own
- * opt-in benchmark switch. A test-only flag does not belong in a production
+ * `Bun.env`, the same way `storage/bun-sql-workload.test-support.ts` reads its
+ * own opt-in benchmark switch. A test-only flag does not belong in a production
  * configuration schema, and `readEnvironmentVariable` is the boundary's
  * sanctioned single-name read.
  */

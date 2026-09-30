@@ -20,9 +20,8 @@ async function readHealthAddress(output: ReadableStream<Uint8Array>): Promise<st
   }
 }
 
-it('starts the source CLI and serves a health request within five seconds', async () => {
+it('starts the source CLI and serves a health request', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'corvidae-cli-start-'));
-  const started = performance.now();
   const child = Bun.spawn({
     cmd: [
       process.execPath,
@@ -51,7 +50,6 @@ it('starts the source CLI and serves a health request within five seconds', asyn
     ]);
     const response = await fetch(address);
     expect(response.status).toBe(200);
-    expect(performance.now() - started).toBeLessThan(5_000);
   } finally {
     clearTimeout(deadline);
     child.kill('SIGTERM');

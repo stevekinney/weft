@@ -1235,15 +1235,14 @@ describe('RemoteWorker', () => {
     });
     expect(worker.inFlight).toBe(1);
 
-    const startTime = Date.now();
+    using warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
     // disconnect() must not hang — it should break out of the polling loop after the timeout
     await worker.disconnect();
 
-    const elapsed = Date.now() - startTime;
-
-    // Should have resolved within the timeout plus generous tolerance for CI jitter
-    expect(elapsed).toBeLessThan(disconnectTimeoutMs + 500);
+    // The drain loop names the timeout it honored: a regression that ignored the option would log
+    // the 30,000 ms default, or never log within the test budget.
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('timed out after 200ms'));
 
     // The connection should be closed even though a task is still technically "in-flight"
     expect(worker.connected).toBe(false);
@@ -1306,18 +1305,13 @@ describe('RemoteWorker', () => {
     });
     expect(worker.shuttingDown).toBe(true);
 
-    const startTime = Date.now();
-
+    // `waitForCondition` throws past this bound, so it is the deadline for the drain to give up.
     const shutdownTimeoutMs = disconnectTimeoutMs + 500;
     await waitForCondition(() => !worker.connected, {
       timeoutMs: shutdownTimeoutMs,
       label: 'shutdown timeout completion',
     });
 
-    const elapsed = Date.now() - startTime;
-
-    // Should have closed within the timeout plus generous tolerance
-    expect(elapsed).toBeLessThan(shutdownTimeoutMs);
     expect(worker.connected).toBe(false);
 
     worker[Symbol.dispose]();
