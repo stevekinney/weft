@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.5] - 2026-09-29
+
+### Fixed
+
+- Preserve a same-id start-new replacement when the old run finishes terminal teardown.
+
 ## [0.27.4] - 2026-09-29
 
 ### Fixed
