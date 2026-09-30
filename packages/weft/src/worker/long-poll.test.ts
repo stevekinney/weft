@@ -398,17 +398,15 @@ describe('LongPollWorker', () => {
       'long-poll non-cooperative activity start',
     );
 
-    const before = Date.now();
     await withTimeout(
       worker.stop(),
       LONG_POLL_TEST_TIMEOUT_MS,
       'long-poll stop() bounded by disconnectTimeoutMs',
     );
-    const elapsedMs = Date.now() - before;
 
-    // Bounded: stop() gave up once disconnectTimeoutMs elapsed rather than
-    // waiting forever for an activity that will never finish on its own.
-    expect(elapsedMs).toBeLessThan(LONG_POLL_TEST_TIMEOUT_MS);
+    // Bounded: `withTimeout` above fails the test if stop() waits forever for
+    // an activity that will never finish on its own, so it needs no reading of
+    // the clock here.
     // The non-cooperative activity is still running — stop() did not, and
     // cannot, force it to stop; it only stopped WAITING for it.
     expect(worker.inFlight).toBe(1);
