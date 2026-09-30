@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,7 +19,7 @@ const databasesToDelete = new Set<string>();
 afterEach(() => {
   for (const databasePath of databasesToDelete) {
     if (existsSync(databasePath)) {
-      rmSync(databasePath, { force: true });
+      rmSync(databasePath, { force: true, recursive: true });
     }
   }
   databasesToDelete.clear();
@@ -246,8 +246,13 @@ describe('CLI edge coverage', () => {
       exitCode: 1,
     });
 
-    const workflowsPath = join(tmpdir(), `weft-cli-edge-workflows-${crypto.randomUUID()}.ts`);
-    databasesToDelete.add(workflowsPath);
+    // Bun's resolver caches directory listings per process. A directory that was already listed
+    // (for example by an earlier import from any subdirectory of tmpdir()) is cached, so a module
+    // written there later can fail with "Cannot find module". A directory created for this test
+    // has never been listed, so it always resolves.
+    const workflowsDirectory = mkdtempSync(join(tmpdir(), 'weft-cli-edge-workflows-'));
+    databasesToDelete.add(workflowsDirectory);
+    const workflowsPath = join(workflowsDirectory, 'module.ts');
     await Bun.write(
       workflowsPath,
       [
