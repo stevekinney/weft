@@ -37,7 +37,12 @@ export {
   reduceRelease,
   reduceRenew,
 } from './concurrency-lock-record.ts';
-export type { AcquireAttempt, LockHolder, LockRecord } from './concurrency-lock-record.ts';
+export type {
+  AcquireAttempt,
+  LockHolder,
+  LockRecord,
+  LockWaiter,
+} from './concurrency-lock-record.ts';
 
 /**
  * Minimal CAS state-slot surface shared by the durable `ctx.state.*` handles
@@ -109,7 +114,9 @@ export interface DurableSemaphoreOptions {
    * Default lease duration in milliseconds applied to an acquired permit when
    * an explicit `leaseMs` is not supplied to `tryAcquire`. A permit whose lease
    * expires may be reclaimed by another contender, which is what frees the lock
-   * when a holder crashes without releasing. Defaults to `30_000`.
+   * when a holder crashes without releasing. The same value is the
+   * waiter queue lease: a queued caller must call `tryAcquire` again within it
+   * or be swept from the queue. Defaults to `30_000`.
    */
   leaseMs?: number;
 }
@@ -131,7 +138,10 @@ const DEFAULT_LEASE_MS = 30_000;
  * Fairness is FIFO: a contender enqueues itself and only acquires once it
  * reaches the head of the waiter queue and a permit is free. Each granted
  * permit carries a lease; an expired lease is reclaimed by the next contender,
- * so a crashed holder cannot deadlock the lock forever.
+ * so a crashed holder cannot deadlock the lock forever. Queue entries carry a
+ * lease too, so a crashed waiter cannot block the queue: a waiting caller must
+ * retry within `leaseMs` of its previous `tryAcquire` or it is swept and
+ * re-queued at the tail.
  *
  * @example
  * ```ts
@@ -173,7 +183,9 @@ export class DurableSemaphore {
    * Attempt to acquire a permit with a single CAS transaction. Returns whether
    * the permit was granted and the caller's FIFO queue position when it was
    * not. The caller is registered in the waiter queue on a failed attempt so a
-   * subsequent retry preserves FIFO order.
+   * subsequent retry preserves FIFO order. Each call refreshes the caller's
+   * waiter lease, so a waiting caller must retry within `leaseMs` of its
+   * previous call or lose its queue position.
    *
    * `RUpdate` is the slot's `update` return type — a `Promise` for
    * {@link AtomicState} or a workflow-operation generator for `ctx.state.*`.
@@ -236,7 +248,9 @@ export class DurableSemaphore {
   /**
    * Read the current record without mutating it. `RGet` is the slot's `get`
    * return type — a `Promise<LockRecord | undefined>` for {@link AtomicState}
-   * or a workflow-operation generator for `ctx.state.*`.
+   * or a workflow-operation generator for `ctx.state.*`. This is a raw read:
+   * a record persisted before waiter leases may still hold bare-string waiters
+   * until its next reducer write.
    */
   inspect<RGet>(slot: CasSlot<LockRecord, unknown, RGet>): RGet {
     return slot.get();

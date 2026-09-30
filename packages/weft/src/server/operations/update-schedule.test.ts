@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { DynamicWorkflowSourceUnavailableError } from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
@@ -510,4 +511,100 @@ describe('weft.schedules.update', () => {
       engine.updateSchedule = originalUpdateSchedule;
     }
   });
+});
+
+const SENSITIVE_CAUSE = '/etc/secrets/token=abc123 unreadable';
+
+const dynamicSourceCases = [
+  {
+    reason: 'load-failed' as const,
+    build: () =>
+      new DynamicWorkflowSourceUnavailableError(
+        'echo',
+        'r1',
+        'load-failed',
+        new Error(SENSITIVE_CAUSE),
+      ),
+    message: 'Dynamic workflow source "echo" revision "r1" failed to load.',
+  },
+  {
+    reason: 'ambiguous-revision' as const,
+    build: () => new DynamicWorkflowSourceUnavailableError('echo', undefined, 'ambiguous-revision'),
+    message: undefined,
+  },
+];
+
+describe('weft.schedules.update DynamicWorkflowSourceUnavailableError wire mapping', () => {
+  let engine: Engine | undefined;
+
+  afterEach(() => {
+    engine?.[Symbol.dispose]();
+    engine = undefined;
+  });
+
+  for (const testCase of dynamicSourceCases) {
+    const expectedMessage = testCase.message ?? testCase.build().message;
+
+    it(`returns REST 409 for reason ${testCase.reason}`, async () => {
+      engine = createEngine();
+      engine.updateSchedule = async () => {
+        throw testCase.build();
+      };
+
+      const response = await handleRequest(
+        jsonRequest('PATCH', '/v1/schedules/schedule-update', {
+          cronExpression: '30 * * * *',
+          revisionPolicy: 'pinned',
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+      const text = await response.text();
+
+      expect(response.status).toBe(409);
+      expect(JSON.parse(text)).toEqual({
+        error: expectedMessage,
+        weftCode: 'DynamicWorkflowSourceUnavailableError',
+      });
+      expect(text).not.toContain('/etc/secrets/token=abc123');
+    });
+
+    it(`returns JSON-RPC Conflict for reason ${testCase.reason}`, async () => {
+      engine = createEngine();
+      engine.updateSchedule = async () => {
+        throw testCase.build();
+      };
+
+      const response = await handleJsonRpcHttpRequest(
+        new Request('http://localhost/jsonrpc', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'weft.schedules.update',
+            params: {
+              scheduleId: 'schedule-update',
+              cronExpression: '30 * * * *',
+              revisionPolicy: 'pinned',
+            },
+          }),
+        }),
+        { registry, engine, principal: anonymousPrincipal() },
+      );
+      const text = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(text)).toEqual({
+        jsonrpc: '2.0',
+        id: 7,
+        error: {
+          code: -32021,
+          message: expectedMessage,
+          data: { reason: testCase.reason, weftCode: 'Conflict', httpStatus: 409 },
+        },
+      });
+      expect(text).not.toContain('/etc/secrets/token=abc123');
+    });
+  }
 });

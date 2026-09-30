@@ -47,6 +47,7 @@ import { chromium } from 'playwright';
 import { browserSmokeEnabled } from '../testing/browser-smoke-gate.test-support.ts';
 
 import type { StorageCapabilities } from './capabilities.ts';
+import { SCAN_PAGE_SIZE } from './indexeddb-scan-page-size.ts';
 
 /**
  * Build the IndexedDB adapter as a browser-compatible IIFE and return its
@@ -470,4 +471,59 @@ describe.skipIf(!browserSmokeEnabled)('IndexedDBStorage — real Chromium durabi
       await page.close();
     }
   }, 30_000);
+
+  // ─── 7. Multi-page scans with a consumer that yields to the event loop ───
+
+  for (const method of ['scan', 'keys'] as const) {
+    it(`${method}() survives a macrotask between records across several pages`, async () => {
+      const page = await openPage();
+      const dbName = uniqueDatabase();
+      try {
+        const total = SCAN_PAGE_SIZE * 2 + 1;
+        const result = await page.evaluate(
+          async ({ databaseName, count, useScan }) => {
+            type IDBStorageCtor = new (name: string) => {
+              batch(
+                operations: Array<{ type: 'put'; key: string; value: Uint8Array }>,
+              ): Promise<void>;
+              scan(prefix: string): AsyncIterable<[string, Uint8Array]>;
+              keys(prefix: string): AsyncIterable<string>;
+              [Symbol.dispose](): void;
+            };
+            const Cls = (globalThis as Record<string, unknown>)[
+              'IndexedDBStorage'
+            ] as IDBStorageCtor;
+            const storage = new Cls(databaseName);
+            const expected = Array.from(
+              { length: count },
+              (_, index) => `p:${String(index).padStart(6, '0')}`,
+            );
+            await storage.batch(
+              expected.map((key) => ({ type: 'put' as const, key, value: new Uint8Array([1]) })),
+            );
+            const seen: string[] = [];
+            const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+            if (useScan) {
+              for await (const [key] of storage.scan('p:')) {
+                await pause();
+                seen.push(key);
+              }
+            } else {
+              for await (const key of storage.keys('p:')) {
+                await pause();
+                seen.push(key);
+              }
+            }
+            storage[Symbol.dispose]();
+            return { seen, expected };
+          },
+          { databaseName: dbName, count: total, useScan: method === 'scan' },
+        );
+
+        expect(result.seen).toEqual(result.expected);
+      } finally {
+        await page.close();
+      }
+    }, 60_000);
+  }
 });

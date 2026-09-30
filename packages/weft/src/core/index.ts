@@ -42,6 +42,7 @@ export type {
   DurableSemaphoreOptions,
   LockHolder,
   LockRecord,
+  LockWaiter,
   RenewWithSlot,
 } from './concurrency.ts';
 export { constraint } from './constraint.ts';
