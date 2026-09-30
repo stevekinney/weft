@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Settle a purged run’s result waiter with that run’s own terminal outcome without disturbing a same-id replacement.
+- Settle a purged run's result waiter with that run's own terminal outcome without disturbing a same-id replacement.
 
 ## [0.27.5] - 2026-09-29
 
