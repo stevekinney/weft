@@ -235,6 +235,7 @@ describe('bulk purge helpers', () => {
     const epochBytes = encodeEpoch(1);
     const state = createWorkflowState('purge-precondition-loss', 2_000);
     await storage.put(KEYS.leaseEpoch(), epochBytes);
+    await storage.put(KEYS.workflow(state.id), encode(state));
     storage.conditionalBatch = async () => false;
     const internals = createInternals(storage) as {
       deposed: boolean;
