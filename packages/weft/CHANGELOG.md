@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.10] - 2026-09-30
+
+### Fixed
+
+- Complete shutdown cleanup even when an earlier step fails, and keep the worker diagnostics and event-feed contracts consistent for current consumers.
+- Preserve defaulted operation inputs in generated client types, enforce durable concurrency token limits, and retain closed input schemas when converting definitions to JSON Schema.
+
 ## [0.27.9] - 2026-09-30
 
 ### Fixed
