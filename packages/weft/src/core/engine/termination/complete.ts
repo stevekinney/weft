@@ -188,6 +188,7 @@ export async function terminateWorkflow(
     // Captured synchronously, immediately after the commit resolved — see
     // `releaseWorkflowClaimAfterTerminalSettlement`'s doc.
     const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
+    const executionToken = internals.checkpoints.get(workflowId)?.workflowExecutionToken;
     // Run teardown handlers only after the state transition succeeds — this
     // prevents handlers from firing when the workflow was already terminal.
     await runCancellationHandlersForStatus(internals, workflowId, status, callbacks);
@@ -197,25 +198,34 @@ export async function terminateWorkflow(
     const elapsed = updatedAt - getWorkflowExecutionStartedAt(previousState);
     await cleanupAttributeIndex(internals, workflowId, attributes);
     await writeRetainedTerminalSearchAttributes(internals, workflowId, retainedAttributes);
-    void callbacks.swallowPromiseRejection(
-      internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
-    );
-    if (previousState.status === 'pending') {
+    // A same-id `start-new` replacement owns the durable deadline / delayed-start
+    // timer keys and the in-memory state once it lands; see `isSupersededBySameIdRun`.
+    if (!isSupersededBySameIdRun(internals, workflowId, executionToken)) {
       void callbacks.swallowPromiseRejection(
-        internals.scheduler.cancel(`delayed-start:${workflowId}`, workflowId),
+        internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
       );
+      if (previousState.status === 'pending') {
+        void callbacks.swallowPromiseRejection(
+          internals.scheduler.cancel(`delayed-start:${workflowId}`, workflowId),
+        );
+      }
     }
 
-    const resolver = internals.resultResolvers.get(workflowId);
+    const resolver = isSupersededBySameIdRun(internals, workflowId, executionToken)
+      ? undefined
+      : internals.resultResolvers.get(workflowId);
     const terminalError = buildTerminalError(workflowId, status, elapsed, reason);
     await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId, claimEpoch);
+    const superseded = isSupersededBySameIdRun(internals, workflowId, executionToken);
 
     try {
-      await cleanupTerminalWorkflowSynchronously(internals, workflowId, true, callbacks);
+      if (!superseded) {
+        await cleanupTerminalWorkflowSynchronously(internals, workflowId, true, callbacks);
+      }
 
       const event = buildTerminalEvent(workflowId, status, elapsed, reason);
       callbacks.dispatchEvent(event);
-      callbacks.forwardEventToHandle(workflowId, event);
+      if (!superseded) callbacks.forwardEventToHandle(workflowId, event);
 
       if (resolver) resolver.reject(terminalError);
       // Scheduled queue handoff is best-effort cleanup and must not block
@@ -225,7 +235,7 @@ export async function terminateWorkflow(
       if (resolver) resolver.reject(terminalError);
       throw cleanupError;
     } finally {
-      internals.resultResolvers.delete(workflowId);
+      if (!superseded) internals.resultResolvers.delete(workflowId);
     }
   } finally {
     internals.terminalizingWorkflows.delete(workflowId);
@@ -319,23 +329,36 @@ function notifyCompletionWaiters(
   result: unknown,
   duration: number,
   callbacks: TerminationCallbacks,
+  superseded: boolean,
 ): void {
   // Cancel deadline timer - fire-and-forget since the workflow is already
   // terminal and a stale timer firing will see the terminal state and no-op.
-  void callbacks.swallowPromiseRejection(
-    internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
-  );
+  // A superseded run must not cancel: the cancel deletes the durable deadline
+  // timer keys by id, which now belong to the replacement.
+  if (!superseded) {
+    void callbacks.swallowPromiseRejection(
+      internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
+    );
+  }
 
   // Drop in-memory state immediately so the hot path releases engine memory
   // before result delivery. Durable scratch cleanup is handled by the
   // persisted terminal-cleanup timer written in the same state batch above.
-  const resolver = internals.resultResolvers.get(workflowId);
+  // A superseded run's in-memory state, and any result waiter now registered
+  // under this id, belong to the same-id replacement: leave both alone. A
+  // superseded run's own waiter, if one existed, was already removed from the
+  // map by the start-new purge without being settled (a known, separate gap),
+  // so this path has no waiter it can safely settle.
+  const resolver = superseded ? undefined : internals.resultResolvers.get(workflowId);
   try {
-    cleanupTerminalWorkflowImmediately(internals, workflowId, callbacks);
+    if (!superseded) cleanupTerminalWorkflowImmediately(internals, workflowId, callbacks);
 
     const event = new WorkflowCompletedEvent(workflowId, result, duration);
     callbacks.dispatchEvent(event);
-    callbacks.forwardEventToHandle(workflowId, event);
+    // The handle cached under this id now belongs to the replacement; a
+    // terminal event forwarded to it would complete its observables and
+    // iterators while it is still running.
+    if (!superseded) callbacks.forwardEventToHandle(workflowId, event);
 
     callbacks.broadcast({ type: 'workflow:completed', workflowId });
 
@@ -347,8 +370,29 @@ function notifyCompletionWaiters(
     if (resolver) resolver.resolve(result);
     throw completionError;
   } finally {
-    internals.resultResolvers.delete(workflowId);
+    if (!superseded) internals.resultResolvers.delete(workflowId);
   }
+}
+
+/**
+ * Whether a same-engine `onTerminalConflict: 'start-new'` replacement has
+ * taken over this id since the terminal commit. The state teardown protects is
+ * this engine's in-memory state, so supersession is judged by local
+ * generation: the cached checkpoint's `workflowExecutionToken` differs from
+ * the one captured at commit. A replacement started by a different engine
+ * purges only that engine's memory, so this engine's state still belongs to
+ * the old run and the check correctly reads as not superseded. It is
+ * synchronous and reads no storage, so it adds no post-commit failure point.
+ * A missing checkpoint reads as not superseded (the pre-fix behavior).
+ */
+function isSupersededBySameIdRun(
+  internals: EngineInternals,
+  workflowId: string,
+  capturedToken: string | undefined,
+): boolean {
+  const current = internals.checkpoints.get(workflowId);
+  if (current === undefined) return false;
+  return current.workflowExecutionToken !== capturedToken;
 }
 
 /**
@@ -495,7 +539,8 @@ export async function completeWorkflow(
       // `releaseWorkflowClaimAfterTerminalSettlement`'s doc for why this
       // must not be re-read after the awaits below.
       const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
-      return { duration, claimEpoch };
+      const executionToken = internals.checkpoints.get(workflowId)?.workflowExecutionToken;
+      return { duration, claimEpoch, executionToken };
     },
   );
   if (!completionMetadata) return;
@@ -506,7 +551,19 @@ export async function completeWorkflow(
     workflowId,
     completionMetadata.claimEpoch,
   );
-  notifyCompletionWaiters(internals, workflowId, result, completionMetadata.duration, callbacks);
+  const superseded = isSupersededBySameIdRun(
+    internals,
+    workflowId,
+    completionMetadata.executionToken,
+  );
+  notifyCompletionWaiters(
+    internals,
+    workflowId,
+    result,
+    completionMetadata.duration,
+    callbacks,
+    superseded,
+  );
 }
 
 export async function failWorkflow(
@@ -575,28 +632,37 @@ export async function failWorkflow(
   // Captured synchronously, immediately after the commit resolved — see
   // `releaseWorkflowClaimAfterTerminalSettlement`'s doc.
   const claimEpoch = captureCurrentClaimEpoch(internals, workflowId);
+  const executionToken = internals.checkpoints.get(workflowId)?.workflowExecutionToken;
 
   await releaseWorkflowConcurrencySlot(internals, workflowId);
 
   // Clean up user-set attribute indexes; fire-and-forget the deadline
-  // timer cancel since the workflow is terminal.
+  // timer cancel since the workflow is terminal. A superseded run must not
+  // cancel: the durable deadline timer keys now belong to the replacement.
   await cleanupAttributeIndex(internals, workflowId, attributes);
-  void callbacks.swallowPromiseRejection(
-    internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
-  );
+  if (!isSupersededBySameIdRun(internals, workflowId, executionToken)) {
+    void callbacks.swallowPromiseRejection(
+      internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
+    );
+  }
 
   // Re-write engine-managed terminal attributes so they remain queryable
   // after the user-defined search attributes have been removed.
   await writeRetainedTerminalSearchAttributes(internals, workflowId, retainedAttributes);
 
-  const resolver = internals.resultResolvers.get(workflowId);
+  const resolver = isSupersededBySameIdRun(internals, workflowId, executionToken)
+    ? undefined
+    : internals.resultResolvers.get(workflowId);
   await releaseWorkflowClaimAfterTerminalSettlement(internals, workflowId, claimEpoch);
+  const superseded = isSupersededBySameIdRun(internals, workflowId, executionToken);
   try {
-    await cleanupTerminalWorkflowSynchronously(internals, workflowId, false, callbacks);
+    if (!superseded) {
+      await cleanupTerminalWorkflowSynchronously(internals, workflowId, false, callbacks);
+    }
 
     const event = new WorkflowFailedEvent(workflowId, error);
     callbacks.dispatchEvent(event);
-    callbacks.forwardEventToHandle(workflowId, event);
+    if (!superseded) callbacks.forwardEventToHandle(workflowId, event);
 
     if (resolver) resolver.reject(error);
     // Scheduled queue handoff is best-effort cleanup and must not block
@@ -606,7 +672,7 @@ export async function failWorkflow(
     if (resolver) resolver.reject(error);
     throw cleanupError;
   } finally {
-    internals.resultResolvers.delete(workflowId);
+    if (!superseded) internals.resultResolvers.delete(workflowId);
   }
 }
 
