@@ -219,6 +219,12 @@ export class WorkflowClaimRegistry {
     return entry === undefined ? null : entry.epochBytes.slice();
   }
 
+  /** Defensive copy of the holder bytes this engine last wrote for `workflowId`, or `null` if untracked. */
+  currentHolderBytes(workflowId: string): Uint8Array | null {
+    const entry = this.#claims.get(workflowId);
+    return entry === undefined ? null : entry.holderBytes.slice();
+  }
+
   /**
    * Cross-process read of `wf-owner-holder:<workflowId>`'s CURRENT liveness —
    * the same durable key and {@link isWorkflowClaimExpired} judgment
@@ -307,17 +313,33 @@ export class WorkflowClaimRegistry {
    * atomic `storageConditionalBatch`, and — ONLY on success — calls
    * {@link recordFoldedAcquire} with this SAME preparation. Safe to call
    * again on every retry: it always re-reads fresh bytes.
+   *
+   * `replacedHolderBytes` is for a `start-new` restart re-minting this
+   * engine's OWN still-durable holder: the holder condition then expects those
+   * exact bytes instead of absence. The CAS stays the sole arbiter.
    */
-  async prepareAcquireFragment(workflowId: string): Promise<WorkflowClaimAcquirePreparation> {
+  async prepareAcquireFragment(
+    workflowId: string,
+    replacedHolderBytes: Uint8Array | null = null,
+  ): Promise<WorkflowClaimAcquirePreparation> {
     const observedEpochBytes = await this.#claimStorage.get(KEYS.workflowOwnerEpoch(workflowId));
     const now = this.#getNow();
-    const fragment = buildWorkflowClaimAcquireTransition({
+    const acquire = buildWorkflowClaimAcquireTransition({
       workflowId,
       engineId: this.#engineId,
       now,
       claimTtlMs: this.#claimTtlMs,
       observedEpochBytes,
     });
+    const holderKey = KEYS.workflowOwnerHolder(workflowId);
+    const fragment = {
+      operations: acquire.operations,
+      conditions: acquire.conditions.map((condition) =>
+        condition.key === holderKey
+          ? { ...condition, expectedValue: replacedHolderBytes }
+          : condition,
+      ),
+    };
     return { fragment, epoch: mintNextEpoch(observedEpochBytes), claimedAt: now };
   }
 

@@ -24,6 +24,7 @@
 import { ExtData, encode as msgpackEncode } from '@msgpack/msgpack';
 import { describe, expect, it } from 'bun:test';
 
+import { GENERATION_KEYS } from '../../storage/generation-keys.ts';
 import {
   KEYS,
   type BatchOperation,
@@ -34,13 +35,15 @@ import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
+import { decodeGeneration } from './generation-codec.ts';
 import {
   ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING,
   Engine,
   WorkflowClaimUnavailableError,
 } from './index.ts';
 import { getInternals } from './internals.ts';
-import { encodeEpoch } from './lease-codec.ts';
+import { decodeEpoch, encodeEpoch } from './lease-codec.ts';
+import { EngineDeposedError } from './lease-errors.ts';
 import { decodeWorkflowClaimHolder, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
@@ -906,5 +909,289 @@ describe('WFT-134 review round 2: claim-generation release correctness', () => {
     // backstop; either way nothing is left stranded.
     expect(registry?.currentEpoch(workflowId)).toBeNull();
     expect(registry?.listHeldWorkflowIds()).not.toContain(workflowId);
+  });
+});
+
+let staleEpochInvocation = 0;
+
+/** A per-invocation suffix so `--rerun-each` repeats never reuse a workflow id. */
+function nextInvocation(): number {
+  staleEpochInvocation += 1;
+  return staleEpochInvocation;
+}
+
+/** The durable `wf-owner-epoch` for `id`, decoded, or `null` when absent or undecodable. */
+async function durableEpoch(storage: MemoryStorage, id: string): Promise<number | null> {
+  const raw = await storage.get(KEYS.workflowOwnerEpoch(id));
+  return raw === null ? null : decodeEpoch(raw);
+}
+
+/** The durable `wf-owner-holder` for `id`, decoded, or `null` when absent or undecodable. */
+async function durableHolder(storage: MemoryStorage, id: string) {
+  const raw = await storage.get(KEYS.workflowOwnerHolder(id));
+  return raw === null ? null : decodeWorkflowClaimHolder(raw);
+}
+
+/** The durable `wf-gen` generation for `id`; an absent key is generation 0 (nothing purged yet). */
+async function durableGeneration(storage: MemoryStorage, id: string): Promise<number | null> {
+  const raw = await storage.get(GENERATION_KEYS.workflowGeneration(id));
+  return raw === null ? 0 : decodeGeneration(raw);
+}
+
+/** The durable workflow record status for `id` as engine `engine` reports it. */
+async function statusOf(
+  engine: Awaited<ReturnType<typeof createClaimEngine>>,
+  id: string,
+): Promise<string | undefined> {
+  const summary = await engine.get(id);
+  return summary?.status;
+}
+
+/** The `status` of a registry `acquire` for `id`. */
+async function acquireStatus(registry: WorkflowClaimRegistry, id: string): Promise<string> {
+  const result = await registry.acquire(id);
+  return result.status;
+}
+
+describe('start-new over a stale cached workflow claim epoch', () => {
+  async function seedCancelledUnderStaleCache(id: string) {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await seedParkedWorkflow(storage, id);
+    const engineA = await createClaimEngine(storage, 'engine-a', workflows);
+    const engineB = await createClaimEngine(storage, 'engine-b', workflows);
+    const registryA = getInternals(engineA).workflowClaimRegistry!;
+    const registryB = getInternals(engineB).workflowClaimRegistry!;
+    expect(await acquireStatus(registryA, id)).toBe('acquired');
+    await engineB.cancel(id);
+    return { storage, engineA, engineB, registryA, registryB };
+  }
+
+  it('rotation false-positive: start-new re-acquires instead of throwing EngineDeposedError', async () => {
+    const id = `stale-epoch-rotation-${nextInvocation()}`;
+    const { storage, engineA, engineB, registryA } = await seedCancelledUnderStaleCache(id);
+    await using _a = engineA;
+    await using _b = engineB;
+
+    expect(await statusOf(engineA, id)).toBe('cancelled');
+    expect(registryA.currentEpoch(id)).toBe(1);
+    expect(await durableEpoch(storage, id)).toBe(2);
+    expect(await storage.get(KEYS.workflowOwnerEpoch(id))).not.toEqual(
+      registryA.currentEpochBytes(id),
+    );
+    expect(await storage.get(KEYS.workflowOwnerHolder(id))).toBeNull();
+    expect(await registryA.holderStatus(id)).toBeUndefined();
+
+    const handle = await engineA.start('claim-race-recovery', null, {
+      id,
+      onTerminalConflict: 'start-new',
+    });
+
+    expect(registryA.currentEpoch(id)).toBe(3);
+    expect(await durableEpoch(storage, id)).toBe(3);
+    expect(await storage.get(KEYS.workflowOwnerEpoch(id))).toEqual(registryA.currentEpochBytes(id));
+    const holder = await durableHolder(storage, id);
+    expect(holder?.engineId).toBe('engine-a');
+    expect(holder?.epoch).toBe(3);
+
+    await engineA.signal(id, 'go');
+    expect(await handle.result()).toBe('ran');
+    expect(registryA.currentEpoch(id)).toBeNull();
+    expect(await storage.get(KEYS.workflowOwnerHolder(id))).toBeNull();
+  });
+
+  it('real deposition control: a live foreign holder still deposes the start-new', async () => {
+    const id = `stale-epoch-foreign-${nextInvocation()}`;
+    const { storage, engineA, engineB, registryA, registryB } =
+      await seedCancelledUnderStaleCache(id);
+    await using _a = engineA;
+    await using _b = engineB;
+    expect(await acquireStatus(registryB, id)).toBe('acquired');
+
+    expect(registryA.currentEpoch(id)).toBe(1);
+    expect(await durableEpoch(storage, id)).toBe(3);
+    const status = await registryA.holderStatus(id);
+    expect(status?.heldByAnyProcess).toBe(true);
+    expect(status?.heldByThisProcess).toBe(false);
+
+    const error = await rejectionOf(
+      engineA.start('claim-race-recovery', null, { id, onTerminalConflict: 'start-new' }),
+    );
+    expect(error).toBeInstanceOf(EngineDeposedError);
+    expect((error as EngineDeposedError).workflowId).toBe(id);
+
+    const foreignHolder = await durableHolder(storage, id);
+    expect(foreignHolder?.engineId).toBe('engine-b');
+    expect(await statusOf(engineA, id)).toBe('cancelled');
+  });
+
+  it('release-inheritance: the old run’s delayed release must not strip the start-new replacement’s claim', async () => {
+    const id = `stale-epoch-release-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let armed = true;
+    const holderKey = KEYS.workflowOwnerHolder(id);
+    const gatedRegistryStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            if (armed && operations.some((op) => op.type === 'delete' && op.key === holderKey)) {
+              armed = false;
+              reached.resolve();
+              await release.promise;
+            }
+            return target.conditionalBatch(conditions, operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const registryA = installClaimRegistry(engineA, 'engine-a', gatedRegistryStorage);
+
+    await engineA.start('claim-race-recovery', null, { id });
+    await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    expect(registryA.currentEpoch(id)).toBe(1);
+
+    const oldRunSettled = Promise.withResolvers<void>();
+    engineA.addEventListener('workflow:completed', (event) => {
+      if ((event as Event & { workflowId?: string }).workflowId === id) oldRunSettled.resolve();
+    });
+
+    try {
+      await engineA.signal(id, 'go');
+      await reached.promise;
+
+      expect(await statusOf(engineA, id)).toBe('completed');
+      expect(registryA.currentEpoch(id)).toBe(1);
+      const holderBefore = await durableHolder(storage, id);
+      expect(holderBefore?.engineId).toBe('engine-a');
+      expect(holderBefore?.epoch).toBe(1);
+      expect(await storage.get(KEYS.workflowOwnerEpoch(id))).toEqual(
+        registryA.currentEpochBytes(id),
+      );
+      expect(getInternals(engineA).parkedInlineWorkflows.has(id)).toBe(false);
+      const generationBefore = await durableGeneration(storage, id);
+
+      await engineA.start('claim-race-recovery', null, { id, onTerminalConflict: 'start-new' });
+      await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+
+      expect(await statusOf(engineA, id)).toBe('running');
+      expect(await durableGeneration(storage, id)).toBe((generationBefore ?? 0) + 1);
+      // The fix may re-mint the epoch inside the create batch, so only the
+      // presence of a claim (not its number) is pinned while the gate is shut.
+      expect(registryA.currentEpoch(id)).not.toBeNull();
+      expect(await storage.get(holderKey)).not.toBeNull();
+      expect(getInternals(engineA).parkedInlineWorkflows.has(id)).toBe(true);
+    } finally {
+      release.resolve();
+    }
+
+    await oldRunSettled.promise;
+
+    const epoch = registryA.currentEpoch(id);
+    expect(epoch).not.toBeNull();
+    const holderAfter = await durableHolder(storage, id);
+    expect(holderAfter?.engineId).toBe('engine-a');
+    expect(holderAfter?.epoch).toBe(epoch ?? -1);
+    expect(await durableEpoch(storage, id)).toBe(epoch);
+    expect(await statusOf(engineA, id)).toBe('running');
+  });
+
+  it('renewal in flight: a renewal that committed durably but has not updated the cache must not strip the start-new replacement’s claim', async () => {
+    const id = `stale-epoch-renewal-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engineA = await createClaimEngine(storage, 'engine-a', workflows);
+
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let armed = false;
+    const holderKey = KEYS.workflowOwnerHolder(id);
+    const gatedRegistryStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            const isHolderPut = operations.some((op) => op.type === 'put' && op.key === holderKey);
+            if (armed && isHolderPut) {
+              armed = false;
+              const committed = await target.conditionalBatch(conditions, operations);
+              reached.resolve();
+              await release.promise;
+              return committed;
+            }
+            return target.conditionalBatch(conditions, operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    let clock = 1_000_000;
+    const registryA = new WorkflowClaimRegistry({
+      storage: gatedRegistryStorage,
+      engineId: 'engine-a',
+      getNow: () => clock,
+      claimTtlMs: 60_000,
+      claimRenewIntervalMs: 5_000,
+    });
+    const releaseCalled = Promise.withResolvers<void>();
+    const originalRelease = registryA.release.bind(registryA);
+    registryA.release = (workflowId, epoch) => {
+      if (workflowId === id) releaseCalled.resolve();
+      return originalRelease(workflowId, epoch);
+    };
+    getInternals(engineA).workflowClaimRegistry = registryA;
+
+    await engineA.start('claim-race-recovery', null, { id });
+    await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    expect(registryA.currentEpoch(id)).toBe(1);
+    const cachedHolderBefore = registryA.currentHolderBytes(id);
+
+    const oldRunSettled = Promise.withResolvers<void>();
+    engineA.addEventListener('workflow:completed', (event) => {
+      if ((event as Event & { workflowId?: string }).workflowId === id) oldRunSettled.resolve();
+    });
+
+    armed = true;
+    clock += 1_000;
+    const renewal = registryA.renew(id);
+    try {
+      await reached.promise;
+      // The renewal committed durably, but the cache still holds the old bytes.
+      expect(registryA.currentHolderBytes(id)).toEqual(cachedHolderBefore);
+      expect(await storage.get(holderKey)).not.toEqual(cachedHolderBefore);
+
+      await engineA.signal(id, 'go');
+      // release() runs only after the self-complete terminal commit, and then blocks on the gated
+      // renewal, so this is a race-free point at which the old run is terminal.
+      await releaseCalled.promise;
+      expect(await statusOf(engineA, id)).toBe('completed');
+      const generationBefore = await durableGeneration(storage, id);
+
+      await engineA.start('claim-race-recovery', null, { id, onTerminalConflict: 'start-new' });
+      await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+
+      expect(await durableGeneration(storage, id)).toBe((generationBefore ?? 0) + 1);
+      expect(await statusOf(engineA, id)).toBe('running');
+      expect(registryA.currentEpoch(id)).not.toBeNull();
+    } finally {
+      release.resolve();
+    }
+
+    await renewal;
+    await oldRunSettled.promise;
+
+    const epoch = registryA.currentEpoch(id);
+    expect(epoch).not.toBeNull();
+    const holderAfter = await durableHolder(storage, id);
+    expect(holderAfter?.engineId).toBe('engine-a');
+    expect(holderAfter?.epoch).toBe(epoch ?? -1);
+    expect(await durableEpoch(storage, id)).toBe(epoch);
+    expect(await statusOf(engineA, id)).toBe('running');
   });
 });

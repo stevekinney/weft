@@ -170,10 +170,10 @@ type PersistStartBatchOutcome = 'committed' | 'precondition-lost' | 'claim-lost'
  * any create-batch signal land in ONE atomic compare-and-swap. Under
  * `ownership: 'workflow-lease'`, an ordinary (non-delayed) start additionally
  * folds `acquire()` into this SAME batch via `claimFold` (ADR 0002 § Entry
- * point classification): `workflowId` has no tracked claim before this write,
- * so it can never be fenced through `commitFencedEngineWrite` (which requires
- * an already-tracked epoch) — the fold's own conditions ARE the fence for this
- * first write instead. Returns `'precondition-lost'` when a base precondition
+ * point classification): `workflowId` has no usable tracked claim before this
+ * write (none at all, or, for a start-new replacement, a stale cached one that
+ * the fold re-mints), so it is not fenced through `commitFencedEngineWrite` —
+ * the fold's own conditions ARE the fence for this write instead. Returns `'precondition-lost'` when a base precondition
  * (idempotency mapping, workflow-concurrency admission) failed — the caller
  * resolves to the existing run or retries admission — and `'claim-lost'` when
  * the fold's own conditions were the ones that failed, which the caller
@@ -429,12 +429,13 @@ export async function buildAndCommitStartBatch(
     // an ordinary start, but the delayed `startAt`/`startAfter` create batch is
     // intentionally external — its `pending` row has no owner yet, and the
     // corresponding acquire happens later, at the delayed-start timer fire (see
-    // `operations-time.ts`). Re-prepared fresh every attempt of this loop, since a
-    // stale epoch read would doom a later retry's CAS.
+    // `operations-time.ts`). Re-prepared fresh every attempt: a stale read dooms a CAS.
     const isDelayedStart = context.delayedStartTimer !== undefined;
     const claimFold = isDelayedStart
       ? undefined
-      : await prepareWorkflowClaimFold(internals, workflowId);
+      : await prepareWorkflowClaimFold(internals, workflowId, {
+          replaceExistingClaim: context.purgeDeleteOperations !== undefined,
+        });
 
     const outcome = await persistStartBatch(
       internals,
