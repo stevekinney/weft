@@ -411,7 +411,10 @@ export {
 } from './lease-errors.ts';
 export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
-export { WorkflowRevisionUnavailableError } from './revision-errors.ts';
+export {
+  EagerRecoveryRevisionRefusedError,
+  WorkflowRevisionUnavailableError,
+} from './revision-errors.ts';
 export { getRevisionRealmDiagnostics } from './revision-realm-diagnostics.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
 export type { ResolveWorkflowSourceOptions } from './source-resolution.ts';

@@ -209,34 +209,10 @@ for (const backend of storageBackends) {
  * removable:false with retainedRecoveryRecords:1 -> purge deletes the
  * terminal WorkflowState -> removable:true -> removeWorkflowRevision
  * succeeds.
- *
- * Excludes `IndexedDBStorage` — independently discovered, pre-existing bug
- * unrelated to WFT-21: `engine.purge()` throws
- * `TransactionInactiveError: A request was placed against a transaction
- * which is currently not active, or which is finished.` on
- * `IndexedDBStorage`. Root cause: `IndexedDBStorage.scan()`
- * (`storage/indexeddb.ts`'s `iterateCursor()`) yields lazily from a LIVE
- * IndexedDB cursor/transaction, one item per `yield`, calling
- * `cursor.continue()` only after the consumer resumes the generator. Per
- * the IndexedDB spec, a transaction auto-commits once the microtask queue
- * drains with no pending request against it — so ANY `await` a `for await
- * (... of storage.scan(...))` consumer performs inside its loop body (e.g.
- * `bulk-operations-purge.ts`'s several `for await` loops over
- * `storage.scan()`/`storageKeys()`) risks the transaction going stale
- * mid-iteration. This is systemic to every `IndexedDBStorage.scan()`
- * consumer with async loop-body work, not a one-function bug isolated to
- * purge, and is out of WFT-21's scope to fix (a storage-layer redesign of
- * `iterateCursor()`, e.g. buffering cursor results before yielding, or
- * consumers restructuring to collect keys before their own awaits). Filed
- * as a follow-up rather than fixed here — see the batch's structured
- * output `deviations` for the exact repro this test's own body doubles as.
  */
-const purgeCapableBackends = storageBackends.filter(
-  (backend) => backend.name !== 'IndexedDBStorage',
-);
 
 describe('WFT-21: retainedRecoveryRecords release via purge', () => {
-  for (const backend of purgeCapableBackends) {
+  for (const backend of storageBackends) {
     it(`releases the retainedRecoveryRecords reference so a terminal-unpurged revision becomes removable [${backend.name}]`, async () => {
       const result = backend.factory();
       let engine: Engine | undefined;

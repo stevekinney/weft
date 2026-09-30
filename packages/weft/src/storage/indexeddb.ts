@@ -3,6 +3,7 @@ import {
   resolveDeleteRangeBounds,
   type DeleteRangeOptions,
 } from './delete-range.ts';
+import { SCAN_PAGE_SIZE } from './indexeddb-scan-page-size.ts';
 import {
   assertStorageBatchOperationCount,
   matchesScanOptions,
@@ -122,38 +123,48 @@ type CursorOpener<TCursor extends IDBCursor | IDBCursorWithValue> = (
   direction: IDBCursorDirection,
 ) => IDBRequest<TCursor | null>;
 
-async function* iterateCursor<TCursor extends IDBCursor | IDBCursorWithValue, TValue>(
+type ScanPage<TValue> = {
+  /** Matching rows, already projected, in iteration order. */
+  rows: TValue[];
+  /** Rows the cursor visited, matching or not. */
+  scanned: number;
+  /** Key of the last visited row; the continuation point for the next page. */
+  lastKey: string;
+};
+
+/**
+ * Read one page inside a single readonly transaction: visit at most
+ * {@link SCAN_PAGE_SIZE} rows, buffer the matching ones, and let the
+ * transaction commit before the caller yields anything.
+ */
+async function readScanPage<TCursor extends IDBCursor | IDBCursorWithValue, TValue>(
   database: IDBDatabase,
-  keyRangeFactory: IndexedDbRuntime['IDBKeyRange'],
-  prefix: string,
+  range: IDBKeyRange,
+  direction: IDBCursorDirection,
   options: ScanOptions,
   openCursor: CursorOpener<TCursor>,
   project: (cursor: TCursor) => TValue,
-): AsyncIterable<TValue> {
-  const { limit, reverse } = options;
-  const prefixEnd = resolvePrefixRangeEnd(prefix);
-  const range = keyRangeFactory.bound(prefix, prefixEnd, false, true);
-  const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
-
+): Promise<ScanPage<TValue>> {
   const transaction = database.transaction(STORE_NAME, 'readonly');
   const store = transaction.objectStore(STORE_NAME);
   const request = openCursor(store, range, direction);
   const nextCursor = createCursorRequestAwaiter(request, transaction);
 
-  let count = 0;
+  const rows: TValue[] = [];
+  let scanned = 0;
+  let lastKey = '';
   let completed = false;
   try {
     let cursor = await nextCursor();
 
     while (cursor) {
-      if (limit !== undefined && count >= limit) {
-        break;
+      scanned++;
+      lastKey = cursor.key as string;
+      if (matchesScanOptions(lastKey, options)) {
+        rows.push(project(cursor));
       }
-
-      const key = cursor.key as string;
-      if (matchesScanOptions(key, options)) {
-        yield project(cursor);
-        count++;
+      if (scanned >= SCAN_PAGE_SIZE) {
+        break;
       }
 
       cursor.continue();
@@ -170,6 +181,70 @@ async function* iterateCursor<TCursor extends IDBCursor | IDBCursorWithValue, TV
       }
     }
   }
+
+  return { rows, scanned, lastKey };
+}
+
+/**
+ * Iterate a prefix page-at-a-time. No cursor or transaction is open while the
+ * consumer holds control, so a consumer may await arbitrary work between
+ * records without the transaction auto-committing underneath a live cursor.
+ * Each page is isolated; the scan as a whole is best-effort.
+ */
+async function* iterateCursor<TCursor extends IDBCursor | IDBCursorWithValue, TValue>(
+  database: IDBDatabase,
+  keyRangeFactory: IndexedDbRuntime['IDBKeyRange'],
+  prefix: string,
+  options: ScanOptions,
+  openCursor: CursorOpener<TCursor>,
+  project: (cursor: TCursor) => TValue,
+): AsyncIterable<TValue> {
+  const { limit, reverse } = options;
+  const prefixEnd = resolvePrefixRangeEnd(prefix);
+  const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
+  let range = keyRangeFactory.bound(prefix, prefixEnd, false, true);
+
+  let yielded = 0;
+  for (;;) {
+    if (limit !== undefined && yielded >= limit) {
+      return;
+    }
+    const page = await readScanPage(database, range, direction, options, openCursor, project);
+
+    for (const row of page.rows) {
+      if (limit !== undefined && yielded >= limit) {
+        return;
+      }
+      yield row;
+      yielded++;
+    }
+
+    if (page.scanned < SCAN_PAGE_SIZE) {
+      return;
+    }
+
+    const nextRange = continuationRange(keyRangeFactory, prefix, prefixEnd, reverse, page.lastKey);
+    if (nextRange === null) {
+      return;
+    }
+    range = nextRange;
+  }
+}
+
+/** Range resuming after `lastKey`, or null when nothing can remain. */
+function continuationRange(
+  keyRangeFactory: IndexedDbRuntime['IDBKeyRange'],
+  prefix: string,
+  prefixEnd: string,
+  reverse: boolean | undefined,
+  lastKey: string,
+): IDBKeyRange | null {
+  if (!reverse) {
+    return keyRangeFactory.bound(lastKey, prefixEnd, true, true);
+  }
+  // A lower bound equal to the upper bound would throw DataError; nothing
+  // sorts below the prefix itself, so the scan is over.
+  return lastKey === prefix ? null : keyRangeFactory.bound(prefix, lastKey, false, true);
 }
 
 /**
@@ -220,10 +295,10 @@ export class IndexedDBStorage implements Storage {
     // IndexedDB transactional same-origin store: same-instance reads observe
     // committed writes (linearizable); batch() runs in one readwrite
     // transaction; deletePrefix and deleteRange use IDBKeyRange deletes
-    // (deleteRange cursor-deletes when a limit caps it). scan() iterates a
-    // live cursor in a readonly transaction that auto-commits whenever the
-    // microtask queue drains between async steps, so a concurrent external write
-    // CAN appear mid-iteration — the honest scan level is best-effort, not
+    // (deleteRange cursor-deletes when a limit caps it). scan() and keys()
+    // read one buffered page per readonly transaction and reopen a transaction
+    // per page, so isolation is per-page, not whole-scan: a concurrent write
+    // CAN appear between pages. The honest scan level is best-effort, not
     // snapshot.
     return {
       persistence: 'local',

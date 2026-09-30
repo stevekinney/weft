@@ -27,6 +27,27 @@ const TYPECHECK_GENERATED_DTS = join(FIXTURE_DIR, 'typecheck', 'weft.generated.d
 const PACKED_FIXTURE_VERSION = '0.0.0-packed-fixture';
 
 /**
+ * Arguments for the packed consumer's `bun install`.
+ *
+ * The consumer has no lockfile, so Bun resolves the packed tarball's dependency
+ * ranges against registry manifests. Never pass `--prefer-offline` (or
+ * `--offline`) here: either makes Bun trust whatever manifest sits in the
+ * machine's global install cache without revalidating it, so a manifest cached
+ * before a dependency published a newer version cannot satisfy a range that
+ * needs it. That is how `ts-morph@28.0.0`'s `@ts-morph/common@~0.29.0` failed
+ * with "No version matching" on hosts whose cached manifest predated 0.29.0,
+ * even though the version existed on the registry. Tarballs still come from
+ * the cache; only the manifests are revalidated.
+ */
+const PACKED_CONSUMER_INSTALL_ARGUMENTS = [
+  'install',
+  '--production',
+  '--ignore-scripts',
+  '--no-progress',
+  '--no-summary',
+] as const;
+
+/**
  * The one token in the golden that is not literal output.
  *
  * `weft codegen` augments whatever this package is published as, so the golden
@@ -303,15 +324,7 @@ async function createPackedConsumerFixture(): Promise<PackedConsumerFixture> {
   );
 
   const install = await runProcess(
-    [
-      process.execPath,
-      'install',
-      '--production',
-      '--ignore-scripts',
-      '--prefer-offline',
-      '--no-progress',
-      '--no-summary',
-    ],
+    [process.execPath, ...PACKED_CONSUMER_INSTALL_ARGUMENTS],
     consumerDirectory,
   );
   expect(install.exitCode, install.stderr).toBe(0);
@@ -453,6 +466,11 @@ describe('executeCodegen end-to-end', () => {
     expect(written).toContain('defineGeneratedWorker');
     expect(written).toContain("from '@lostgradient/weft/worker/generated-authoring'");
     expect(written).not.toContain("from './");
+  });
+
+  it('revalidates registry manifests when installing the packed consumer', () => {
+    expect(PACKED_CONSUMER_INSTALL_ARGUMENTS).not.toContain('--prefer-offline');
+    expect(PACKED_CONSUMER_INSTALL_ARGUMENTS).not.toContain('--offline');
   });
 
   it('packs a @lostgradient/weft tarball with the expected package identity', async () => {

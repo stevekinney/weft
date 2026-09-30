@@ -7,6 +7,7 @@ import {
 } from '../../workflow-version-tuple.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import type { EngineInternals } from '../internals.ts';
+import { resolveEagerRecoveryRestamp } from './resume-revision-restamp.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 
 /** Build a {@link WorkflowVersionTuple} from a {@link RegistrationEntry}. */
@@ -85,11 +86,14 @@ export async function prepareResumeState(
   checkpointBytes: Uint8Array,
   registration: RegistrationEntry,
   callbacks: LifecycleCallbacks,
+  skipEagerRevisionCheck = false,
 ): Promise<{
   state: WorkflowState;
   checkpoint: Checkpoint;
   serializedCheckpoint: Uint8Array;
   versionTuple: WorkflowVersionTuple;
+  /** Registered revision to durably re-stamp onto the run (compatible eager redeploy only). */
+  restampRevision?: string;
 }> {
   const preparedExecutionState = derivePreparedExecutionState(
     internals,
@@ -99,6 +103,14 @@ export async function prepareResumeState(
     registration,
     callbacks,
   );
+
+  // Strictly after the version check, so a workflowVersion drift still throws
+  // VersionMismatchError first. Read-only; the write happens in the serialized resume.
+  // Skipped for a wake of an inline-parked run: `parkedInlineWorkflows` is in-memory only, so
+  // that run was admitted by this process or already passed the check at recovery.
+  const restampRevision = skipEagerRevisionCheck
+    ? undefined
+    : await resolveEagerRecoveryRestamp(internals, workflowId, state);
 
   const hydratedCheckpoint = await hydrateCheckpointReplayState(
     internals.storage,
@@ -133,6 +145,7 @@ export async function prepareResumeState(
     checkpoint: checkpointWithSeededToken,
     serializedCheckpoint: checkpointBytes,
     versionTuple: preparedExecutionState.versionTuple,
+    ...(restampRevision !== undefined && { restampRevision }),
   };
 }
 

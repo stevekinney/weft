@@ -136,6 +136,8 @@ export async function resumeParkedInlineWorkflow(
       workflowId,
       false,
       callbacks.createLifecycleCallbacks(),
+      undefined,
+      { skipEagerRevisionCheck: true },
     );
   } catch (error) {
     const resumeDisposition = await callbacks.getParkedWorkflowResumeDisposition(workflowId);

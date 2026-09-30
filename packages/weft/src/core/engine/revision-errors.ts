@@ -15,6 +15,7 @@
  * @module core/engine/revision-errors
  */
 
+import type { WorkflowCompatibilityReason } from '../contract/compatibility.ts';
 import { WeftError } from '../weft-error.ts';
 
 /**
@@ -92,5 +93,81 @@ export class WorkflowRevisionUnavailableError extends WeftError<'WorkflowRevisio
     this.workflowType = workflowType;
     this.revision = revision;
     this.reason = reason;
+  }
+}
+
+/** Why {@link EagerRecoveryRevisionRefusedError} refused a recovery. */
+export type EagerRecoveryRefusalReason =
+  'incompatible' | 'persisted-revision-not-installed' | 'registered-revision-unknown';
+
+/**
+ * Thrown by the resume/recovery path when an EAGER-registered type's run
+ * cannot be re-bound to the definition this process registered (COR-13).
+ *
+ * Recovery of an eager type runs whatever definition the current process
+ * registered. When the run's persisted `WorkflowState.revision` differs from
+ * the registered revision, `checkWorkflowCompatibility()` is consulted with
+ * `{ requireExactRevision: false }`: a compatible verdict re-stamps the run's
+ * revision, anything else refuses with this error before any state is written.
+ *
+ * - `reason: 'incompatible'` - the persisted and registered manifests differ
+ *   in a way the policy forbids; `compatibilityReasons` is the ordered list.
+ * - `reason: 'persisted-revision-not-installed'` - the durable catalog has no
+ *   entry for the run's persisted revision.
+ * - `reason: 'registered-revision-unknown'` - the registered eager type's
+ *   revision cannot be resolved: this process has no catalog revision recorded
+ *   for it, or the recorded revision has no durable catalog entry (fail
+ *   closed). `registeredRevision` is populated when a revision was known.
+ *
+ * `engine.resume(id)` rejects with it; `engine.recoverAll()` rethrows it and
+ * aborts the batch. `RecoverAllOptions.versionMismatchPolicy` does not apply.
+ *
+ * @example
+ * ```ts
+ * import { Engine, EagerRecoveryRevisionRefusedError } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * try {
+ *   await engine.resume('workflow-id');
+ * } catch (err) {
+ *   if (err instanceof EagerRecoveryRevisionRefusedError) {
+ *     console.error(err.persistedRevision, err.registeredRevision, err.reason);
+ *   }
+ * }
+ * ```
+ */
+export class EagerRecoveryRevisionRefusedError extends WeftError<'EagerRecoveryRevisionRefusedError'> {
+  readonly workflowId: string;
+  readonly workflowType: string;
+  readonly persistedRevision: string;
+  readonly registeredRevision: string | undefined;
+  readonly reason: EagerRecoveryRefusalReason;
+  readonly compatibilityReasons: readonly WorkflowCompatibilityReason[];
+
+  constructor(details: {
+    workflowId: string;
+    workflowType: string;
+    persistedRevision: string;
+    registeredRevision: string | undefined;
+    reason: EagerRecoveryRefusalReason;
+    compatibilityReasons?: readonly WorkflowCompatibilityReason[];
+  }) {
+    super(
+      'EagerRecoveryRevisionRefusedError',
+      `Cannot recover workflow "${details.workflowId}" of type "${details.workflowType}": ` +
+        (details.reason === 'incompatible'
+          ? `registered revision "${details.registeredRevision}" is not compatible with persisted revision "${details.persistedRevision}" (${(details.compatibilityReasons ?? []).join(', ')}).`
+          : details.reason === 'persisted-revision-not-installed'
+            ? `persisted revision "${details.persistedRevision}" is not installed in the durable catalog.`
+            : details.registeredRevision === undefined
+              ? `no registered revision is known for the eager type in this process (persisted revision "${details.persistedRevision}").`
+              : `registered revision "${details.registeredRevision}" could not be resolved from the durable catalog (persisted revision "${details.persistedRevision}").`),
+    );
+    this.workflowId = details.workflowId;
+    this.workflowType = details.workflowType;
+    this.persistedRevision = details.persistedRevision;
+    this.registeredRevision = details.registeredRevision;
+    this.reason = details.reason;
+    this.compatibilityReasons = details.compatibilityReasons ?? [];
   }
 }

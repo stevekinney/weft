@@ -39,7 +39,7 @@ export type ScheduleOverlapPolicy = 'skip' | 'queue' | 'cancel-running' | 'allow
  * revision that would run right now at create/update time
  * ({@link ScheduleMetadata.pinnedRevision}) and forces every future
  * occurrence to resolve against exactly that revision, pausing the schedule
- * (see `guides/workflow-versioning.md`'s "Schedule revision policy" section)
+ * (see the "Scheduled runs" section of `guides/workflow-revisions.md`)
  * if that revision later becomes unavailable rather than silently falling
  * back to whatever is active.
  *
