@@ -10,7 +10,7 @@
     },
     "packages/weft": {
       "name": "@lostgradient/weft",
-      "version": "0.27.4",
+      "version": "0.27.5",
       "bin": {
         "weft": "dist/cli-main.js",
         "weft-mcp": "dist/mcp/cli.js",
