@@ -17,19 +17,20 @@ async function runCliShutdown(
 ): Promise<void> {
   dependencies.log(`\nReceived ${signal}; shutting down...`);
 
-  try {
-    await dependencies.stopServer();
+  let failed = false;
+  const attempt = async (message: string, step: () => void | Promise<void>): Promise<void> => {
     try {
-      await dependencies.removeRunLockfile();
+      await step();
     } catch (error) {
-      dependencies.reportError('[weft] Failed to remove run lockfile:', error);
+      failed = true;
+      dependencies.reportError(message, error);
     }
-    dependencies.disposeStorage();
-    dependencies.exit(0);
-  } catch (error) {
-    dependencies.reportError('[weft] Shutdown error:', error);
-    dependencies.exit(1);
-  }
+  };
+
+  await attempt('[weft] Failed to stop server:', dependencies.stopServer);
+  await attempt('[weft] Failed to remove run lockfile:', dependencies.removeRunLockfile);
+  await attempt('[weft] Failed to dispose storage:', dependencies.disposeStorage);
+  dependencies.exit(failed ? 1 : 0);
 }
 
 export function createCliShutdownHandler(

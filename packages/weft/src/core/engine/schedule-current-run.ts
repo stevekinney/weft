@@ -169,9 +169,14 @@ async function deleteTransientScheduleRunMetadata(
   internals: EngineInternals,
   workflowId: string,
 ): Promise<void> {
+  // Engine-scoped on purpose: this runs from terminal cleanup, by which point
+  // the workflow's claim has already been released, so a per-workflow fence
+  // would halt on a claim this engine no longer (correctly) holds and strand
+  // the record. The delete is idempotent and only removes transient metadata
+  // for a workflow that is already terminal.
   await commitFencedEngineWrite(
     internals,
-    workflowId,
+    null,
     [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
     [],
     () => new Error(`Schedule-run cleanup for workflow "${workflowId}" lost its precondition.`),

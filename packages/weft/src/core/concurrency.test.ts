@@ -4,12 +4,16 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { AtomicState } from './atomic-state.ts';
 import {
   DurableMutex,
+  DurableRateLimiter,
   DurableSemaphore,
   initialLockRecord,
   reduceAcquire,
+  reduceConsume,
   reduceRelease,
   reduceRenew,
+  type CasSlot,
   type LockRecord,
+  type TokenBucketRecord,
 } from './concurrency.ts';
 
 function makeSlot(initial?: LockRecord): AtomicState<LockRecord> {
@@ -590,5 +594,134 @@ describe('DurableSemaphore (generator-flavoured ctx.state slot)', () => {
     // The slot's update returns a bare string — neither a promise nor a
     // generator — so the slot-result mapper rejects it at runtime.
     expect(() => mutex.tryAcquire(brokenSlot, { holderId: 'a', now: 1_000 })).toThrow(TypeError);
+  });
+});
+
+describe('token-bucket reducer', () => {
+  const config = { tokensPerInterval: 2, interval: 1_000, maximumTokens: 5 };
+
+  it('starts a fresh bucket full at maximumTokens and consumes one token', () => {
+    const { record, result } = reduceConsume(undefined, { ...config, now: 10_000 });
+    expect(record).toEqual({ tokens: 4, lastRefillAt: 10_000 });
+    expect(result).toEqual({ consumed: true, retryAfterMs: 0 });
+  });
+
+  it('reports exhaustion with a positive retryAfterMs', () => {
+    let current: TokenBucketRecord | undefined;
+    const results = [];
+    for (let call = 0; call < 6; call += 1) {
+      const reduced = reduceConsume(current, { ...config, now: 10_000 });
+      current = reduced.record;
+      results.push(reduced.result);
+    }
+    expect(results.slice(0, 5).every((result) => result.consumed)).toBe(true);
+    expect(results[5]?.consumed).toBe(false);
+    expect(results[5]?.retryAfterMs).toBe(1_000);
+    expect(current).toEqual({ tokens: 0, lastRefillAt: 10_000 });
+  });
+
+  it('refills one whole interval and advances lastRefillAt by whole intervals only', () => {
+    const start: TokenBucketRecord = { tokens: 0, lastRefillAt: 10_000 };
+    const { record, result } = reduceConsume(start, { ...config, now: 11_400 });
+    // floor(1400 / 1000) = 1 interval -> +2 tokens, then one consumed.
+    expect(record).toEqual({ tokens: 1, lastRefillAt: 11_000 });
+    expect(result.consumed).toBe(true);
+  });
+
+  it('refills several whole intervals and caps at maximumTokens', () => {
+    const start: TokenBucketRecord = { tokens: 0, lastRefillAt: 10_000 };
+    const three = reduceConsume(start, { ...config, now: 13_999 });
+    // floor(3999 / 1000) = 3 -> +6 capped at 5, then one consumed.
+    expect(three.record).toEqual({ tokens: 4, lastRefillAt: 13_000 });
+    const two = reduceConsume(start, { ...config, now: 12_000 });
+    // 2 intervals -> +4, one consumed.
+    expect(two.record).toEqual({ tokens: 3, lastRefillAt: 12_000 });
+  });
+
+  it('clamps a clock that moves backwards instead of removing tokens', () => {
+    const empty = reduceConsume({ tokens: 0, lastRefillAt: 10_000 }, { ...config, now: 9_500 });
+    expect(empty.record).toEqual({ tokens: 0, lastRefillAt: 10_000 });
+    expect(empty.result).toEqual({ consumed: false, retryAfterMs: 1_500 });
+    const stocked = reduceConsume({ tokens: 3, lastRefillAt: 10_000 }, { ...config, now: 8_000 });
+    expect(stocked.record).toEqual({ tokens: 2, lastRefillAt: 10_000 });
+  });
+
+  it('computes retryAfterMs from the remainder of the current interval', () => {
+    const start: TokenBucketRecord = { tokens: 0, lastRefillAt: 10_000 };
+    const { result } = reduceConsume(start, { ...config, now: 10_250 });
+    expect(result).toEqual({ consumed: false, retryAfterMs: 750 });
+  });
+
+  it('is replay-deterministic for the same (now) sequence and starting record', () => {
+    const start: TokenBucketRecord = { tokens: 1, lastRefillAt: 5_000 };
+    const nows = [5_000, 5_100, 5_100, 6_200, 6_200, 6_200, 9_999, 20_000];
+    const run = (): { record: TokenBucketRecord; results: unknown[] } => {
+      let current: TokenBucketRecord | undefined = start;
+      const results: unknown[] = [];
+      for (const now of nows) {
+        const reduced = reduceConsume(current, { ...config, now });
+        current = reduced.record;
+        results.push(reduced.result);
+      }
+      return { record: current, results };
+    };
+    expect(run()).toEqual(run());
+  });
+});
+
+describe('DurableRateLimiter', () => {
+  it('defaults maximumTokens to tokensPerInterval', () => {
+    const limiter = new DurableRateLimiter({ tokensPerInterval: 3, interval: 100 });
+    expect(limiter.maximumTokens).toBe(3);
+  });
+
+  it('rejects invalid options with RangeError', () => {
+    const make = (options: ConstructorParameters<typeof DurableRateLimiter>[0]) => () =>
+      new DurableRateLimiter(options);
+    expect(make({ tokensPerInterval: 0, interval: 100 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1.5, interval: 100 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1, interval: 0 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1, interval: -5 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1, interval: Number.POSITIVE_INFINITY })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1, interval: Number.NaN })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 2, interval: 100, maximumTokens: 1 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 2, interval: 100, maximumTokens: 2.5 })).toThrow(RangeError);
+    expect(make({ tokensPerInterval: 1, interval: 100, maximumTokens: 0 })).toThrow(RangeError);
+  });
+
+  it('consumes through a promise-flavoured AtomicState slot until exhausted', async () => {
+    const slot = new AtomicState<TokenBucketRecord>(new MemoryStorage(), 'state:test:bucket');
+    const limiter = new DurableRateLimiter({ tokensPerInterval: 2, interval: 1_000 });
+    expect(await limiter.tryConsume(slot, { now: 0 })).toEqual({ consumed: true, retryAfterMs: 0 });
+    expect(await limiter.tryConsume(slot, { now: 0 })).toEqual({ consumed: true, retryAfterMs: 0 });
+    const denied = await limiter.tryConsume(slot, { now: 400 });
+    expect(denied).toEqual({ consumed: false, retryAfterMs: 600 });
+    expect(await limiter.tryConsume(slot, { now: 1_000 })).toEqual({
+      consumed: true,
+      retryAfterMs: 0,
+    });
+    expect(await limiter.inspect(slot)).toEqual({ tokens: 1, lastRefillAt: 1_000 });
+  });
+
+  it('drives a generator-flavoured slot', () => {
+    let stored: TokenBucketRecord | undefined;
+    const slot: CasSlot<TokenBucketRecord, Generator<unknown, TokenBucketRecord, unknown>> = {
+      get: () => {
+        throw new Error('unused');
+      },
+      update(updater: (current: TokenBucketRecord | undefined) => TokenBucketRecord) {
+        return (function* () {
+          stored = updater(stored);
+          yield 'step';
+          return stored;
+        })();
+      },
+    };
+    const limiter = new DurableRateLimiter({ tokensPerInterval: 1, interval: 50 });
+    const run = limiter.tryConsume(slot, { now: 0 });
+    let step = run.next();
+    while (!step.done) step = run.next();
+    expect(step.value).toEqual({ consumed: true, retryAfterMs: 0 });
+    expect(stored).toEqual({ tokens: 0, lastRefillAt: 0 });
   });
 });

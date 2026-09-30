@@ -60,6 +60,10 @@ function decodeCursorOrThrow(cursor: Cursor): number {
   return sequence;
 }
 
+export function compareCursor(a: Cursor, b: Cursor): 'before' | 'at' | 'after' {
+  const delta = decodeCursorOrThrow(a) - decodeCursorOrThrow(b);
+  return delta === 0 ? 'at' : delta < 0 ? 'before' : 'after';
+}
 // ---------------------------------------------------------------------------
 // Envelope
 // ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.tes
 import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { ReplayWindowExceededError } from './replay-live-feed-internals.ts';
 import {
+  compareCursor,
   createWorkflowEventFeed,
   decodeCursor,
   encodeCursor,
@@ -83,6 +84,55 @@ describe('encodeCursor / decodeCursor', () => {
 
   it('encodeCursor returns a stable string for the same input', () => {
     expect(encodeCursor(42)).toBe(encodeCursor(42));
+  });
+});
+
+describe('compareCursor', () => {
+  it("compares a cursor equal to the feed's tail sequence as 'at'", async () => {
+    const backend = createInMemoryEventBackend();
+    for (let seq = 0; seq < 3; seq += 1) {
+      await backend.append(makeEnvelope({ sequence: seq }));
+    }
+    const feed = createWorkflowEventFeed(backend);
+    let stored: string | undefined;
+    for await (const envelope of feed.replay({ workflowId: 'wf-1', selector: 'events' })) {
+      stored = envelope.cursor;
+    }
+    const tail = await backend.snapshotTailSequence('wf-1', 'events');
+    expect(tail).toBe(2);
+    expect(stored).toBeDefined();
+    expect(compareCursor(stored as string, encodeCursor(tail))).toBe('at');
+    const replayed: number[] = [];
+    for await (const envelope of feed.replay({
+      workflowId: 'wf-1',
+      selector: 'events',
+      fromCursor: stored as string,
+    })) {
+      replayed.push(envelope.sequence);
+    }
+    expect(replayed).toEqual([]);
+  });
+
+  it("returns 'before' when the first cursor is behind the second", () => {
+    expect(compareCursor(encodeCursor(1), encodeCursor(5))).toBe('before');
+    expect(compareCursor('-1', encodeCursor(0))).toBe('before');
+  });
+
+  it("returns 'after' when the first cursor is ahead of the second", () => {
+    expect(compareCursor(encodeCursor(9), encodeCursor(2))).toBe('after');
+    expect(compareCursor(encodeCursor(0), '-1')).toBe('after');
+  });
+
+  it("returns 'at' for two initial sentinels", () => {
+    expect(compareCursor('-1', '-1')).toBe('at');
+  });
+
+  it('throws when the first argument is malformed', () => {
+    expect(() => compareCursor('garbage', encodeCursor(1))).toThrow('Invalid cursor');
+  });
+
+  it('throws when the second argument is malformed', () => {
+    expect(() => compareCursor(encodeCursor(1), '')).toThrow('Invalid cursor');
   });
 });
 
