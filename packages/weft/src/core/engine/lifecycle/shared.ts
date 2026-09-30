@@ -89,6 +89,10 @@ export type RecoverAllOptions = {
    * - `'throw'`: use fail-fast recovery — rethrow the
    *   {@link VersionMismatchError} out of `recoverAll()` immediately, leaving
    *   every workflow not yet processed in this batch unresumed.
+   *
+   * This policy does not apply to `EagerRecoveryRevisionRefusedError`, which
+   * `recoverAll()` always rethrows (aborting the batch) when an eager type's
+   * redeployed definition is incompatible with a run's persisted revision.
    */
   versionMismatchPolicy?: 'fail-run' | 'throw';
 };

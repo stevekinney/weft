@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
@@ -7,7 +7,9 @@ import {
   withFailingIndexedDbOpen,
   withFakeIndexedDb,
 } from './indexeddb-fault-harness.test-support.ts';
+import { SCAN_PAGE_SIZE } from './indexeddb-scan-page-size.ts';
 import { IndexedDBStorage } from './indexeddb.ts';
+import type { ScanOptions } from './interface.ts';
 import {
   collect,
   runBasicStorageContract,
@@ -383,5 +385,314 @@ describe('IndexedDBStorage deleteRange edge cases', () => {
     expect(await storage.get('k:2')).toBeNull();
     expect(await storage.get('k:3')).not.toBeNull();
     expect(await storage.get('k:4')).not.toBeNull();
+  });
+});
+
+const PAGE = SCAN_PAGE_SIZE;
+
+/** Zero-padded key so lexicographic order equals numeric order. */
+function pagedKey(index: number, prefix = 'p:'): string {
+  return `${prefix}${String(index).padStart(6, '0')}`;
+}
+
+function macrotask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function seedKeys(storage: IndexedDBStorage, keys: string[]): Promise<void> {
+  await storage.batch(keys.map((key) => ({ type: 'put' as const, key, value: encode(key) })));
+}
+
+async function seedCount(count: number, prefix = 'p:'): Promise<IndexedDBStorage> {
+  const storage = new IndexedDBStorage(`paged-${crypto.randomUUID()}`);
+  await seedKeys(
+    storage,
+    Array.from({ length: count }, (_, index) => pagedKey(index, prefix)),
+  );
+  return storage;
+}
+
+type KeyReader = {
+  name: 'scan' | 'keys';
+  read: (storage: IndexedDBStorage, prefix: string, options?: ScanOptions) => AsyncIterable<string>;
+};
+
+const keyReaders: KeyReader[] = [
+  {
+    name: 'scan',
+    async *read(storage, prefix, options) {
+      for await (const [key] of storage.scan(prefix, options)) yield key;
+    },
+  },
+  { name: 'keys', read: (storage, prefix, options) => storage.keys(prefix, options) },
+];
+
+/** Count transactions opened while `run` executes. */
+async function countTransactions(run: () => Promise<void>): Promise<number> {
+  const spy = spyOn(IDBDatabase.prototype, 'transaction');
+  try {
+    await run();
+    return spy.mock.calls.length;
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe('IndexedDBStorage paged scans', () => {
+  it('uses an internal page size strictly between 1 and 1000', () => {
+    expect(Number.isInteger(SCAN_PAGE_SIZE)).toBe(true);
+    expect(SCAN_PAGE_SIZE).toBeGreaterThan(1);
+    expect(SCAN_PAGE_SIZE).toBeLessThan(1000);
+  });
+
+  it('keeps reporting best-effort scan consistency', () => {
+    expect(
+      new IndexedDBStorage(`paged-${crypto.randomUUID()}`).capabilities().scanConsistency,
+    ).toBe('best-effort');
+  });
+
+  it('scan tolerates a consumer that awaits storage work and a macrotask per record', async () => {
+    const storage = await seedCount(PAGE * 2 + 1);
+    const seen: string[] = [];
+    for await (const [key] of storage.scan('p:')) {
+      await storage.get(key);
+      await macrotask();
+      seen.push(key);
+    }
+    expect(seen).toEqual(Array.from({ length: PAGE * 2 + 1 }, (_, index) => pagedKey(index)));
+  });
+
+  it('keys tolerates a consumer that awaits storage work and a macrotask per record', async () => {
+    const storage = await seedCount(PAGE * 2 + 1);
+    const seen: string[] = [];
+    for await (const key of storage.keys('p:')) {
+      await storage.get(key);
+      await macrotask();
+      seen.push(key);
+    }
+    expect(seen).toEqual(Array.from({ length: PAGE * 2 + 1 }, (_, index) => pagedKey(index)));
+  });
+
+  for (const reader of keyReaders) {
+    describe(reader.name, () => {
+      const collectKeys = async (
+        storage: IndexedDBStorage,
+        prefix: string,
+        options?: ScanOptions,
+      ): Promise<string[]> => {
+        const out: string[] = [];
+        for await (const key of reader.read(storage, prefix, options)) out.push(key);
+        return out;
+      };
+      const expected = (count: number, reverse = false): string[] => {
+        const all = Array.from({ length: count }, (_, index) => pagedKey(index));
+        return reverse ? all.toReversed() : all;
+      };
+
+      for (const count of [PAGE * 2 + 7, PAGE * 2, PAGE, PAGE - 1, 1]) {
+        it(`yields every key once in order, forward and reverse, for ${count} records`, async () => {
+          const storage = await seedCount(count);
+          expect(await collectKeys(storage, 'p:')).toEqual(expected(count));
+          expect(await collectKeys(storage, 'p:', { reverse: true })).toEqual(
+            expected(count, true),
+          );
+        });
+      }
+
+      it('yields every key once for the empty prefix, forward and reverse', async () => {
+        const storage = await seedCount(PAGE * 2 + 3);
+        expect(await collectKeys(storage, '')).toEqual(expected(PAGE * 2 + 3));
+        expect(await collectKeys(storage, '', { reverse: true })).toEqual(
+          expected(PAGE * 2 + 3, true),
+        );
+      });
+
+      it('yields nothing after exactly one zero-row page for an empty prefix match', async () => {
+        const storage = await seedCount(3);
+        let result: string[] = ['unset'];
+        const transactions = await countTransactions(async () => {
+          result = await collectKeys(storage, 'absent:');
+        });
+        expect(result).toEqual([]);
+        expect(transactions).toBe(1);
+      });
+
+      it('opens one extra zero-row page only for an exact multiple of the page size', async () => {
+        const exact = await seedCount(PAGE * 2);
+        expect(await countTransactions(async () => void (await collectKeys(exact, 'p:')))).toBe(3);
+        const short = await seedCount(PAGE * 2 - 1);
+        expect(await countTransactions(async () => void (await collectKeys(short, 'p:')))).toBe(2);
+      });
+
+      it('honors limit across a page boundary and stops opening pages', async () => {
+        const storage = await seedCount(PAGE * 3);
+        let result: string[] = [];
+        const transactions = await countTransactions(async () => {
+          result = await collectKeys(storage, 'p:', { limit: PAGE + 10 });
+        });
+        expect(result).toEqual(expected(PAGE + 10));
+        expect(transactions).toBe(2);
+      });
+
+      it('does not open another page when limit lands exactly on a page boundary', async () => {
+        const storage = await seedCount(PAGE * 3);
+        let result: string[] = [];
+        const transactions = await countTransactions(async () => {
+          result = await collectKeys(storage, 'p:', { limit: PAGE });
+        });
+        expect(result).toEqual(expected(PAGE));
+        expect(transactions).toBe(1);
+      });
+
+      it('yields nothing for limit 0', async () => {
+        const storage = await seedCount(PAGE + 1);
+        expect(await collectKeys(storage, 'p:', { limit: 0 })).toEqual([]);
+      });
+
+      it('honors a gt bound beyond the first page, including a first page with no matches', async () => {
+        const count = PAGE * 3;
+        const storage = await seedCount(count);
+        const gt = pagedKey(PAGE + 10);
+        expect(await collectKeys(storage, 'p:', { gt })).toEqual(
+          expected(count).filter((key) => key > gt),
+        );
+      });
+
+      it('honors an lt bound beyond the first page in both directions', async () => {
+        const count = PAGE * 3;
+        const storage = await seedCount(count);
+        const lt = pagedKey(PAGE + 5);
+        expect(await collectKeys(storage, 'p:', { lt })).toEqual(
+          expected(count).filter((key) => key < lt),
+        );
+        const lowLt = pagedKey(5);
+        expect(await collectKeys(storage, 'p:', { lt: lowLt, reverse: true })).toEqual(
+          expected(count, true).filter((key) => key < lowLt),
+        );
+      });
+
+      it('terminates a reverse scan whose lowest key equals the prefix', async () => {
+        for (const total of [PAGE * 2, PAGE + 1, PAGE * 2 + 1]) {
+          const storage = new IndexedDBStorage(`paged-${crypto.randomUUID()}`);
+          const others = Array.from({ length: total - 1 }, (_, index) => pagedKey(index));
+          await seedKeys(storage, ['p:', ...others]);
+          expect(await collectKeys(storage, 'p:', { reverse: true })).toEqual([
+            ...others.toReversed(),
+            'p:',
+          ]);
+        }
+      });
+
+      it('terminates a reverse empty-prefix scan whose lowest key is the empty string', async () => {
+        for (const total of [PAGE * 2, PAGE + 1]) {
+          const storage = new IndexedDBStorage(`paged-${crypto.randomUUID()}`);
+          const others = Array.from({ length: total - 1 }, (_, index) => pagedKey(index));
+          await seedKeys(storage, ['', ...others]);
+          expect(await collectKeys(storage, '', { reverse: true })).toEqual([
+            ...others.toReversed(),
+            '',
+          ]);
+          expect(await collectKeys(storage, '')).toEqual(['', ...others]);
+        }
+      });
+
+      describe('mutation semantics', () => {
+        const drain = async (iterator: AsyncIterator<string>): Promise<string[]> => {
+          const out: string[] = [];
+          for (let step = await iterator.next(); !step.done; step = await iterator.next()) {
+            out.push(step.value);
+          }
+          return out;
+        };
+
+        it('lets a purge-shaped consumer delete every key exactly once across pages', async () => {
+          const count = PAGE * 2 + 1;
+          const storage = await seedCount(count);
+          const seen: string[] = [];
+          for await (const key of reader.read(storage, 'p:')) {
+            await storage.delete(key);
+            await macrotask();
+            seen.push(key);
+          }
+          expect(seen).toEqual(expected(count));
+          expect(await collectKeys(storage, 'p:')).toEqual([]);
+        });
+
+        it('yields a buffered key deleted before it is yielded', async () => {
+          const storage = await seedCount(PAGE * 2);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          const first = await iterator.next();
+          expect(first.value).toBe(pagedKey(0));
+          await storage.delete(pagedKey(1));
+          const second = await iterator.next();
+          expect(second.value).toBe(pagedKey(1));
+        });
+
+        it('does not yield a key in a later page deleted before that page is read', async () => {
+          const storage = await seedCount(PAGE * 2);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          await iterator.next();
+          await storage.delete(pagedKey(PAGE + 3));
+          const rest = await drain(iterator);
+          expect(rest).not.toContain(pagedKey(PAGE + 3));
+          expect(rest).toHaveLength(PAGE * 2 - 2);
+        });
+
+        it('yields a key inserted after the continuation key of a non-final full page exactly once', async () => {
+          const storage = await seedCount(PAGE * 2 + 1);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          await iterator.next();
+          const inserted = `${pagedKey(PAGE - 1)}x`;
+          await storage.put(inserted, encode('x'));
+          const rest = await drain(iterator);
+          expect(rest.filter((key) => key === inserted)).toHaveLength(1);
+          expect(rest.indexOf(inserted)).toBe(PAGE - 1);
+          expect(new Set(rest).size).toBe(rest.length);
+        });
+
+        it('does not yield a key inserted at or before the continuation key', async () => {
+          const storage = await seedCount(PAGE * 2 + 1);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          await iterator.next();
+          const inserted = `${pagedKey(PAGE / 2)}x`;
+          await storage.put(inserted, encode('x'));
+          const rest = await drain(iterator);
+          expect(rest).not.toContain(inserted);
+          expect(rest).toHaveLength(PAGE * 2);
+        });
+
+        it('does not yield a key inserted while a short final page is being yielded', async () => {
+          const storage = await seedCount(PAGE + 5);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          for (let index = 0; index <= PAGE; index++) await iterator.next();
+          await storage.put('p:zzzzzz', encode('z'));
+          expect(await drain(iterator)).toEqual(
+            Array.from({ length: 4 }, (_, index) => pagedKey(PAGE + 1 + index)),
+          );
+        });
+
+        it('yields a key inserted while a full final page is being yielded via the trailing page', async () => {
+          const storage = await seedCount(PAGE * 2);
+          const iterator = reader.read(storage, 'p:')[Symbol.asyncIterator]();
+          for (let index = 0; index <= PAGE; index++) await iterator.next();
+          await storage.put('p:zzzzzz', encode('z'));
+          const rest = await drain(iterator);
+          expect(rest.filter((key) => key === 'p:zzzzzz')).toHaveLength(1);
+          expect(rest.at(-1)).toBe('p:zzzzzz');
+        });
+      });
+    });
+  }
+
+  it('yields a buffered value overwritten before it is yielded with its buffered value', async () => {
+    const storage = await seedCount(PAGE * 2);
+    const iterator = storage.scan('p:')[Symbol.asyncIterator]();
+    await iterator.next();
+    await storage.put(pagedKey(1), encode('overwritten'));
+    const second = await iterator.next();
+    expect(second.value?.[0]).toBe(pagedKey(1));
+    expect(new TextDecoder().decode(second.value?.[1])).toBe(pagedKey(1));
+    const current = await storage.get(pagedKey(1));
+    expect(new TextDecoder().decode(current ?? undefined)).toBe('overwritten');
   });
 });

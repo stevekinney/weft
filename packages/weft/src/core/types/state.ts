@@ -61,14 +61,16 @@ export interface WorkflowState {
    */
   versionTuple: WorkflowVersionTuple;
   /**
-   * The exact executable artifact this run started against — the revision
-   * of the code actually loaded in this process at admission time (an
+   * The revision most recently bound to this run — the revision of the code
+   * actually loaded in this process at admission time (an
    * eager registration's `registeredCatalogRevisions` entry, or a dynamic
    * source's resolved candidate revision), NOT the catalog's cached active
    * pointer. Sibling to {@link versionTuple}: `revision` answers "which
    * artifact" for identity, diagnostics, and pinning; `versionTuple` remains
    * the sole semantic-compatibility axis recovery checks. Every fresh start
-   * from this release forward sets it; `undefined` only on a record
+   * from this release forward sets it, and recovery of an eager-registered
+   * type re-stamps it when the redeployed definition is compatible (see
+   * {@link WorkflowReplay.revision}); `undefined` only on a record
    * persisted before this field existed (a pre-upgrade run) — recovery
    * treats that absence as a bounded, explicitly-classified legacy case
    * rather than falling back to the currently active revision.
@@ -396,23 +398,28 @@ export type WorkflowReplay = {
    * predates revision pinning (a legacy record with no persisted
    * `revision`).
    *
-   * **Known limitation for an EAGER-registered type, documented rather
-   * than fixed (WFT-159):** recovery and a default fork
-   * intentionally run whatever THIS process currently has eagerly
-   * registered, even when it differs from `revision` —
-   * `resolveExecutableRegistrationForRevision()`'s documented "eager is
-   * always ready regardless of pin" design (see
-   * `documentation/guides/workflow-versioning.md#per-run-revision-pinning-wft-17`).
-   * `revision` itself is stamped once, only at that run's own genuine
-   * start/fork, and is never re-stamped by a LATER recovery — so a run
-   * recovered after this process redeployed to a new eager revision B
-   * (compatible `version`, different `revision` than the original A) keeps
-   * reporting `revision: A` for checkpoints B's own code goes on to
-   * produce. The `workflowExecutionToken` correlation above is still
-   * correct (it is genuinely the same execution), but `revision` itself
-   * can be stale for this specific eager-redeploy-during-recovery case —
-   * a pre-existing property of how eager `revision` has behaved since
-   * WFT-17/19, not something this field's own addition changes.
+   * **Eager-registered types.** Recovery runs whatever definition THIS
+   * process currently has eagerly registered
+   * (`resolveExecutableRegistrationForRevision()`'s "eager is always ready
+   * regardless of pin" design; see
+   * `documentation/guides/workflow-revisions.md#what-runs-after-activation`).
+   * When the registered revision differs from the run's persisted one and
+   * `checkWorkflowCompatibility()` (with `requireExactRevision: false`)
+   * reports the definitions compatible, recovery durably re-stamps the run's
+   * revision to the registered one, so checkpoints produced after recovery
+   * report it. When they are incompatible (or the persisted manifest is
+   * unavailable), recovery throws `EagerRecoveryRevisionRefusedError` and
+   * writes nothing.
+   *
+   * **Attribution bound.** `WorkflowState.revision` is one value per run, not
+   * per checkpoint, so after a re-stamp `replayTo()` reports the revision most
+   * recently bound to the run for every one of its checkpoints, including
+   * those produced before the recovery by the earlier revision's code.
+   *
+   * **Residual limitation for default forks.** A default fork of an eager run
+   * persists the source run's current revision while executing the code this
+   * process registered, so a fork of a run that recovery has not yet
+   * re-stamped can report a revision other than the code that runs.
    */
   revision?: string;
 };

@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, mock, spyOn } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import {
   advanceTimersByTime,
   flushMicrotasks,
@@ -228,6 +228,69 @@ class EngineCreateNoConditionalBatchStorage extends MemoryStorage {
 }
 
 // ---------------------------------------------------------------------------
+// Timer API spies
+// ---------------------------------------------------------------------------
+
+/**
+ * Spy on the timer globals for the window the caller holds the result open.
+ *
+ * The engine's `*_WAIT_FOR_*` test seams expose no pending-timer accessor, so
+ * "arms no timer" and "clears its timeout" are proven by observing the timer
+ * API calls made inside the measured window. Bun's process-wide fake-timer
+ * count is not an option: it includes every fake timer in the process, so the
+ * assertion would measure whatever timer state other test files leave behind.
+ *
+ * Install this after `useFakeTimers()` and hold it with `using` so it is
+ * restored when the block exits, before `restoreRealTimers()` runs. Restoring a
+ * spy after `restoreRealTimers()` would reinstate the fake globals over the real
+ * ones. The spies call through, so the wrapped timers still behave normally.
+ */
+function spyOnTimerApis() {
+  const spies = {
+    setTimeout: spyOn(globalThis, 'setTimeout'),
+    setInterval: spyOn(globalThis, 'setInterval'),
+    setImmediate: spyOn(globalThis, 'setImmediate'),
+    clearTimeout: spyOn(globalThis, 'clearTimeout'),
+  };
+  return {
+    ...spies,
+    [Symbol.dispose]() {
+      for (const spy of Object.values(spies)) spy.mockRestore();
+    },
+  };
+}
+
+type TimerApiSpies = ReturnType<typeof spyOnTimerApis>;
+
+/** Assert that nothing in the spied window armed a timeout, interval, or immediate. */
+function expectNoTimerArmed(timerSpies: TimerApiSpies): void {
+  expect(timerSpies.setTimeout).toHaveBeenCalledTimes(0);
+  expect(timerSpies.setInterval).toHaveBeenCalledTimes(0);
+  expect(timerSpies.setImmediate).toHaveBeenCalledTimes(0);
+}
+
+/**
+ * The handle returned by the one `setTimeout` call whose delay is the sleep
+ * resolver readiness timeout. Other engine timers in the window are told apart
+ * by their delay; exactly one call may carry this one.
+ */
+function readinessTimeoutHandle(timerSpies: TimerApiSpies): unknown {
+  const { calls, results } = timerSpies.setTimeout.mock;
+  const readinessCallIndexes = calls.flatMap(([, delay], index) =>
+    delay === SLEEP_RESOLVER_READY_WAIT_TIMEOUT_MS_FOR_TESTING ? [index] : [],
+  );
+  expect(readinessCallIndexes).toHaveLength(1);
+  const result = results[readinessCallIndexes[0] as number];
+  if (result?.type !== 'return') throw new Error('expected the readiness timeout to be armed');
+  return result.value;
+}
+
+/** How many times the spied `clearTimeout` received exactly this handle. */
+function clearTimeoutCallCountFor(timerSpies: TimerApiSpies, handle: unknown): number {
+  return timerSpies.clearTimeout.mock.calls.filter(([candidate]) => candidate === handle).length;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -312,12 +375,12 @@ describe('Engine', () => {
       await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
       expect(engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]()).toBe(1);
 
-      const timerCountBefore = jest.getTimerCount();
+      using timerSpies = spyOnTimerApis();
       await engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
 
       // The happy path (resolver already registered) must resolve without
-      // arming a timeout timer — no new timer should be pending.
-      expect(jest.getTimerCount()).toBe(timerCountBefore);
+      // arming a timeout timer, or any other timer.
+      expectNoTimerArmed(timerSpies);
     } finally {
       allowSleep.resolve();
       await engine[Symbol.asyncDispose]();
@@ -343,15 +406,17 @@ describe('Engine', () => {
       await engine.start('wait-for-sleep-readiness-clears-timeout', null, { id: workflowId });
       await workflowStarted.promise;
 
+      using timerSpies = spyOnTimerApis();
       const barrier = engine[ENGINE_WAIT_FOR_SLEEP_RESOLVER_FOR_TESTING](workflowId);
-      const timerCountAfterArming = jest.getTimerCount();
+      const readinessTimeout = readinessTimeoutHandle(timerSpies);
+      expect(clearTimeoutCallCountFor(timerSpies, readinessTimeout)).toBe(0);
 
       allowSleep.resolve();
       await barrier;
 
-      // The readiness timeout timer armed above must be cleared on the
-      // resolve path — exactly one fewer pending timer than while armed.
-      expect(jest.getTimerCount()).toBe(timerCountAfterArming - 1);
+      // The readiness timeout armed above must be cleared on the resolve path:
+      // its own handle is passed to clearTimeout exactly once.
+      expect(clearTimeoutCallCountFor(timerSpies, readinessTimeout)).toBe(1);
     } finally {
       allowSleep.resolve();
       await engine[Symbol.asyncDispose]();
@@ -422,9 +487,9 @@ describe('Engine', () => {
       expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBeGreaterThanOrEqual(1);
 
       // Already registered: resolves at once, with no timer of its own.
-      const timerCountBefore = jest.getTimerCount();
+      using timerSpies = spyOnTimerApis();
       await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
-      expect(jest.getTimerCount()).toBe(timerCountBefore);
+      expectNoTimerArmed(timerSpies);
     } finally {
       allowWait.resolve();
       await engine[Symbol.asyncDispose]();
@@ -465,9 +530,9 @@ describe('Engine', () => {
       expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
 
       // Already parked: resolves at once, with no timer of its own.
-      const timerCountBefore = jest.getTimerCount();
+      using timerSpies = spyOnTimerApis();
       await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](workflowId);
-      expect(jest.getTimerCount()).toBe(timerCountBefore);
+      expectNoTimerArmed(timerSpies);
     } finally {
       allowWait.resolve();
       await engine[Symbol.asyncDispose]();
@@ -537,9 +602,9 @@ describe('Engine', () => {
       // Already parked: resolves at once, with no timer of its own. Fake
       // timers go on only here, so the park itself runs on real timers.
       useFakeTimers();
-      const timerCountBefore = jest.getTimerCount();
+      using timerSpies = spyOnTimerApis();
       await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](workflowId);
-      expect(jest.getTimerCount()).toBe(timerCountBefore);
+      expectNoTimerArmed(timerSpies);
     } finally {
       releaseHold.resolve();
       await engine[Symbol.asyncDispose]();

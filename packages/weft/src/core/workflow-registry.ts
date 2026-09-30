@@ -65,6 +65,7 @@ export {
   DynamicWorkflowSourceUnavailableError,
   ENGINE_LEASE_LOST_WARNING_NAME,
   ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
+  EagerRecoveryRevisionRefusedError,
   Engine,
   EngineCreateNameMismatchError,
   EngineDisposalError,

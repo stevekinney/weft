@@ -124,12 +124,7 @@ function hasValidDeadLetterDiscriminant(
  *
  * Buffers the single-slot scan into an array before doing any
  * `storage.get()` lookups, rather than awaiting inside the `for await`
- * loop directly: an `IndexedDBStorage.scan()` iterator holds its
- * transaction open only across synchronous iteration, and awaiting other
- * storage calls between `next()` calls exposes the SAME class of
- * `TransactionInactiveError` risk tracked (pre-existing, out of this PR's
- * scope) as WFT-160 — this scan does not need to add a fresh instance of
- * it.
+ * loop directly.
  */
 export async function countTeardownDeadLettersForRevision(
   storage: Storage,

@@ -78,6 +78,7 @@ export type WeftErrorCode =
   | 'WorkflowSourceNotRegisteredError'
   | 'DynamicWorkflowSourceUnavailableError'
   | 'WorkflowRevisionUnavailableError'
+  | 'EagerRecoveryRevisionRefusedError'
   | 'ForkSourceReplacedError';
 
 /**
@@ -166,6 +167,7 @@ const publicWeftErrorCodeMap = {
   WorkflowSourceNotRegisteredError: true,
   DynamicWorkflowSourceUnavailableError: true,
   WorkflowRevisionUnavailableError: true,
+  EagerRecoveryRevisionRefusedError: true,
   ForkSourceReplacedError: true,
 } satisfies Record<WeftErrorCode, true>;
 

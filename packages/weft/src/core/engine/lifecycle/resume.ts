@@ -52,6 +52,11 @@ export type ResumeFromStorageOptions = {
   deferClaimReleaseOnRejection?: boolean;
   /** Populated with the freshly-acquired epoch, if any — see {@link FreshResumeClaimTracker}. */
   freshClaimTracker?: FreshResumeClaimTracker;
+  /**
+   * `true` only for the wake of an inline-parked run (`resumeParkedInlineWorkflow`): skips the
+   * eager-type recovery revision check, which belongs to the recovery entry points.
+   */
+  skipEagerRevisionCheck?: boolean;
 };
 
 /** Populate `tracker.epoch` from a fresh acquisition — split out to keep `resumeWorkflowFromStorage`'s complexity under this repository's ceiling. */
@@ -112,6 +117,7 @@ export async function resumeWorkflowFromStorage(
       dispatchResumedEvent,
       callbacks,
       onRecoveredWorkflow,
+      options?.skipEagerRevisionCheck,
     );
   } catch (error) {
     // WFT-134: release a freshly-acquired claim (see its doc) on any

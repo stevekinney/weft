@@ -17,6 +17,7 @@ import {
   DurableActivityScopeError,
   DurableActivityUnsupportedError,
   DynamicWorkflowSourceUnavailableError,
+  EagerRecoveryRevisionRefusedError,
   EffectReplayConflictError,
   EngineCreateNameMismatchError,
   EngineDisposalError,
@@ -164,6 +165,15 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkflowSourceNotRegisteredError: () => new WorkflowSourceNotRegisteredError('checkout', 'r1'),
   DynamicWorkflowSourceUnavailableError: () =>
     new DynamicWorkflowSourceUnavailableError('checkout', 'r1', 'load-failed', new Error('boom')),
+  EagerRecoveryRevisionRefusedError: () =>
+    new EagerRecoveryRevisionRefusedError({
+      workflowId: 'wf-1',
+      workflowType: 'checkout',
+      persistedRevision: 'r1',
+      registeredRevision: 'r2',
+      reason: 'incompatible',
+      compatibilityReasons: ['contract-hash-mismatch'],
+    }),
   WorkflowRevisionUnavailableError: () =>
     new WorkflowRevisionUnavailableError('checkout', 'r1', 'not-registered'),
   ForkSourceReplacedError: () => new ForkSourceReplacedError('wf-1'),
