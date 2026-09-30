@@ -265,6 +265,6 @@ export async function prepareTerminalRunPurge(
     });
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
   deleteOperations.push(buildWorkflowGenerationBumpOperation(state.id, observedGenerationBytes));
-  clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaitersForStart);
+  clearPurgedWorkflowInMemoryState(internals, state, cleanupWaitersForStart);
   return deleteOperations;
 }

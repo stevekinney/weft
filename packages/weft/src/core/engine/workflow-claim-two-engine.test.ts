@@ -35,6 +35,7 @@ import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
+import { purgeWorkflow } from './bulk-operations-purge.ts';
 import { decodeGeneration } from './generation-codec.ts';
 import {
   ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING,
@@ -44,6 +45,7 @@ import {
 import { getInternals } from './internals.ts';
 import { decodeEpoch, encodeEpoch } from './lease-codec.ts';
 import { EngineDeposedError } from './lease-errors.ts';
+import { loadWorkflowState } from './storage-io.ts';
 import { decodeWorkflowClaimHolder, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 import { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 
@@ -1589,5 +1591,137 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
       await engineB[Symbol.asyncDispose]();
       await engineA[Symbol.asyncDispose]();
     }
+  });
+});
+
+describe('COR-1386: a start-new purge settles the old run result waiter with the old run own outcome', () => {
+  /** Fold the settlement of `promise` into a value so a hang is observable without a timeout pass condition. */
+  function trackSettlement(promise: Promise<unknown>): { readonly state: () => string } {
+    let outcome = 'pending';
+    void promise.then(
+      (value) => {
+        outcome = `resolved:${String(value)}`;
+      },
+      (error: unknown) => {
+        outcome = `rejected:${error instanceof Error ? error.message : String(error)}`;
+      },
+    );
+    return { state: () => outcome };
+  }
+
+  /** Let every already-queued microtask and macrotask drain; only bounds a failure, never gates a pass. */
+  const drain = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it('gated release: result() taken before the signal resolves with the old run result after a start-new', async () => {
+    const id = `purge-waiter-gated-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    await using engineA = await Engine.create({
+      storage,
+      workflows: { 'claim-race-echo': claimRaceEchoWorkflow },
+      ownership: 'workflow-lease',
+      workflowClaimTtl: '1m',
+      workflowClaimRenewInterval: '5s',
+      recover: false,
+      backgroundTasks: 'manual',
+    });
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let armed = true;
+    const holderKey = KEYS.workflowOwnerHolder(id);
+    const gatedRegistryStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            if (armed && operations.some((op) => op.type === 'delete' && op.key === holderKey)) {
+              armed = false;
+              reached.resolve();
+              await release.promise;
+            }
+            return target.conditionalBatch(conditions, operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    installClaimRegistry(engineA, 'engine-a', gatedRegistryStorage);
+
+    const oldHandle = await engineA.start('claim-race-echo', 'OLD', { id });
+    await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    const oldOutcome = trackSettlement(oldHandle.result());
+
+    await engineA.signal(id, 'go');
+    await reached.promise;
+    const committedSummary = await engineA.get(id);
+    expect(committedSummary?.status).toBe('completed');
+
+    const replacement = await engineA.start('claim-race-echo', 'NEW', {
+      id,
+      onTerminalConflict: 'start-new',
+    });
+    await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    // The purge that admitted the replacement has run; the old waiter must already be settled.
+    await drain();
+    expect(oldOutcome.state()).toBe('resolved:OLD');
+
+    release.resolve();
+    await engineA.signal(id, 'go');
+    expect(await replacement.result()).toBe('NEW');
+    expect(oldOutcome.state()).toBe('resolved:OLD');
+  });
+
+  it('same engine, ungated: result() on a completed run followed by start-new settles the old waiter with the old result', async () => {
+    const id = `purge-waiter-ungated-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({
+      storage,
+      workflows: { 'claim-race-echo': claimRaceEchoWorkflow },
+      recover: false,
+    });
+    const oldHandle = await engine.start('claim-race-echo', 'OLD', { id });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    const oldOutcome = trackSettlement(oldHandle.result());
+    await engine.signal(id, 'go');
+    expect(await oldHandle.result()).toBe('OLD');
+
+    const replacement = await engine.start('claim-race-echo', 'NEW', {
+      id,
+      onTerminalConflict: 'start-new',
+    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    await drain();
+    expect(oldOutcome.state()).toBe('resolved:OLD');
+    await engine.signal(id, 'go');
+    expect(await replacement.result()).toBe('NEW');
+  });
+
+  it('stale-snapshot bulk purge never settles the same-id replacement waiter with the old outcome', async () => {
+    const id = `purge-waiter-stale-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({
+      storage,
+      workflows: { 'claim-race-echo': claimRaceEchoWorkflow },
+      recover: false,
+    });
+    const oldHandle = await engine.start('claim-race-echo', 'OLD', { id });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    await engine.signal(id, 'go');
+    expect(await oldHandle.result()).toBe('OLD');
+    const internals = getInternals(engine);
+    // What a bulk scan saw before the replacement committed.
+    const staleSnapshot = await loadWorkflowState(internals, id);
+    expect(staleSnapshot).toBeDefined();
+
+    const replacement = await engine.start('claim-race-echo', 'NEW', {
+      id,
+      onTerminalConflict: 'start-new',
+    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    const replacementOutcome = trackSettlement(replacement.result());
+
+    await purgeWorkflow(internals, staleSnapshot!, () => {});
+    await drain();
+    expect(replacementOutcome.state()).not.toBe('resolved:OLD');
+    expect(replacementOutcome.state()).toBe('pending');
   });
 });

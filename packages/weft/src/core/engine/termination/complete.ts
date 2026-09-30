@@ -346,9 +346,9 @@ function notifyCompletionWaiters(
   // persisted terminal-cleanup timer written in the same state batch above.
   // A superseded run's in-memory state, and any result waiter now registered
   // under this id, belong to the same-id replacement: leave both alone. A
-  // superseded run's own waiter, if one existed, was already removed from the
-  // map by the start-new purge without being settled (a known, separate gap),
-  // so this path has no waiter it can safely settle.
+  // superseded run's own waiter was already settled with that run's terminal
+  // outcome and removed by the start-new purge (COR-1386), so this path has
+  // nothing to settle and must leave the replacement's map entry alone.
   const resolver = superseded ? undefined : internals.resultResolvers.get(workflowId);
   try {
     if (!superseded) cleanupTerminalWorkflowImmediately(internals, workflowId, callbacks);
