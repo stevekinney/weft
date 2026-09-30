@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.3] - 2026-09-29
+
+### Fixed
+
+- Page IndexedDB scans so consumers can await between records without losing an active cursor transaction.
+- Reclaim expired durable semaphore waiters and report unavailable schedule sources as conflicts.
+- Restamp or reject stale eager workflow revisions during recovery.
+
 ## [0.27.2] - 2026-09-29
 
 ### Fixed
