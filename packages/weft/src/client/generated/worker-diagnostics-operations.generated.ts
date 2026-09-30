@@ -34,7 +34,7 @@ export type WorkerDiagnosticsOperationTypes = {
     readonly faults: never;
   };
   'weft.workers.rejections': {
-    readonly input: { readonly limit: number };
+    readonly input: { readonly limit?: number };
     readonly output: {
       readonly items: ReadonlyArray<{
         readonly buildId?: string;

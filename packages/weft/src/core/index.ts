@@ -34,16 +34,23 @@ export {
 } from './codec.ts';
 export { createBunCompressor, createCompressor } from './compression.ts';
 export type { CompressionAlgorithm, CompressionOptions, Compressor } from './compression.ts';
-export { DurableMutex, DurableSemaphore, initialLockRecord } from './concurrency.ts';
+export {
+  DurableMutex,
+  DurableRateLimiter,
+  DurableSemaphore,
+  initialLockRecord,
+} from './concurrency.ts';
 export type {
   AcquireAttempt,
   AcquireWithSlot,
   CasSlot,
+  DurableRateLimiterOptions,
   DurableSemaphoreOptions,
   LockHolder,
   LockRecord,
   LockWaiter,
   RenewWithSlot,
+  TokenBucketRecord,
 } from './concurrency.ts';
 export { constraint } from './constraint.ts';
 export type {

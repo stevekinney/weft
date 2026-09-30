@@ -664,6 +664,38 @@ describe('recurring schedules', () => {
     }
   });
 
+  it('deletes stale schedule-run metadata under workflow-lease without a claim-lost warning', async () => {
+    const storage = new MemoryStorage();
+    const emitWarning = spyOn(process, 'emitWarning').mockImplementation(() => {});
+    const engine = await Engine.create({
+      storage,
+      ownership: 'workflow-lease',
+      recover: false,
+      getNow: () => 1,
+    });
+    const workflowId = 'workflow-released-claim';
+
+    try {
+      // A failed scheduled run reaches terminal cleanup after its claim has been
+      // released, and the schedule no longer points at it.
+      await storage.put(KEYS.scheduleRun(workflowId), encode({ id: 'schedule-released' }));
+      await storage.put(
+        KEYS.schedule('schedule-released'),
+        encode(createScheduleState({ id: 'schedule-released' })),
+      );
+
+      await handleScheduledWorkflowTerminalForEngine(engine, workflowId);
+
+      expect(emitWarning).not.toHaveBeenCalled();
+      const leftoverKeys: string[] = [];
+      for await (const [key] of storage.scan('schedule-run:')) leftoverKeys.push(key);
+      expect(leftoverKeys).toEqual([]);
+    } finally {
+      emitWarning.mockRestore();
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('returns when the schedule no longer points at the completed workflow', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine({ now: 1 }, storage);

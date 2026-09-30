@@ -17,7 +17,7 @@ export type ActivitiesOperationTypes = {
   'weft.workflows.activities.pending.list': {
     readonly input: {
       readonly cursor?: string;
-      readonly limit: number;
+      readonly limit?: number;
       readonly workflowId: string;
     };
     readonly output: {

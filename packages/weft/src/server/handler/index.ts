@@ -49,6 +49,8 @@ export {
 } from '../fleet-event-feed.ts';
 export {
   createWorkflowEventFeed,
+  decodeCursor,
+  encodeCursor,
   type Cursor,
   type EventEnvelope,
   type WorkflowEventFeed,

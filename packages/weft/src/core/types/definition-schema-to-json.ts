@@ -78,7 +78,7 @@ export function definitionSchemaToJsonSchema(
   // `~standard.jsonSchema` that does not honor the project's
   // `unrepresentable: 'any'` option; deferring to the vendor adapter keeps
   // generated artifacts stable.
-  if (vendor === 'zod') return convertZod(schema as z.ZodType);
+  if (vendor === 'zod') return convertZod(schema as z.ZodType, direction);
   if (vendor === 'valibot') return convertValibot(schema);
 
   const structuralConverter = (standard as { jsonSchema?: unknown }).jsonSchema;
@@ -117,8 +117,25 @@ function isStructuralConverter(value: unknown): value is {
 
 const defaultTarget: StandardJSONSchemaV1Target = 'draft-2020-12';
 
-function convertZod(schema: z.ZodType): Record<string, unknown> {
-  const result: unknown = z.toJSONSchema(schema, { unrepresentable: 'any' });
+function convertZod(
+  schema: z.ZodType,
+  direction: DefinitionSchemaDirection,
+): Record<string, unknown> {
+  // `io` decides whether a `.default()` field is required: the input side
+  // leaves it optional, the output side always carries it. Zod also stops
+  // closing plain objects (`additionalProperties: false`) on the input side;
+  // the override restores that so published contracts keep the closed shape
+  // they had before `io` was forwarded and only `required` changes.
+  const result: unknown = z.toJSONSchema(schema, {
+    unrepresentable: 'any',
+    io: direction,
+    override: ({ zodSchema, jsonSchema }) => {
+      if (direction !== 'input' || !(zodSchema instanceof z.ZodObject)) return;
+      if (!zodSchema.def.catchall && jsonSchema.additionalProperties === undefined) {
+        jsonSchema.additionalProperties = false;
+      }
+    },
+  });
   return stripDialect(requirePlainObject(result, 'zod'));
 }
 

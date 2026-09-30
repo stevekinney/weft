@@ -95,7 +95,7 @@ describe('createCliShutdownHandler', () => {
     expect(exitCalls).toBe(1);
   });
 
-  it('reports lockfile cleanup errors and continues successful shutdown', async () => {
+  it('reports lockfile cleanup errors, still disposes storage, and exits unsuccessfully', async () => {
     const lockfileError = new Error('lockfile unavailable');
     const { dependencies, operations } = createDependencies({
       removeRunLockfile: async () => {
@@ -111,11 +111,11 @@ describe('createCliShutdownHandler', () => {
       'stop server',
       'error: [weft] Failed to remove run lockfile: Error: lockfile unavailable',
       'dispose storage',
-      'exit: 0',
+      'exit: 1',
     ]);
   });
 
-  it('reports server stop errors and exits unsuccessfully without later cleanup', async () => {
+  it('reports server stop errors, still runs later cleanup, and exits unsuccessfully', async () => {
     const { dependencies, operations } = createDependencies({
       stopServer: async () => {
         operations.push('stop server');
@@ -129,7 +129,9 @@ describe('createCliShutdownHandler', () => {
     expect(operations).toEqual([
       'log: \nReceived SIGINT; shutting down...',
       'stop server',
-      'error: [weft] Shutdown error: Error: stop failed',
+      'error: [weft] Failed to stop server: Error: stop failed',
+      'remove run lockfile',
+      'dispose storage',
       'exit: 1',
     ]);
   });
@@ -150,7 +152,7 @@ describe('createCliShutdownHandler', () => {
       'stop server',
       'remove run lockfile',
       'dispose storage',
-      'error: [weft] Shutdown error: Error: disposal failed',
+      'error: [weft] Failed to dispose storage: Error: disposal failed',
       'exit: 1',
     ]);
   });

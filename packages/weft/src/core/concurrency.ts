@@ -30,6 +30,13 @@ import {
   type AcquireAttempt,
   type LockRecord,
 } from './concurrency-lock-record.ts';
+import {
+  reduceConsume,
+  resolveRateLimiterOptions,
+  type DurableRateLimiterOptions,
+  type TokenBucketRecord,
+  type TokenConsumeResult,
+} from './concurrency-token-bucket.ts';
 
 export {
   initialLockRecord,
@@ -43,6 +50,13 @@ export type {
   LockRecord,
   LockWaiter,
 } from './concurrency-lock-record.ts';
+export { reduceConsume } from './concurrency-token-bucket.ts';
+export type {
+  ConsumeInput,
+  DurableRateLimiterOptions,
+  TokenBucketRecord,
+  TokenConsumeResult,
+} from './concurrency-token-bucket.ts';
 
 /**
  * Minimal CAS state-slot surface shared by the durable `ctx.state.*` handles
@@ -289,6 +303,78 @@ export class DurableMutex extends DurableSemaphore {
     super({ ...options, permits: 1 });
   }
 }
+
+/**
+ * A durable, replay-deterministic token bucket. One CAS slot holds one bucket's
+ * {@link TokenBucketRecord}; each `tryConsume` is a single CAS transaction that
+ * refills in whole intervals and takes one token. Like the lock primitives it
+ * never reads the wall clock: the caller passes a durably captured `now`.
+ *
+ * `tryConsume` never throws for a lack of tokens and never blocks; the caller
+ * decides how to wait, e.g. `yield* ctx.sleep(retryAfterMs)` inside a workflow.
+ *
+ * Design credited to goldcaddy77/weft commit 740669aac (MIT license); this is
+ * an independent reimplementation.
+ *
+ * @example
+ * ```ts
+ * import { DurableRateLimiter, AtomicState, MemoryStorage } from '@lostgradient/weft';
+ * import type { TokenBucketRecord } from '@lostgradient/weft';
+ *
+ * const slot = new AtomicState<TokenBucketRecord>(new MemoryStorage(), 'state:api:bucket');
+ * const limiter = new DurableRateLimiter({ tokensPerInterval: 5, interval: 1_000 });
+ * const { consumed, retryAfterMs } = await limiter.tryConsume(slot, { now: Date.now() });
+ * if (!consumed) {
+ *   // wait `retryAfterMs` before trying again
+ * }
+ * void retryAfterMs;
+ * ```
+ */
+export class DurableRateLimiter {
+  readonly tokensPerInterval: number;
+  readonly interval: number;
+  readonly maximumTokens: number;
+
+  constructor(options: DurableRateLimiterOptions) {
+    const { tokensPerInterval, interval } = options;
+    const maximumTokens = resolveRateLimiterOptions(options);
+    this.tokensPerInterval = tokensPerInterval;
+    this.interval = interval;
+    this.maximumTokens = maximumTokens;
+  }
+
+  /** Take one token with a single CAS transaction. */
+  tryConsume<RUpdate>(
+    slot: CasSlot<TokenBucketRecord, RUpdate>,
+    options: { now: number },
+  ): ConsumeWithSlot<RUpdate> {
+    let result: TokenConsumeResult = { consumed: false, retryAfterMs: 0 };
+    const update = slot.update((current) => {
+      const reduced = reduceConsume(current, {
+        tokensPerInterval: this.tokensPerInterval,
+        interval: this.interval,
+        maximumTokens: this.maximumTokens,
+        now: options.now,
+      });
+      result = reduced.result;
+      return reduced.record;
+    });
+    return mapSlotResult(update, () => result);
+  }
+
+  /** Read the current record without mutating it. */
+  inspect<RGet>(slot: CasSlot<TokenBucketRecord, unknown, RGet>): RGet {
+    return slot.get();
+  }
+}
+
+/**
+ * Result of {@link DurableRateLimiter.tryConsume}, mirroring the slot's flavour.
+ */
+export type ConsumeWithSlot<R> =
+  R extends Promise<unknown>
+    ? Promise<TokenConsumeResult>
+    : Generator<unknown, TokenConsumeResult, unknown>;
 
 // ---------------------------------------------------------------------------
 // Slot-result mapping
