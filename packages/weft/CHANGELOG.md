@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.7] - 2026-09-29
+
+### Fixed
+
+- Generate the CLI edge-coverage workflow module in a fresh temporary directory so Bun cannot resolve a stale fixture.
+
 ## [0.27.6] - 2026-09-29
 
 ### Fixed
