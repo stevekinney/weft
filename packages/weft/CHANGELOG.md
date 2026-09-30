@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.4] - 2026-09-29
+
+### Fixed
+
+- Reacquire a workflow claim when a start-new replacement encounters a stale cached claim epoch.
+
 ## [0.27.3] - 2026-09-29
 
 ### Fixed
