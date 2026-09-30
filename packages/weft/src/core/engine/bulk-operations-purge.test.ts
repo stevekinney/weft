@@ -77,10 +77,43 @@ describe('bulk purge helpers', () => {
     internals.pendingAsyncActivities.set('token-a', { workflowId: 'purged-workflow' });
     internals.pendingAsyncActivities.set('token-b', { workflowId: 'other-workflow' });
 
-    clearPurgedWorkflowInMemoryState(internals as never, 'purged-workflow', () => {});
+    clearPurgedWorkflowInMemoryState(
+      internals as never,
+      createWorkflowState('purged-workflow', 1_000),
+      () => {},
+    );
 
     expect(internals.pendingAsyncActivities.has('token-a')).toBe(false);
     expect(internals.pendingAsyncActivities.has('token-b')).toBe(true);
+  });
+
+  it('settles the purged run result waiter with that run own terminal outcome (COR-1386)', async () => {
+    const internals = createInternals(new MemoryStorage()) as {
+      resultResolvers: Map<
+        string,
+        { promise: Promise<unknown>; resolve: (v: unknown) => void; reject: (e: unknown) => void }
+      >;
+    };
+    const make = () => Promise.withResolvers<unknown>();
+    const done = make();
+    const failed = make();
+    internals.resultResolvers.set('done-run', done);
+    internals.resultResolvers.set('failed-run', failed);
+
+    clearPurgedWorkflowInMemoryState(
+      internals as never,
+      createWorkflowState('done-run', 1_000),
+      () => {},
+    );
+    clearPurgedWorkflowInMemoryState(
+      internals as never,
+      createWorkflowState('failed-run', 1_000, { status: 'failed', error: 'boom' }),
+      () => {},
+    );
+
+    expect(await done.promise).toBe('done');
+    expect(await throwingRejectionOf(failed.promise)).toThrow('boom');
+    expect(internals.resultResolvers.size).toBe(0);
   });
 
   it('applies the smaller of the filter limit and fallback limit during purge', async () => {
