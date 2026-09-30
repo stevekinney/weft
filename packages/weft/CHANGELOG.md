@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.9] - 2026-09-30
+
+### Fixed
+
+- Fence bulk purge on the scanned workflow record so a concurrent same-ID replacement survives, and skip a scanned record already removed by another purge without counting a second deletion.
+
 ## [0.27.8] - 2026-09-29
 
 ### Fixed
