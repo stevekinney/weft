@@ -337,15 +337,16 @@ async function runBulkDeletion(
       deletableStates,
       bulkConcurrency,
       async (workflowState) => {
-        await purgeWorkflow(internals, workflowState, cleanupWaiters);
-        return workflowState.id;
+        return purgeWorkflow(internals, workflowState, cleanupWaiters);
       },
     );
     const deletionErrors: unknown[] = [];
 
     for (const deletionResult of deletionResults) {
       if (deletionResult.status === 'fulfilled') {
-        deleted += 1;
+        // `false` is a run that moved after the load (start-new replacement, retry reactivation,
+        // or a concurrent purge): skipped, not deleted.
+        if (deletionResult.value) deleted += 1;
       } else {
         deletionErrors.push(deletionResult.reason);
       }

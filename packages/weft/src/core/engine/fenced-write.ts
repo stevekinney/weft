@@ -301,8 +301,12 @@ export async function commitFencedEngineWriteAllowingPreconditionFailure(
   workflowId: string | null,
   operations: BatchOperation[],
   baseConditions: ConditionalBatchCondition[],
+  trackWrite?: FencedWriteTracker,
 ): Promise<boolean> {
-  return (await fencedCommit(internals, workflowId, operations, baseConditions)) === 'committed';
+  return (
+    (await fencedCommit(internals, workflowId, operations, baseConditions, trackWrite)) ===
+    'committed'
+  );
 }
 
 /**
