@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.12] - 2026-10-02
+
+### Documentation
+
+- Show both local worker and remote activity execution options, including generated worker URL cleanup.
+
 ## [0.27.11] - 2026-10-01
 
 ### Fixed
