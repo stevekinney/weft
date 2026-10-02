@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.11] - 2026-10-01
+
+### Fixed
+
+- Export the generated catalog client type from the package root as `CatalogOperations` while preserving the existing `WeftClient` interface.
+
 ## [0.27.10] - 2026-09-30
 
 ### Fixed
