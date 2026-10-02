@@ -230,13 +230,26 @@ export type ClientOperationTypes = ${types};
  */
 export type CatalogOperationTypes = Pick<ClientOperationTypes, CatalogOperationName>;
 
-export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
+/**
+ * A client shaped over the JSON-RPC operations in {@link CatalogOperationTypes}.
+ * This is the type returned by {@link createWeftClient}.
+ *
+ * @example
+ * \`\`\`ts
+ * import type { CatalogOperations } from '${packageName}';
+ *
+ * declare const client: CatalogOperations;
+ * const listAlerts = client['weft.alerts.list'];
+ * console.log(typeof listAlerts);
+ * \`\`\`
+ */
+export type CatalogOperations = CatalogWeftClient<CatalogOperationTypes>;
 
 /**
  * A client shaped over every operation, REST included: each operation name is
  * a method taking that operation's input and resolving to its output.
  *
- * {@link createWeftClient} returns the narrower JSON-RPC-only shape. Name this
+ * {@link createWeftClient} returns the narrower {@link CatalogOperations} shape. Name this
  * one when you build a client over a transport that also covers the REST-only
  * operations.
  *
@@ -275,7 +288,7 @@ export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
  * console.log(alerts);
  * \`\`\`
  */
-export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
+export function createWeftClient(connection: WeftClientConnection = {}): CatalogOperations {
   return createCatalogWeftClient<CatalogOperationTypes>(
     CATALOG_OPERATION_NAMES,
     httpJsonRpcTransport(connection),
