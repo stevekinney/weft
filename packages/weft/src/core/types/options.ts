@@ -557,10 +557,26 @@ export interface EngineOptions<TServices = unknown> {
  * flags that could both be set — replacing the pre-COR-152
  * local-Worker-only `activityExecution` shape.
  *
+ * Revoke a generated worker URL after the engine's worker pool is disposed.
+ *
  * @example
  * ```ts
- * import type { ActivityExecutionOptions } from '@lostgradient/weft';
- * const execution: ActivityExecutionOptions = { mode: 'remote', queue: 'payments' };
+ * import { createActivityWorkerEntryUrl, type ActivityExecutionOptions } from '@lostgradient/weft';
+ *
+ * const workerUrl = createActivityWorkerEntryUrl(new Map([['charge', (amount: unknown) => Number(amount)]]));
+ * const worker: ActivityExecutionOptions = {
+ *   mode: 'worker',
+ *   workerUrl,
+ *   poolSize: 4,
+ *   smol: true,
+ * };
+ * const remote: ActivityExecutionOptions = {
+ *   mode: 'remote',
+ *   queue: 'payments',
+ *   visibilityTimeoutMilliseconds: 30_000,
+ *   retryPolicy: { maxAttempts: 3, initialBackoff: 1_000, backoffMultiplier: 2, maxBackoff: 30_000 },
+ * };
+ * void [worker, remote];
  * ```
  */
 export type ActivityExecutionOptions =
