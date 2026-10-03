@@ -260,10 +260,12 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
   });
 
-  it('leaves the marker and re-arms a timer when a fresh running claim is presumed live', async () => {
+  it('leaves the marker and re-arms only the watchdog when a fresh running claim is presumed live', async () => {
     // A `running` claim whose `claimedAt` is recent (well under the stale threshold) is a
-    // genuine live sibling — the drive must NOT reclaim or clear it, and must re-arm a
-    // future timer so the claim is not stranded after the fired timer is deleted.
+    // genuine live sibling — the drive must NOT reclaim or clear it. It re-arms exactly the
+    // watchdog at `claimedAt` plus the stale horizon: the fired timer may have been the only
+    // one left, and that deadline is a pure function of the claim, so engines never multiply
+    // it (COR-1415).
     let clock = 1_000_000;
     const engine = new Engine({ getNow: () => clock });
     let finalizerRuns = 0;
@@ -305,21 +307,24 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     );
 
     // The live sibling's running marker is untouched, the finalizer did NOT run again,
-    // and a fresh self-heal timer was armed.
+    // and the one timer armed is the watchdog at the stale horizon (1m timeout + 30s margin).
     const markerBytes = await internals.storage.get(KEYS.teardownOwed(workflowId));
     expect(markerBytes).not.toBeNull();
     expect(decode(markerBytes!)).toMatchObject({ status: 'running' });
     expect(finalizerRuns).toBe(0);
-    expect(await teardownTimerCount(internals)).toBe(1);
+    const timerKeys: string[] = [];
+    for await (const [key] of internals.storage.scan('wf-teardown:')) timerKeys.push(key);
+    expect(timerKeys).toEqual([KEYS.teardownTimer(clock + 90_000, createTeardownTimerId(token))]);
     engine[Symbol.dispose]();
   });
 
-  // Cursor Bugbot round 4: every settle path must re-arm a self-heal timer when its CAS
-  // loses (a concurrent reclaimer overwrote our `running` bytes) — the scheduler already
-  // deleted the fired timer, so returning silently would strand the marker. We force the
-  // loss by having the finalizer overwrite the marker with a DIFFERENT running claim
-  // mid-run, then exercise each settle path: success, failure-reschedule, dead-letter, and
-  // shutdown-abort. Each must leave exactly one self-heal timer.
+  // Every settle path stays silent when its CAS loses (a concurrent reclaimer overwrote our
+  // `running` bytes): the reclaimer armed its own watchdog in the same batch and owns the
+  // marker, so a re-arm here would only multiply timers (COR-1415). We force the loss by
+  // having the finalizer overwrite the marker with a DIFFERENT running claim mid-run, then
+  // exercise each settle path: success, failure-reschedule, dead-letter, and shutdown-abort.
+  // The only timer each leaves is the watchdog this drive's own claim armed — the failed
+  // settle batch, which would have removed it, did not commit.
   const lostSettleCases = [
     { name: 'success', ok: true, startAttempts: 0, disposeBeforeRun: false },
     { name: 'failure-reschedule', ok: false, startAttempts: 0, disposeBeforeRun: false },
@@ -328,7 +333,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
   ] as const;
 
   for (const testCase of lostSettleCases) {
-    it(`re-arms a self-heal timer when the ${testCase.name} settle CAS loses its race`, async () => {
+    it(`stays silent and arms nothing new when the ${testCase.name} settle CAS loses its race`, async () => {
       const clock = 1_000_000;
       const engine = new Engine({ getNow: () => clock });
       const slug = testCase.name.replace(/\W+/g, '-');
@@ -373,9 +378,11 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
         makeCallbacks(terminalState(workflowId, workflowType)),
       );
 
-      // The settle CAS lost (the marker now holds 'other-token'), so the drive re-armed a
-      // self-heal timer rather than stranding the marker.
-      expect(await teardownTimerCount(internalsRef)).toBe(1);
+      // The settle CAS lost (the marker now holds 'other-token'): nothing was settled and the
+      // only timer is this drive's own claim watchdog (1m timeout + 30s margin after claim).
+      const timerKeys: string[] = [];
+      for await (const [key] of internalsRef.storage.scan('wf-teardown:')) timerKeys.push(key);
+      expect(timerKeys).toEqual([KEYS.teardownTimer(clock + 90_000, createTeardownTimerId(token))]);
       expect(await internalsRef.storage.get(KEYS.teardownSucceeded(workflowId))).toBeNull();
       engine[Symbol.dispose]();
     });

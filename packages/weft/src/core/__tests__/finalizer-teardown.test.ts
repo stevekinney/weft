@@ -26,6 +26,10 @@ import { decode, encode } from '../codec.ts';
 import { Engine, WorkflowTeardownPendingError } from '../engine.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
 import type { TeardownDeadLetterRecord } from '../engine/termination.ts';
+import {
+  OUTSIDE_FIRED_TIMER,
+  teardownTimerOperations,
+} from '../engine/termination/finalizer-claim.ts';
 import type { AnyActivityDefinition, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { collectTeardownEvents } from './finalizer-teardown.test-support.ts';
@@ -370,6 +374,13 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     };
     await storage.batch([
       { type: 'put', key: KEYS.teardownOwed('teardown-crash-1'), value: encode(staleRunning) },
+      // The claim CAS arms its watchdog in the same batch, so a crashed holder leaves one.
+      ...teardownTimerOperations(
+        owed.token,
+        'teardown-crash-1',
+        now + 330_000,
+        OUTSIDE_FIRED_TIMER,
+      ),
     ]);
     engine1[Symbol.dispose](); // "crash" — no in-flight drive, no leaked promise.
 
@@ -385,7 +396,7 @@ describe('engine-driven finalizer teardown (#446 Phase 2)', () => {
     await engine2.recoverAll();
 
     // First tick: the `running` claim is FRESH (claimedAt === now) — engine2 must back off,
-    // leaving the claim and re-arming, NOT reclaiming a possibly-live holder.
+    // leaving the claim (whose watchdog stays armed), NOT reclaiming a possibly-live holder.
     await engine2.scheduler.tick(now);
     expect(destroyedBy).toEqual([]);
     expect(await storage.get(KEYS.teardownOwed('teardown-crash-1'))).not.toBeNull();
