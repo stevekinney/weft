@@ -187,6 +187,96 @@ describe('buildForTarget command', () => {
     expect(command).toContain('--bytecode');
     expect(command).toContain('--format=esm');
   });
+
+  it('signs and verifies both Darwin targets on a macOS host', async () => {
+    for (const target of ['bun-darwin-arm64', 'bun-darwin-x64'] as const) {
+      const commands: string[][] = [];
+      const result = await buildForTarget(
+        target,
+        'dist',
+        (command) => {
+          commands.push(command);
+          return {
+            exited: Promise.resolve(0),
+            stdout: new Response('').body,
+            stderr: new Response('').body,
+          };
+        },
+        'darwin',
+      );
+
+      expect(result.success).toBe(true);
+      expect(commands).toHaveLength(3);
+      expect(commands[1]).toEqual(['codesign', '--force', '--sign', '-', result.outputPath]);
+      expect(commands[2]).toEqual(['codesign', '--verify', '--verbose=2', result.outputPath]);
+    }
+  });
+
+  it('does not sign non-Darwin targets or sign on a non-macOS host', async () => {
+    for (const [target, platform] of [
+      ['bun-linux-x64', 'darwin'],
+      ['bun-windows-x64', 'darwin'],
+      ['bun-darwin-arm64', 'linux'],
+    ] as const) {
+      const commands: string[][] = [];
+      const result = await buildForTarget(
+        target,
+        'dist',
+        (command) => {
+          commands.push(command);
+          return {
+            exited: Promise.resolve(0),
+            stdout: new Response('').body,
+            stderr: new Response('').body,
+          };
+        },
+        platform,
+      );
+
+      expect(result.success).toBe(true);
+      expect(commands).toHaveLength(1);
+      expect(commands[0]?.[0]).toBe('bun');
+    }
+  });
+
+  it('fails the build when signing or verification fails', async () => {
+    for (const failingCommand of ['--force', '--verify']) {
+      const result = await buildForTarget(
+        'bun-darwin-arm64',
+        'dist',
+        (command) => ({
+          exited: Promise.resolve(command.includes(failingCommand) ? 1 : 0),
+          stdout: new Response('').body,
+          stderr: new Response(command.includes(failingCommand) ? 'signature failed' : '').body,
+        }),
+        'darwin',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('signature failed');
+    }
+  });
+
+  it('fails the build when the signing process cannot start', async () => {
+    const result = await buildForTarget(
+      'bun-darwin-arm64',
+      'dist',
+      (command) => {
+        if (command[0] === 'codesign') {
+          throw new Error('codesign unavailable');
+        }
+        return {
+          exited: Promise.resolve(0),
+          stdout: new Response('').body,
+          stderr: new Response('').body,
+        };
+      },
+      'darwin',
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('codesign sign could not start: codesign unavailable');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -214,14 +304,16 @@ describe('buildForTarget (current platform)', () => {
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
     const target = `bun-${platform}-${arch}` as Parameters<typeof buildForTarget>[0];
 
-    let result = await buildForTarget(target, outdir);
-    if (!result.success) {
-      result = await buildForTarget(target, outdir);
-    }
+    const result = await buildForTarget(target, outdir);
 
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
     expect(existsSync(result.outputPath)).toBe(true);
+
+    if (process.platform === 'darwin') {
+      const signature = Bun.spawnSync(['codesign', '--verify', '--verbose=2', result.outputPath]);
+      expect(signature.exitCode).toBe(0);
+    }
   }, 60_000);
 
   it('produces an executable binary that responds to --help', async () => {
@@ -230,11 +322,7 @@ describe('buildForTarget (current platform)', () => {
     const binaryName = `weft-${platform}-${arch}${platform === 'windows' ? '.exe' : ''}`;
     const binaryPath = join(outdir, binaryName);
 
-    // Skip if binary was not produced (previous test may have been skipped)
-    if (!existsSync(binaryPath)) {
-      console.warn('Skipping --help test: binary not found');
-      return;
-    }
+    expect(existsSync(binaryPath)).toBe(true);
 
     const proc = Bun.spawn([binaryPath, '--help'], {
       stdout: 'pipe',
