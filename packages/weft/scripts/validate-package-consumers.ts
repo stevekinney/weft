@@ -8,10 +8,6 @@ const repositoryPath = join(import.meta.dir, '..');
 const packageName = '@lostgradient/weft';
 const textDecoder = new TextDecoder();
 
-type PackResult = {
-  filename: string;
-};
-
 function commandOutput(output: Uint8Array): string {
   return textDecoder.decode(output).trim();
 }
@@ -67,9 +63,9 @@ function runCommand(
   );
 }
 
-function packPackage(packDirectory: string): string {
+export function packPackage(packDirectory: string): string {
   const result = Bun.spawnSync(
-    ['npm', 'pack', '--json', '--ignore-scripts', '--pack-destination', packDirectory],
+    ['npm', 'pack', '--ignore-scripts', '--pack-destination', packDirectory, '--silent'],
     {
       cwd: repositoryPath,
       stdout: 'pipe',
@@ -84,12 +80,10 @@ function packPackage(packDirectory: string): string {
     throw new Error(`npm pack failed with exit ${result.exitCode}\n${stderr}\n${stdout}`.trim());
   }
 
-  const parsed = JSON.parse(stdout) as unknown;
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
+  if (!/^lostgradient-weft-[^\s/\\]+\.tgz$/.test(stdout)) {
     throw new Error(`npm pack returned an unexpected shape: ${stdout}`);
   }
-  const packResult = parsed[0] as PackResult;
-  const tarballPath = join(packDirectory, packResult.filename);
+  const tarballPath = join(packDirectory, stdout);
   if (!existsSync(tarballPath)) {
     throw new Error(`npm pack reported ${tarballPath}, but the tarball was not created`);
   }
@@ -720,4 +714,4 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.main) await main();
