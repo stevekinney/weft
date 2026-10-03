@@ -106,15 +106,15 @@ function countingFinalizer(name: string): { destroy: AnyActivityDefinition; dest
   return { destroy, destroyed };
 }
 
-/**
- * A finalizer whose FIRST call parks on a gate (and signals it started); later calls finish
- * immediately. `release()` lets the parked call return.
- */
 /** A structurally runnable finalizer for tests that call the claim primitives directly. */
 function noopFinalizer(name: string): RunnableFinalizer {
   return { name, execute: async () => undefined };
 }
 
+/**
+ * A finalizer whose FIRST call parks on a gate (and signals it started); later calls finish
+ * immediately. `release()` lets the parked call return.
+ */
 function parkedFinalizer(name: string): {
   destroy: AnyActivityDefinition;
   starts: () => number;
