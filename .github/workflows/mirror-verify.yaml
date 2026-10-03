@@ -47,6 +47,21 @@ jobs:
         run: |
           bun run prepack
 
+      - name: require @lostgradient/weft scripts/build-binary.test.ts
+        working-directory: packages/weft
+        run: |
+          test -f scripts/build-binary.test.ts
+
+      - name: require @lostgradient/weft scripts/build-binary-size.test.ts
+        working-directory: packages/weft
+        run: |
+          test -f scripts/build-binary-size.test.ts
+
+      - name: verify @lostgradient/weft binary payload
+        working-directory: packages/weft
+        run: |
+          bun test scripts/build-binary.test.ts scripts/build-binary-size.test.ts
+
       - name: pack @lostgradient/weft
         working-directory: packages/weft
         run: |

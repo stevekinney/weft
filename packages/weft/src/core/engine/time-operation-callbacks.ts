@@ -46,7 +46,7 @@ export type TimeOperationCallbacks = {
     fieldName: 'options.executionTimeout' | 'options.startAfter',
   ) => number;
   runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
-  runWorkflowFinalizer: (workflowId: string, timerId: string) => Promise<void>;
+  runWorkflowFinalizer: (workflowId: string, timerId: string, firedAt: number) => Promise<void>;
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;

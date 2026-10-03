@@ -7,11 +7,20 @@
  * byte-level claim transitions here keeps each module under the size budget and isolates
  * the part where CAS correctness matters most.
  *
- * Concurrency contract (see `./finalizer.ts` for the full model): a holder fenced-CAS's
+ * Concurrency contract (see `./finalizer.ts` for the full model): a holder CAS's
  * `owed → running` (stamping `claimedAt`) before running the finalizer, then settle-CAS's
  * the EXACT `running` bytes it wrote when clearing, rescheduling, or dead-lettering — so a
  * concurrent reclaimer can never clobber a fresher claim. Liveness is decided purely by
  * the clock via {@link teardownStaleThresholdMs}.
+ *
+ * Every write here is engine-scoped (`workflowId: null` to the fenced commit): the marker's
+ * byte-for-byte CAS is the sole arbiter between engines, in every ownership mode. A
+ * definition-level finalizer runs only after a `cancelled`/`timed-out` terminal, by which
+ * time the workflow's own `wf-owner-epoch` claim has been released or rotated away, so
+ * fencing the marker on it would fail closed forever (COR-1415). The post-terminal purge and
+ * checkpoint-prune writers and the external-terminal commit are engine-scoped the same way;
+ * under `ownership: 'lease'` the global lease epoch condition still applies, and under
+ * `'none'` there is no epoch at all.
  *
  * @module core/engine/termination/finalizer-claim
  */
@@ -154,16 +163,41 @@ export interface TeardownDeadLetterRecord {
  */
 export const LEGACY_DEAD_LETTER_HISTORY_TOKEN = 'legacy';
 
-/** Build the operations that arm a fresh `wf-teardown:` timer at `fireAt` (same token). */
+/**
+ * The `firedAt` for a teardown timer write made OUTSIDE a fired teardown-timer callback (a
+ * test fixture or a direct primitive call): no timer has fired, so nothing constrains the key.
+ */
+export const OUTSIDE_FIRED_TIMER = Number.NEGATIVE_INFINITY;
+
+/**
+ * The fire time a timer written from inside a fired teardown-timer callback must use. The
+ * scheduler deletes the fired key once the callback returns, and a timer key embeds its
+ * `fireAt` and token, so a write that lands on the fired key (same token, same `fireAt`) is
+ * erased with it and strands the marker. A `desiredFireAt` strictly after `firedAt` is kept
+ * as is; anything else moves one self-heal interval past the fired key, a pure function of
+ * (desired, fired key) so engines still agree on the key.
+ */
+export function fireAtAfterFired(desiredFireAt: number, firedAt: number): number {
+  return desiredFireAt > firedAt ? desiredFireAt : firedAt + TEARDOWN_SELF_HEAL_DELAY_MS;
+}
+
+/**
+ * Build the operations that arm a `wf-teardown:` timer. This is the ONLY place a teardown
+ * timer is built for a write, and `firedAt` is required, so a callback-originated write cannot
+ * omit the fired key: the timer lands at `desiredFireAt`, or strictly after `firedAt` when
+ * `desiredFireAt` would not be (see {@link fireAtAfterFired}). Pass {@link OUTSIDE_FIRED_TIMER}
+ * only outside a fired-timer callback.
+ */
 export function teardownTimerOperations(
   token: string,
   workflowId: string,
-  fireAt: number,
+  desiredFireAt: number,
+  firedAt: number,
 ): BatchOperation[] {
   return buildTimerBatchOperations({
     id: createTeardownTimerId(token),
     workflowId,
-    fireAt,
+    fireAt: fireAtAfterFired(desiredFireAt, firedAt),
     kind: 'teardown',
   });
 }
@@ -181,30 +215,97 @@ export function encodeRunningClaim(attempts: number, token: string, claimedAt: n
 }
 
 /**
- * Re-arm a future `wf-teardown:` timer for a non-settling drive exit (lost CAS, a
- * presumed-live `running` claim, a shutdown abort, or a leave-the-marker case), so the
- * claim is not stranded after the scheduler deletes the fired timer. The marker bytes
- * are left untouched — only the timer is (re)written. Fenced, best-effort: a deposed
- * engine that loses the fence simply yields to the new owner, whose own timer drives it.
+ * The next self-heal slot at least a full `delayMs` after `now`: the first multiple of
+ * `delayMs` at or past `now + delayMs`. Quantizing the fire time makes a re-arm IDEMPOTENT
+ * across engines. A timer key embeds `fireAt`, so engines that each re-arm at
+ * `getNow() + delay` write distinct keys for one logical self-heal and multiply the timers
+ * every interval; engines that quantize land on the same key. Starting from `now + delayMs`
+ * (not `now`) keeps the delay contract: a re-arm made 1ms before a slot boundary waits the
+ * next full slot rather than firing a millisecond later.
+ */
+function nextSelfHealSlot(now: number, delayMs: number): number {
+  return Math.ceil((now + delayMs) / delayMs) * delayMs;
+}
+
+/**
+ * Write a `wf-teardown:` timer for `token` at exactly `fireAt`, engine-scoped (`null`), never
+ * fenced on the workflow's claim: this write only arms a timer — a scheduling hint that cannot
+ * change the marker or any workflow state. A stale or zombie timer is harmless: the drive
+ * re-validates the marker's token and bytes on every fire. Best-effort: a deposed engine that
+ * loses the fence simply yields to the new owner, whose own timer drives it.
+ */
+async function writeTeardownTimer(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string,
+  desiredFireAt: number,
+  firedAt: number,
+): Promise<void> {
+  try {
+    await commitFencedEngineWrite(
+      internals,
+      null,
+      teardownTimerOperations(token, workflowId, desiredFireAt, firedAt),
+      [],
+      () => new Error('teardown timer re-arm lost the lease fence'),
+    );
+  } catch {
+    // Deposed or lost-race: the current owner re-drives via its own timer.
+  }
+}
+
+/**
+ * Re-arm a future `wf-teardown:` timer for a non-settling drive exit that has NO winner to
+ * own the next timer (a missing registration, a failed corrupt-marker clear, or an
+ * unexpected error), so the marker is not stranded after the scheduler deletes the fired
+ * timer. A lost claim or settle CAS is deliberately NOT such an exit: the CAS winner armed
+ * its own timer in the same batch, so a loser stays silent. The marker bytes are left
+ * untouched — only the timer is (re)written, at a slot shared by every engine (see
+ * {@link nextSelfHealSlot}). `firedAt` is the fired timer's own `fireAt`: the slot is always
+ * strictly after it (measured from the later of the clock and `firedAt`), so the post-callback delete
+ * of the fired key can never erase the re-arm. Pass {@link OUTSIDE_FIRED_TIMER} only outside a fired-timer callback.
  */
 export async function rearmTeardownTimer(
   internals: EngineInternals,
   workflowId: string,
   token: string,
   delayMs: number,
+  firedAt: number,
 ): Promise<void> {
-  const fireAt = internals.options.getNow() + delayMs;
-  try {
-    await commitFencedEngineWrite(
-      internals,
-      workflowId,
-      teardownTimerOperations(token, workflowId, fireAt),
-      [],
-      () => new Error('teardown self-heal re-arm lost the lease fence'),
-    );
-  } catch {
-    // Deposed or lost-race: the current owner re-drives via its own timer.
-  }
+  await writeTeardownTimer(
+    internals,
+    workflowId,
+    token,
+    nextSelfHealSlot(Math.max(internals.options.getNow(), firedAt), delayMs),
+    firedAt,
+  );
+}
+
+/**
+ * The fire time of the watchdog a drive re-arms when it yields to a `running` claim it judged
+ * fresh: the claim CAS armed one watchdog, and the yield consumed it (the scheduler deletes
+ * the fired key), which happens whenever this engine's horizon or clock disagrees with the
+ * claimer's. The target is `claimedAt` plus THIS drive's horizon, a key every engine computes
+ * identically so concurrent yields collapse onto one timer; the write moves it past the fired
+ * key when needed (see {@link fireAtAfterFired}).
+ */
+export function liveClaimWatchdogFireAt(
+  claim: TeardownClaim,
+  finalizer: RunnableFinalizer,
+  firedAt: number,
+): number {
+  return (claim.claimedAt ?? firedAt) + teardownStaleThresholdMs(finalizer);
+}
+
+/** Re-arm the watchdog for a live `running` claim this drive yielded to (see above). */
+export async function rearmLiveClaimWatchdog(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string,
+  watchdogFireAt: number,
+  firedAt: number,
+): Promise<void> {
+  await writeTeardownTimer(internals, workflowId, token, watchdogFireAt, firedAt);
 }
 
 /**
@@ -224,7 +325,7 @@ export async function clearTeardownMarker(
   try {
     return await commitFencedEngineWriteAllowingPreconditionFailure(
       internals,
-      workflowId,
+      null,
       [{ type: 'delete', key: KEYS.teardownOwed(workflowId) }],
       [{ key: KEYS.teardownOwed(workflowId), expectedValue: expectedBytes }],
     );
@@ -235,10 +336,34 @@ export async function clearTeardownMarker(
 }
 
 /**
- * Atomically claim the marker: CAS `owed → running` only if it is byte-for-byte the
- * `expectedBytes` we read (so concurrent reclaimers can't both win), fenced on the lease
- * epoch. Returns the `running` bytes we wrote on success (needed as the settle CAS
- * precondition), or `null` on a lost CAS.
+ * A claim on the marker: the exact bytes a settle must still find (`bytes`) and the
+ * operations that remove the watchdog timer the claim armed (`watchdogCleanup`; empty for a
+ * marker this drive did not claim). A settle appends the cleanup so a finished attempt leaves
+ * no timer behind.
+ */
+export interface TeardownHold {
+  bytes: Uint8Array;
+  watchdogCleanup: BatchOperation[];
+}
+
+/** The hold for a marker this drive read but did not claim (`owed` bytes, no watchdog). */
+export function observedMarkerHold(bytes: Uint8Array): TeardownHold {
+  return { bytes, watchdogCleanup: [] };
+}
+
+/** A fresh claim token: ties a marker to the one timer allowed to drive it. */
+export function newTeardownToken(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Atomically claim the marker: CAS `owed → running` (or reclaim a stale `running`) only if
+ * it is byte-for-byte the `expectedBytes` we read, so concurrent claimers cannot both win.
+ * The SAME batch arms a watchdog timer at `claimedAt` plus the stale-running horizon: a
+ * winner that dies mid-finalizer is then reclaimed by the watchdog, and a loser never needs
+ * a timer of its own; `firedAt` is the fired timer's `fireAt` (see {@link teardownTimerOperations}).
+ * Returns the {@link TeardownHold} on success (the settle CAS
+ * precondition and the watchdog cleanup), or `null` on a lost CAS.
  */
 export async function claimTeardownMarker(
   internals: EngineInternals,
@@ -246,41 +371,90 @@ export async function claimTeardownMarker(
   expectedBytes: Uint8Array,
   attempts: number,
   token: string,
-): Promise<Uint8Array | null> {
-  const runningBytes = encodeRunningClaim(attempts, token, internals.options.getNow());
+  finalizer: RunnableFinalizer,
+  firedAt: number,
+): Promise<TeardownHold | null> {
+  const claimedAt = internals.options.getNow();
+  const runningBytes = encodeRunningClaim(attempts, token, claimedAt);
+  // The claim reuses the fired timer's token: a watchdog on the fired key would be erased by
+  // the scheduler's post-callback delete.
+  const watchdogOperations = teardownTimerOperations(
+    token,
+    workflowId,
+    claimedAt + teardownStaleThresholdMs(finalizer),
+    firedAt,
+  );
   const claimed = await commitFencedEngineWriteAllowingPreconditionFailure(
     internals,
-    workflowId,
-    [{ type: 'put', key: KEYS.teardownOwed(workflowId), value: runningBytes }],
+    null,
+    [
+      { type: 'put', key: KEYS.teardownOwed(workflowId), value: runningBytes },
+      ...watchdogOperations,
+    ],
     [{ key: KEYS.teardownOwed(workflowId), expectedValue: expectedBytes }],
   );
-  return claimed ? runningBytes : null;
+  if (!claimed) return null;
+  return {
+    bytes: runningBytes,
+    watchdogCleanup: watchdogOperations.map((operation) => ({
+      type: 'delete',
+      key: operation.key,
+    })),
+  };
 }
 
 /**
  * Commit a settle batch conditioned on the `teardownOwed` marker still equalling the
- * exact `running` bytes this drive wrote (Codex MF2). If a reclaimer overwrote the
- * marker first, the CAS fails and this returns `false` WITHOUT committing — the caller
- * must then skip dispatching any teardown event. A deposition still hard-halts (the
- * fenced helper throws), which the drive's outer try/catch routes to a cleanup error.
+ * exact bytes of `hold` (Codex MF2), together with removal of the watchdog the claim armed.
+ * If a reclaimer overwrote the marker first, the CAS fails and this returns `false` WITHOUT
+ * committing — the caller must then skip dispatching any teardown event, and stays silent:
+ * the reclaimer armed its own watchdog and owns the next step.
  */
 export async function settleOnRunningClaim(
   internals: EngineInternals,
   workflowId: string,
-  runningBytes: Uint8Array,
+  hold: TeardownHold,
   operations: BatchOperation[],
 ): Promise<boolean> {
-  return commitFencedEngineWriteAllowingPreconditionFailure(internals, workflowId, operations, [
-    { key: KEYS.teardownOwed(workflowId), expectedValue: runningBytes },
+  return commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
+    null,
+    [...operations, ...hold.watchdogCleanup],
+    [{ key: KEYS.teardownOwed(workflowId), expectedValue: hold.bytes }],
+  );
+}
+
+/**
+ * Settle a drive whose finalizer attempt was aborted by engine disposal: put the marker back
+ * to `owed` at the unchanged `attempts` under a NEW token (so no earlier timer can start the
+ * retry) and arm a near-future timer for it. The CAS is the same engine-scoped
+ * {@link settleOnRunningClaim} as every other settle, so it needs no per-workflow claim and
+ * lands under `workflow-lease` and `none` (both tested). Under global `ownership: 'lease'`
+ * disposal may release the lease first, in which case the settle cannot land: the marker stays
+ * `running` and the watchdog the claim armed reclaims it once the stale horizon passes. A
+ * lost CAS means a reclaimer owns the marker and its watchdog; nothing is re-armed.
+ */
+export async function reassertOwedAfterShutdown(
+  internals: EngineInternals,
+  workflowId: string,
+  hold: TeardownHold,
+  attempts: number,
+  firedAt: number,
+): Promise<void> {
+  const token = newTeardownToken();
+  const fireAt = internals.options.getNow() + TEARDOWN_SELF_HEAL_DELAY_MS;
+  await settleOnRunningClaim(internals, workflowId, hold, [
+    { type: 'put', key: KEYS.teardownOwed(workflowId), value: encodeOwedClaim(attempts, token) },
+    ...teardownTimerOperations(token, workflowId, fireAt, firedAt),
   ]);
 }
 
 /**
  * Write the durable dead-letter record and clear the teardown + finalizer-state keys,
- * conditioned on the marker still being byte-for-byte `expectedBytes`. Used both at the
- * retry horizon (`expectedBytes` = the `running` bytes this drive wrote) and when the
- * recorded resource state vanished before any claim (`expectedBytes` = the `owed` bytes
- * this drive read). Conditioning on `expectedBytes` in BOTH cases prevents a stale drive
+ * conditioned on the marker still being byte-for-byte `expected.bytes`. Used both at the
+ * retry horizon (the `running` hold this drive claimed) and when the recorded resource state
+ * vanished before any claim (the `owed` bytes this drive read, via {@link observedMarkerHold}).
+ * Conditioning on the expected bytes in BOTH cases prevents a stale drive
  * from dead-lettering after a concurrent drive already settled the marker — which would
  * falsely report a leak after a successful teardown. Returns whether the durable write
  * committed; the caller dispatches the dead-lettered event only when it did.
@@ -290,7 +464,7 @@ export async function deadLetterTeardown(
   workflowId: string,
   workflowType: string,
   attempts: number,
-  expectedBytes: Uint8Array,
+  expected: TeardownHold,
   details: { lastError: string; finalizerInput: unknown },
   workflowExecutionToken?: string,
   revision?: string,
@@ -307,7 +481,7 @@ export async function deadLetterTeardown(
     ...(revision === undefined ? {} : { revision }),
   };
   const deadLetterBytes = encode(deadLetter);
-  return settleOnRunningClaim(internals, workflowId, expectedBytes, [
+  return settleOnRunningClaim(internals, workflowId, expected, [
     { type: 'delete', key: KEYS.teardownOwed(workflowId) },
     { type: 'delete', key: KEYS.finalizerState(workflowId) },
     { type: 'put', key: KEYS.teardownDeadLetter(workflowId), value: deadLetterBytes },

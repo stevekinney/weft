@@ -201,13 +201,14 @@ export function createStreamOperationCallbacks<
 export function createTimeOperationCallbacks<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
 ): TimeOperationCallbacks {
+  const termination = createTerminationCallbacks(engine);
   return {
     completeOperation: (workflowId, value, operationId, workflowExecutionToken) =>
       completeOperationForEngine(engine, workflowId, value, operationId, workflowExecutionToken),
     dispatchEvent: (event) => engine.dispatchEvent(event),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     failWorkflow: (workflowId, error) =>
-      failWorkflow(getInternals(engine), workflowId, error, createTerminationCallbacks(engine)),
+      failWorkflow(getInternals(engine), workflowId, error, termination),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
     beginWorkflowExecution: (
@@ -253,19 +254,9 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
         createLifecycleCallbacks(engine),
       ),
     runDeferredTerminalCleanup: (workflowId, timerId) =>
-      runDeferredTerminalCleanup(
-        getInternals(engine),
-        workflowId,
-        timerId,
-        createTerminationCallbacks(engine),
-      ),
-    runWorkflowFinalizer: (workflowId, timerId) =>
-      runWorkflowFinalizer(
-        getInternals(engine),
-        workflowId,
-        timerId,
-        createTerminationCallbacks(engine),
-      ),
+      runDeferredTerminalCleanup(getInternals(engine), workflowId, timerId, termination),
+    runWorkflowFinalizer: (workflowId, timerId, firedAt) =>
+      runWorkflowFinalizer(getInternals(engine), workflowId, timerId, termination, firedAt),
     handleScheduleTimer: (entry) => handleScheduleTimerForEngine(engine, entry),
     timeout: (workflowId) => engine.timeout(workflowId),
     handleCleanupError: (source, error, workflowId) =>

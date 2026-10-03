@@ -427,7 +427,7 @@ export async function handleTimerFired(
   }
 
   if (entry.kind === 'teardown') {
-    await callbacks.runWorkflowFinalizer(entry.workflowId, entry.id);
+    await callbacks.runWorkflowFinalizer(entry.workflowId, entry.id, entry.fireAt);
     return;
   }
 
