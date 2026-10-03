@@ -138,6 +138,7 @@ export async function buildForTarget(
   outdir: string,
   spawnBuildProcess: BuildProcessSpawner = (command, options) => Bun.spawn(command, options),
   hostPlatform: NodeJS.Platform = process.platform,
+  entrypoint = './src/cli-main.ts',
 ): Promise<BuildResult> {
   const outputName = outputNameForTarget(bunTarget);
   const outputPath = join(outdir, outputName);
@@ -165,7 +166,7 @@ export async function buildForTarget(
         outputPath,
         '--sourcemap=external',
         '--minify',
-        './src/cli-main.ts',
+        entrypoint,
       ],
       {
         stdout: 'pipe',
