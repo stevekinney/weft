@@ -1,6 +1,6 @@
 {
   "name": "@lostgradient/weft",
-  "version": "0.27.13",
+  "version": "0.27.14",
   "description": "A Bun-native durable execution engine with pluggable key-value storage.",
   "keywords": [
     "bun",

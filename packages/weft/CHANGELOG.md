@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.14] - 2026-10-03
+
+### Fixed
+
+- Run definition-level finalizers after cancellation when the workflow lease owns the run, so a cancelled workflow's finalizers still execute.
+
+### Documentation
+
+- Clarify that standalone binaries are built from a source checkout, with macOS targets built on a Mac so they are signed and verified.
+
 ## [0.27.13] - 2026-10-03
 
 ### Fixed
