@@ -186,7 +186,18 @@ export async function buildForTarget(
 
     if (hostPlatform === 'darwin' && bunTarget.startsWith('bun-darwin-')) {
       for (const [stage, command] of [
-        ['sign', ['codesign', '--force', '--sign', '-', outputPath]],
+        [
+          'sign',
+          [
+            'codesign',
+            '--force',
+            '--sign',
+            '-',
+            '--entitlements',
+            join(import.meta.dir, 'macos-entitlements.plist'),
+            outputPath,
+          ],
+        ],
         ['verify', ['codesign', '--verify', '--verbose=2', outputPath]],
       ] as const) {
         let signingProcess: BuildProcess;

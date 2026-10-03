@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -207,8 +207,29 @@ describe('buildForTarget command', () => {
 
       expect(result.success).toBe(true);
       expect(commands).toHaveLength(3);
-      expect(commands[1]).toEqual(['codesign', '--force', '--sign', '-', result.outputPath]);
+      expect(commands[1]).toEqual([
+        'codesign',
+        '--force',
+        '--sign',
+        '-',
+        '--entitlements',
+        join(import.meta.dir, 'macos-entitlements.plist'),
+        result.outputPath,
+      ]);
       expect(commands[2]).toEqual(['codesign', '--verify', '--verbose=2', result.outputPath]);
+    }
+  });
+
+  it('signs with the JavaScript engine entitlements recommended by Bun', () => {
+    const entitlements = readFileSync(join(import.meta.dir, 'macos-entitlements.plist'), 'utf8');
+    for (const entitlement of [
+      'allow-jit',
+      'allow-unsigned-executable-memory',
+      'disable-executable-page-protection',
+      'allow-dyld-environment-variables',
+      'disable-library-validation',
+    ]) {
+      expect(entitlements).toContain(`<key>com.apple.security.cs.${entitlement}</key>\n  <true/>`);
     }
   });
 
@@ -335,6 +356,22 @@ describe('buildForTarget (current platform)', () => {
     if (process.platform === 'darwin') {
       const signature = Bun.spawnSync(['codesign', '--verify', '--verbose=2', result.outputPath]);
       expect(signature.exitCode).toBe(0);
+      const embedded = Bun.spawnSync(['codesign', '-d', '--entitlements', '-', result.outputPath]);
+      expect(embedded.exitCode).toBe(0);
+      const signedEntitlements = new TextDecoder().decode(embedded.stdout);
+      for (const entitlement of [
+        'allow-jit',
+        'allow-unsigned-executable-memory',
+        'disable-executable-page-protection',
+        'allow-dyld-environment-variables',
+        'disable-library-validation',
+      ]) {
+        expect(signedEntitlements).toMatch(
+          new RegExp(
+            `\\[Key\\] com\\.apple\\.security\\.cs\\.${entitlement}\\s+\\[Value\\]\\s+\\[Bool\\] true`,
+          ),
+        );
+      }
     }
   }, 60_000);
 
