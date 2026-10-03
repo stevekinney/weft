@@ -60,3 +60,18 @@ export function recordFinalizerState(
     operations: [{ type: 'put', key: KEYS.finalizerState(workflowId), value: encode(value) }],
   });
 }
+
+/**
+ * Bind {@link recordFinalizerState} to one workflow id for a `Context`'s
+ * `recordFinalizerState` option. Every engine-built context that can run
+ * workflow code — fresh inline start, crash-recovery resume, and
+ * launch-from-checkpoint (fork) — must wire this, because `ctx.setFinalizerState`
+ * throws when the option is absent and a replayed workflow re-executes its
+ * `setFinalizerState` call from the top (COR-1413).
+ */
+export function createFinalizerStateRecorder(
+  internals: EngineInternals,
+  workflowId: string,
+): (value: unknown) => void {
+  return (value) => recordFinalizerState(internals, workflowId, value);
+}

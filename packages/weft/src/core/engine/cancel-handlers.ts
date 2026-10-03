@@ -1,3 +1,5 @@
+import type { ContextOptions } from '../context/types.ts';
+import { createFinalizerStateRecorder } from './finalizer-state.ts';
 import type { EngineInternals } from './internals.ts';
 
 export type CancelHandler = () => Promise<void> | void;
@@ -35,6 +37,23 @@ export function createCancelHandlerRegistration(
   workflowId: string,
 ): (handler: CancelHandler) => () => void {
   return (handler) => registerCancelHandler(internals, workflowId, handler);
+}
+
+/**
+ * The per-workflow callbacks every engine-built `Context` needs from the engine:
+ * cancel-handler registration and finalizer-state recording. Recovery/resume and
+ * checkpoint-launch contexts spread this so they cannot drift from the inline start
+ * path — a replayed workflow re-executes `ctx.setFinalizerState`, which throws when
+ * `recordFinalizerState` is absent (COR-1413).
+ */
+export function createWorkflowScopedContextCallbacks(
+  internals: EngineInternals,
+  workflowId: string,
+): Pick<ContextOptions, 'registerCancelHandler' | 'recordFinalizerState'> {
+  return {
+    registerCancelHandler: createCancelHandlerRegistration(internals, workflowId),
+    recordFinalizerState: createFinalizerStateRecorder(internals, workflowId),
+  };
 }
 
 export function resetCancelHandlers(internals: EngineInternals, workflowId: string): void {
