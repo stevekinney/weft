@@ -12,7 +12,7 @@ import { serializeCheckpoint } from '../../checkpoint.ts';
 import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
-import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
+import { createWorkflowScopedContextCallbacks, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -50,7 +50,7 @@ function launchInlineWorkflowFromCheckpoint(
     executionStateOwnerId: state.executionStateOwnerId ?? workflowId,
     accumulatedResults,
     searchAttributes: checkpoint.searchAttributes,
-    registerCancelHandler: createCancelHandlerRegistration(internals, workflowId),
+    ...createWorkflowScopedContextCallbacks(internals, workflowId),
     ...(registration.searchAttributes && {
       searchAttributeSchema: registration.searchAttributes,
     }),

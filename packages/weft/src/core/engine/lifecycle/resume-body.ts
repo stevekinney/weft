@@ -19,7 +19,7 @@ import { WorkflowResumedEvent } from '../../events.ts';
 import { buildTimerBatchOperations } from '../../scheduler.ts';
 import type { Checkpoint, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
-import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
+import { createWorkflowScopedContextCallbacks, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
@@ -226,7 +226,7 @@ async function relaunchInlineWorkflowAfterResume(
     accumulatedResults,
     locals: resumeCheckpoint.locals,
     searchAttributes: resumeCheckpoint.searchAttributes,
-    registerCancelHandler: createCancelHandlerRegistration(internals, workflowId),
+    ...createWorkflowScopedContextCallbacks(internals, workflowId),
     ...(registration.searchAttributes && {
       searchAttributeSchema: registration.searchAttributes,
     }),
