@@ -137,11 +137,21 @@ export async function buildForTarget(
   bunTarget: BunTarget,
   outdir: string,
   spawnBuildProcess: BuildProcessSpawner = (command, options) => Bun.spawn(command, options),
+  hostPlatform: NodeJS.Platform = process.platform,
 ): Promise<BuildResult> {
   const outputName = outputNameForTarget(bunTarget);
   const outputPath = join(outdir, outputName);
 
   try {
+    if (bunTarget.startsWith('bun-darwin-') && hostPlatform !== 'darwin') {
+      return {
+        target: bunTarget,
+        outputPath,
+        success: false,
+        error: 'Darwin binaries require a macOS host for code signing',
+      };
+    }
+
     const proc = spawnBuildProcess(
       [
         'bun',
@@ -172,6 +182,53 @@ export async function buildForTarget(
 
     if (exitCode !== 0) {
       return { target: bunTarget, outputPath, success: false, error: stderr.trim() };
+    }
+
+    if (hostPlatform === 'darwin' && bunTarget.startsWith('bun-darwin-')) {
+      for (const [stage, command] of [
+        [
+          'sign',
+          [
+            'codesign',
+            '--force',
+            '--sign',
+            '-',
+            '--entitlements',
+            join(import.meta.dir, 'macos-entitlements.plist'),
+            outputPath,
+          ],
+        ],
+        ['verify', ['codesign', '--verify', '--verbose=2', outputPath]],
+      ] as const) {
+        let signingProcess: BuildProcess;
+        try {
+          signingProcess = spawnBuildProcess([...command], {
+            stdout: 'pipe',
+            stderr: 'pipe',
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            target: bunTarget,
+            outputPath,
+            success: false,
+            error: `codesign ${stage} could not start: ${message}`,
+          };
+        }
+        const [signingExitCode, , signingStderr] = await Promise.all([
+          signingProcess.exited,
+          new Response(signingProcess.stdout).text(),
+          new Response(signingProcess.stderr).text(),
+        ]);
+        if (signingExitCode !== 0) {
+          return {
+            target: bunTarget,
+            outputPath,
+            success: false,
+            error: `codesign ${stage} failed (exit ${signingExitCode}): ${signingStderr.trim()}`,
+          };
+        }
+      }
     }
 
     return { target: bunTarget, outputPath, success: true };

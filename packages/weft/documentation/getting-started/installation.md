@@ -45,7 +45,7 @@ For larger deployments, build a standalone binary with the Weft engine, server, 
 bun run build:binary
 ```
 
-The build script (`scripts/build-binary-main.ts`) bundles the Bun runtime, the Weft engine, and your workflows. For cross-compilation targets, see the script's Bun `--target` options.
+The build script (`scripts/build-binary-main.ts`) bundles the Bun runtime, the Weft engine, and your workflows. Use its `--target` option for cross-compilation. Build macOS targets on a Mac so the script can sign and verify them; a non-macOS host rejects Darwin targets instead of reporting an unusable binary as successful.
 
 ## Supported Platforms
 
@@ -57,12 +57,14 @@ Weft produces standalone binaries for these targets:
 - `linux-arm64`
 - `windows-x64`
 
-Cross-compilation works from any OS. A single CI pipeline can produce all five binaries:
+Build the two macOS targets on a macOS runner. The Linux and Windows targets can be cross-compiled from any host:
 
 ```bash
-bun build --compile --target=bun-darwin-arm64 src/cli-main.ts --outfile dist/weft-darwin-arm64
-bun build --compile --target=bun-linux-x64    src/cli-main.ts --outfile dist/weft-linux-x64
-bun build --compile --target=bun-windows-x64  src/cli-main.ts --outfile dist/weft-windows-x64.exe
+bun run build:binary --target darwin-arm64
+bun run build:binary --target darwin-x64
+bun run build:binary --target linux-x64
+bun run build:binary --target linux-arm64
+bun run build:binary --target windows-x64
 ```
 
 ## What Ships Inside the Binary
