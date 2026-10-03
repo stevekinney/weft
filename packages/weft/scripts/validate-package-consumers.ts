@@ -65,7 +65,15 @@ function runCommand(
 
 export function packPackage(packDirectory: string): string {
   const result = Bun.spawnSync(
-    ['npm', 'pack', '--ignore-scripts', '--pack-destination', packDirectory, '--silent'],
+    [
+      'npm',
+      'pack',
+      '--ignore-scripts',
+      '--pack-destination',
+      packDirectory,
+      '--silent',
+      '--json=false',
+    ],
     {
       cwd: repositoryPath,
       stdout: 'pipe',

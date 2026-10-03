@@ -19,7 +19,15 @@ describe('packPackage', () => {
     try {
       expect(packPackage(directory)).toBe(join(directory, filename));
       expect(spawn).toHaveBeenCalledWith(
-        ['npm', 'pack', '--ignore-scripts', '--pack-destination', directory, '--silent'],
+        [
+          'npm',
+          'pack',
+          '--ignore-scripts',
+          '--pack-destination',
+          directory,
+          '--silent',
+          '--json=false',
+        ],
         expect.objectContaining({ stdout: 'pipe', stderr: 'pipe' }),
       );
     } finally {
