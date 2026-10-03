@@ -212,11 +212,10 @@ describe('buildForTarget command', () => {
     }
   });
 
-  it('does not sign non-Darwin targets or sign on a non-macOS host', async () => {
+  it('does not sign non-Darwin targets', async () => {
     for (const [target, platform] of [
       ['bun-linux-x64', 'darwin'],
       ['bun-windows-x64', 'darwin'],
-      ['bun-darwin-arm64', 'linux'],
     ] as const) {
       const commands: string[][] = [];
       const result = await buildForTarget(
@@ -236,6 +235,29 @@ describe('buildForTarget command', () => {
       expect(result.success).toBe(true);
       expect(commands).toHaveLength(1);
       expect(commands[0]?.[0]).toBe('bun');
+    }
+  });
+
+  it('rejects Darwin cross-builds on non-macOS hosts before compiling', async () => {
+    for (const target of ['bun-darwin-arm64', 'bun-darwin-x64'] as const) {
+      const commands: string[][] = [];
+      const result = await buildForTarget(
+        target,
+        'dist',
+        (command) => {
+          commands.push(command);
+          return {
+            exited: Promise.resolve(0),
+            stdout: new Response('').body,
+            stderr: new Response('').body,
+          };
+        },
+        'linux',
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('macOS host');
+      expect(commands).toHaveLength(0);
     }
   });
 

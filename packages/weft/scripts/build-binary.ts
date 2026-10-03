@@ -143,6 +143,15 @@ export async function buildForTarget(
   const outputPath = join(outdir, outputName);
 
   try {
+    if (bunTarget.startsWith('bun-darwin-') && hostPlatform !== 'darwin') {
+      return {
+        target: bunTarget,
+        outputPath,
+        success: false,
+        error: 'Darwin binaries require a macOS host for code signing',
+      };
+    }
+
     const proc = spawnBuildProcess(
       [
         'bun',

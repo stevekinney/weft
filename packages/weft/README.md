@@ -34,7 +34,7 @@ Weft is a ground-up rethink: what would durable execution look like if you desig
 
 - **Web-native everywhere.** Every API comes from web standards: `fetch`, `WebSocket`, `Worker`, `BroadcastChannel`, `structuredClone`, `AbortController`, `crypto.randomUUID()`, `ReadableStream`. If the browser has it, we use it.
 - **Bun-native on the server.** `Bun.serve()`, `Bun.SQL`, `Bun.build()`, `bun:test`. The full Bun platform, not just "Node.js but faster."
-- **Single binary, every OS.** `bun build --compile` produces standalone executables for darwin-arm64, darwin-x64, linux-x64, linux-arm64, and windows-x64. One CI pipeline, six binaries, zero runtime dependencies.
+- **Single binary, every OS.** `bun run build:binary` produces standalone executables for darwin-arm64, darwin-x64, linux-x64, linux-arm64, and windows-x64. Build the macOS targets on a Mac so the outputs are signed and verified; Linux and Windows targets can be cross-compiled. Five binaries, zero runtime dependencies.
 - **Runs in the browser.** The core engine (minus the server shell) runs in Web Workers with a Service Worker as its persistence backbone. Same workflow code, different environment.
 - **Human-in-the-loop.** Workflows can pause at any checkpoint and surface a decision to a human reviewer via `ctx.review()`. The workflow resumes with the reviewer's decision—approved or rejected—without any special infrastructure.
 

@@ -4,17 +4,17 @@
 
 ## Building for every platform
 
-A single CI pipeline produces binaries for five targets.
+The build script produces binaries for five targets. Run the Darwin targets on macOS so they receive valid signatures; Linux and Windows targets can run on other hosts.
 
 ```bash
-bun build --compile --target=bun-darwin-arm64  src/cli-main.ts --outfile dist/weft-darwin-arm64
-bun build --compile --target=bun-darwin-x64    src/cli-main.ts --outfile dist/weft-darwin-x64
-bun build --compile --target=bun-linux-x64     src/cli-main.ts --outfile dist/weft-linux-x64
-bun build --compile --target=bun-linux-arm64   src/cli-main.ts --outfile dist/weft-linux-arm64
-bun build --compile --target=bun-windows-x64   src/cli-main.ts --outfile dist/weft-windows-x64.exe
+bun run build:binary --target darwin-arm64
+bun run build:binary --target darwin-x64
+bun run build:binary --target linux-x64
+bun run build:binary --target linux-arm64
+bun run build:binary --target windows-x64
 ```
 
-Cross-compilation works from any OS. Build all five on your Mac, on a Linux CI runner, wherever.
+On a Mac, `bun run build:binary --all` can build all five. On Linux, request only Linux or Windows targets; a Darwin target fails before compilation because the output cannot be signed there.
 
 ## What ships inside
 
