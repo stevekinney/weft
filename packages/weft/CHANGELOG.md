@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Discard signals, async-activity completions, condition waiters and timers for a generation the engine abandoned after a lost checkpoint race, in every ownership mode, and keep its durable timers in storage for the winning engine.
 - Refuse a stale terminal failure write over a generation the engine abandoned, over a run launched again since, or after the engine is disposed.
 - Release every execution attempt when the engine is disposed, so a retained engine or handle no longer holds workflow ids and execution tokens.
-- Install a run's services and terminal-cleanup membership when its launch adopts the workflow id, so a cancel or timeout that lands while the create batch commits no longer misses the cleanup obligation, including for scheduled runs.
-- Condition a delayed-start run's first checkpoint commit on the checkpoint it loaded, as start and resume already do.
+- Leave a running workflow's in-memory state alone when a start or prepare for the same id is rejected before it launches (a duplicate id, an unregistered type, an oversized input), so a rejected duplicate start no longer strips the live run's services, checkpoint baseline and terminal-cleanup membership.
+- Install a run's services and terminal-cleanup membership when its launch adopts the workflow id, so a cancel or timeout that lands while the create batch of a start or prepare with `services` or a concurrency limit commits no longer misses the cleanup obligation.
+- Condition the first checkpoint commit of a delayed-start run, and of a prepared run launched by an engine that did not prepare it, on the checkpoint it loaded, as start and resume already do.
 - Release a worker's active-worker bookkeeping when posting the cancel message throws.
 
 ## [0.27.14] - 2026-10-03
