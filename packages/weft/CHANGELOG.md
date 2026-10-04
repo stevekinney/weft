@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.15] - 2026-10-04
+
+### Added
+
+- Export `WorkflowCheckpointConflictError`, the error a workflow's `handle.result()` rejects with when its checkpoint commit loses its compare-and-swap race to another engine over the same store, together with the `WeftWorkflowCheckpointConflictWarning` operator warning and its `WORKFLOW_CHECKPOINT_CONFLICT_WARNING_NAME` constant. `'WorkflowCheckpointConflictError'` joins the `WeftErrorCode` union.
+
+### Changed
+
+- Name a checkpoint compare-and-swap race lost under `ownership: 'none'` in the error that retains a discarded durable timer for the true owner.
+
+### Fixed
+
+- Fail fast when a checkpoint commit loses its compare-and-swap race: the engine stops driving that workflow, writes nothing durable over the winner's progress, rejects the pending and any later `result()` with `WorkflowCheckpointConflictError`, retires only that workflow's execution, and emits `WeftWorkflowCheckpointConflictWarning`. A parent awaiting an abandoned child is not failed, and resuming the same generation on the losing engine starts a healthy run.
+- Discard signals, async-activity completions, condition waiters and timers for a generation the engine abandoned after a lost checkpoint race, in every ownership mode, and keep its durable timers in storage for the winning engine.
+- Refuse a stale terminal failure write over a generation the engine abandoned, over a run launched again since, or after the engine is disposed.
+- Release every execution attempt when the engine is disposed, so a retained engine or handle no longer holds workflow ids and execution tokens.
+- Leave a running workflow's in-memory state alone when a start or prepare for the same id is rejected before it launches (a duplicate id, an unregistered type, an oversized input), so a rejected duplicate start no longer strips the live run's services, checkpoint baseline and terminal-cleanup membership.
+- Install a run's services and terminal-cleanup membership when its launch adopts the workflow id, so a cancel or timeout that lands while the create batch of a start or prepare with `services` or a concurrency limit commits no longer misses the cleanup obligation.
+- Condition the first checkpoint commit of a delayed-start run, and of a prepared run launched by an engine that did not prepare it, on the checkpoint it loaded, as start and resume already do.
+- Release a worker's active-worker bookkeeping when posting the cancel message throws.
+
 ## [0.27.14] - 2026-10-03
 
 ### Fixed
