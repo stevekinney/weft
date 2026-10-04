@@ -34,8 +34,9 @@ import {
   minimalServerContext,
 } from './server-context.test-support.ts';
 import { dispatchTaskImpl } from './task-dispatch.ts';
-import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
+import { handleTaskPollRequest } from './task-polling.ts';
 import { taskResultPayloadSizeError } from './task-result-resolution.ts';
+import { handleTaskResultRequest } from './task-result-submission.ts';
 
 /** handleTaskResultRequest never consults the worker registry, so use a null one. */
 function createMinimalContext() {

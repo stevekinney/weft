@@ -286,3 +286,26 @@ export class WorkerRealmReadiness {
     return validateRealmReadyMessage(message, this.#dependencies);
   }
 }
+
+/**
+ * Build the realm-ready handshake tracker a worker strategy requires, or `null`
+ * when the strategy does not require the handshake.
+ */
+export function buildWorkerRealmReadiness(
+  requireRealmReady: boolean,
+  getExpectedWorkflowTypes: (() => readonly string[]) | undefined,
+  timeoutMs: number,
+  maxProtocolMessageBytes: number | undefined,
+): WorkerRealmReadiness | null {
+  if (!requireRealmReady) return null;
+  if (!getExpectedWorkflowTypes) {
+    throw new Error(
+      'WorkerExecutionStrategyOptions.getExpectedWorkflowTypes is required when requireRealmReady is true',
+    );
+  }
+  return new WorkerRealmReadiness({
+    getExpectedWorkflowTypes,
+    timeoutMs,
+    maxProtocolMessageBytes,
+  });
+}

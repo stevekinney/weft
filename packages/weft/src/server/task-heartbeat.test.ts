@@ -46,8 +46,9 @@ import {
   minimalServeOptions,
   minimalServerContext,
 } from './runtime/server-context.test-support.ts';
-import { handleTaskHeartbeatRequest, handleTaskResultRequest } from './runtime/task-polling.ts';
+import { handleTaskHeartbeatRequest } from './runtime/task-polling.ts';
 import { scanExpiredTasks } from './runtime/task-reconciliation.ts';
+import { handleTaskResultRequest } from './runtime/task-result-submission.ts';
 import { handleWorkerWebSocketMessage } from './runtime/websocket-worker.ts';
 
 type FakeWs = {

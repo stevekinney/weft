@@ -18,11 +18,8 @@ import { API_PREFIX } from '../route-model.ts';
 import type { ServerContext } from './context.ts';
 import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
 import { gateRequest } from './request-gate.ts';
-import {
-  handleTaskHeartbeatRequest,
-  handleTaskPollRequest,
-  handleTaskResultRequest,
-} from './task-polling.ts';
+import { handleTaskHeartbeatRequest, handleTaskPollRequest } from './task-polling.ts';
+import { handleTaskResultRequest } from './task-result-submission.ts';
 import {
   acquireWorkflowStreamConnection,
   addStreamSocket,

@@ -1,3 +1,5 @@
+import { abandonedGenerationConflict } from './checkpoint-conflict-abandon.ts';
+import { isCheckpointConflictFor } from './checkpoint-conflict-error.ts';
 import type { WorkflowResultWaiter } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
@@ -32,6 +34,15 @@ export function getWorkflowResultPromise(
   const existingWaiter = internals.resultResolvers.get(workflowId);
   if (existingWaiter) {
     return existingWaiter.promise;
+  }
+
+  // This engine abandoned the generation it holds after a lost checkpoint race, live or
+  // suspended: nothing local will settle a fresh waiter, so reject now (no storage read).
+  const conflict = abandonedGenerationConflict(internals, workflowId);
+  if (conflict !== undefined) {
+    const rejected = Promise.reject(conflict);
+    void rejected.catch(() => {});
+    return rejected;
   }
 
   // A result() call after disposal would otherwise register a fresh waiter in a
@@ -87,6 +98,7 @@ export function getGeneratorOwnedWorkflowResultPromise(
     internals,
     parentWorkflowId,
     getWorkflowResultPromise(internals, workflowId),
+    workflowId,
   );
 }
 
@@ -111,6 +123,7 @@ function fenceResultOnParentGeneration(
   internals: EngineInternals,
   parentWorkflowId: string,
   promise: Promise<unknown>,
+  childWorkflowId: string,
 ): Promise<unknown> {
   const gate = Promise.withResolvers<unknown>();
   void promise.then(
@@ -119,6 +132,9 @@ function fenceResultOnParentGeneration(
       return undefined;
     },
     async (error: unknown) => {
+      // A child abandoned after a lost checkpoint race is healthy under its
+      // winner, which drives the parent too: report nothing, not a false failure.
+      if (isCheckpointConflictFor(error, childWorkflowId)) return undefined;
       if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
       return undefined;
     },

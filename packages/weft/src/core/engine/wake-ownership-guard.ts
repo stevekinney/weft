@@ -10,6 +10,10 @@
  * `expectedEpoch` pair — it has no opinion on how a caller obtains those. Every
  * wake site needs the exact same three-way decision tree first:
  *
+ * - The generation this engine holds for the workflow (running, parked, or suspended) is
+ *   abandoned after a lost checkpoint compare-and-swap race (any ownership mode):
+ *   discard, silently. It is read from the execution attempt registry, not from the
+ *   in-memory checkpoint, which a suspension releases.
  * - `internals.workflowClaimRegistry` is `null` (ownership is `'none'` or
  *   `'lease'`): this check is a no-op. Proceed — byte-identical to every
  *   pre-ADR-0002 deployment. This is the property every wake site must
@@ -35,12 +39,25 @@
  * @module core/engine/wake-ownership-guard
  */
 
+import { isHeldGenerationAbandoned } from './execution-attempts.ts';
 import type { EngineInternals } from './internals.ts';
 import { emitWorkflowWakeDiscardedWarning, type WorkflowWakeKind } from './lease-deposition.ts';
 import { wakeOwnershipCheck } from './wake-ownership-check.ts';
 
 /** Outcome of {@link confirmWakeOwnership}: whether the caller may proceed with this wake. */
 export type WakeOwnershipDecision = 'proceed' | 'discard';
+
+/**
+ * Whether a wake for `workflowId` needs {@link confirmWakeOwnership} at all:
+ * only with a claim registry, or for a generation abandoned after a lost
+ * checkpoint race. Synchronous, so call sites that must not add a microtask hop
+ * to a healthy `'none'`/`'lease'` run can guard the `await` itself with it.
+ */
+export function wakeNeedsOwnershipCheck(internals: EngineInternals, workflowId: string): boolean {
+  return (
+    internals.workflowClaimRegistry !== null || isHeldGenerationAbandoned(internals, workflowId)
+  );
+}
 
 /**
  * Decide whether a claim-requiring wake path may resolve its in-memory
@@ -52,6 +69,14 @@ export async function confirmWakeOwnership(
   workflowId: string,
   wakeKind: WorkflowWakeKind,
 ): Promise<WakeOwnershipDecision> {
+  // A generation this engine abandoned after losing its checkpoint
+  // compare-and-swap race belongs to the winning engine in every ownership mode,
+  // including `'none'` where there is no claim registry to say so. Synchronous,
+  // so a wake for a healthy generation takes exactly the path it always did.
+  if (isHeldGenerationAbandoned(internals, workflowId)) {
+    return 'discard';
+  }
+
   const registry = internals.workflowClaimRegistry;
   if (registry === null) {
     return 'proceed';

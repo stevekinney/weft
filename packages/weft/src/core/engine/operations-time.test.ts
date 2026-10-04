@@ -14,6 +14,7 @@ import {
   type WorkflowContext,
   type WorkflowState,
 } from '../types.ts';
+import { getCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import { Engine } from './index.ts';
 import {
@@ -633,6 +634,41 @@ describe('engine time operation helpers', () => {
     expect(resolverCalls).toBe(0);
     expect(failed).toHaveLength(0);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('primes the checkpoint compare-and-swap baseline from the checkpoint a fired delayed start loaded', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-baseline';
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
+    const registration = { handler: async function* () {}, version: '1' };
+    const storedBytes = serializeCheckpoint(createCheckpoint(workflowId));
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), storedBytes);
+    const internals = {
+      checkpoints: new Map<string, Checkpoint>(),
+      inlineStrategy: {},
+      workflowServices: new Map<string, unknown>(),
+      options: { getNow: () => 2_000 },
+      registrations: new Map([[state.type, registration]]),
+      storage,
+      workflowVersionTuples: new Map(),
+    };
+
+    await startDelayedWorkflow(
+      internals as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        loadWorkflowState: async () => state,
+        resolveExecutableRegistrationForRevision: async () => ({
+          entry: registration,
+          revision: undefined,
+        }),
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    // `persistCheckpoint` conditions its commit on exactly these bytes.
+    expect(getCommittedCheckpointBytes(internals as never, workflowId)).toEqual(storedBytes);
   });
 
   // Both delayed-start terminal-cleanup tests share the same recovery harness:

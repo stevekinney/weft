@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 
 import { Context } from './context.ts';
 import { InlineExecutionStrategy } from './inline-execution-strategy.ts';
@@ -496,6 +496,40 @@ describe('InlineExecutionStrategy', () => {
       expect(strategy.hasGenerator('wf-1')).toBe(false);
       expect(strategy.getContext('wf-1')).toBeUndefined();
       expect(strategy.getAbortController('wf-1')).toBeUndefined();
+    });
+
+    it('retireWorkflow evicts the generator, context, and abort controller like cancellation', async () => {
+      setup();
+
+      registrations.set('yielding', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-retire',
+        workflowType: 'yielding',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await waitForCondition(() => strategy.hasGenerator('wf-retire'), {
+        label: 'generator installed',
+      });
+      const abortController = strategy.getAbortController('wf-retire');
+
+      strategy.retireWorkflow('wf-retire');
+
+      expect(abortController?.signal.aborted).toBe(true);
+      expect(strategy.hasGenerator('wf-retire')).toBe(false);
+      expect(strategy.getContext('wf-retire')).toBeUndefined();
     });
 
     it('adopts externally created workflow state for resumed workflows', () => {

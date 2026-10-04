@@ -120,6 +120,16 @@ export interface ExecutionStrategy extends Disposable, AsyncDisposable {
   cancelWorkflow(workflowId: string): void;
 
   /**
+   * Stop executing one workflow's stale generation because another engine owns
+   * the run now (a lost checkpoint compare-and-swap). Unlike
+   * {@link cancelWorkflow}, this must never fail, discard, or otherwise disturb
+   * any other workflow, and emits nothing for the retired one: the worker
+   * strategy retires cooperatively even when real cancellation discards the
+   * worker.
+   */
+  retireWorkflow(workflowId: string): void;
+
+  /**
    * Register a handler that receives all outbound messages from the strategy.
    * The engine calls this once during setup; the handler persists for the
    * lifetime of the strategy.

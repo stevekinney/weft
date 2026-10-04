@@ -15,7 +15,7 @@ import { commitAnonymousSignalOperations } from './anonymous-signal-sequence.ts'
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
-import { confirmWakeOwnership } from './wake-ownership-guard.ts';
+import { confirmWakeOwnership, wakeNeedsOwnershipCheck } from './wake-ownership-guard.ts';
 
 type TrackedWaiterKeys = string | Set<string>;
 
@@ -372,8 +372,11 @@ async function deliverBufferedSignals(
       // resolution by a microtask under `ownership: 'none'`/`'lease'`, where
       // the check is a no-op anyway. Those modes must stay byte-identical —
       // mirrors `async-activity-completion.ts`'s own registry-gated await.
+      // A generation abandoned after a lost checkpoint race also discards here,
+      // in every ownership mode; for a healthy `'none'`/`'lease'` run the guard
+      // stays false and nothing is awaited.
       if (
-        internals.workflowClaimRegistry !== null &&
+        wakeNeedsOwnershipCheck(internals, workflowId) &&
         (await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard'
       ) {
         continue;

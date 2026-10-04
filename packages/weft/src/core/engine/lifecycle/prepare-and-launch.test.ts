@@ -28,6 +28,10 @@ import {
   type WorkflowContext,
 } from '../../types.ts';
 import { PREPARED_WORKFLOW_ABANDONED_REASON } from '../../types/history-policy.ts';
+import {
+  forgetCommittedCheckpointBytes,
+  getCommittedCheckpointBytes,
+} from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { Engine } from '../index.ts';
 import { getInternals } from '../internals.ts';
@@ -121,6 +125,41 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
 
     const recordAfterCompletion = await engine.get(prepared.id);
     expect(recordAfterCompletion?.status).toBe('completed');
+  });
+
+  it('primes the checkpoint compare-and-swap baseline from the checkpoint launch() loaded', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    engine.register(
+      workflow({ name: 'cor-1408-launch-baseline' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitForSignal('continue');
+        return 'ok';
+      }),
+    );
+    const internals = getInternals(engine);
+
+    const prepared = await engine.prepare('cor-1408-launch-baseline', null, {
+      id: 'cor-1408-launch-baseline-1',
+    });
+    // An engine that did not prepare the run (a fresh process) holds no
+    // in-memory baseline for it; launch() must prime one from storage.
+    forgetCommittedCheckpointBytes(internals, prepared.id);
+    await prepared.launch();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (internals.parkedInlineWorkflows.has(prepared.id)) break;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    // Commits refresh the remembered bytes only once a baseline exists, so an
+    // unprimed launch would leave the run's later checkpoints unconditioned.
+    expect(internals.parkedInlineWorkflows.has(prepared.id)).toBe(true);
+    const storedCheckpoint = await storage.get(KEYS.checkpoint(prepared.id));
+    expect(storedCheckpoint).not.toBeNull();
+    expect(getCommittedCheckpointBytes(internals, prepared.id)).toEqual(
+      storedCheckpoint ?? undefined,
+    );
   });
 
   it('runs a real multi-step workflow to completion after launch()', async () => {

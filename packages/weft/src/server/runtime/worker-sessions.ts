@@ -13,15 +13,17 @@ import type { PendingTask } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
 import type { LongPollClaim } from './task-polling.ts';
 import {
-  authorizeWorkerPrincipal,
-  awaitTaskLedgerRecovery,
   DEFAULT_POLL_TIMEOUT,
   handleTaskHeartbeatRequest,
-  handleTaskResultRequest,
   markTaskClaimedByLongPollWorker,
   MAX_POLL_TIMEOUT,
-  parseTaskResultBody,
 } from './task-polling.ts';
+import {
+  authorizeWorkerPrincipal,
+  awaitTaskLedgerRecovery,
+  handleTaskResultRequest,
+  parseTaskResultBody,
+} from './task-result-submission.ts';
 import {
   authorizeWorkerSessionAccess,
   generateWorkerSessionCredential,

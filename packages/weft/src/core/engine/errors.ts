@@ -487,4 +487,5 @@ export {
   PersistedDataCorruptError,
   PersistedDataIncompatibleError,
 } from '../persisted-data-incompatible-error.ts';
+export { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 export { ForkSourceReplacedError } from './fork-source-replaced-error.ts';

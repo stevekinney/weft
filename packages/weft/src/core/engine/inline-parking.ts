@@ -1,6 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { hasExposedAccessors, hasUpdateHandlers } from '../context/context-presence.ts';
 import type { WorkerOutboundMessage, WorkflowState } from '../types.ts';
+import { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 import { CheckpointEncodingError } from './checkpoint-encoding-error.ts';
 import type { EngineInternals } from './internals.ts';
 import {
@@ -259,11 +260,22 @@ export async function handleStrategyMessage(
   } catch (error) {
     rejectSleepTimerAcknowledgements(internals, message.workflowId, error);
     // The inline strategy contains a handler's rejection so one workflow's
-    // failure cannot take down the engine. A storage failure is left that way
-    // on purpose: the workflow stays `running` and recovery retries it. A
-    // checkpoint that cannot be encoded is not retryable, since the same
+    // failure cannot take down the engine, and recovery runs only at boot, so
+    // what is left alone here stays un-driven until the next restart. A storage
+    // failure is left that way on purpose: the workflow stays `running` durably
+    // and the next boot's recovery retries it.
+    //
+    // A checkpoint that cannot be encoded is not retryable, since the same
     // state fails on every resume, so left alone it would stay `running` with
     // `result()` pending forever. Fail the workflow with the cause instead.
+    //
+    // A checkpoint commit that lost its compare-and-swap race means another
+    // engine over the same store already advanced this workflow and owns its
+    // durable state. `commitCheckpoint` already abandoned the run where it
+    // detected the loss (this engine stops driving it and settles its local
+    // handle); all that is left is to write nothing: failing the workflow here
+    // would overwrite the winner.
+    if (error instanceof WorkflowCheckpointConflictError) return;
     if (!(error instanceof CheckpointEncodingError)) throw error;
     await failWorkflowFromTermination(
       internals,

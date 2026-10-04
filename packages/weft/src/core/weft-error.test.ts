@@ -42,6 +42,7 @@ import {
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
   WorkflowCatalogConflictError,
+  WorkflowCheckpointConflictError,
   WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
@@ -146,6 +147,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   ActivityPerAttemptTimeoutError: () => new ActivityPerAttemptTimeoutError('charge', 2, 1_000),
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
   WorkflowTeardownPendingError: () => new WorkflowTeardownPendingError('wf-1'),
+  WorkflowCheckpointConflictError: () => new WorkflowCheckpointConflictError('wf-1'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
   WorkerManifestBuildError: () =>
     new WorkerManifestBuildError('workflow "checkout" not registered'),

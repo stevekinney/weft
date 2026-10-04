@@ -6,7 +6,7 @@ import {
   type ConditionalBatchCondition,
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -17,6 +17,7 @@ import {
   type ActivityReconciliationRecord,
 } from './activity-reconciliation.ts';
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
+import { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
 import {
   pendingAtomicWorkflowCommitSideEffectsStagePut,
@@ -134,17 +135,20 @@ async function expectCheckpointCommitFailure(
   const bytes = serializeCheckpoint(nextCheckpoint);
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
-  expect(
-    await throwingRejectionOf(
-      persistCheckpoint(
-        internals,
-        checkpoint.workflowId,
-        checkpointOperation,
-        buffer,
-        createPersistCallbacks(),
-      ),
+  const reason = await rejectionOf(
+    persistCheckpoint(
+      internals,
+      checkpoint.workflowId,
+      checkpointOperation,
+      buffer,
+      createPersistCallbacks(),
     ),
-  ).toThrow('lost its CAS race');
+  );
+  expect((reason as Error).message).toContain('lost its CAS race');
+  // The batch lost on a side-effect condition while the stored checkpoint still
+  // holds the bytes this commit was conditioned on: another writer did not
+  // advance the workflow, so this is not a checkpoint conflict.
+  expect(reason).not.toBeInstanceOf(WorkflowCheckpointConflictError);
 }
 
 function createSubOperationCallbacks() {

@@ -20,7 +20,7 @@ import { buildTimerBatchOperations } from '../../scheduler.ts';
 import type { Checkpoint, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createWorkflowScopedContextCallbacks, resetCancelHandlers } from '../cancel-handlers.ts';
-import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { adoptLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
@@ -174,8 +174,7 @@ function commitSerializedResumeState(
     restoredHead,
     callbacks,
   } = args;
-  internals.checkpoints.set(workflowId, resumeCheckpoint);
-  rememberCommittedCheckpointBytes(internals, workflowId, serializedCheckpoint);
+  adoptLaunchCheckpoint(internals, workflowId, resumeCheckpoint, serializedCheckpoint);
   internals.workflowVersionTuples.set(workflowId, registeredVersionTuple);
   internals.eventLogHeads.set(workflowId, restoredHead);
   setWorkflowStartHeaders(internals, workflowId, args.workflowStartHeaders, callbacks);

@@ -3,7 +3,7 @@ import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent } from '../../events.ts';
 import type { ForkOptions, WorkflowState } from '../../types.ts';
 import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.ts';
-import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { releaseLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
@@ -486,8 +486,7 @@ export async function fork(
       return handle;
     } finally {
       if (!forkStarted) {
-        forgetCommittedCheckpointBytes(internals, workflowId);
-        internals.checkpoints.delete(workflowId);
+        releaseLaunchCheckpoint(internals, workflowId);
         internals.workflowVersionTuples.delete(workflowId);
         internals.eventLogHeads.delete(workflowId);
         internals.workflowHeaders.delete(workflowId);

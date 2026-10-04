@@ -1,4 +1,5 @@
 import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
+import { releaseAllCheckpoints } from './checkpoint-commit-snapshots.ts';
 import { clearAllPendingAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
@@ -180,7 +181,7 @@ export function disposeEngine(
   internals.sleepTimerAcknowledgementWaiters.clear();
   internals.durableInlineOperations.clear();
   internals.sleepTimersFiredWithoutResolver.clear();
-  internals.checkpoints.clear();
+  releaseAllCheckpoints(internals);
   internals.pendingExecutionStateOwnerId = undefined;
   internals.pendingParentWorkflowId = undefined;
   internals.pendingParentWorkflowExecutionToken = undefined;

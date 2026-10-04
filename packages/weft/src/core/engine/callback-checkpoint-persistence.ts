@@ -2,6 +2,7 @@ import type { ContextOperationRequest } from '../context.ts';
 import { HISTORY_CIRCUIT_BREAKER_REASON } from '../types.ts';
 import { validateAttributeValueSizes } from './attributes-tags.ts';
 import { createTerminationCallbacks } from './callback-creators-core.ts';
+import { persistCheckpointAbandoningOnConflict } from './checkpoint-conflict-abandon.ts';
 import {
   appendTimelineBatchOperations,
   persistCheckpoint,
@@ -54,12 +55,15 @@ export function persistCheckpointForDataOperation<
   workflowId: string,
   operation: ContextOperationRequest,
 ): Promise<void> {
-  return persistCheckpoint(
-    getInternals(engine),
-    workflowId,
-    operation,
-    undefined,
-    createCheckpointPersistenceCallbacks(engine),
-    { timeline: 'preserve-pending' },
+  const internals = getInternals(engine);
+  return persistCheckpointAbandoningOnConflict(internals, workflowId, () =>
+    persistCheckpoint(
+      internals,
+      workflowId,
+      operation,
+      undefined,
+      createCheckpointPersistenceCallbacks(engine),
+      { timeline: 'preserve-pending' },
+    ),
   );
 }

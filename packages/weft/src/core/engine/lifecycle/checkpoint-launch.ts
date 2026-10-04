@@ -13,7 +13,7 @@ import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { createWorkflowScopedContextCallbacks, resetCancelHandlers } from '../cancel-handlers.ts';
-import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { adoptLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
@@ -136,8 +136,6 @@ export function launchWorkflowFromCheckpoint(
     type: state.type,
     revision: resolvedRevision,
   });
-  // Store checkpoint for future persistence
-  internals.checkpoints.set(workflowId, checkpoint);
   // Prime the checkpoint-bytes CAS baseline (WFT-21, Codex review round 10,
   // P1) — `fork()` is this function's only caller, and its own initial
   // checkpoint commit already landed durably before this launch runs (see
@@ -154,7 +152,8 @@ export function launchWorkflowFromCheckpoint(
   // race the round-5 `start.ts` fix exists to close, missed here because
   // this function's single caller was never audited alongside `start()` and
   // `resume()` when that fix was made.
-  rememberCommittedCheckpointBytes(internals, workflowId, serializeCheckpoint(checkpoint));
+  // Store checkpoint for future persistence, with that baseline.
+  adoptLaunchCheckpoint(internals, workflowId, checkpoint, serializeCheckpoint(checkpoint));
   internals.workflowVersionTuples.set(
     workflowId,
     createWorkflowVersionTuple(internals, registration, callbacks),

@@ -22,6 +22,7 @@ export type TimeOperationCallbacks = {
   ) => void;
   dispatchEvent: (event: Event) => void;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
+  /** Fails a delayed-start run while it launches, before its checkpoint is adopted: judged by the stored generation (see `FailureOrigin`). */
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;
   runSerializedWorkflowStateWrite: <Result>(
     workflowId: string,

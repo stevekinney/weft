@@ -1,6 +1,7 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint } from '../../worker/versioning-policy.ts';
+import { bytesEqual } from '../application-primitive-commit.ts';
 import {
   advanceCheckpoint,
   deserializeCheckpoint,
@@ -22,6 +23,7 @@ import {
   getCommittedCheckpointBytes,
   rememberCommittedCheckpointBytes,
 } from './checkpoint-commit-snapshots.ts';
+import { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 import { CheckpointEncodingError } from './checkpoint-encoding-error.ts';
 import {
   attachTransientCheckpointReplayPayload,
@@ -41,7 +43,7 @@ import {
   serializeDeletedEntries,
   type CompactionResult,
 } from './event-log-compaction.ts';
-import { commitFencedEngineWrite } from './fenced-write.ts';
+import { commitFencedEngineWriteAllowingPreconditionFailure } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
 import { buildPendingTimelineOperation } from './termination.ts';
@@ -415,11 +417,13 @@ async function commitCheckpoint(
   // checkpoint-CAS/side-effect condition would bypass the fence and let a deposed
   // zombie's write land unconditioned. Under `ownership: 'none'` it is a
   // byte-for-byte no-op (plain batch when no conditions, conditionalBatch otherwise).
-  await commitFencedEngineWrite(internals, workflowId, commit.operations, conditions, () => {
-    return new Error(
-      `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
-    );
-  });
+  const committed = await commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
+    workflowId,
+    commit.operations,
+    conditions,
+  );
+  if (!committed) await throwCheckpointCommitLoss(internals, workflowId, commit);
   if (pendingSideEffects !== undefined) {
     clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
   }
@@ -484,6 +488,58 @@ function checkpointSideEffectConditions(
 ): ConditionalBatchCondition[] {
   if (!storageSupportsConditionalBatch) return [];
   return pendingSideEffects?.conditions ?? [];
+}
+
+/**
+ * Throw for a checkpoint batch that lost its conditional commit. The batch
+ * carries more than the checkpoint compare-and-swap (staged side-effect
+ * conditions), so a loss is not by itself proof that another writer advanced the
+ * checkpoint: only changed checkpoint bytes make it a
+ * {@link WorkflowCheckpointConflictError}; anything else keeps the generic error.
+ */
+async function throwCheckpointCommitLoss(
+  internals: EngineInternals,
+  workflowId: string,
+  commit: CheckpointCommit,
+): Promise<never> {
+  // Captured before the classification read awaits: a local replacement run can
+  // install itself under this id while that read is in flight.
+  const { workflowExecutionToken } = commit.checkpoint;
+  let checkpointChanged: boolean;
+  try {
+    checkpointChanged = await checkpointBytesChangedUnderWriter(internals, workflowId, commit);
+  } catch (readError) {
+    // The compare-and-swap already lost. If the loss cannot be classified it
+    // must stay on the write-free conflict path, never fail the run normally.
+    throw new WorkflowCheckpointConflictError(workflowId, {
+      cause: readError,
+      workflowExecutionToken,
+    });
+  }
+  if (checkpointChanged) {
+    throw new WorkflowCheckpointConflictError(workflowId, { workflowExecutionToken });
+  }
+  throw new Error(
+    `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
+  );
+}
+
+/**
+ * After a lost conditional batch, whether the stored checkpoint no longer holds
+ * the bytes this commit was conditioned on — a checkpoint another writer
+ * advanced, replaced, or removed. A commit with no checkpoint condition cannot
+ * have lost on the checkpoint, and an unchanged checkpoint means a side-effect
+ * condition (signal-record consumption, activity reconciliation, child
+ * cancellation) was the one that failed.
+ */
+async function checkpointBytesChangedUnderWriter(
+  internals: EngineInternals,
+  workflowId: string,
+  commit: CheckpointCommit,
+): Promise<boolean> {
+  if (commit.expectedSerialized === undefined) return false;
+  const stored = await internals.storage.get(KEYS.checkpoint(workflowId));
+  return stored === null || !bytesEqual(stored, commit.expectedSerialized);
 }
 
 function buildCheckpointCommitConditions(

@@ -5,6 +5,7 @@ import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../scheduler.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
+import { adoptLaunchCheckpoint } from './checkpoint-commit-snapshots.ts';
 import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
@@ -14,11 +15,14 @@ import { ensureDelayedStartClaimAndCleanupBeforeFailure } from './lifecycle/stan
 import { registerSleepResolver } from './sleep-resolver-registration.ts';
 import {
   acknowledgeSupersededSleepTimers,
+  fireExecutionDeadline,
   handleSleepTimerWithAcknowledgement,
   resolveSleepTimer,
   retainDiscardedDurableTimer,
+  retainTimerOfAbandonedGeneration,
 } from './sleep-timer-acknowledgements.ts';
 import { type TimeOperationCallbacks } from './time-operation-callbacks.ts';
+import { wakeNeedsOwnershipCheck } from './wake-ownership-guard.ts';
 import { commitWithWorkflowClaimFold, prepareWorkflowClaimFold } from './workflow-claim-fold.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
@@ -161,10 +165,11 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  const checkpoint = await loadDelayedWorkflowCheckpoint(internals, entry, callbacks);
-  if (!checkpoint) {
+  const loadedCheckpoint = await loadDelayedWorkflowCheckpoint(internals, entry, callbacks);
+  if (!loadedCheckpoint) {
     return;
   }
+  const { checkpoint, serialized: serializedCheckpoint } = loadedCheckpoint;
 
   const resolvedRegistration = await resolveDelayedStartRegistrationOrFail(
     internals,
@@ -307,7 +312,9 @@ export async function startDelayedWorkflow(
     internals.workflowsNeedingTerminalCleanup.add(entry.workflowId);
   }
 
-  internals.checkpoints.set(entry.workflowId, checkpoint);
+  // Prime the checkpoint compare-and-swap baseline from the bytes just loaded, so
+  // this run's first commit is conditioned on them like start and resume.
+  adoptLaunchCheckpoint(internals, entry.workflowId, checkpoint, serializedCheckpoint);
   internals.workflowVersionTuples.set(
     entry.workflowId,
     callbacks.workflowVersionTupleFromState(runningState),
@@ -339,7 +346,7 @@ async function loadDelayedWorkflowCheckpoint(
   internals: EngineInternals,
   entry: TimerEntry,
   callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
-): Promise<Checkpoint | null> {
+): Promise<{ checkpoint: Checkpoint; serialized: Uint8Array } | null> {
   const checkpointBytes = await internals.storage.get(KEYS.checkpoint(entry.workflowId));
   if (!checkpointBytes) {
     await callbacks.failWorkflow(
@@ -349,7 +356,7 @@ async function loadDelayedWorkflowCheckpoint(
     return null;
   }
 
-  return deserializeCheckpoint(checkpointBytes);
+  return { checkpoint: deserializeCheckpoint(checkpointBytes), serialized: checkpointBytes };
 }
 
 async function resolveDelayedExecutionDeadline(
@@ -439,13 +446,15 @@ export async function handleTimerFired(
   if (entry.kind === 'sleep') {
     await handleSleepTimerWithAcknowledgement(internals, entry, callbacks.loadWorkflowState);
   } else if (entry.kind === 'wait-condition') {
-    // registry null: unchanged sync fast path ('none'/'lease'), no async hop.
-    if (internals.workflowClaimRegistry === null) {
+    // No claim registry and no abandoned generation: unchanged sync fast path, no async hop.
+    if (!wakeNeedsOwnershipCheck(internals, entry.workflowId)) {
       resolveConditionTimer(internals, entry);
     } else {
       await resolveConditionTimerConfirmingOwnership(internals, entry, callbacks.loadWorkflowState);
     }
-  } else if (entry.kind === 'execution-deadline') await callbacks.timeout(entry.workflowId);
+  } else if (entry.kind === 'execution-deadline') {
+    await fireExecutionDeadline(internals, entry, callbacks);
+  }
 }
 function isReviewTimerEntry(entry: TimerEntry): boolean {
   return entry.id.startsWith('review-escalation:') || entry.id.startsWith('review-timeout:');
@@ -474,6 +483,8 @@ async function handleReviewTimer(
   entry: TimerEntry,
   callbacks: Pick<TimeOperationCallbacks, 'loadWorkflowState'>,
 ): Promise<void> {
+  const retained = retainTimerOfAbandonedGeneration(internals, entry, callbacks.loadWorkflowState);
+  if (retained !== undefined) return retained;
   const reviewId = entry.id.split(':')[1];
   if (!reviewId) return;
   const handler = internals.reviewEscalationHandlers.get(reviewId);

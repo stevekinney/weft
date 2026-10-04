@@ -8,6 +8,7 @@ import {
   registerEnsureRetentionSweepInterval,
 } from './callback-creators-core.ts';
 import { createOperationRouterCallbacks } from './callback-creators-router.ts';
+import { persistCheckpointAbandoningOnConflict } from './checkpoint-conflict-abandon.ts';
 import { persistCheckpoint, validateDevelopmentCheckpoint } from './checkpoint-io.ts';
 import { evaluateConstraints } from './constraints.ts';
 import type { Engine } from './index.ts';
@@ -103,12 +104,15 @@ export function persistCheckpointForEngine<TWorkflows extends object, TActivitie
   operation: ContextOperationRequest,
   workerCheckpointBytes?: ArrayBuffer,
 ): Promise<void> {
-  return persistCheckpoint(
-    getInternals(engine),
-    workflowId,
-    operation,
-    workerCheckpointBytes,
-    createCheckpointPersistenceCallbacks(engine),
+  const internals = getInternals(engine);
+  return persistCheckpointAbandoningOnConflict(internals, workflowId, () =>
+    persistCheckpoint(
+      internals,
+      workflowId,
+      operation,
+      workerCheckpointBytes,
+      createCheckpointPersistenceCallbacks(engine),
+    ),
   );
 }
 

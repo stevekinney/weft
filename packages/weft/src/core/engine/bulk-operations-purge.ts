@@ -10,7 +10,7 @@ import { buildIndexOperations } from '../search-attributes.ts';
 import type { ListFilter, PurgeResult, SearchAttributeValue, WorkflowState } from '../types.ts';
 import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workflow-tags.ts';
 import { asyncActivityWorkflowPrefix } from './async-activity-records.ts';
-import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
+import { releaseLaunchCheckpoint } from './checkpoint-commit-snapshots.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
@@ -211,9 +211,8 @@ export function clearPurgedWorkflowInMemoryState(
   cleanupWaiters: CleanupWaiters,
 ): void {
   const workflowId = state.id;
-  forgetCommittedCheckpointBytes(internals, workflowId);
   const inMemoryCheckpoint = internals.checkpoints.get(workflowId);
-  internals.checkpoints.delete(workflowId);
+  releaseLaunchCheckpoint(internals, workflowId);
   internals.heartbeatDetails.delete(workflowId);
   internals.lastHeartbeatDetailsByStep.delete(workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {
