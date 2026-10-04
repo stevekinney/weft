@@ -14,6 +14,7 @@ import type {
 } from '../types.ts';
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
+import type { StartTransientState } from './lifecycle/start-transient-state.ts';
 import {
   buildPinnedRevisionWriteOptions,
   resolveScheduleCreationRevision,
@@ -60,6 +61,10 @@ export type ScheduleCallbacks = {
    * replaying a schedule's already-persisted `queuedRuns[].workflowId` via
    * `drainQueuedScheduleRun()`; every other schedule-run start (a fresh cadence tick,
    * a `cancel-running` replacement) omits it and gets strict id admission.
+   *
+   * `transientState` (internal only) is threaded straight through to `startWorkflow`'s parameter
+   * of the same name: the occurrence's resolved services, and the run's membership in terminal
+   * cleanup, which `startWorkflow` installs when its launch adopts the id.
    */
   startWorkflow: (
     type: string,
@@ -68,6 +73,7 @@ export type ScheduleCallbacks = {
     additionalStartOperations?: BatchOperation[],
     revisionOverride?: string,
     skipAdmissionIdCheck?: boolean,
+    transientState?: StartTransientState,
   ) => Promise<void>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null | undefined>;
   cancelWorkflow: (workflowId: string) => Promise<void>;

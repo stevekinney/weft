@@ -27,7 +27,11 @@ import {
   DEFAULT_WORKER_REALM_READY_TIMEOUT_MS,
   WORKER_PROTOCOL_VERSION,
 } from './worker-protocol.ts';
-import { isWorkerRealmReadyMessage, WorkerRealmReadiness } from './worker-realm-readiness.ts';
+import {
+  buildWorkerRealmReadiness,
+  isWorkerRealmReadyMessage,
+  type WorkerRealmReadiness,
+} from './worker-realm-readiness.ts';
 import {
   WorkerTurnWatchdog,
   type WorkerTurnTimeoutResolverForTesting,
@@ -85,7 +89,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       this.#requireProtocolVersion,
       this.#turnWatchdog,
     );
-    this.#realmReadiness = WorkerExecutionStrategy.#buildRealmReadiness(
+    this.#realmReadiness = buildWorkerRealmReadiness(
       requireRealmReady,
       getExpectedWorkflowTypes,
       realmReadyTimeoutMs,
@@ -257,6 +261,19 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   cancelWorkflow(workflowId: string): void {
+    this.#cancelWorkflow(workflowId, this.#discardOnCancel);
+  }
+
+  /**
+   * Retire a stale execution without disturbing other workflows: always the
+   * cooperative path, since discarding the worker fails every workflow parked on
+   * it. Abandonment happens only while the worker awaits the turn that lost.
+   */
+  retireWorkflow(workflowId: string): void {
+    this.#cancelWorkflow(workflowId, false);
+  }
+
+  #cancelWorkflow(workflowId: string, discardWorker: boolean): void {
     // Terminal for this strategy's own bookkeeping even though a stray
     // message can still arrive after — the cleared turn watchdog below
     // fails the guard's turn-match check regardless.
@@ -264,7 +281,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     const worker = this.#ownership.getActiveWorker(workflowId);
     if (worker) {
       this.#ownership.markCancelled(workflowId);
-      if (this.#discardOnCancel) {
+      if (discardWorker) {
         this.#faultHandler.discardWorkerAndFailWorkflows(worker, {
           targetWorkflowId: workflowId,
           skipTarget: true,
@@ -281,8 +298,11 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
         message.protocolVersion = WORKER_PROTOCOL_VERSION;
       }
 
-      worker.postMessage(message);
-      this.#releaseActiveWorker(workflowId);
+      try {
+        worker.postMessage(message);
+      } finally {
+        this.#releaseActiveWorker(workflowId);
+      }
       return;
     }
 
@@ -291,7 +311,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
 
     this.#ownership.markCancelled(workflowId);
     this.#ownership.deleteParked(workflowId);
-    if (this.#discardOnCancel) {
+    if (discardWorker) {
       this.#faultHandler.discardWorkerAndFailWorkflows(parkedWorker, {
         targetWorkflowId: workflowId,
         skipTarget: true,
@@ -476,24 +496,5 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
       // Observe the unawaited handler turn so rejections never become process noise.
       void result.catch(() => {});
     }
-  }
-
-  static #buildRealmReadiness(
-    requireRealmReady: boolean,
-    getExpectedWorkflowTypes: (() => readonly string[]) | undefined,
-    timeoutMs: number,
-    maxProtocolMessageBytes: number | undefined,
-  ): WorkerRealmReadiness | null {
-    if (!requireRealmReady) return null;
-    if (!getExpectedWorkflowTypes) {
-      throw new Error(
-        'WorkerExecutionStrategyOptions.getExpectedWorkflowTypes is required when requireRealmReady is true',
-      );
-    }
-    return new WorkerRealmReadiness({
-      getExpectedWorkflowTypes,
-      timeoutMs,
-      maxProtocolMessageBytes,
-    });
   }
 }

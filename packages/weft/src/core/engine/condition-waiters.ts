@@ -1,5 +1,9 @@
 import type { EngineInternals } from './internals.ts';
-import { confirmWakeOwnership, type WakeOwnershipDecision } from './wake-ownership-guard.ts';
+import {
+  confirmWakeOwnership,
+  wakeNeedsOwnershipCheck,
+  type WakeOwnershipDecision,
+} from './wake-ownership-guard.ts';
 
 /**
  * Re-drive every in-process `ctx.waitUntil` waiter registered for a workflow.
@@ -40,7 +44,7 @@ export function notifyConditionWaiters(internals: EngineInternals, workflowId: s
   // resolver is absent when the workflow has no active `waitUntil` — e.g. an
   // `onUpdate` arrived before the workflow reached `waitUntil`, or after it
   // already completed. That is a harmless no-op poke.
-  if (internals.workflowClaimRegistry === null) {
+  if (!wakeNeedsOwnershipCheck(internals, workflowId)) {
     internals.conditionWaiters.get(workflowId)?.();
     return;
   }

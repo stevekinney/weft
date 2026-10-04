@@ -92,6 +92,32 @@ describe('RevisionRealmExecutionStrategy', () => {
       expect(disposeSpy).not.toHaveBeenCalled();
     });
 
+    it('retireWorkflow releases only the retired execution realm', async () => {
+      const { strategy, registry, messages } = newStrategy();
+      const acquireForExecution = registry.acquireForExecution.bind(registry);
+      const acquisitions: Promise<RevisionRealmAcquireOutcome>[] = [];
+      spyOn(registry, 'acquireForExecution').mockImplementation((...parameters) => {
+        const acquisition = acquireForExecution(...parameters);
+        acquisitions.push(acquisition);
+        return acquisition;
+      });
+      strategy.startWorkflow({
+        workflowId: 'wf-realm-retire',
+        revision: REVISION,
+        workflowType: ORDER_WORKFLOW_NAME,
+        input: 'input',
+        checkpoint: new ArrayBuffer(0),
+      });
+      const acquisition = await acquisitions[0];
+      expect(acquisition?.ok).toBe(true);
+
+      strategy.retireWorkflow('wf-realm-retire');
+      await flushMicrotasks();
+
+      expect(registry.getPool(ORDER_WORKFLOW_NAME, REVISION)?.realmCount ?? 0).toBe(0);
+      expect(messages).toEqual([]);
+    });
+
     it('releases the realm for an in-flight execution and emits nothing further for it (non-cooperative cancel)', async () => {
       const { strategy, registry, messages } = newStrategy();
       const acquireForExecution = registry.acquireForExecution.bind(registry);

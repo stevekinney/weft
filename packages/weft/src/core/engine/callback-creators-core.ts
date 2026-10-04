@@ -96,6 +96,17 @@ export async function processPendingUpdatesAfterInlineAdvanceForEngine<
 export function createLifecycleCallbacks<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
 ): LifecycleCallbacks {
+  // Each `failWorkflowForXxx` below fails a run while it is being launched, resumed, or
+  // recovered, before the engine adopts its checkpoint (see `FailureOrigin`).
+  const failBeforeAdoption = (workflowId: string, error: Error): Promise<void> =>
+    failWorkflow(
+      getInternals(engine),
+      workflowId,
+      error,
+      createTerminationCallbacks(engine),
+      'system',
+      'launch',
+    );
   return {
     dispatchEvent: (event) => {
       engine.dispatchEvent(event);
@@ -149,38 +160,10 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         HISTORY_CIRCUIT_BREAKER_REASON,
       ),
-    failWorkflowForUnavailableServices: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
-    failWorkflowForRecoveryHook: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
-    failWorkflowForCheckpointDecodeError: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
-    failWorkflowForVersionMismatch: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
+    failWorkflowForUnavailableServices: failBeforeAdoption,
+    failWorkflowForRecoveryHook: failBeforeAdoption,
+    failWorkflowForCheckpointDecodeError: failBeforeAdoption,
+    failWorkflowForVersionMismatch: failBeforeAdoption,
     resolveExecutableRegistration: (type, onRevisionChosen) =>
       resolveExecutableRegistration(
         engine as unknown as Engine,
@@ -188,14 +171,7 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         type,
         onRevisionChosen,
       ),
-    failWorkflowForUnavailableDynamicSource: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
+    failWorkflowForUnavailableDynamicSource: failBeforeAdoption,
     resolveExecutableRegistrationForRevision: (type, revision, onRevisionChosen) =>
       resolveExecutableRegistrationForRevision(
         engine as unknown as Engine,
@@ -204,14 +180,7 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         revision,
         onRevisionChosen,
       ),
-    failWorkflowForRevisionUnavailable: (workflowId, error) =>
-      failWorkflow(
-        getInternals(engine),
-        workflowId,
-        error,
-        createTerminationCallbacks(engine),
-        'system',
-      ),
+    failWorkflowForRevisionUnavailable: failBeforeAdoption,
   };
 }
 

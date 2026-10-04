@@ -208,7 +208,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
     dispatchEvent: (event) => engine.dispatchEvent(event),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     failWorkflow: (workflowId, error) =>
-      failWorkflow(getInternals(engine), workflowId, error, termination),
+      failWorkflow(getInternals(engine), workflowId, error, termination, 'system', 'launch'),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
     beginWorkflowExecution: (

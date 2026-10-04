@@ -47,6 +47,8 @@ export type WorkflowStateTransitionCategory = 'self' | 'external-terminal';
 type WorkflowStateUpdateOptions = {
   allowedStatuses?: readonly WorkflowStatus[];
   buildAdditionalOperations?: (previousState: WorkflowState, updatedAt: number) => BatchOperation[];
+  /** Checked with the decoded state after the last read before the commit; `true` skips the write. */
+  skipCommitIf?: (state: WorkflowState) => boolean;
 };
 
 type WorkflowStateUpdateResult = {
@@ -153,6 +155,9 @@ export async function updateWorkflowState(
 
     const state = decodeWorkflowState(bytes);
     if (options.allowedStatuses && !options.allowedStatuses.includes(state.status)) {
+      return null;
+    }
+    if (options.skipCommitIf?.(state) === true) {
       return null;
     }
 

@@ -1699,6 +1699,159 @@ describe('WorkerExecutionStrategy', () => {
   });
 
   // -------------------------------------------------------------------------
+  // retireWorkflow
+  // -------------------------------------------------------------------------
+
+  describe('retireWorkflow', () => {
+    /** Park `parkedId`, then start `activeId` on the same single worker. */
+    async function parkOneAndActivateAnother(parkedId: string, activeId: string): Promise<void> {
+      strategy.startWorkflow({
+        workflowId: parkedId,
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      const worker = firstWorker();
+      await waitForTestingCondition(() => worker.postMessage.mock.calls.length === 1, {
+        label: 'parked workflow run message',
+      });
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'checkpoint',
+            workflowId: parkedId,
+            checkpoint: new ArrayBuffer(0),
+            operationRequest: { type: 'wait-signal', operationId: 'op-wait', signalName: 'go' },
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      await waitForTestingCondition(
+        () => (mockPool.release as ReturnType<typeof mock>).mock.calls.length === 1,
+        {
+          label: 'parked worker released to the pool',
+        },
+      );
+      strategy.startWorkflow({
+        workflowId: activeId,
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await waitForTestingCondition(() => worker.postMessage.mock.calls.length === 2, {
+        label: 'active workflow run message',
+      });
+    }
+
+    it('does not discard the worker or fail a workflow parked on it, even under discardOnCancel', async () => {
+      setup(1, { discardOnCancel: true });
+      await parkOneAndActivateAnother('wf-parked', 'wf-retired');
+      const worker = firstWorker();
+      messages.length = 0;
+
+      strategy.retireWorkflow('wf-retired');
+
+      expect(messages).toEqual([]);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(worker.postMessage.mock.calls.at(-1)?.[0]).toEqual({
+        type: 'cancel',
+        workflowId: 'wf-retired',
+      });
+      expect(mockPool.release).toHaveBeenCalledTimes(2);
+
+      // The parked workflow is still resumable on its worker.
+      strategy.resumeWorkflow({
+        workflowId: 'wf-parked',
+        checkpoint: new ArrayBuffer(0),
+        operationResult: { status: 'completed', value: null },
+      });
+      await waitForTestingCondition(() => worker.postMessage.mock.calls.length === 4, {
+        label: 'parked workflow resumed',
+      });
+      expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+        type: 'resume',
+        workflowId: 'wf-parked',
+      });
+      expect(messages).toEqual([]);
+    });
+
+    it('swallows a later resume for the retired workflow instead of failing it', async () => {
+      setup(1, { discardOnCancel: true });
+      await parkOneAndActivateAnother('wf-parked', 'wf-retired');
+      messages.length = 0;
+
+      strategy.retireWorkflow('wf-retired');
+      strategy.resumeWorkflow({
+        workflowId: 'wf-retired',
+        checkpoint: new ArrayBuffer(0),
+        operationResult: { status: 'completed', value: null },
+      });
+
+      expect(messages).toEqual([]);
+    });
+
+    it('retires a parked workflow cooperatively without failing the active one', async () => {
+      setup(1, { discardOnCancel: true });
+      await parkOneAndActivateAnother('wf-retired', 'wf-active');
+      const worker = firstWorker();
+      messages.length = 0;
+
+      strategy.retireWorkflow('wf-retired');
+      expect(messages).toEqual([]);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+
+      // The worker is busy with the active workflow, so the cancel for the
+      // retired parked one is delivered once the active turn finishes.
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: { type: 'completed', workflowId: 'wf-active', result: 'done' },
+        }),
+      );
+      await waitForTestingCondition(
+        () =>
+          worker.postMessage.mock.calls.some(
+            (call) => call[0]?.type === 'cancel' && call[0]?.workflowId === 'wf-retired',
+          ),
+        { label: 'cancel posted for the retired parked workflow' },
+      );
+
+      expect(messages.map((message) => message.type)).toEqual(['completed']);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('still releases the worker when the cancel message cannot be sent', async () => {
+      setup(1, { discardOnCancel: true });
+      await parkOneAndActivateAnother('wf-parked', 'wf-retired');
+      const worker = firstWorker();
+      messages.length = 0;
+      worker.postMessage.mockImplementation(() => {
+        throw new Error('worker channel closed');
+      });
+
+      // The failed send is reported to the caller (abandonment contains it), but
+      // the worker is released and nothing else on it is disturbed.
+      expect(() => strategy.retireWorkflow('wf-retired')).toThrow('worker channel closed');
+
+      expect(messages).toEqual([]);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(mockPool.release).toHaveBeenCalledTimes(2);
+    });
+
+    it('does nothing when no worker is assigned', () => {
+      setup();
+      strategy.retireWorkflow('wf-nonexistent');
+      expect(messages).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Worker errors
   // -------------------------------------------------------------------------
 

@@ -362,6 +362,10 @@ export {
   type WorkflowRevisionDiagnostics,
 } from './catalog-removal.ts';
 export {
+  WeftWorkflowCheckpointConflictWarning,
+  WORKFLOW_CHECKPOINT_CONFLICT_WARNING_NAME,
+} from './checkpoint-conflict-error.ts';
+export {
   DynamicWorkflowSourceUnavailableError,
   WorkflowSourceNotRegisteredError,
 } from './dynamic-source-errors.ts';
@@ -385,6 +389,7 @@ export {
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
+  WorkflowCheckpointConflictError,
   WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,

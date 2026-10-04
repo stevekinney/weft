@@ -284,6 +284,11 @@ export class RevisionRealmExecutionStrategy implements ExecutionStrategy {
     this.#registry.releaseAfterExecution(execution.name, execution.revision, execution.realm);
   }
 
+  /** One realm serves exactly one execution, so releasing it touches no other workflow. */
+  retireWorkflow(workflowId: string): void {
+    this.cancelWorkflow(workflowId);
+  }
+
   /**
    * Clears any stale `#cancelled`/`#inFlight` entry a PRIOR, unrelated
    * execution of this same workflow id left behind, before a fresh

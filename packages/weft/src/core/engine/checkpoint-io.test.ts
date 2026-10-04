@@ -7,13 +7,15 @@ import {
   type StorageCapabilities,
 } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { EMPTY_EVENT_HEAD } from '../event-log.ts';
 import type { Checkpoint } from '../types.ts';
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
+import { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { cleanupTerminalWorkflowMemory } from './termination/cleanup.ts';
 
@@ -200,6 +202,124 @@ describe('checkpoint commit compare-and-swap guard', () => {
     expect(committed).toEqual(serializeCheckpoint(firstNext));
     expect(storage.conditionalBatchCallCount).toBe(2);
     expect(storage.mismatchedConditionCount).toBe(1);
+  });
+
+  it('classifies a lost commit as a checkpoint conflict only when the stored checkpoint changed', async () => {
+    const storage = new CountingConditionalBatchStorage();
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const { workflowId } = initialCheckpoint;
+    const advancedElsewhere = serializeCheckpoint({
+      ...initialCheckpoint,
+      step: 1,
+      createdAt: 2_000,
+    });
+    const nextBuffer = serializeCheckpointBuffer({
+      ...initialCheckpoint,
+      step: 1,
+      createdAt: 3_000,
+    });
+
+    // Another writer replaced the checkpoint: a conflict naming the workflow.
+    const advanced = createCheckpointInternals(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(advanced, initialCheckpoint);
+    await storage.put(KEYS.checkpoint(workflowId), advancedElsewhere);
+    const advancedReason = await rejectionOf(
+      persistCheckpoint(
+        advanced,
+        workflowId,
+        checkpointOperation,
+        nextBuffer,
+        createPersistCallbacks(),
+      ),
+    );
+    expect(advancedReason).toBeInstanceOf(WorkflowCheckpointConflictError);
+    expect((advancedReason as WorkflowCheckpointConflictError).workflowId).toBe(workflowId);
+
+    // The checkpoint was removed (purged or replaced): also a conflict.
+    const removed = createCheckpointInternals(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(removed, initialCheckpoint);
+    await storage.delete(KEYS.checkpoint(workflowId));
+    expect(
+      await rejectionOf(
+        persistCheckpoint(
+          removed,
+          workflowId,
+          checkpointOperation,
+          nextBuffer,
+          createPersistCallbacks(),
+        ),
+      ),
+    ).toBeInstanceOf(WorkflowCheckpointConflictError);
+  });
+
+  it('classifies a lost commit as a conflict when the follow-up checkpoint read fails', async () => {
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const { workflowId } = initialCheckpoint;
+    const readFailure = new Error('storage read unavailable');
+    let commitLost = false;
+    class ReadFailsAfterLossStorage extends MemoryStorage {
+      override async conditionalBatch(
+        conditions: ConditionalBatchCondition[],
+        operations: BatchOperation[],
+      ): Promise<boolean> {
+        const applied = await super.conditionalBatch(conditions, operations);
+        if (!applied) commitLost = true;
+        return applied;
+      }
+      override async get(key: string): Promise<Uint8Array | null> {
+        if (commitLost && key === KEYS.checkpoint(workflowId)) throw readFailure;
+        return super.get(key);
+      }
+    }
+    const storage = new ReadFailsAfterLossStorage();
+    const internals = createCheckpointInternals(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(internals, initialCheckpoint);
+    await storage.put(
+      KEYS.checkpoint(workflowId),
+      serializeCheckpoint({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
+    );
+
+    const reason = await rejectionOf(
+      persistCheckpoint(
+        internals,
+        workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 3_000 }),
+        createPersistCallbacks(),
+      ),
+    );
+
+    // The compare-and-swap already lost, so an unclassifiable loss must stay on
+    // the write-free conflict path rather than surface as an ordinary failure.
+    expect(reason).toBeInstanceOf(WorkflowCheckpointConflictError);
+    expect((reason as Error).cause).toBe(readFailure);
+  });
+
+  it('keeps the generic lost-race error when the batch had no checkpoint condition to lose', async () => {
+    const storage = new CountingConditionalBatchStorage();
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const { workflowId } = initialCheckpoint;
+    // No remembered committed bytes: the commit carries no checkpoint condition,
+    // so only the staged side-effect condition below can lose it.
+    const internals = createCheckpointInternals(storage, initialCheckpoint);
+    await seedCheckpoint(storage, initialCheckpoint);
+    stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+      conditions: [{ key: 'side-effect-guard', expectedValue: new Uint8Array([1]) }],
+      operations: [],
+    });
+
+    const reason = await rejectionOf(
+      persistCheckpoint(
+        internals,
+        workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
+        createPersistCallbacks(),
+      ),
+    );
+
+    expect((reason as Error).message).toContain('lost its CAS race');
+    expect(reason).not.toBeInstanceOf(WorkflowCheckpointConflictError);
   });
 
   it('leaves in-memory checkpoint state unchanged when the CAS commit loses', async () => {

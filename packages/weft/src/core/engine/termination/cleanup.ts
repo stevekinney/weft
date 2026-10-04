@@ -3,7 +3,7 @@ import { KEYS, encodeStorageKeyComponent, storageHas } from '../../../storage/in
 import { CleanupWarningEvent, RemoteActivityCancellationRequestedEvent } from '../../events.ts';
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
-import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { releaseLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { clearPendingAtomicWorkflowCommitSideEffects } from '../checkpoint-side-effects.ts';
 import type { EngineInternals } from '../internals.ts';
 import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
@@ -368,8 +368,7 @@ export function cleanupTerminalWorkflowMemory(
 ): void {
   settleSleepTimerAcknowledgements(internals, workflowId, 'terminal');
   internals.workflowsNeedingTerminalCleanup.delete(workflowId);
-  forgetCommittedCheckpointBytes(internals, workflowId);
-  internals.checkpoints.delete(workflowId);
+  releaseLaunchCheckpoint(internals, workflowId);
   internals.heartbeatDetails.delete(workflowId);
   internals.lastHeartbeatDetailsByStep.delete(workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {

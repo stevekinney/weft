@@ -143,6 +143,11 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#cleanup(workflowId);
   }
 
+  /** Inline execution is one generator per workflow: retiring is cancelling. */
+  retireWorkflow(workflowId: string): void {
+    this.cancelWorkflow(workflowId);
+  }
+
   /**
    * Evict a workflow's in-memory execution state (generator, abort controller,
    * live context, tracked turns/advances).

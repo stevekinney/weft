@@ -31,11 +31,11 @@ const SHARED_CALL_PATTERN = /\bapplyWorkerTaskResult\s*\(/;
 describe('WebSocket and long-poll share one result-application implementation (COR-240 criterion 12)', () => {
   it('both transports import applyWorkerTaskResult from task-result-application.ts', () => {
     const websocketSource = readRuntimeSource('websocket-worker.ts');
-    const longPollSource = readRuntimeSource('task-polling.ts');
+    const longPollSource = readRuntimeSource('task-result-submission.ts');
 
     for (const [name, source] of [
       ['websocket-worker.ts', websocketSource],
-      ['task-polling.ts', longPollSource],
+      ['task-result-submission.ts', longPollSource],
     ] as const) {
       expect(source, `${name} should import applyWorkerTaskResult`).toMatch(SHARED_IMPORT_PATTERN);
       expect(source, `${name} should call applyWorkerTaskResult`).toMatch(SHARED_CALL_PATTERN);
@@ -50,7 +50,7 @@ describe('WebSocket and long-poll share one result-application implementation (C
     // guarantee shared BEHAVIOR — this closes that gap directly.
     const forbiddenDefinitionPattern =
       /function\s+(commitTaskLedgerCompletion|matchIdempotentResubmission)\b/;
-    for (const fileName of ['websocket-worker.ts', 'task-polling.ts'] as const) {
+    for (const fileName of ['websocket-worker.ts', 'task-result-submission.ts'] as const) {
       expect(
         readRuntimeSource(fileName),
         `${fileName} should not define its own ledger-completion logic`,

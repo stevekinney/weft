@@ -12,7 +12,6 @@ import {
   releaseInFlightStart,
   resolveAndReserveExecutableRegistration,
 } from '../catalog-removal.ts';
-import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { Engine } from '../index.ts';
@@ -54,7 +53,8 @@ import {
   prepareTerminalRunPurge,
   resolveTerminalConflictForRestart,
 } from './start-terminal-conflict-purge.ts';
-import { rollbackTransientStartState } from './start-transient-state.ts';
+import type { StartTransientState } from './start-transient-state.ts';
+import { createLaunchAdoption } from './start-transient-state.ts';
 import {
   mergeWorkerStartOverrideOperations,
   prepareWorkerStartOverrideConsumption,
@@ -267,6 +267,11 @@ export async function startWorkflow(
    * any public surface.
    */
   skipAdmissionIdCheck?: boolean | 'reattach-only' | 'bulk-retry-only',
+  /**
+   * Internal-only, never part of `StartOptions`: services and terminal-cleanup membership a caller
+   * resolved ahead of the start. Passed only by `startScheduledRun`; every public surface omits it.
+   */
+  transientState?: StartTransientState,
 ): Promise<WorkflowHandle> {
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
@@ -298,6 +303,7 @@ export async function startWorkflow(
   }
   internals.pendingStarts.add(workflowId);
   let startSucceeded = false;
+  const launch = createLaunchAdoption(internals, workflowId);
   let inFlightRevision: string | undefined;
 
   try {
@@ -402,14 +408,26 @@ export async function startWorkflow(
           )
         : undefined;
 
-    internals.checkpoints.set(workflowId, checkpoint);
     // Prime the checkpoint-bytes CAS baseline synchronously (WFT-21, Codex
     // review round 5, P1; mirrors `resume.ts`'s own set+remember pairing) —
     // without this, this generation's first checkpoint commit carries no
     // `expectedSerialized`, leaving it unfenced against a concurrent
     // `start-new` replacement. A failed start's own rollback below already
     // calls `forgetCommittedCheckpointBytes()`, so nothing stale leaks.
-    rememberCommittedCheckpointBytes(internals, workflowId, serializeCheckpoint(checkpoint));
+    //
+    // Adopting the id also installs the run's non-serialized services, held in engine memory so
+    // the inline Context can read them (never written to storage; the start batch writes only a
+    // presence marker so a fresh-process recovery knows to re-provide them), and its membership in
+    // terminal cleanup, which is what makes a terminal write schedule the deferred cleanup that
+    // sweeps that marker. This launch is the only writer of either entry, and it installs them
+    // here, before the create batch below is awaited, so a cancel or timeout that lands while the
+    // batch commits already finds the membership. The rollback below takes back exactly what it
+    // installed. A scheduled occurrence's services arrive in `transientState`.
+    launch.adopt(checkpoint, serializeCheckpoint(checkpoint), {
+      options,
+      transientState,
+      limitsConcurrency: workflowConcurrency !== undefined,
+    });
     setWorkflowStartHeaders(internals, workflowId, workflowStartHeaders, callbacks);
 
     // Cache the workflow version tuple for forwarding to event-log entries.
@@ -454,25 +472,6 @@ export async function startWorkflow(
       buildIdempotentStartOperations,
     );
 
-    // Hold the non-serialized per-run services in engine memory so the inline
-    // Context can read them. The services value is never written to storage — it
-    // bypasses every durable record. A presence-only "expects services" marker IS
-    // written atomically in the start batch (see buildStartBatchOperations) so a
-    // fresh-process recovery knows to re-provide them. Cleared on terminal cleanup
-    // (and on rollback below).
-    //
-    // Joining `workflowsNeedingTerminalCleanup` mirrors `setWorkflowStartHeaders`:
-    // it is what makes `completeWorkflow` schedule the deferred durable cleanup
-    // that sweeps the marker. The start batch wrote the matching
-    // `terminalCleanupNeeded` key so recovery re-derives this membership.
-    if (options?.services !== undefined) {
-      internals.workflowServices.set(workflowId, options.services);
-      internals.workflowsNeedingTerminalCleanup.add(workflowId);
-    }
-    if (workflowConcurrency !== undefined) {
-      internals.workflowsNeedingTerminalCleanup.add(workflowId);
-    }
-
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
     await beginExecutionAwaitingLiveness(
       internals,
@@ -494,7 +493,7 @@ export async function startWorkflow(
     internals.pendingStarts.delete(workflowId);
     releaseInFlightStart(internals, type, inFlightRevision);
     if (!startSucceeded) {
-      rollbackTransientStartState(internals, workflowId);
+      launch.rollback();
     }
   }
 }

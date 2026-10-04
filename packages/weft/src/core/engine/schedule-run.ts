@@ -6,9 +6,14 @@ import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { unavailableServicesError } from './lifecycle/recovered-services.ts';
 import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
+import type { StartTransientState } from './lifecycle/start-transient-state.ts';
 import { buildPinnedRevisionOverride } from './schedule-revision-fire.ts';
 import { encodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
+
+/** What {@link resolveScheduledRunServices} reports for one occurrence; `null` when nothing was resolved. */
+type ScheduledRunServicesResolution =
+  { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string } | null;
 
 export type ScheduledRunStartOptions = {
   occurrence?: number;
@@ -100,20 +105,19 @@ export async function startScheduledRun(
       key: KEYS.workflowHasServices(workflowId),
       value: EMPTY_STORAGE_VALUE,
     });
-
-    if (resolution.status === 'available') {
-      internals.workflowServices.set(workflowId, resolution.services);
-    }
   }
 
-  // Register the terminal-cleanup obligation before startWorkflow is called.
-  // Every scheduled run writes `schedule-run` metadata, and the inline start can
-  // complete before this function resumes after the await. The in-memory set is
-  // what makes completion schedule the deferred durable cleanup timer that
-  // sweeps that metadata if the fire-and-forget scheduled-terminal handler is
-  // interrupted. If startWorkflow throws, rollbackTransientStartState clears it.
-  internals.workflowsNeedingTerminalCleanup.add(workflowId);
-
+  // Put nothing in engine memory here. Every scheduled run writes `schedule-run` metadata, and
+  // the inline start can complete before this function resumes after the await, so the run must
+  // join terminal cleanup: the in-memory membership is what makes completion schedule the deferred
+  // durable cleanup timer that sweeps that metadata if the fire-and-forget scheduled-terminal
+  // handler is interrupted. The run also holds the services resolved above. Both go to
+  // `startWorkflow` as its internal `transientState`, which installs them when its launch adopts
+  // the id, before the create batch commits, so a cancel or timeout that lands while the batch
+  // commits already finds the membership. The launch removes them again if it is rejected after it
+  // adopted a checkpoint. A start rejected before that has installed nothing, so there is nothing
+  // to take back, and the id, which may by then belong to another launch, is never touched.
+  //
   // An empty array and `undefined` are equivalent at the receiving end
   // (buildStartBatchOperations spreads `?? []`), so pass the array directly.
   // `buildPinnedRevisionOverride` is `undefined` for an `'active-at-fire'`
@@ -126,6 +130,7 @@ export async function startScheduledRun(
     scheduleRunOperations,
     buildPinnedRevisionOverride(state),
     options.skipAdmissionIdCheck,
+    buildScheduledRunTransientState(resolution),
   );
 
   // The run launched, so the occurrence fired. Emit before the unavailable
@@ -154,6 +159,19 @@ export async function startScheduledRun(
 }
 
 /**
+ * What the occurrence hands `startWorkflow` to install for its run: membership in terminal cleanup,
+ * which every scheduled run owes, and its services when the resolution produced them.
+ */
+function buildScheduledRunTransientState(
+  resolution: ScheduledRunServicesResolution,
+): StartTransientState {
+  return {
+    joinTerminalCleanup: true,
+    ...(resolution?.status === 'available' && { services: { value: resolution.services } }),
+  };
+}
+
+/**
  * Resolve workflow services for a scheduled occurrence when the engine has a
  * `resolveWorkflowServices` resolver and is in inline execution mode.
  *
@@ -167,9 +185,7 @@ async function resolveScheduledRunServices(
   workflowId: string,
   state: ScheduleState,
   occurrence: number | undefined,
-): Promise<
-  { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string } | null
-> {
+): Promise<ScheduledRunServicesResolution> {
   const resolver = internals.options.resolveWorkflowServices;
   if (internals.inlineStrategy === null || !resolver) {
     return null;

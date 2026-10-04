@@ -1,6 +1,6 @@
 import { isAuthenticated, type Principal } from '../principal.ts';
 import type { LongPollWorkerSession, ServerContext } from './context.ts';
-import { authorizeWorkerPrincipal } from './task-polling.ts';
+import { authorizeWorkerPrincipal } from './task-result-submission.ts';
 
 export const WORKER_SESSION_CREDENTIAL_HEADER = 'Weft-Worker-Session-Token';
 

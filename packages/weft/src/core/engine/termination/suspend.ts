@@ -2,6 +2,7 @@ import type { BatchOperation } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
 import { WorkflowSuspendedEvent } from '../../events.ts';
+import { releaseSuspendedCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowSuspendNotSupportedError } from '../errors.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -144,7 +145,7 @@ export async function suspendWorkflow(
     //      (likely alongside MultiEngine); deliberately out of scope here.
     internals.inlineStrategy.parkWorkflow(workflowId);
     dropQueuedInlineWorkflowStart(internals, workflowId);
-    internals.checkpoints.delete(workflowId);
+    releaseSuspendedCheckpoint(internals, workflowId, state.workflowExecutionToken);
     internals.parkedInlineWorkflows.delete(workflowId);
     evictSuspendedWorkflowWaiters(internals, workflowId, callbacks);
 
