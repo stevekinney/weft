@@ -3,7 +3,9 @@
  * part of the public API (re-exported from `@lostgradient/weft`). Each value equals the
  * throwing class's name and is safe to `switch` on exhaustively. Errors not
  * exported from `@lostgradient/weft` carry internal codes that are intentionally absent
- * from this union and may change between releases.
+ * from this union and may change between releases. A few root-exported
+ * classes are unregistered too (the lease and claim errors, internal-only
+ * under ADR 0002, among them); the reference page below lists every one.
  *
  * Prefer comparing `error.code` (or {@link isWeftErrorLike}) over `instanceof`
  * when an error may have crossed a realm or duplicate-module boundary, where

@@ -10,8 +10,16 @@
  *
  * Every `data` object carries `{ weftCode, httpStatus }` plus the typed
  * fault-specific payload. The pair is a uniform machine-readable handle:
- * clients can route on `weftCode` (string) when they want symbolic names,
- * or on `httpStatus` (number) when they want HTTP-equivalent semantics.
+ * clients can route on `weftCode` when they want symbolic names, or on
+ * `httpStatus` (number) when they want HTTP-equivalent semantics.
+ *
+ * Here `weftCode` is the coarse `FaultCode` (`fault.code`, e.g. `NotFound`),
+ * NOT the fine-grained `WeftErrorCode` (e.g. `WorkflowNotFoundError`) that
+ * the REST body's top-level `weftCode` carries (`shapeRestFaultAsJson` in
+ * `operation-fault.ts`). Because the envelope keys are written last, a
+ * fine-grained `weftCode` inside the fault's own data does not survive onto
+ * this wire. The asymmetry is the current wire contract; see
+ * `documentation/reference/api-errors.md#wire-envelopes`.
  *
  * Pure: no engine, no I/O. The fault decides the wire shape.
  */

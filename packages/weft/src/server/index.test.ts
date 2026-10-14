@@ -4122,6 +4122,40 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     }
   });
 
+  it('admits mTLS from the serve() authenticator only when its own listener enforces client certificates', async () => {
+    const admissionFor = async (rejectUnauthorized: boolean | undefined) => {
+      engine = createEngine();
+      const { serverOptions, serverMetricsCollector } = resolveNetworkConfig({
+        engine,
+        port: 0,
+        publicOrigin: 'https://localhost',
+        auth: {
+          mtls: {
+            ca: 'ca-pem',
+            cert: 'cert-pem',
+            key: 'key-pem',
+            ...(rejectUnauthorized === undefined ? {} : { rejectUnauthorized }),
+          },
+        },
+      });
+      const context = buildServerContext(serverOptions, serverMetricsCollector);
+      try {
+        const authenticate = await context.authenticatorPromise;
+        return await authenticate?.(new Request('https://localhost/v1/workflows'));
+      } finally {
+        context.workflowEventFeed.dispose();
+        context.fleetEventFeed.dispose();
+        engine[Symbol.dispose]();
+      }
+    };
+
+    expect(await admissionFor(undefined)).toEqual({ authenticated: true, method: 'mtls' });
+    expect(await admissionFor(false)).toEqual({
+      authenticated: false,
+      error: 'No valid credentials provided',
+    });
+  });
+
   it('serves unauthenticated workflow event SSE when server auth is disabled', async () => {
     engine = createEngine();
     const { serverOptions, serverMetricsCollector } = resolveNetworkConfig({

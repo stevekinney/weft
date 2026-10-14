@@ -4,7 +4,8 @@
  * Supports three authentication methods, all optional and configurable:
  * - **API keys**: validated via `Authorization: Bearer <key>` or `X-API-Key` header
  * - **JWT**: HMAC or RSA/ECDSA signature verification with claims validation
- * - **mTLS**: mutual TLS at the transport layer (configured via Bun.serve tls options)
+ * - **mTLS**: mutual TLS at the transport layer (configured via Bun.serve tls options),
+ *   admitted only on positive evidence of a verified client certificate
  *
  * @module server/authentication
  */
@@ -24,6 +25,7 @@ import {
   type Authenticator,
   type AuthResult,
   type JWTConfig,
+  type MTLSConfig,
 } from './types.ts';
 
 export {
@@ -171,6 +173,50 @@ async function authenticateViaJwt(
   }
 }
 
+async function clientCertificateVerified(
+  request: Request,
+  mtlsConfig: MTLSConfig,
+  transportVerifiesClientCertificates: boolean,
+): Promise<boolean> {
+  const verify = mtlsConfig.verifyClientCertificate;
+  if (verify === undefined) return transportVerifiesClientCertificates;
+  try {
+    // Untyped hosts can return any value; only a literal `true` is evidence.
+    const verified: unknown = await verify(request);
+    return verified === true;
+  } catch (error) {
+    console.warn(
+      'Client certificate verification failed:',
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
+}
+
+/**
+ * Options supplied by the code that owns the transport, not by `AuthConfig`.
+ */
+export type CreateAuthenticatorOptions = {
+  /**
+   * Attests that the listener carrying these requests requested a client
+   * certificate and refused every connection without a verified one, so a
+   * request reaching the authenticator is evidence of a verified certificate.
+   * `serve()` sets this from the TLS options it builds; leave it unset
+   * whenever TLS terminates anywhere else.
+   */
+  transportVerifiesClientCertificates?: boolean;
+};
+
+/**
+ * Whether TLS options built by {@link buildTLSOptions} refuse every
+ * connection that lacks a verified client certificate.
+ */
+export function tlsOptionsVerifyClientCertificates(
+  tlsOptions: ReturnType<typeof buildTLSOptions>,
+): boolean {
+  return tlsOptions !== undefined && tlsOptions.requestCert && tlsOptions.rejectUnauthorized;
+}
+
 /**
  * Validate an `AuthConfig` eagerly, throwing on invalid combinations.
  * Called synchronously in `serve()` so misconfigurations fail fast.
@@ -199,7 +245,9 @@ export function validateAuthConfig(config: AuthConfig): void {
  * 1. Public path bypass
  * 2. API key (constant-time digest scan)
  * 3. JWT (signature + claims verification)
- * 4. mTLS (transport-level — any request that reaches the handler is authenticated)
+ * 4. mTLS, only when no explicit credential was presented and a verified client
+ *    certificate is evidenced by `verifyClientCertificate` or by
+ *    `options.transportVerifiesClientCertificates`
  *
  * @example
  * ```ts
@@ -215,8 +263,12 @@ export function validateAuthConfig(config: AuthConfig): void {
  * console.log(result.authenticated); // true
  * ```
  */
-export async function createAuthenticator(config: AuthConfig): Promise<Authenticator> {
+export async function createAuthenticator(
+  config: AuthConfig,
+  options: CreateAuthenticatorOptions = {},
+): Promise<Authenticator> {
   validateAuthConfig(config);
+  const transportVerifiesClientCertificates = options.transportVerifiesClientCertificates === true;
 
   const apiKeyEntries = config.apiKeys?.length
     ? createConstantTimeApiKeyMatcher(config.apiKeys).entries
@@ -250,7 +302,11 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
 
     const explicitAuthAttempted =
       apiKeyAttempt.explicitAuthAttempted || jwtAttempt.explicitAuthAttempted;
-    if (config.mtls && !explicitAuthAttempted) {
+    if (
+      config.mtls &&
+      !explicitAuthAttempted &&
+      (await clientCertificateVerified(request, config.mtls, transportVerifiesClientCertificates))
+    ) {
       return auditDecision(auditSink, request, { authenticated: true, method: 'mtls' });
     }
 
