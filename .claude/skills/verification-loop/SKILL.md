@@ -144,7 +144,7 @@ npm publish --dry-run --ignore-scripts
 ```
 
 `prepack` is the repository package contract: build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` because the release workflow runs `prepack` explicitly before publishing with ignored package lifecycle scripts.
-Release pipeline changes must also prove `package.json.version`, the exported `VERSION`, agree with `bun run scripts/verify-release-version.ts`; the release workflow runs that check and the `mirror-verify` gates before publish.
+Release pipeline changes must also prove `package.json.version` and the exported `VERSION` agree with `bun run scripts/verify-release-version.ts`; the release workflow runs that check and the `mirror-verify` gates before publish.
 
 ### Phase 6: Diff Review
 

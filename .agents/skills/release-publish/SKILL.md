@@ -15,18 +15,20 @@ Publish Weft through the GitHub Actions release workflow, not by defaulting to a
 local `npm publish`. The workflow runs on every push to `main`, after
 `verify` (package.json and `src/version.ts` agree) and `verify-mirror` (the
 `mirror-verify.yaml` build, typecheck, pack, and consumer gates) pass. It runs
-`changesets/action`, which has two outcomes:
+two steps in order:
 
-- While changesets are pending, it opens or updates the "Version Packages"
-  pull request. That pull request shows the version bump, the changelog entries,
-  and the regenerated `src/version.ts`.
-- When that pull request has merged and no changesets are left, it runs
-  `bun run release:publish` (`scripts/publish-if-missing.ts`). If npm already has
-  the version, it logs that it is skipping the publish and publishes nothing.
-  Otherwise it runs `scripts/verify-release-version.ts`, `bun run prepack`, and
-  `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
-  `npm publish --ignore-scripts`, and creates and pushes the annotated
-  `v<version>` tag on the checked-out commit.
+1. `bun run release:publish` (`scripts/publish-if-missing.ts`) publishes any
+   version npm does not have yet. If npm already has the manifest version, it
+   logs that it is skipping the publish and publishes nothing. Otherwise it runs
+   `scripts/verify-release-version.ts`, `bun run prepack`, and
+   `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
+   `npm publish --ignore-scripts`, and creates and pushes the annotated
+   `v<version>` tag on the checked-out commit. This runs before the next step
+   because `changesets/action` v2 skips publishing whenever changesets are
+   pending, which would strand an already-bumped version.
+2. `changesets/action` opens or updates the "Version Packages" pull request when
+   changesets are pending. That pull request shows the version bump, the
+   changelog entries, and the regenerated `src/version.ts`.
 
 A tag is the result of a release, never the trigger. If a publish succeeded but
 the tag push failed, the next run tags the commit npm records as `gitHead`. An
@@ -85,7 +87,8 @@ timeout-bump a gate to keep the release moving.
 
 ## Publication gate
 
-Merging the "Version Packages" pull request is what publishes to npm, so that is
+Merging the "Version Packages" pull request is what publishes to npm (the release
+run on the merge commit finds a version npm lacks), so that is
 where confirmation belongs. Confirm before merging unless the user already
 explicitly authorized release publication. Keep monitoring the pull request
 until CI is green, review comments are resolved, and the branch has no

@@ -69,11 +69,13 @@ jobs:
     if: github.event_name == 'push' || inputs.snapshot
     uses: ./.github/workflows/mirror-verify.yaml
 
-  # changesets/action v2 (the line for Changesets CLI v3) runs from the repository root. With
-  # changesets pending it opens or updates the "Version Packages" pull request; otherwise it runs
-  # release:publish, which publishes only when npm does not have the current version. The publish path below is the one the tag-triggered
-  # publish job used: same setup, same dry run, same OIDC trusted publishing with provenance. There
-  # is no NPM_TOKEN, because its presence can suppress OIDC.
+  # Every push to main first publishes any version npm does not have yet, then lets
+  # changesets/action open or update the "Version Packages" pull request if changesets are pending.
+  # The order matters: changesets/action v2 runs its publish script only when no changesets are
+  # pending, so a changeset landing before an already-bumped version published would otherwise
+  # leave that version unpublished and untagged. release:publish asks npm first, so a push that
+  # changes no version publishes nothing. It uses the OIDC trusted publishing and provenance setup
+  # the tag-triggered publish job had; there is no NPM_TOKEN, because its presence can suppress OIDC.
   release:
     if: github.event_name == 'push'
     needs: [verify, verify-mirror]
@@ -114,20 +116,23 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --linker=isolated
 
-      - name: Create Version Packages pull request or publish
+      # Publishes the manifest version when npm lacks it, then creates and pushes the annotated
+      # v<version> tag on the commit that published; otherwise skips, and heals or verifies the tag.
+      - name: Publish unpublished version
+        run: bun run release:publish
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Create or update Version Packages pull request
         uses: changesets/action@v2.1.2
         with:
           version-script: bun run changeset:version
-          publish-script: bun run release:publish
           pr-title: Version Packages
           commit-message: Version Packages
           create-github-releases: false
-          # release:publish creates and pushes the annotated v<version> tag itself, on the commit
-          # that published, so the action must not tag as well.
+          # release:publish creates the tag itself, so the action must not tag as well.
           push-git-tags: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          NPM_CONFIG_PROVENANCE: "true"
 
   publish-npm:
     if: github.event_name == 'workflow_dispatch' && inputs.snapshot

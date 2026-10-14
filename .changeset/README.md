@@ -16,6 +16,6 @@ Changes that arrive from the corvidae mirror sync carry their own changesets: co
 
 ## What happens next
 
-Merging to `main` runs the release workflow, which opens or updates a "Version Packages" pull request that applies the bumps, regenerates `src/version.ts`, and updates `packages/weft/CHANGELOG.md`. Merging that pull request publishes `@lostgradient/weft` to npm with provenance through trusted publishing and tags the release `v<version>`.
+Merging to `main` runs the release workflow. Each run first publishes any version npm does not have yet, then, when changesets are pending, opens or updates a "Version Packages" pull request that applies the bumps, regenerates `src/version.ts`, and updates `packages/weft/CHANGELOG.md`. Merging that pull request makes the next release run find an unpublished version, which it publishes to npm with provenance through trusted publishing and tags `v<version>`.
 
-A push to `main` that changes no version publishes nothing: the release step asks npm whether the version already exists and skips it when it does.
+A push to `main` that changes no version publishes nothing: the publish step asks npm whether the version already exists and skips it when it does.

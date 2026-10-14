@@ -31,11 +31,6 @@ export interface PublishIfMissingOptions {
   version: string;
   run: CommandRunner;
   log: (line: string) => void;
-  /**
-   * The file changesets/action v2 reads to learn what a custom publish script published
-   * (`CHANGESETS_OUTPUT`). Unset outside the action.
-   */
-  outputFile?: string | undefined;
 }
 
 const commitIdPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -196,8 +191,6 @@ async function reconcileTag(options: PublishIfMissingOptions, tag: string): Prom
 export async function publishIfMissing(options: PublishIfMissingOptions): Promise<void> {
   const tag = `v${options.version}`;
   const packageCommand = { cwd: options.packageRoot, stream: true };
-  // changesets/action warns when the file is absent, so a run that publishes nothing leaves it empty.
-  if (options.outputFile) fs.appendFileSync(options.outputFile, '');
 
   if (await isPublished(options)) {
     options.log(`${options.name}@${options.version} is already on npm; skipping publish`);
@@ -213,11 +206,6 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
     environment: { NPM_CONFIG_PROVENANCE: 'false' },
   });
   await expectSuccess(options, ['npm', 'publish', '--ignore-scripts'], packageCommand);
-  // changesets/action v2 reads published packages from this file, not from the script's output.
-  if (options.outputFile) {
-    const event = { type: 'git-tag', tag, packageName: options.name };
-    fs.appendFileSync(options.outputFile, `${JSON.stringify(event)}\n`);
-  }
   await tagAndPush(options, tag, undefined);
 }
 
@@ -263,7 +251,6 @@ if (import.meta.main) {
       version: manifest.version,
       run: defaultRunner,
       log: (line) => console.log(line),
-      outputFile: process.env['CHANGESETS_OUTPUT'],
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
