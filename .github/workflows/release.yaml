@@ -1,12 +1,14 @@
 name: release
 
-# `v*.*.*` tags publish @lostgradient/weft from packages/weft. The npm
-# trusted publisher for @lostgradient/weft is configured against this
-# repository and this workflow file (release.yaml) — keep both stable.
+# Every push to main runs changesets/action. While changesets are pending it opens or updates the
+# "Version Packages" pull request; once that pull request merges, release:publish publishes
+# @lostgradient/weft from packages/weft if npm does not have the version yet, then tags it. A push
+# that changes no version publishes nothing. The npm trusted publisher for @lostgradient/weft is
+# configured against this repository and this workflow file (release.yaml) — keep both stable.
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       snapshot:
@@ -22,6 +24,11 @@ on:
 
 permissions:
   contents: read
+
+# Releases must not overlap: two runs would race on the Version Packages branch and on the registry.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -39,7 +46,7 @@ jobs:
         with:
           bun-version: 1.4.0
 
-      - name: Verify tag, package.json, and VERSION agree
+      - name: Verify package.json and VERSION agree
         if: github.event_name == 'push'
         run: bun run scripts/verify-release-version.ts
 
@@ -62,8 +69,65 @@ jobs:
     if: github.event_name == 'push' || inputs.snapshot
     uses: ./.github/workflows/mirror-verify.yaml
 
+  # changesets/action runs from the repository root. With changesets pending it opens or updates the
+  # "Version Packages" pull request; otherwise it runs release:publish, which publishes only when
+  # npm does not have the current version. The publish path below is the one the tag-triggered
+  # publish job used: same setup, same dry run, same OIDC trusted publishing with provenance. There
+  # is no NPM_TOKEN, because its presence can suppress OIDC.
+  release:
+    if: github.event_name == 'push'
+    needs: [verify, verify-mirror]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Configure npm for trusted publishing
+        shell: bash
+        run: |
+          echo "NPM_CONFIG_USERCONFIG=$HOME/.npmrc" >> "$GITHUB_ENV"
+          cat > "$HOME/.npmrc" <<'EOF'
+          registry=https://registry.npmjs.org/
+          always-auth=false
+          EOF
+
+      - name: Upgrade npm
+        run: npm install -g npm@11.5.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --linker=isolated
+
+      - name: Create Version Packages pull request or publish
+        uses: changesets/action@v1
+        with:
+          version: bun run changeset:version
+          publish: bun run release:publish
+          title: Version Packages
+          commit: Version Packages
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
+
   publish-npm:
-    if: github.event_name == 'push' || inputs.snapshot
+    if: github.event_name == 'workflow_dispatch' && inputs.snapshot
     needs: [verify, verify-mirror]
     runs-on: ubuntu-latest
     permissions:
@@ -103,10 +167,6 @@ jobs:
         run: bun install --frozen-lockfile --linker=isolated
         working-directory: .
 
-      - name: Verify tag, package.json, and VERSION agree
-        if: github.event_name == 'push'
-        run: bun run scripts/verify-release-version.ts
-
       - name: Prepare snapshot version
         if: github.event_name == 'workflow_dispatch' && inputs.snapshot
         env:
@@ -121,19 +181,9 @@ jobs:
       - name: Run package prepack gates
         run: bun run prepack
 
-      - name: Verify npm publish dry run
-        if: github.event_name == 'push'
-        run: npm publish --dry-run --ignore-scripts
-
       - name: Verify npm snapshot publish dry run
         if: github.event_name == 'workflow_dispatch' && inputs.snapshot
         run: npm publish --dry-run --ignore-scripts --tag=next
-
-      - name: Publish to npm
-        if: github.event_name == 'push'
-        env:
-          NPM_CONFIG_PROVENANCE: "true"
-        run: npm publish --ignore-scripts
 
       - name: Publish snapshot to npm next dist-tag
         if: github.event_name == 'workflow_dispatch' && inputs.snapshot

@@ -8,9 +8,13 @@
   "packageManager": "bun@1.4.0",
   "scripts": {
     "build": "turbo run build",
+    "changeset": "changeset",
+    "changeset:version": "changeset version && bun packages/weft/scripts/write-version-constant.ts && bun install --lockfile-only && bun install --frozen-lockfile --linker=isolated",
+    "release:publish": "bun packages/weft/scripts/publish-if-missing.ts",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.0",
     "turbo": "^2.5.0"
   }
 }
