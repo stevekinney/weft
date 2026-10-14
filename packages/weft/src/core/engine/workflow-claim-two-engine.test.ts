@@ -285,6 +285,74 @@ describe('WFT-78: two engines sharing one store under ownership: "workflow-lease
   });
 });
 
+// COR-1390: a holder whose claim lapses (a starved renewal on a loaded host)
+// still sees the run's outcome through `handle.result()`, which reads it from
+// the store. `lostWorkflowClaim` is how it learns the outcome is not its own.
+describe('Engine.lostWorkflowClaim', () => {
+  it('is false under ownership: "none"', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, recover: false });
+    expect(await engine.lostWorkflowClaim('any-workflow')).toBe(false);
+  });
+
+  it('tells the holder whose lapsed claim another engine reclaimed that the result it observes is not its own', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'lapsed-claim-handoff';
+    await seedParkedWorkflow(storage, workflowId);
+    let now = 1_000_000;
+    const ttlMs = 60_000;
+    const renewMs = 5_000;
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const createEngine = async (engineId: string) => {
+      const engine = await Engine.create({
+        storage,
+        workflows,
+        ownership: 'workflow-lease',
+        workflowClaimTtl: ttlMs,
+        workflowClaimRenewInterval: renewMs,
+        recover: false,
+        backgroundTasks: 'manual',
+      });
+      const registry = new WorkflowClaimRegistry({
+        storage,
+        engineId,
+        getNow: () => now,
+        claimTtlMs: ttlMs,
+        claimRenewIntervalMs: renewMs,
+        warn: () => {},
+      });
+      getInternals(engine).workflowClaimRegistry = registry;
+      return { engine, registry };
+    };
+    const first = await createEngine('engine-a');
+    await using firstEngine = first.engine;
+    const second = await createEngine('engine-b');
+    await using secondEngine = second.engine;
+
+    // The first engine recovers the parked run and holds its claim.
+    const recoveredByFirst = await firstEngine.recoverAll();
+    expect(recoveredByFirst.map((handle) => handle.id)).toEqual([workflowId]);
+    const observedByFirst = firstEngine.getHandle(workflowId).result();
+    expect(await firstEngine.lostWorkflowClaim(workflowId)).toBe(false);
+
+    // Its claim lapses without a renewal; the second engine reclaims the run and finishes it.
+    now += ttlMs + 2 * renewMs + 1;
+    expect(await second.registry.takeover(workflowId)).toMatchObject({ status: 'acquired' });
+    const recoveredBySecond = await secondEngine.recoverAll();
+    expect(recoveredBySecond.map((handle) => handle.id)).toEqual([workflowId]);
+    await secondEngine.getHandle(workflowId).signal('go');
+    expect(await secondEngine.getHandle(workflowId).result()).toBe('ran');
+
+    // The first engine's waiter settles with the run's outcome, read from the store...
+    await firstEngine.runMaintenance();
+    expect(await observedByFirst).toBe('ran');
+    // ...but the outcome is the second engine's, not the first's.
+    expect(await firstEngine.lostWorkflowClaim(workflowId)).toBe(true);
+    expect(await secondEngine.lostWorkflowClaim(workflowId)).toBe(false);
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+});
+
 describe('WFT-134: engine.suspend() does not strand a same-engine resume() under ownership: "workflow-lease"', () => {
   it('suspend forgets the LOCAL claim cache entry, and a same-engine resume() re-acquires and runs to completion', async () => {
     const storage = new MemoryStorage();

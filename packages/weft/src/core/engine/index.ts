@@ -640,6 +640,7 @@ export class Engine<
   static async create(options: EngineCreateRuntimeOptions): Promise<unknown> {
     validateEngineCreateBackgroundTaskOptions(options);
     const engine = new Engine<object, object>(options);
+    getInternals(engine).onRecoveredWorkflowHook = options.onRecoveredWorkflow;
 
     try {
       await assertCompatiblePersistedDataVersion(getInternals(engine).storage);
@@ -2684,8 +2685,16 @@ export class Engine<
     // reuse — see `onRecoveredWorkflowHook`'s doc on `EngineInternals` for why
     // a reclaim-driven resume must not silently skip this hook just because it
     // was installed here rather than passed to that reclaim's own call.
-    getInternals(this).onRecoveredWorkflowHook = options?.onRecoveredWorkflow;
-    return recoverAllFromLifecycle(getInternals(this), this.#createLifecycleCallbacks(), options);
+    getInternals(this).onRecoveredWorkflowHook =
+      options?.onRecoveredWorkflow ?? getInternals(this).onRecoveredWorkflowHook;
+    const recoveredWorkflowHook = getInternals(this).onRecoveredWorkflowHook;
+    return recoverAllFromLifecycle(
+      getInternals(this),
+      this.#createLifecycleCallbacks(),
+      recoveredWorkflowHook === undefined
+        ? options
+        : { ...options, onRecoveredWorkflow: recoveredWorkflowHook },
+    );
   }
 
   /**
@@ -2883,6 +2892,24 @@ export class Engine<
    */
   async claimHolder(workflowId: string): Promise<WorkflowClaimHolderStatus | undefined> {
     return getInternals(this).workflowClaimRegistry?.holderStatus(workflowId);
+  }
+  /**
+   * Whether this engine claimed `workflowId` under `ownership:
+   * 'workflow-lease'` and another engine has since taken that claim, so the
+   * run's outcome is the other engine's. {@link WorkflowHandle.result} settles
+   * with that outcome either way, read from the store, because it reports the
+   * workflow, not who drove it. A caller that publishes a run's terminal
+   * outcome exactly once checks this after `result()` settles and leaves
+   * publication to the engine that kept the claim. `false` under every other
+   * ownership mode, for a workflow this engine never claimed, and for a claim
+   * this engine released itself. A cancel, timeout, or suspend rotates the
+   * claim's epoch whichever engine commits it, so after one of those this
+   * reports `true` even when this engine committed it: ask it only about a
+   * completed workflow, whose completion is committed under the holder's own
+   * claim. A storage read failure rejects.
+   */
+  async lostWorkflowClaim(workflowId: string): Promise<boolean> {
+    return (await getInternals(this).workflowClaimRegistry?.lostClaim(workflowId)) ?? false;
   }
   async getCurrentCheckpointStep(workflowId: string): Promise<number | null> {
     // Prefer the in-memory checkpoint: for a run live in this engine it is the

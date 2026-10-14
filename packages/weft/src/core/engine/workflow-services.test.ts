@@ -276,6 +276,42 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('hands a run recovered by a plain recoverAll() to the hook installed at Engine.create', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'create-time-hook' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('continue');
+      return 'completed';
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'create-time-hook': wf },
+    });
+    await firstEngine.start('create-time-hook', null, { id: 'create-time-run' });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const recovered: string[] = [];
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'create-time-hook': wf },
+      onRecoveredWorkflow: ({ workflowId }) => {
+        recovered.push(workflowId);
+      },
+    });
+    // No hook is passed here: the one installed at creation is the one a reclaim-driven resume
+    // would also use, and a plain recoverAll() must not discard it.
+    const handles = await secondEngine.recoverAll();
+
+    expect(recovered).toEqual(['create-time-run']);
+    await handles[0]!.signal('continue');
+    expect(await handles[0]!.result()).toBe('completed');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('isolates a recovery hook failure to its run and continues recovering siblings', async () => {
     const storage = new MemoryStorage();
     const wf = workflow({ name: 'hook-failure-sibling' }).execute(async function* (

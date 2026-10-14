@@ -2,6 +2,11 @@ import { expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from './testing/module-scope-scenario.test-support.ts';
 
 async function readHealthAddress(output: ReadableStream<Uint8Array>): Promise<string> {
   const reader = output.getReader();
@@ -20,9 +25,13 @@ async function readHealthAddress(output: ReadableStream<Uint8Array>): Promise<st
   }
 }
 
-it('starts the source CLI and serves a health request', async () => {
+// This scenario starts the source CLI as a real process, which takes seconds on a loaded host, so each scenario runs here at
+// module scope, off Bun's five-second per-test clock; its test rethrows the outcome.
+
+const scenario1 = await outcomeOf(async () => {
   const directory = await mkdtemp(join(tmpdir(), 'corvidae-cli-start-'));
   const child = Bun.spawn({
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
     cmd: [
       process.execPath,
       new URL('./cli-main.ts', import.meta.url).pathname,
@@ -57,3 +66,5 @@ it('starts the source CLI and serves a health request', async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+it('starts the source CLI and serves a health request', () => rethrow(scenario1));

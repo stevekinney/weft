@@ -89,4 +89,18 @@ describe('WorkflowClaimTakeoverCooldown', () => {
     expect(cooldown.isActive('wf-1', now)).toBe(true);
     expect(cooldown.isActive('wf-2', now)).toBe(false);
   });
+
+  it('wasDeposed() outlives the window and ends only at clear()', () => {
+    const cooldown = makeCooldown();
+    const now = 1_000_000;
+    expect(cooldown.wasDeposed('wf-1')).toBe(false);
+
+    cooldown.recordDeposition('wf-1', now);
+    expect(cooldown.isActive('wf-1', now + WINDOW_MS)).toBe(false);
+    expect(cooldown.wasDeposed('wf-1')).toBe(true);
+    expect(cooldown.wasDeposed('wf-2')).toBe(false);
+
+    cooldown.clear('wf-1');
+    expect(cooldown.wasDeposed('wf-1')).toBe(false);
+  });
 });

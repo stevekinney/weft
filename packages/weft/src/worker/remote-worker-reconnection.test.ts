@@ -32,6 +32,11 @@ import {
   waitForRealTimersForTesting,
 } from '../testing/fake-timers.test-support.ts';
 import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
+import {
   killAndReboot,
   spawnServerSubprocess,
   type SubprocessServerHandle,
@@ -1110,18 +1115,17 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
   });
 });
 
-describe('RemoteWorker durability — server restart while task is in flight', () => {
-  const createdFixtures: string[] = [];
-  const handles: SubprocessServerHandle[] = [];
+/**
+ * The whole scenario: a real server subprocess, SIGKILLed and rebooted with a task in flight. It
+ * takes seconds on a loaded host, so it runs at module scope, off Bun's five-second per-test clock,
+ * and the test below rethrows its outcome. The `finally` block does the cleanup an `afterEach` did.
+ */
+// Module-level so the hang guard can stop servers the scenario started if it never settles.
+const inFlightRestartHandles: SubprocessServerHandle[] = [];
 
-  afterEach(async () => {
-    await Promise.all(handles.splice(0).map((handle) => handle.stop()));
-    for (const fixture of createdFixtures.splice(0)) {
-      rmSync(fixture, { force: true, recursive: true });
-      rmSync(`${fixture}-wal`, { force: true });
-      rmSync(`${fixture}-shm`, { force: true });
-    }
-  });
+async function recoverInFlightTaskAcrossSigkill(): Promise<void> {
+  const createdFixtures: string[] = [];
+  const handles = inFlightRestartHandles;
 
   async function waitForTestDispatchUrl(handle: SubprocessServerHandle): Promise<string> {
     const deadline = Date.now() + 3_000;
@@ -1227,7 +1231,7 @@ process.on('SIGINT', () => void stop(0));
 `;
   }
 
-  it('recovers an in-flight task across SIGKILL and re-dispatches to a fresh worker', async () => {
+  try {
     const entrypoint = await writeEntrypoint('scenario-4', entrypointSource());
     const databasePath = join(fixtureDir('scenario-4-db'), 'weft.db');
 
@@ -1328,5 +1332,25 @@ process.on('SIGINT', () => void stop(0));
       await sleepForTesting(20);
     }
     expect(resolvedFlag).toBe(true);
-  }, 45_000);
+  } finally {
+    await Promise.all(handles.splice(0).map((handle) => handle.stop()));
+    for (const fixture of createdFixtures.splice(0)) {
+      rmSync(fixture, { force: true, recursive: true });
+      rmSync(`${fixture}-wal`, { force: true });
+      rmSync(`${fixture}-shm`, { force: true });
+    }
+  }
+}
+
+const inFlightRestartOutcome = await outcomeOf(
+  recoverInFlightTaskAcrossSigkill,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+  async () => {
+    await Promise.all(inFlightRestartHandles.splice(0).map((handle) => handle.stop()));
+  },
+);
+
+describe('RemoteWorker durability — server restart while task is in flight', () => {
+  it('recovers an in-flight task across SIGKILL and re-dispatches to a fresh worker', () =>
+    rethrow(inFlightRestartOutcome));
 });

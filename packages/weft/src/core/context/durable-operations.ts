@@ -109,6 +109,12 @@ export function* waitForSignal<T = unknown>(
 
 const CONDITION_DEADLINE_LOCAL_PREFIX = '__weftConditionDeadline:';
 
+function consumeSleepReferenceTime(internals: ContextInternals): number {
+  const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
+  internals.sleepReferenceTime = undefined;
+  return referenceTime;
+}
+
 /**
  * Read the absolute deadline anchor for a `ctx.waitUntil` step, writing it on the
  * first evaluation. Read-first so a crash/replay never resets the window: the
@@ -123,7 +129,16 @@ export function readOrInitConditionDeadline(
   step: number,
   timeout: Duration | undefined,
 ): number | undefined {
-  if (timeout === undefined) return undefined;
+  // Consume the resume reference time on every path that returns. An uncached
+  // `waitUntil` is the first time operation after resume whether or not it has a
+  // timeout or an existing anchor; leaving the reference set would hand the stale
+  // checkpoint time to the next uncached `ctx.sleep`, which would then fire early.
+  // A path that throws leaves it set, so a workflow that catches the error and
+  // then sleeps still schedules from the checkpoint time.
+  if (timeout === undefined) {
+    consumeSleepReferenceTime(internals);
+    return undefined;
+  }
 
   const localKey = `${CONDITION_DEADLINE_LOCAL_PREFIX}${step}`;
   const existing = internals.checkpointLocals[localKey];
@@ -131,6 +146,7 @@ export function readOrInitConditionDeadline(
   // 0 reference time); an `existing > 0` guard would treat that as unset and
   // re-anchor on every replay, resetting the wall-clock budget.
   if (typeof existing === 'number' && Number.isFinite(existing)) {
+    consumeSleepReferenceTime(internals);
     return existing;
   }
   // A present-but-non-finite anchor is corrupt persisted data. Fail loudly rather
@@ -143,9 +159,7 @@ export function readOrInitConditionDeadline(
   }
 
   const milliseconds = parseDuration(timeout);
-  const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
-  internals.sleepReferenceTime = undefined;
-  const deadline = referenceTime + milliseconds;
+  const deadline = consumeSleepReferenceTime(internals) + milliseconds;
   // Reassign rather than mutate in place: `checkpointLocals` is frozen between
   // operations (the activity-retry-state precedent), so an in-place write throws.
   internals.checkpointLocals = { ...internals.checkpointLocals, [localKey]: deadline };

@@ -256,6 +256,20 @@ export class WorkflowClaimRegistry {
     };
   }
 
+  /**
+   * Whether another engine took this engine's claim on `workflowId`: a renewal
+   * found it taken, or the stored epoch moved past the tracked one (a reclaim
+   * no renewal noticed yet, or any external terminal rotation). `false` once
+   * this engine released the claim or claims it again. A read failure rejects.
+   */
+  async lostClaim(workflowId: string): Promise<boolean> {
+    if (this.#takeoverCooldown.wasDeposed(workflowId)) return true;
+    const entry = this.#claims.get(workflowId);
+    if (entry === undefined) return false;
+    const stored = await this.#claimStorage.get(KEYS.workflowOwnerEpoch(workflowId));
+    return stored === null || decodeEpoch(stored) !== entry.epoch;
+  }
+
   async #resolveHeldBy(workflowId: string): Promise<string | null> {
     const raw = await this.#claimStorage.get(KEYS.workflowOwnerHolder(workflowId));
     if (raw === null) return null;

@@ -18,6 +18,8 @@
  * exactly three points: a failed `renew` calls {@link recordDeposition}, a
  * successful `acquire`/`takeover`/folded-acquire calls {@link clear}, and
  * `takeover` consults {@link isActive} before attempting its CAS.
+ * `lostClaim` also reads {@link wasDeposed}: a recorded deposition outlives
+ * its window until the next clear, so it still says the claim was lost.
  *
  * **Curve.** A fixed window of `workflowClaimRenewInterval`, not exponential.
  * Through `WorkflowClaimRegistry`'s real call graph, a second
@@ -67,6 +69,14 @@ export class WorkflowClaimTakeoverCooldown {
    */
   recordDeposition(workflowId: string, now: number): void {
     this.#untilMsByWorkflowId.set(workflowId, now + this.#windowMs);
+  }
+
+  /**
+   * Whether a deposition was recorded for `workflowId` since its last
+   * {@link clear}, whether or not its window has passed.
+   */
+  wasDeposed(workflowId: string): boolean {
+    return this.#untilMsByWorkflowId.has(workflowId);
   }
 
   /** Clear any tracked cooldown for `workflowId` — call on a successful (re)acquire or takeover. */
