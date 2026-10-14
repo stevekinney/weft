@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.16] - 2026-10-14
+
+### Changed
+
+- Maintain the workflow visibility indexes only when they are live: when the `wf-idx-meta:version` watermark is current, while a backfill is running (the new `wf-idx-meta:building` marker), or under `ownership: 'workflow-lease'`, whose reclaim scan reads the running-status index regardless of the watermark. On a store that has never been backfilled, state writes no longer pay for index rows that `engine.list` and `engine.aggregate` cannot read yet, which restores workflow-start throughput. The decision is read from storage and cached for the same one-second window the query planner uses.
+- A visibility backfill writes the building marker before it scans, waits out the cache window, rebuilds from empty on a fresh run, and drops the marker with the watermark write; dropping the indexes waits the same window before sweeping.
+- Serialize a start's initial checkpoint once instead of twice, and reuse one msgpack encoder in `codec.encode`, returning an exact-size copy.
+
+### Fixed
+
+- Count a teardown attempt whose host crashed toward the finalizer's attempt limit, so a finalizer that repeatedly crashes its host dead-letters instead of retrying forever. Missing-state dead letters count the stale attempt too, and the spent count is clamped.
+- Renew the running teardown marker while an unbounded finalizer is still live, so another engine does not reclaim a finalizer that is making progress. Transient heartbeat failures are retried, and the attempt keeps its original start time.
+
 ## [0.27.15] - 2026-10-04
 
 ### Added
