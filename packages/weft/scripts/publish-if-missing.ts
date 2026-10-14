@@ -220,6 +220,30 @@ async function assertHeadSetTheVersion(options: PublishIfMissingOptions): Promis
 }
 
 /**
+ * Refuse to publish when the release tag already exists on another commit.
+ *
+ * A publish cannot be undone, so the tag it will advertise is checked first: absent, or already
+ * on HEAD (a previous attempt tagged it and then failed). Returns whether it is already on HEAD.
+ */
+async function assertTagFreeOrOnHead(
+  options: PublishIfMissingOptions,
+  tag: string,
+): Promise<boolean> {
+  const existing = await remoteTagTarget(options, tag);
+  if (!existing) return false;
+  const head = await expectSuccess(options, ['git', 'rev-parse', 'HEAD'], {
+    cwd: options.repositoryRoot,
+  });
+  const commit = head.stdout.trim();
+  if (existing.toLowerCase() === commit.toLowerCase()) return true;
+  throw new PublishError(
+    `${tag} already points at ${existing}, not at HEAD (${commit}), so ` +
+      `${options.name}@${options.version} is not published: its tag would name the wrong source. ` +
+      'Fix the tag by hand, then re-run this release run.',
+  );
+}
+
+/**
  * Publish `options.name@options.version` unless the registry already has it.
  *
  * Releases run on every push to main, and most pushes carry no new version. Asking the registry
@@ -238,6 +262,7 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
   }
 
   await assertHeadSetTheVersion(options);
+  const tagAlreadyOnHead = await assertTagFreeOrOnHead(options, tag);
   await expectSuccess(options, ['bun', 'run', 'scripts/verify-release-version.ts'], packageCommand);
   await expectSuccess(options, ['bun', 'run', 'prepack'], packageCommand);
   // Provenance is requested for the real publish only, as it was before releases moved here.
@@ -246,6 +271,10 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
     environment: { NPM_CONFIG_PROVENANCE: 'false' },
   });
   await expectSuccess(options, ['npm', 'publish', '--ignore-scripts'], packageCommand);
+  if (tagAlreadyOnHead) {
+    options.log(`${tag} already points at the commit that published; leaving it in place`);
+    return;
+  }
   await tagAndPush(options, tag, undefined);
 }
 

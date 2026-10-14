@@ -69,7 +69,7 @@ Lint, the lint-suppression ceiling, the implementation file-size registry, the r
 bun run prepack
 ```
 
-`prepack` runs the build, the export and portability checks and the package-consumer validation — the same checks `release.yaml` runs before `npm publish`. Run `bun run verify:release-version` before tagging so `package.json`, `src/version.ts` and the tag agree.
+`prepack` runs the build, the export and portability checks and the package-consumer validation — the same checks `release.yaml` runs before `npm publish`. Run `bun run verify:release-version` before merging a Version Packages pull request so `package.json` and `src/version.ts` agree; the release workflow runs the same check, then tags the commit it publishes from.
 
 ## Git hooks
 

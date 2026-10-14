@@ -23,6 +23,8 @@ const parentManifest = 'git show HEAD^:packages/weft/package.json';
 const bumpSearch = `git log -1 --format=%H -S"version": "${version}" -- packages/weft/package.json`;
 const bumpCommit = 'b'.repeat(40);
 const lsRemotePeeled = `git ls-remote --tags origin refs/tags/v${version}^{}`;
+const revParseHead = 'git rev-parse HEAD';
+const headCommit = 'e'.repeat(40);
 
 const ok = (stdout = ''): CommandResult => ({ exitCode: 0, stdout, stderr: '' });
 const failure = (stdout: string, stderr = ''): CommandResult => ({
@@ -218,18 +220,60 @@ describe('publishIfMissing: version absent from npm', () => {
     await publishIfMissing(h.options());
 
     const commands = h.commands();
-    expect(commands.slice(0, 2)).toEqual([viewVersion, parentManifest]);
-    expect(commands.slice(2, 6)).toEqual([
+    expect(commands.slice(0, 3)).toEqual([viewVersion, parentManifest, lsRemote]);
+    expect(commands.slice(3, 7)).toEqual([
       'bun run scripts/verify-release-version.ts',
       'bun run prepack',
       'npm publish --dry-run --ignore-scripts',
       'npm publish --ignore-scripts',
     ]);
-    expect(commands[6]).toContain(`tag -a v${version} -m Weft ${version}`);
-    expect(commands[6]).not.toContain(gitHead);
-    expect(commands[7]).toBe(`git push origin refs/tags/v${version}`);
-    expect(commands).toHaveLength(8);
+    expect(commands[7]).toContain(`tag -a v${version} -m Weft ${version}`);
+    expect(commands[7]).not.toContain(gitHead);
+    expect(commands[8]).toBe(`git push origin refs/tags/v${version}`);
+    expect(commands).toHaveLength(9);
     expect(h.lines.some((line) => line.includes('skipping publish'))).toBe(false);
+  });
+
+  test('refuses to publish, before any package command, when the tag is on another commit', async () => {
+    const other = 'd'.repeat(40);
+    const h = harness({
+      [viewVersion]: notFound,
+      [lsRemote]: ok(`${'c'.repeat(40)}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${other}\trefs/tags/v${version}^{}\n`),
+      [revParseHead]: ok(`${headCommit}\n`),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain(other);
+    expect((failure as Error).message).toContain(headCommit);
+    expect(h.commands()).toEqual([
+      viewVersion,
+      parentManifest,
+      lsRemote,
+      lsRemotePeeled,
+      revParseHead,
+    ]);
+  });
+
+  test('publishes but leaves the tag alone when it already points at HEAD', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [lsRemote]: ok(`${headCommit}\trefs/tags/v${version}\n`),
+      [revParseHead]: ok(`${headCommit}\n`),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain('npm publish --ignore-scripts');
+    expect(h.commands().some((command) => /^git (?:.* )?(?:tag -a|push)\b/.test(command))).toBe(
+      false,
+    );
+    expect(h.lines.some((line) => line.includes('leaving it in place'))).toBe(true);
   });
 
   test('refuses to publish from a commit that did not set the version, naming the one that did', async () => {

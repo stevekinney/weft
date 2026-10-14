@@ -19,15 +19,17 @@ two steps in order:
 
 1. `bun run release:publish` (`scripts/publish-if-missing.ts`) publishes any
    version npm does not have yet. If npm already has the manifest version, it
-   logs that it is skipping the publish and publishes nothing. Otherwise it runs
-   `scripts/verify-release-version.ts`, `bun run prepack`, and
+   logs that it is skipping the publish and publishes nothing. Otherwise it
+   refuses to publish when the remote `v<version>` tag already points at another
+   commit, then runs `scripts/verify-release-version.ts`, `bun run prepack`, and
    `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
    `npm publish --ignore-scripts`, and creates and pushes the annotated
    `v<version>` tag on the checked-out commit. This runs before the next step
    because `changesets/action` v2 skips publishing whenever changesets are
    pending, which would strand an already-bumped version.
 2. `changesets/action` opens or updates the "Version Packages" pull request when
-   changesets are pending. That pull request shows the version bump, the
+   changesets are pending. It runs in its own job, after the publish, without the
+   `id-token: write` permission npm's trusted publishing needs. That pull request shows the version bump, the
    changelog entries, and the regenerated `src/version.ts`.
 
 A tag is the result of a release, never the trigger. If a publish succeeded but

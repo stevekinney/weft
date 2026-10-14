@@ -75,10 +75,10 @@ jobs:
     if: github.event_name == 'push' || inputs.snapshot
     uses: ./.github/workflows/mirror-verify.yaml
 
-  # Every push to main first publishes any version npm does not have yet, then lets
-  # changesets/action open or update the "Version Packages" pull request if changesets are pending.
-  # The order matters: changesets/action v2 runs its publish script only when no changesets are
-  # pending, so a changeset landing before an already-bumped version published would otherwise
+  # Every push to main first publishes any version npm does not have yet; only then does the
+  # version-pull-request job let changesets/action open or update the "Version Packages" pull
+  # request if changesets are pending. The order matters: changesets/action v2 runs its publish
+  # script only when no changesets are pending, so a changeset landing before an already-bumped version published would otherwise
   # leave that version unpublished and untagged. release:publish asks npm first, so a push that
   # changes no version publishes nothing. It uses the OIDC trusted publishing and provenance setup
   # the tag-triggered publish job had; there is no NPM_TOKEN, because its presence can suppress OIDC.
@@ -88,7 +88,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
       id-token: write
     steps:
       - name: Checkout
@@ -128,6 +127,29 @@ jobs:
         run: bun run release:publish
         env:
           NPM_CONFIG_PROVENANCE: "true"
+
+  # Kept out of the release job so this third-party action never holds npm's trusted-publishing
+  # OIDC permission: it only opens or updates a pull request, so it gets no id-token at all.
+  version-pull-request:
+    if: github.event_name == 'push'
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --linker=isolated
 
       - name: Create or update Version Packages pull request
         uses: changesets/action@v2.1.2
