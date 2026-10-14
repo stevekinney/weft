@@ -185,14 +185,34 @@ async function reconcileTag(options: PublishIfMissingOptions, tag: string): Prom
   await tagAndPush(options, tag, commit);
 }
 
-/** Whether a changeset's frontmatter releases `name` with a major, minor or patch bump. */
-export function changesetReleases(content: string, name: string): boolean {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n?---/.exec(content.trimStart());
-  if (!frontmatter?.[1]) return false;
-  return frontmatter[1].split(/\r?\n/).some((line) => {
-    const entry = /^\s*(["']?)(.+?)\1\s*:\s*(major|minor|patch)\s*$/.exec(line);
-    return entry?.[2] === name;
-  });
+/**
+ * Whether a changeset releases `name`. The frontmatter is YAML, as Changesets parses it, so a
+ * hand-edited file with quoting or comments reads the same. Anything that is not a valid changeset
+ * throws: a file that cannot be read must block a publish, never wave it through.
+ */
+export function changesetReleases(content: string, name: string, file = 'changeset'): boolean {
+  // The same frontmatter split @changesets/parse uses.
+  const frontmatter = /\s*---([^]*?)\n\s*---(\s*(?:\n|$)[^]*)/.exec(content);
+  if (!frontmatter) {
+    throw new PublishError(`${file} has no changeset frontmatter, so it cannot be read safely.`);
+  }
+  let releases: unknown;
+  try {
+    releases = Bun.YAML.parse(frontmatter[1] ?? '');
+  } catch (error) {
+    throw new PublishError(
+      `${file} has frontmatter that is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (releases === null || releases === undefined) return false;
+  if (typeof releases !== 'object' || Array.isArray(releases)) {
+    throw new PublishError(`${file} frontmatter is not a map of package names to bump types.`);
+  }
+  if (!Object.hasOwn(releases, name)) return false;
+  const bump = (releases as Record<string, unknown>)[name];
+  if (bump === 'major' || bump === 'minor' || bump === 'patch') return true;
+  if (bump === 'none') return false;
+  throw new PublishError(`${file} gives ${name} an unknown bump type: ${String(bump)}`);
 }
 
 /**
@@ -216,7 +236,7 @@ async function pendingChangesets(
   const releasing: string[] = [];
   for (const file of files) {
     const shown = await expectSuccess(options, ['git', 'show', `${commit}:${file}`], git);
-    if (changesetReleases(shown.stdout, options.name)) releasing.push(file);
+    if (changesetReleases(shown.stdout, options.name, file)) releasing.push(file);
   }
   return releasing;
 }

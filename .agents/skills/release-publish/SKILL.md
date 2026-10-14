@@ -26,7 +26,9 @@ two jobs:
    `npm publish --ignore-scripts`, and creates and pushes the annotated
    `v<version>` tag on the checked-out commit. It publishes only from the commit
    that set the version, and only when that commit has no pending changesets that
-   release `@lostgradient/weft` (an empty changeset does not count).
+   release `@lostgradient/weft`. Their YAML frontmatter is parsed as Changesets
+   reads it; an empty changeset does not count, and one that cannot be parsed
+   blocks the publish.
    This is not left to `changesets/action`, because v2 skips publishing whenever
    changesets are pending, which would strand an already-bumped version.
 2. `changesets/action` opens or updates the "Version Packages" pull request when

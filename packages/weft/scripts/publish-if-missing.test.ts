@@ -358,6 +358,17 @@ describe('publishIfMissing: version absent from npm', () => {
     ]);
   });
 
+  test('blocks the publish when a pending changeset cannot be read', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok('.changeset/broken-owls.md\n'),
+      'git show HEAD:.changeset/broken-owls.md': ok(`---\n'${name}': [patch\n---\n`),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('.changeset/broken-owls.md');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
   test('publishes when the only pending changesets are empty or name another package', async () => {
     const h = harness({
       [viewVersion]: notFound,
@@ -512,16 +523,24 @@ describe('publish-if-missing CLI', () => {
 });
 
 describe('changesetReleases', () => {
-  test('recognizes quoted and unquoted package names with a release bump', () => {
+  test('reads the frontmatter as YAML: quoted, unquoted, commented and CRLF entries', () => {
     expect(changesetReleases(`---\n'${name}': patch\n---\n`, name)).toBe(true);
     expect(changesetReleases(`---\n"${name}": minor\n---\n`, name)).toBe(true);
+    expect(changesetReleases(`---\n"${name}": patch # urgent fix\n---\n\nFix.\n`, name)).toBe(true);
     expect(changesetReleases(`---\r\nweft: major\r\n---\r\n`, 'weft')).toBe(true);
   });
 
-  test('ignores empty changesets, other packages, and a name outside the frontmatter', () => {
+  test('does not count empty changesets, other packages, none bumps, or names outside the frontmatter', () => {
     expect(changesetReleases('---\n---\n', name)).toBe(false);
     expect(changesetReleases("---\n'@lostgradient/other': patch\n---\n", name)).toBe(false);
+    expect(changesetReleases(`---\n'${name}': none\n---\n`, name)).toBe(false);
     expect(changesetReleases(`---\n---\n\n'${name}': patch\n`, name)).toBe(false);
-    expect(changesetReleases(`no frontmatter '${name}': patch`, name)).toBe(false);
+  });
+
+  test('fails closed on a file it cannot read as a changeset', () => {
+    expect(() => changesetReleases(`no frontmatter '${name}': patch`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n'${name}': [patch\n---\n`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n- ${name}\n---\n`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n'${name}': huge\n---\n`, name)).toThrow('huge');
   });
 });
