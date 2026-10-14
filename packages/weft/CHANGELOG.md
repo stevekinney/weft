@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.17] - 2026-10-14
+
+### Added
+
+- `MTLSConfig.verifyClientCertificate`, a hook that receives the request and returns `true` only when the host has verified the client's certificate, and the exported `CreateAuthenticatorOptions` type, whose `transportVerifiesClientCertificates` lets the code that owns the transport attest that its listener refuses connections without a verified client certificate.
+
+### Changed
+
+- Document the per-transport meaning of `weftCode` in the published declarations: on JSON-RPC it is the coarse `FaultCode`, alongside `httpStatus`, while the REST fault body's top-level `weftCode` is the fine-grained `WeftErrorCode` of the originating error class and never carries the `FaultCode`. The REST status mapping is not injective, so a REST consumer cannot recover the exact `FaultCode` from the status. The `WeftErrorCode` declaration also notes that a few root-exported error classes, including the lease and claim errors, are not registered in it.
+
+### Security
+
+- Admit mTLS only on evidence of a verified client certificate. `createAuthenticator` previously reported method `mtls` for any request that carried no other credentials, so a listener with `rejectUnauthorized: false`, or TLS terminated outside `serve()`, authenticated certificate-less requests. Admission now requires either `verifyClientCertificate` to return a literal `true` or `serve()`'s attestation that its own listener refuses unverified clients. A verifier that throws or returns anything else denies the request.
+
+Upgrade notes:
+
+- A host that uses mTLS authentication with TLS terminated outside `serve()` (a proxy or load balancer) must now supply `verifyClientCertificate`; without it, requests that previously authenticated as mTLS are rejected. `serve()` with its own TLS listener that requires and verifies client certificates keeps working unchanged.
+
 ## [0.27.16] - 2026-10-14
 
 ### Changed
