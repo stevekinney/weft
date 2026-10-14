@@ -321,9 +321,20 @@ function isGenericRestClientOperation(operation: CatalogOperationSnapshot): bool
   );
 }
 
-if (import.meta.main) {
+/**
+ * The command behind `bun scripts/generate-operation-client.ts`: generates the client from the
+ * live catalog and writes each file to `--output-directory` (the checked-in
+ * {@link OPERATION_CLIENT_DIRECTORY} by default), reporting one `wrote <path>` line per file.
+ *
+ * Exported so tests run it in process. Spawning it would put a Bun boot, the catalog load, and a
+ * cold prettier inside the per-test budget (COR-1459).
+ */
+export async function runGenerateOperationClientCommand(
+  args: readonly string[],
+  log: (line: string) => void = console.log,
+): Promise<void> {
   const { values } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: [...args],
     options: { 'output-directory': { type: 'string' } },
     strict: true,
   });
@@ -333,6 +344,8 @@ if (import.meta.main) {
   for (const [fileName, source] of sources) {
     const path = join(directory, fileName);
     await Bun.write(path, source);
-    console.log(`wrote ${path}`);
+    log(`wrote ${path}`);
   }
 }
+
+if (import.meta.main) await runGenerateOperationClientCommand(Bun.argv.slice(2));

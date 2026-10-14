@@ -13,8 +13,11 @@
  * The expected lists and digests below are what `startScheduledRun` committed on main (244ef383),
  * in order and byte for byte, before the occurrence's transient state moved into `startWorkflow`.
  * The clock and the UUID source are fixed so that every encoded value is reproducible. This file
- * does not import anything the pull request added, so it passes unchanged against that commit as
- * well.
+ * does not import anything the pull request added, so it passed unchanged against that commit as
+ * well. Since COR-1387 the batch carries no `wf-idx-*` visibility rows: an engine writes them only
+ * once a backfill has made the index live, and this engine never ran one. It also ends with a
+ * `wf-gen` bump, because an occurrence starts under an id the schedule chose rather than one the
+ * engine generated. Every other operation and every byte is still what main committed.
  */
 import { createHash } from 'node:crypto';
 
@@ -78,11 +81,6 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
 const WORKFLOW_RECORD_OPERATIONS = [
   `put ${KEYS.workflow(WORKFLOW_ID)}`,
   `put ${KEYS.checkpoint(WORKFLOW_ID)}`,
-  `put ${KEYS.workflowVisibilityCreated(FIXED_NOW, WORKFLOW_ID)}`,
-  `put ${KEYS.workflowVisibilityStatus('running', WORKFLOW_ID)}`,
-  `put ${KEYS.workflowVisibilityType(WORKFLOW_ID, WORKFLOW_ID)}`,
-  `put ${KEYS.workflowVisibilityUpdated(FIXED_NOW, WORKFLOW_ID)}`,
-  `put ${KEYS.workflowVisibilityManifest(WORKFLOW_ID)}`,
 ];
 
 /** The operations `buildScheduleRunOperations` produces for an occurrence with no folded-in extras. */
@@ -100,6 +98,9 @@ const FOLDED_IN_OPERATIONS = [
 
 const SERVICES_MARKER = `put ${KEYS.workflowHasServices(WORKFLOW_ID)}`;
 
+/** An occurrence names its own workflow id, so its create batch bumps that id's generation (COR-1387). */
+const GENERATION_BUMP = `put ${KEYS.workflowGeneration(WORKFLOW_ID)}`;
+
 function expectedBatch(resolution: Resolution, foldedIn: boolean): string[] {
   return [
     ...WORKFLOW_RECORD_OPERATIONS,
@@ -107,6 +108,7 @@ function expectedBatch(resolution: Resolution, foldedIn: boolean): string[] {
     ...(foldedIn ? FOLDED_IN_OPERATIONS : []),
     // Written for every resolution that was attempted, available or not, and last.
     ...(resolution === 'none' ? [] : [SERVICES_MARKER]),
+    GENERATION_BUMP,
   ];
 }
 
@@ -206,12 +208,6 @@ const MAIN_VALUE_DIGESTS: Record<string, string> = {
   [KEYS.workflow(WORKFLOW_ID)]: '608c116f6eff278b2e28f6a55cdb28d3edd00289778b3e61da8547180995afdb',
   [KEYS.checkpoint(WORKFLOW_ID)]:
     '8cca8da6004d6233b1f51dcd774bd7d6f7e887f12d43ba952c376f336c2285c6',
-  [KEYS.workflowVisibilityCreated(FIXED_NOW, WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
-  [KEYS.workflowVisibilityStatus('running', WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
-  [KEYS.workflowVisibilityType(WORKFLOW_ID, WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
-  [KEYS.workflowVisibilityUpdated(FIXED_NOW, WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
-  [KEYS.workflowVisibilityManifest(WORKFLOW_ID)]:
-    '73afb59c607fe19c213455abe4b475e5902f7b869d0990f3b688adb83255d26e',
   [KEYS.scheduleRun(WORKFLOW_ID)]:
     '51fb9242c5aa70e04142674694424870349f7bd8efdebcbac48bf722b6aa3827',
   [KEYS.scheduleRunLink(WORKFLOW_ID)]:
@@ -220,6 +216,9 @@ const MAIN_VALUE_DIGESTS: Record<string, string> = {
   [KEYS.terminalCleanupNeeded(WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
   [KEYS.workflowHasServices(WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
   [KEYS.schedule(SCHEDULE_ID)]: 'eb320cee97dea7f255efc4ebdf98392157748fe5f676c2283a72b6822a061b6b',
+  // Generation 1, as an 8-byte big-endian counter.
+  [KEYS.workflowGeneration(WORKFLOW_ID)]:
+    'cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50',
 };
 
 describe('the start batch of a scheduled occurrence', () => {

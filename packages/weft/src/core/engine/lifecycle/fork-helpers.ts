@@ -13,7 +13,7 @@ import { canResolveRevisionLocally } from '../dynamic-source-execution.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
-import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
+import { visibilityIndexOperations } from '../workflow-visibility-maintenance.ts';
 import { EMPTY_STORAGE_VALUE, FORK_LINEAGE_ATTRIBUTE, type LifecycleCallbacks } from './shared.ts';
 import { buildCatalogEntryRevisionCondition } from './start-commit.ts';
 
@@ -377,7 +377,7 @@ export function applyForkWorkerBindingInheritance(
 }
 
 export function buildForkBatchOperations(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   workflowId: string,
   state: WorkflowState,
   checkpoint: Checkpoint,
@@ -392,7 +392,7 @@ export function buildForkBatchOperations(
       key: KEYS.checkpoint(workflowId),
       value: serializedCheckpoint,
     },
-    ...buildWorkflowVisibilityIndexOperations(workflowId, null, state).batchOps,
+    ...visibilityIndexOperations(internals, workflowId, null, state),
   ];
 
   if (Object.keys(checkpoint.searchAttributes).length > 0) {

@@ -242,6 +242,25 @@ export async function getWorkflowVisibilityWatermark(
 }
 
 /**
+ * The index's build stamp (`wf-idx-meta:built-at`), or `null` when there is none. A backfill or
+ * drop deletes the stamp in the same batch as the watermark, before it changes any index row, and
+ * a publish writes a new stamp in the same batch as the watermark, so equal stamps read before and
+ * after an index scan mean the scan saw one complete build. Callers check the watermark itself
+ * first, through the query cache.
+ */
+export async function readWorkflowVisibilityBuild(storage: Storage): Promise<Uint8Array | null> {
+  return storage.get(KEYS.workflowVisibilityMetaBuiltAt());
+}
+
+export function sameWorkflowVisibilityBuild(before: Uint8Array, after: Uint8Array | null): boolean {
+  return (
+    after !== null &&
+    before.byteLength === after.byteLength &&
+    before.every((byte, index) => byte === after[index])
+  );
+}
+
+/**
  * Read the visibility-index watermark through the engine-local query cache.
  * The short freshness window avoids repeated metadata reads during bursts of
  * list/aggregate queries without pinning an external backfill or drop decision

@@ -3,7 +3,15 @@ import { describe, expect, it } from 'bun:test';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
 
 import { decode, encode, validateCloneable } from './codec.ts';
+import {
+  SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES,
+  sharedEncoderScratchBytesForTesting,
+} from './codec/api.ts';
 import { extensionCodec, replaceUndefined } from './codec/extension-codec.ts';
+import {
+  registerSerializer,
+  resetSerializerRegistryForTesting,
+} from './codec/serializer-registry.ts';
 
 function byteStabilityPreprocess(value: unknown, visited: Set<object>): unknown {
   if (value === null || typeof value !== 'object') return value;
@@ -613,5 +621,83 @@ describe('codec', () => {
       expect(result.valid).toBe(false);
       expect(result.errors[0]!.path).toBe('data[0]');
     });
+  });
+});
+
+describe('encode output ownership', () => {
+  it('returns an exact-size buffer that later encodes cannot overwrite', () => {
+    const first = encode({ marker: 'first', payload: 'x'.repeat(64) });
+    const snapshot = Uint8Array.from(first);
+
+    encode({ marker: 'second', payload: 'y'.repeat(64) });
+    encode({ marker: 'third', payload: 'z'.repeat(64) });
+
+    // `first` owns its bytes: not a view into a buffer the encoder reuses, and not a window
+    // onto a larger backing allocation that would pin the encoder's whole scratch space.
+    expect(first.byteOffset).toBe(0);
+    expect(first.buffer.byteLength).toBe(first.byteLength);
+    expect(first).toEqual(snapshot);
+    expect(decode(first)).toEqual({ marker: 'first', payload: 'x'.repeat(64) });
+  });
+
+  it('encodes correctly when an extension encoder re-enters encode', () => {
+    class Nested {
+      constructor(readonly count: number) {}
+    }
+    registerSerializer(
+      Nested,
+      {
+        // Re-enters `encode` while the outer `encode` call is mid-flight.
+        toJSON: (value) => ({ inner: encode({ count: value.count, note: 'inner' }) }),
+        fromJSON: (data) => {
+          const record = data as { inner: Uint8Array };
+          return new Nested((decode(record.inner) as { count: number }).count);
+        },
+      },
+      { tag: 'CodecReentrancyNested' },
+    );
+
+    try {
+      const bytes = encode({ before: 'a', nested: new Nested(7), after: 'z' });
+      const restored = decode(bytes) as { before: string; nested: Nested; after: string };
+
+      expect(restored.before).toBe('a');
+      expect(restored.after).toBe('z');
+      expect(restored.nested).toBeInstanceOf(Nested);
+      expect(restored.nested.count).toBe(7);
+    } finally {
+      resetSerializerRegistryForTesting();
+    }
+  });
+
+  it('releases the scratch buffer an oversized encode grew', () => {
+    const oversized = new Uint8Array(SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES * 4);
+
+    const bytes = encode({ oversized });
+
+    expect(bytes.byteLength).toBeGreaterThan(SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES * 4);
+    expect(sharedEncoderScratchBytesForTesting()).toBeLessThanOrEqual(
+      SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES,
+    );
+    expect((decode(bytes) as { oversized: Uint8Array }).oversized).toEqual(oversized);
+  });
+
+  it('keeps reusing its scratch buffer for encodes under the limit', () => {
+    encode({ payload: 'w'.repeat(SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES / 2) });
+
+    expect(sharedEncoderScratchBytesForTesting()).toBeGreaterThan(
+      SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES / 2,
+    );
+  });
+
+  it('releases the scratch buffer an encode grew before it threw', () => {
+    const oversized = new Uint8Array(SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES * 4);
+
+    expect(() => encode({ oversized, unsupported: Symbol('not encodable') })).toThrow();
+
+    expect(sharedEncoderScratchBytesForTesting()).toBeLessThanOrEqual(
+      SHARED_ENCODER_RETAINED_BUFFER_LIMIT_BYTES,
+    );
+    expect(decode(encode({ after: 'failure' }))).toEqual({ after: 'failure' });
   });
 });

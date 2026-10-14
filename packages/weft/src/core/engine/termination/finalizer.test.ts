@@ -32,7 +32,7 @@ import { getInternals } from '../internals.ts';
 import { buildRegistrationEntry } from '../registration.ts';
 import { createTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
 import { runFinalizerActivity } from './finalizer-activity.ts';
-import type { TeardownDeadLetterRecord } from './finalizer-claim.ts';
+import { MAX_TEARDOWN_ATTEMPTS, type TeardownDeadLetterRecord } from './finalizer-claim.ts';
 import { resolveFinalizerRegistration } from './finalizer-registration.ts';
 import { runWorkflowFinalizer, type FinalizerDriveCallbacks } from './finalizer.ts';
 
@@ -436,12 +436,12 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(succeededBytes).not.toBeNull();
     expect(decode(succeededBytes!)).toMatchObject({
       workflowExecutionToken: `execution-${workflowId}`,
-      attempts: 1,
+      attempts: 2,
       completedAt: expect.any(Number),
     });
     expect(await engine.getFinalizerStatus(workflowId)).toMatchObject({
       status: 'succeeded',
-      attempts: 1,
+      attempts: 2,
     });
     engine[Symbol.dispose]();
   });
@@ -787,6 +787,82 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       status: 'dead-lettered',
       attempts: 2,
       error: record.lastError,
+    });
+    engine[Symbol.dispose]();
+  });
+
+  it('counts a stale running attempt in the missing-state dead letter (COR-1422)', async () => {
+    let clock = 1_000_000;
+    const engine = new Engine({ getNow: () => clock });
+    engine.register(
+      workflow({
+        name: 'teardown-stale-missing-state',
+        finalizer: activity({ name: 'destroy-stale-missing-state', execute: async () => {} }),
+      }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      }),
+    );
+    const internals = getInternals(engine);
+    const workflowId = 'wf-stale-missing-state';
+    const token = 'tok-stale-missing';
+    const running: TeardownClaim = { status: 'running', attempts: 0, token, claimedAt: clock };
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(running));
+    clock += 600_000;
+
+    const events: Event[] = [];
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, 'teardown-stale-missing-state'), events),
+    );
+
+    const record = decode(
+      (await internals.storage.get(KEYS.teardownDeadLetter(workflowId)))!,
+    ) as TeardownDeadLetterRecord;
+    expect(record.attempts).toBe(1);
+    expect(events[0]).toMatchObject({ status: 'dead-lettered', attempts: 1 });
+    engine[Symbol.dispose]();
+  });
+
+  it('clamps the exhausted count so a MAX_SAFE_INTEGER stale claim still reports failed (COR-1422)', async () => {
+    let clock = 1_000_000;
+    const engine = new Engine({ getNow: () => clock });
+    engine.register(
+      workflow({
+        name: 'teardown-overflow',
+        finalizer: activity({ name: 'destroy-overflow', execute: async () => {} }),
+      }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      }),
+    );
+    const internals = getInternals(engine);
+    const workflowId = 'wf-overflow';
+    const token = 'tok-overflow';
+    const running: TeardownClaim = {
+      status: 'running',
+      attempts: Number.MAX_SAFE_INTEGER,
+      token,
+      claimedAt: clock,
+    };
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode(running));
+    await internals.storage.put(KEYS.finalizerState(workflowId), encode({ sandboxId: 'sbx' }));
+    await engine.storage.put(
+      KEYS.workflow(workflowId),
+      encode(terminalState(workflowId, 'teardown-overflow')),
+    );
+    clock += 600_000;
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId(token),
+      makeCallbacks(terminalState(workflowId, 'teardown-overflow')),
+    );
+
+    expect(await engine.getFinalizerStatus(workflowId)).toMatchObject({
+      status: 'failed',
+      attempts: MAX_TEARDOWN_ATTEMPTS,
     });
     engine[Symbol.dispose]();
   });

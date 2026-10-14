@@ -15,11 +15,11 @@ import { buildWorkflowTagIndexOperations } from '../../workflow-tags.ts';
 import { validateAttributeValueSizes } from '../attributes-tags.ts';
 import type { EngineInternals } from '../internals.ts';
 import { encodeWorkflowStartHeaders } from '../state-utilities.ts';
-import { buildWorkflowVisibilityIndexOperations } from '../workflow-indexes.ts';
+import { visibilityIndexOperations } from '../workflow-visibility-maintenance.ts';
 import { EMPTY_STORAGE_VALUE, type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 
 export function buildStartBatchOperations(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   workflowId: string,
   state: WorkflowState,
   checkpoint: Checkpoint,
@@ -31,12 +31,10 @@ export function buildStartBatchOperations(
   additionalOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
   purgeDeleteOperations: BatchOperation[] | undefined,
+  /** The checkpoint's serialized bytes when the caller already produced them, so a start serializes it once. */
+  serializedCheckpoint?: Uint8Array,
 ): BatchOperation[] {
-  const visibilityIndexOperations = buildWorkflowVisibilityIndexOperations(
-    workflowId,
-    null,
-    state,
-  ).batchOps;
+  const visibilityOperations = visibilityIndexOperations(internals, workflowId, null, state);
   // Purge deletes (an `onTerminalConflict: 'start-new'` restart removing the prior
   // terminal run under this id) MUST come first: storage batches apply in array
   // order with last-op-wins, so a delete that shares a key with a create put below
@@ -49,13 +47,13 @@ export function buildStartBatchOperations(
     {
       type: 'put',
       key: KEYS.checkpoint(workflowId),
-      value: serializeCheckpoint(checkpoint),
+      value: serializedCheckpoint ?? serializeCheckpoint(checkpoint),
     },
-    ...visibilityIndexOperations,
+    ...visibilityOperations,
     ...buildWorkflowTagIndexOperations(workflowId, undefined, state.tags),
     ...buildChildWorkflowIndexOperations(state),
     ...buildInitialSearchAttributeOperations(
-      _internals,
+      internals,
       workflowId,
       registration,
       options?.searchAttributes,

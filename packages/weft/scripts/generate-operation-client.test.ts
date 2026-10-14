@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createOperationClientSources,
   OPERATION_CLIENT_DIRECTORY,
+  OPERATION_CLIENT_FILE,
+  runGenerateOperationClientCommand,
 } from './generate-operation-client.ts';
 
 import {
@@ -12,6 +14,7 @@ import {
   stringifyCatalogSnapshot,
 } from '../src/server/operation-catalog-snapshot.ts';
 import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
+import { throwingRejectionOf } from '../src/testing/promise-outcome.test-support.ts';
 import { assignAliasNames } from './operation-client-aliases.ts';
 import { canonicalKey, schemaToNode } from './operation-client-schema.ts';
 
@@ -210,32 +213,49 @@ describe('createOperationClientSources — generated output', () => {
     }
   });
 
-  it('generates the complete checked-in client through the CLI into an isolated directory', async () => {
-    const sources = await createOperationClientSources(createCatalogSnapshot());
-    const directory = await mkdtemp(join(tmpdir(), 'weft-operation-client-'));
+  /**
+   * Runs the CLI command in process: spawning `bun scripts/generate-operation-client.ts` would
+   * put a Bun boot, the catalog load, and a second cold prettier inside the per-test budget,
+   * which timed out at host load ~150 (COR-1459). The command generates once, and its output is
+   * compared with the checked-in files rather than with a second generation.
+   */
+  it('generates the complete checked-in client through the CLI command into an isolated directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'weft-operation-client-'));
+    // A nested path proves the command creates the output directory it is given.
+    const directory = join(root, 'nested', 'generated');
     try {
+      const lines: string[] = [];
+      await runGenerateOperationClientCommand(['--output-directory', directory], (line) =>
+        lines.push(line),
+      );
+
       // Check drift without rewriting the source checkout as part of a test.
-      for (const [fileName, source] of sources) {
-        expect(await Bun.file(join(OPERATION_CLIENT_DIRECTORY, fileName)).text()).toBe(source);
-      }
-      const result = Bun.spawn({
-        cmd: ['bun', 'scripts/generate-operation-client.ts', '--output-directory', directory],
-        cwd: process.cwd(),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const exitCode = await result.exited;
-      const stdout = await new Response(result.stdout).text();
-      const stderr = await new Response(result.stderr).text();
-      expect(exitCode).toBe(0);
-      expect(stderr).toBe('');
-      for (const [fileName, source] of sources) {
-        expect(stdout).toContain(`wrote ${join(directory, fileName)}`);
-        expect(await Bun.file(join(directory, fileName)).text()).toBe(source);
+      const writtenEntries = await readdir(directory);
+      const checkedInEntries = await readdir(OPERATION_CLIENT_DIRECTORY);
+      const written = writtenEntries.toSorted();
+      expect(written).toEqual(checkedInEntries.toSorted());
+      expect(written).toContain(OPERATION_CLIENT_FILE);
+      expect(lines.toSorted()).toEqual(
+        written.map((fileName) => `wrote ${join(directory, fileName)}`),
+      );
+      for (const fileName of written) {
+        expect(await Bun.file(join(directory, fileName)).text()).toBe(
+          await Bun.file(join(OPERATION_CLIENT_DIRECTORY, fileName)).text(),
+        );
       }
     } finally {
-      await rm(directory, { force: true, recursive: true });
+      await rm(root, { force: true, recursive: true });
     }
+  });
+
+  it('rejects an unknown CLI option before writing anything', async () => {
+    const lines: string[] = [];
+    expect(
+      await throwingRejectionOf(
+        runGenerateOperationClientCommand(['--output-dir', 'unused'], (line) => lines.push(line)),
+      ),
+    ).toThrow("Unknown option '--output-dir'");
+    expect(lines).toEqual([]);
   });
 });
 

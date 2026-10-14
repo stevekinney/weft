@@ -946,6 +946,8 @@ export class Engine<
     getInternals(this).workflowVersionTuples = new Map();
     getInternals(this).workflowVisibilityWatermark = undefined;
     getInternals(this).workflowVisibilityWatermarkExpiresAt = undefined;
+    getInternals(this).workflowVisibilityMaintenance = undefined;
+    getInternals(this).workflowVisibilityMaintenanceRefresh = undefined;
     getInternals(this).activityWorkerDispatcher = createActivityWorkerDispatcher(
       options?.activityExecution,
     );

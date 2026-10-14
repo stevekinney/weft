@@ -62,7 +62,10 @@ import type { EngineInternals } from '../internals.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from '../storage-io.ts';
 import { buildWorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
-import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
+import {
+  refreshWorkflowVisibilityMaintenance,
+  visibilityIndexOperations,
+} from '../workflow-visibility-maintenance.ts';
 import { createWorkflowVersionTuple, workflowVersionTupleFromState } from './persist.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 import {
@@ -468,13 +471,15 @@ async function commitPendingToRunning(
     ...(executionDeadline !== undefined && { executionDeadline }),
   };
 
+  const visibilityMaintenance = refreshWorkflowVisibilityMaintenance(internals);
+  if (visibilityMaintenance !== undefined) await visibilityMaintenance;
   const operations = [
     {
       type: 'put' as const,
       key: KEYS.workflow(workflowId),
       value: encode(nextRunningState),
     },
-    ...buildWorkflowVisibilityIndexTransition(workflowId, latestState, nextRunningState).batchOps,
+    ...visibilityIndexOperations(internals, workflowId, latestState, nextRunningState),
     ...(executionDeadline !== undefined
       ? buildTimerBatchOperations({
           id: `deadline:${workflowId}`,

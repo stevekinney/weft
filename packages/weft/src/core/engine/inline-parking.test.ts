@@ -2,7 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec/api.ts';
 import { Engine } from '../engine.ts';
@@ -190,7 +190,15 @@ describe('engine inline parking helpers', () => {
       callbacks,
     );
 
-    await sleepForTesting(0);
+    // The failure commit is a chain of storage reads and writes, not a fixed number of
+    // microtask turns, so wait for the state it produces rather than for a drain depth.
+    await waitForCondition(
+      async () => {
+        const state = await loadWorkflowState(getInternals(engine), workflowId);
+        return state?.status === 'failed';
+      },
+      { label: 'inline process failure recorded' },
+    );
     expect(await loadWorkflowState(getInternals(engine), workflowId)).toMatchObject({
       error: 'inline process failed',
       failureCategory: 'system',
