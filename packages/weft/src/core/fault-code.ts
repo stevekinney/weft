@@ -4,10 +4,18 @@
  * onto the wire so clients can branch on the failure programmatically rather
  * than string-matching a human message:
  *
- *   - REST operation routes: HTTP status plus `{ error: string }` for declared
- *     faults, with `EngineFailure` masked to `"Internal server error"`.
- *   - JSON-RPC: `error.data.weftCode` plus `error.data.httpStatus` (see
- *     `fault-to-json-rpc.ts`).
+ *   - REST operation routes: the HTTP status derived from this code, plus a
+ *     `{ error, weftCode?, data? }` body. The body never carries the
+ *     `FaultCode` itself: its optional `weftCode` is the fine-grained
+ *     `WeftErrorCode` of the originating error class (see
+ *     `shapeRestFaultAsJson` in `operation-fault.ts`). `EngineFailure` is
+ *     masked to exactly `{ "error": "Internal server error" }`.
+ *   - JSON-RPC: `error.data.weftCode` is this coarse `FaultCode`, alongside
+ *     `error.data.httpStatus` (see `fault-to-json-rpc.ts`). The fine-grained
+ *     `WeftErrorCode` is not carried on this transport.
+ *
+ * The same key therefore names different vocabularies per transport; see
+ * `documentation/reference/api-errors.md#wire-envelopes`.
  *
  * The type lives in `core` — not `server` — because both the server (which
  * produces faults) and the client (which consumes them off the wire) need it,
@@ -27,8 +35,8 @@ import type { FailureCategory } from './types/identity.ts';
  * be added additively, and the `satisfies` map below forces every new code to
  * declare its failure category at compile time.
  *
- * See `documentation/reference/api-errors.md#faultcode` for the REST HTTP
- * status and JSON-RPC error-data mappings for every public fault code.
+ * See `documentation/reference/api-errors.md#faultcode` for the HTTP status,
+ * JSON-RPC error code, and failure category of every fault code.
  *
  * @example
  * ```ts

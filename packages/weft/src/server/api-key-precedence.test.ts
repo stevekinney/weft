@@ -327,11 +327,12 @@ describe('mTLS fallback regression (Bugbot round 5)', () => {
     // over from a different deployment) must not suppress the mTLS
     // fallback — extractApiKey finds the header, but there is no
     // API-key admission path, so explicitAuthAttempted must stay false
-    // and mTLS admits the request normally.
+    // and mTLS admits the request normally. The transport attestation stands
+    // in for the enforcing listener `serve()` builds from this config.
     const config: AuthConfig = {
       mtls: { ca: '', cert: '', key: '' },
     };
-    const auth = await createAuthenticator(config);
+    const auth = await createAuthenticator(config, { transportVerifiesClientCertificates: true });
     const request = new Request('http://localhost/v1/workflows', {
       method: 'GET',
       headers: { 'X-API-Key': 'stray-header' },

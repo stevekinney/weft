@@ -169,6 +169,16 @@ export type RestFaultResponseOptions = {
   readonly message?: string;
 };
 
+/**
+ * The REST fault body. `weftCode` is the fine-grained {@link WeftErrorCode} of
+ * the originating error class, present only when the fault carried one; the
+ * coarse {@link FaultCode} is not in the body at all. The HTTP status is
+ * derived from it, but that mapping is not injective (`NotFound` and
+ * `MethodNotFound` are both 404, for example), so a REST consumer cannot
+ * recover the exact `FaultCode` from the status. JSON-RPC uses
+ * the same `weftCode` key for the coarse `FaultCode` instead (see
+ * `fault-to-json-rpc.ts`).
+ */
 export type RestFaultBody = {
   readonly error: string;
   readonly weftCode?: WeftErrorCode;
@@ -244,8 +254,10 @@ const REST_FAULT_DATA_EXTRACTORS: RestFaultDataExtractors = {
 /**
  * Map an `OperationFault` to the canonical additive REST body:
  * `{ error, weftCode?, data? }`. The existing string `error` and optional
- * fine-grained `weftCode` remain unchanged; `data` contains only fields from
- * the audited allowlist above. JSON-RPC uses its own broader projection.
+ * fine-grained `weftCode` (a {@link WeftErrorCode}, never a {@link FaultCode})
+ * remain unchanged; `data` contains only fields from the audited allowlist
+ * above. JSON-RPC uses its own broader projection, whose `data.weftCode` is the
+ * coarse `FaultCode`.
  *
  * `EngineFailure` is a hard exception: its exact body remains
  * `{ "error": "Internal server error" }`, regardless of response overrides.

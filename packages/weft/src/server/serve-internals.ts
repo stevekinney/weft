@@ -16,6 +16,7 @@ import {
   buildTLSOptions,
   createAuthenticator,
   createRateLimiter,
+  tlsOptionsVerifyClientCertificates,
   validateAuthConfig,
   validateRateLimitConfig,
 } from './authentication.ts';
@@ -327,7 +328,13 @@ export function buildServerContext(
     mcpSessionManager: createMcpSessionManager(engine),
     // The authenticator is initialized asynchronously (key import) but the
     // promise is created eagerly and resolved before the first request completes.
-    authenticatorPromise: options.auth ? createAuthenticator(options.auth) : null,
+    authenticatorPromise: options.auth
+      ? createAuthenticator(options.auth, {
+          transportVerifiesClientCertificates: tlsOptionsVerifyClientCertificates(
+            buildTLSOptions(options.auth),
+          ),
+        })
+      : null,
     rateLimiter: options.rateLimit ? createRateLimiter(options.rateLimit) : null,
     visibilityPollMs: options.visibilityPollIntervalMs ?? 5_000,
     workerReconnectGracePeriodMs: clampWorkerReconnectGracePeriod(

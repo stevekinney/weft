@@ -73,6 +73,7 @@ export type {
   AuthMethod,
   AuthResult,
   Authenticator,
+  CreateAuthenticatorOptions,
   JWTAlgorithm,
   JWTConfig,
   JWTPayload,

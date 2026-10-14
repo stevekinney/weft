@@ -5,7 +5,14 @@ import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
-import type { AuthConfig, JWTConfig, JWTPayload } from './authentication.ts';
+import type {
+  AuthAuditEvent,
+  AuthConfig,
+  AuthMethod,
+  AuthResult,
+  JWTConfig,
+  JWTPayload,
+} from './authentication.ts';
 import {
   buildTLSOptions,
   createAuthenticator,
@@ -644,12 +651,13 @@ describe('createAuthenticator — public paths', () => {
 // ---------------------------------------------------------------------------
 
 describe('createAuthenticator — mTLS', () => {
-  it('authenticates via mTLS when configured (transport-level pass-through)', async () => {
-    const authenticate = await createAuthenticator({
-      mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem' },
-    });
+  it('authenticates via mTLS when the transport attests that it verified the client certificate', async () => {
+    const authenticate = await createAuthenticator(
+      { mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem' } },
+      { transportVerifiesClientCertificates: true },
+    );
 
-    // Any request that reaches the handler has already passed TLS verification
+    // serve()'s enforcing listener refused every connection without a verified certificate
     const result = await authenticate(makeRequest('http://localhost/v1/workflows'));
 
     expect(result.authenticated).toBe(true);
@@ -726,10 +734,13 @@ describe('createAuthenticator — mTLS', () => {
   });
 
   it('falls through to mTLS when no credentials are provided', async () => {
-    const authenticate = await createAuthenticator({
-      apiKeys: [TEST_API_KEY],
-      mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem' },
-    });
+    const authenticate = await createAuthenticator(
+      {
+        apiKeys: [TEST_API_KEY],
+        mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem' },
+      },
+      { transportVerifiesClientCertificates: true },
+    );
 
     // No auth headers — should fall through to mTLS
     const result = await authenticate(makeRequest('http://localhost/v1/workflows'));
@@ -738,6 +749,175 @@ describe('createAuthenticator — mTLS', () => {
     if (result.authenticated) {
       expect(result.method).toBe('mtls');
     }
+  });
+
+  it('rejects a certificate-less request when rejectUnauthorized is false and nothing verifies the certificate', async () => {
+    const auditEvents: AuthAuditEvent[] = [];
+    const authenticate = await createAuthenticator(
+      {
+        mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem', rejectUnauthorized: false },
+        auditSink: (event) => auditEvents.push(event),
+      },
+      // serve() never attests a listener that admits unverified clients.
+      { transportVerifiesClientCertificates: false },
+    );
+
+    const result = await authenticate(makeRequest('https://localhost/v1/workflows'));
+
+    expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+    expect(auditEvents.map((event) => event.outcome)).toEqual(['failure']);
+  });
+
+  it('rejects a certificate-less request when no listener attests verification (TLS terminated elsewhere)', async () => {
+    const authenticate = await createAuthenticator({
+      mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem' },
+    });
+
+    const result = await authenticate(makeRequest('https://localhost/v1/workflows'));
+
+    expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+  });
+
+  it('authenticates via mTLS when verifyClientCertificate confirms a verified certificate', async () => {
+    const seen: Request[] = [];
+    const authenticate = await createAuthenticator({
+      mtls: {
+        ca: 'ca-pem',
+        cert: 'cert-pem',
+        key: 'key-pem',
+        rejectUnauthorized: false,
+        verifyClientCertificate: async (request) => {
+          seen.push(request);
+          return request.headers.get('X-Client-Certificate-Verified') === 'SUCCESS';
+        },
+      },
+    });
+
+    const verified = await authenticate(
+      makeRequest('http://localhost/v1/workflows', { 'X-Client-Certificate-Verified': 'SUCCESS' }),
+    );
+    const unverified = await authenticate(makeRequest('http://localhost/v1/workflows'));
+
+    expect(verified).toEqual({ authenticated: true, method: 'mtls' });
+    expect(unverified).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('lets a verifier that returns false override the transport attestation', async () => {
+    const authenticate = await createAuthenticator(
+      {
+        mtls: {
+          ca: 'ca-pem',
+          cert: 'cert-pem',
+          key: 'key-pem',
+          verifyClientCertificate: () => false,
+        },
+      },
+      { transportVerifiesClientCertificates: true },
+    );
+
+    const result = await authenticate(makeRequest('https://localhost/v1/workflows'));
+
+    expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+  });
+
+  it('admits mTLS only when the verifier returns a literal true', async () => {
+    for (const truthy of ['false', 'FAILURE', 1, {}]) {
+      const authenticate = await createAuthenticator({
+        mtls: {
+          ca: 'ca-pem',
+          cert: 'cert-pem',
+          key: 'key-pem',
+          // An untyped host can hand back a non-boolean truthy value.
+          verifyClientCertificate: () => truthy as unknown as boolean,
+        },
+      });
+
+      const result = await authenticate(makeRequest('https://localhost/v1/workflows'));
+
+      expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+    }
+  });
+
+  it('treats a throwing verifier as unverified instead of rejecting the authenticate call', async () => {
+    const authenticate = await createAuthenticator({
+      mtls: {
+        ca: 'ca-pem',
+        cert: 'cert-pem',
+        key: 'key-pem',
+        verifyClientCertificate: () => {
+          throw new Error('verifier unavailable');
+        },
+      },
+    });
+
+    const result = await authenticate(makeRequest('https://localhost/v1/workflows'));
+
+    expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
+  });
+
+  it('does not consult the verifier when an explicit credential was presented and rejected', async () => {
+    let verifierCalls = 0;
+    const authenticate = await createAuthenticator({
+      apiKeys: [TEST_API_KEY],
+      mtls: {
+        ca: 'ca-pem',
+        cert: 'cert-pem',
+        key: 'key-pem',
+        verifyClientCertificate: () => {
+          verifierCalls += 1;
+          return true;
+        },
+      },
+    });
+
+    const result = await authenticate(
+      makeRequest('http://localhost/v1/workflows', { Authorization: 'Bearer wrong-key' }),
+    );
+
+    expect(result.authenticated).toBe(false);
+    expect(verifierCalls).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No authentication method without positive evidence
+// ---------------------------------------------------------------------------
+
+describe('createAuthenticator — no admission without positive evidence', () => {
+  // Every credential-bearing AuthMethod must appear here. Each row configures
+  // the method but withholds the evidence it needs; the Record type makes
+  // adding a method to AuthMethod without a row a type error.
+  const withheldEvidence: Record<Exclude<AuthMethod, 'public'>, () => Promise<AuthResult>> = {
+    'api-key': async () =>
+      (await createAuthenticator({ apiKeys: [TEST_API_KEY] }))(
+        makeRequest('http://localhost/v1/workflows', { 'X-API-Key': 'not-the-key' }),
+      ),
+    jwt: async () =>
+      (await createAuthenticator({ jwt: { secret: TEST_SECRET } }))(
+        makeRequest('http://localhost/v1/workflows', { Authorization: 'Bearer a.b.c' }),
+      ),
+    mtls: async () =>
+      (
+        await createAuthenticator({
+          mtls: { ca: 'ca-pem', cert: 'cert-pem', key: 'key-pem', rejectUnauthorized: false },
+        })
+      )(makeRequest('https://localhost/v1/workflows')),
+  };
+
+  for (const [method, attempt] of Object.entries(withheldEvidence)) {
+    it(`does not report ${method} when its evidence is withheld`, async () => {
+      const result = await attempt();
+      expect(result.authenticated).toBe(false);
+    });
+  }
+
+  it('does not report jwt when no bearer token is presented', async () => {
+    const authenticate = await createAuthenticator({ jwt: { secret: TEST_SECRET } });
+
+    const result = await authenticate(makeRequest('http://localhost/v1/workflows'));
+
+    expect(result).toEqual({ authenticated: false, error: 'No valid credentials provided' });
   });
 });
 

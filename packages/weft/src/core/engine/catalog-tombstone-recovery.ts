@@ -138,7 +138,7 @@ async function resolveCatalogTombstone(
  * independently, mirroring this codebase's other "one bad record fails
  * only its own unit, siblings continue" precedent
  * (`DynamicWorkflowSourceUnavailableError`'s recovery classification —
- * `documentation/reference/api-errors.md`):
+ * `dynamic-source-errors.ts`):
  *
  * - A `decodeCatalogEntryRecord` failure means the tombstone's own bytes
  *   cannot be trusted as a real entry at all, so this tombstone is left

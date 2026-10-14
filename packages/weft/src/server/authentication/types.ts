@@ -75,9 +75,15 @@ export type JWTConfig = {
 /**
  * Mutual TLS configuration passed through to `Bun.serve`'s `tls` option.
  *
- * When present in an {@link AuthConfig}, the server requires every client to
- * present a valid certificate signed by the configured CA.  Requests that reach
- * the application handler are already authenticated at the transport layer.
+ * When present in an {@link AuthConfig}, `serve()` builds a TLS listener that
+ * requests a client certificate signed by the configured CA. Bun's fetch
+ * handler cannot see the peer certificate, so the authenticator reports
+ * `method: 'mtls'` only on positive evidence that one was verified: either
+ * `verifyClientCertificate` returns `true`, or `serve()` itself built a
+ * listener that refuses unverified clients (`rejectUnauthorized` left `true`).
+ * With `rejectUnauthorized: false`, or when TLS terminates outside `serve()`,
+ * certificate-less requests are rejected unless `verifyClientCertificate`
+ * confirms a verified certificate.
  *
  * @example
  * ```ts
@@ -100,8 +106,20 @@ export type MTLSConfig = {
   cert: string;
   /** PEM-encoded server private key. */
   key: string;
-  /** Reject connections without a valid client certificate (default: true). */
+  /**
+   * Reject connections without a valid client certificate (default: true).
+   * Setting `false` stops the listener from vouching for client certificates,
+   * so mTLS admits a request only when `verifyClientCertificate` returns `true`.
+   */
   rejectUnauthorized?: boolean;
+  /**
+   * Host-supplied evidence that the request arrived with a verified client
+   * certificate — for example, by checking the verification header a
+   * TLS-terminating proxy sets. When present, its answer alone decides mTLS
+   * admission; a throw counts as unverified. Required for mTLS to admit anyone
+   * when `rejectUnauthorized` is `false` or TLS terminates outside `serve()`.
+   */
+  verifyClientCertificate?: (request: Request) => boolean | Promise<boolean>;
 };
 
 /**
