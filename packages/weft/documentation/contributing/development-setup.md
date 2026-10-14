@@ -49,7 +49,7 @@ bun ./dist/index.js
 ## Testing
 
 > [!NOTE] This repository is a publication mirror
-> `stevekinney/weft` is synced from the private corvidae workspace, which is the source of truth. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; the retired commands below are corvidae's. Here, `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag.
+> `stevekinney/weft` is synced from the private corvidae workspace, which is the source of truth. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; the retired commands below are corvidae's. Here, `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it through Changesets: changesets arrive (normally from the sync), a "Version Packages" pull request opens, merging it publishes to npm, and `release:publish` then tags `v<version>`.
 
 The test files ship here as source, but no script runs them: `bun test`, `test:coverage` and `test:benchmarks` were retired with the repository's own CI. Run them in corvidae.
 
@@ -69,7 +69,7 @@ Lint, the lint-suppression ceiling, the implementation file-size registry, the r
 bun run prepack
 ```
 
-`prepack` runs the build, the export and portability checks and the package-consumer validation — the same checks `release.yaml` runs before `npm publish`. Run `bun run verify:release-version` before tagging so `package.json`, `src/version.ts` and the tag agree.
+`prepack` runs the build, the export and portability checks and the package-consumer validation — the same checks `release.yaml` runs before `npm publish`. Run `bun run verify:release-version` before merging a Version Packages pull request so `package.json` and `src/version.ts` agree; the release workflow runs the same check, then tags the commit it publishes from.
 
 ## Git hooks
 

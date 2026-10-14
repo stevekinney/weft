@@ -1,0 +1,546 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import {
+  changesetReleases,
+  PublishError,
+  publishIfMissing,
+  type CommandOptions,
+  type CommandResult,
+} from './publish-if-missing.ts';
+
+const name = '@lostgradient/weft';
+const version = '0.27.18';
+const gitHead = '8472c3fe955e92eed8a5a09a05364c70d138a576';
+const repositoryRoot = '/repository';
+const packageRoot = '/repository/packages/weft';
+
+const viewVersion = `npm view ${name}@${version} version --json`;
+const viewGitHead = `npm view ${name}@${version} gitHead`;
+const lsRemote = `git ls-remote --tags origin refs/tags/v${version}`;
+const parentManifest = 'git show HEAD^:packages/weft/package.json';
+const bumpSearch = `git log -1 --format=%H -S"version": "${version}" -- packages/weft/package.json`;
+const bumpCommit = 'b'.repeat(40);
+const lsRemotePeeled = `git ls-remote --tags origin refs/tags/v${version}^{}`;
+const revParseHead = 'git rev-parse HEAD';
+const pendingAtHead = 'git ls-tree --name-only HEAD -- .changeset/';
+const pendingAtBump = `git ls-tree --name-only ${'b'.repeat(40)} -- .changeset/`;
+const headCommit = 'e'.repeat(40);
+
+const ok = (stdout = ''): CommandResult => ({ exitCode: 0, stdout, stderr: '' });
+const failure = (stdout: string, stderr = ''): CommandResult => ({
+  exitCode: 1,
+  stdout,
+  stderr,
+});
+const notFound = failure(JSON.stringify({ error: { code: 'E404', summary: 'No match found' } }));
+
+interface Call {
+  command: string;
+  cwd: string;
+  environment: Record<string, string> | undefined;
+}
+
+function harness(responses: Record<string, CommandResult>) {
+  const calls: Call[] = [];
+  const lines: string[] = [];
+  return {
+    calls,
+    lines,
+    commands: () => calls.map((call) => call.command),
+    run: (command: readonly string[], options: CommandOptions): CommandResult => {
+      const text = command.join(' ');
+      calls.push({ command: text, cwd: options.cwd, environment: options.environment });
+      // By default HEAD is the commit that set the version: its parent carries an older one.
+      const defaults = { [parentManifest]: ok(JSON.stringify({ version: '0.27.17' })) };
+      // An exact key wins over a prefix: the tag lookup is a prefix of its peeled lookup.
+      const entries = Object.entries({ ...defaults, ...responses });
+      const matched =
+        entries.find(([key]) => text === key) ?? entries.find(([key]) => text.startsWith(key));
+      return matched ? matched[1] : ok();
+    },
+    options() {
+      return {
+        packageRoot,
+        repositoryRoot,
+        name,
+        version,
+        run: this.run,
+        log: (line: string) => lines.push(line),
+      };
+    },
+  };
+}
+
+describe('publishIfMissing: version already on npm', () => {
+  const tagObject = 'c'.repeat(40);
+  const existingTagCommands = [viewVersion, lsRemote, lsRemotePeeled, viewGitHead];
+
+  test('skips the publish and leaves a lightweight tag at the published commit alone', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok(`${gitHead}\n`),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.lines).toContain(`${name}@${version} is already on npm; skipping publish`);
+    expect(h.commands()).toEqual(existingTagCommands);
+  });
+
+  test('compares the commit an annotated tag peels to, not the tag object', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${gitHead}\trefs/tags/v${version}^{}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toEqual(existingTagCommands);
+  });
+
+  test('fails, naming both commits, when the tag points at another commit', async () => {
+    const other = 'd'.repeat(40);
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${other}\trefs/tags/v${version}^{}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain(other);
+    expect((failure as Error).message).toContain(gitHead);
+    // A mismatched tag is reported, never moved.
+    expect(h.commands()).toEqual(existingTagCommands);
+  });
+
+  test('fails when a lightweight tag points at another commit', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${'d'.repeat(40)}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow(PublishError);
+  });
+
+  test('warns and exits cleanly when the tag exists and the registry has no gitHead', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${gitHead}\trefs/tags/v${version}^{}\n`),
+      [viewGitHead]: ok('\n'),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.lines.some((line) => line.startsWith('::warning::') && line.includes(version))).toBe(
+      true,
+    );
+    expect(h.commands()).toEqual(existingTagCommands);
+  });
+
+  test('creates and pushes the missing tag on the commit that published', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(''),
+      [viewGitHead]: ok(`${gitHead}\n`),
+    });
+
+    await publishIfMissing(h.options());
+
+    const commands = h.commands();
+    expect(commands.slice(0, 3)).toEqual([viewVersion, lsRemote, viewGitHead]);
+    expect(commands[3]).toBe(`git fetch origin ${gitHead}`);
+    expect(commands[4]).toContain(`tag -a v${version} -m Weft ${version} ${gitHead}`);
+    expect(commands[5]).toBe(`git push origin refs/tags/v${version}`);
+    expect(commands).toHaveLength(6);
+    expect(commands.some((command) => command.startsWith('npm publish'))).toBe(false);
+    expect(h.lines.join('\n')).toContain(gitHead);
+  });
+
+  test('warns and exits cleanly when the tag is missing and the registry has no gitHead', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(''),
+      [viewGitHead]: ok('\n'),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.lines.some((line) => line.startsWith('::warning::') && line.includes(version))).toBe(
+      true,
+    );
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+  });
+
+  test('fails when the heal itself cannot push the tag', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(''),
+      [viewGitHead]: ok(gitHead),
+      'git push': failure('', 'remote: permission denied'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('permission denied');
+  });
+
+  test('refuses a gitHead that is not a commit id', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(''),
+      [viewGitHead]: ok('--upload-pack=evil'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow(PublishError);
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+  });
+
+  test('fails when git cannot list the remote tags', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: failure('', 'fatal: could not read from remote'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('could not read from remote');
+  });
+});
+
+describe('publishIfMissing: version absent from npm', () => {
+  test('verifies, dry-runs, publishes, then tags the checked-out commit', async () => {
+    const h = harness({ [viewVersion]: notFound });
+
+    await publishIfMissing(h.options());
+
+    const commands = h.commands();
+    expect(commands.slice(0, 4)).toEqual([viewVersion, parentManifest, pendingAtHead, lsRemote]);
+    expect(commands.slice(4, 8)).toEqual([
+      'bun run scripts/verify-release-version.ts',
+      'bun run prepack',
+      'npm publish --dry-run --ignore-scripts',
+      'npm publish --ignore-scripts',
+    ]);
+    expect(commands[8]).toContain(`tag -a v${version} -m Weft ${version}`);
+    expect(commands[8]).not.toContain(gitHead);
+    expect(commands[9]).toBe(`git push origin refs/tags/v${version}`);
+    expect(commands).toHaveLength(10);
+    expect(h.lines.some((line) => line.includes('skipping publish'))).toBe(false);
+  });
+
+  test('refuses to publish, before any package command, when the tag is on another commit', async () => {
+    const other = 'd'.repeat(40);
+    const h = harness({
+      [viewVersion]: notFound,
+      [lsRemote]: ok(`${'c'.repeat(40)}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${other}\trefs/tags/v${version}^{}\n`),
+      [revParseHead]: ok(`${headCommit}\n`),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain(other);
+    expect((failure as Error).message).toContain(headCommit);
+    expect(h.commands()).toEqual([
+      viewVersion,
+      parentManifest,
+      pendingAtHead,
+      lsRemote,
+      lsRemotePeeled,
+      revParseHead,
+    ]);
+  });
+
+  test('publishes but leaves the tag alone when it already points at HEAD', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [lsRemote]: ok(`${headCommit}\trefs/tags/v${version}\n`),
+      [revParseHead]: ok(`${headCommit}\n`),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain('npm publish --ignore-scripts');
+    expect(h.commands().some((command) => /^git (?:.* )?(?:tag -a|push)\b/.test(command))).toBe(
+      false,
+    );
+    expect(h.lines.some((line) => line.includes('leaving it in place'))).toBe(true);
+  });
+
+  test('refuses to publish from a commit that did not set the version, naming the one that did', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(`${bumpCommit}\n`),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    const message = (failure as Error).message;
+    expect(message).toContain(version);
+    expect(message).toContain(bumpCommit);
+    expect(message).toContain('Re-run');
+    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch, pendingAtBump]);
+  });
+
+  test('still refuses, without a commit to name, when history does not show where the version was set', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(''),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow(version);
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('refuses, without publishing, when the commit that set the version still has pending changesets', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok(
+        '.changeset/README.md\n.changeset/config.json\n.changeset/quiet-owls.md\n.changeset/empty-cats.md\n',
+      ),
+      'git show HEAD:.changeset/quiet-owls.md': ok(`---\n'${name}': patch\n---\n\nFix a thing.\n`),
+      'git show HEAD:.changeset/empty-cats.md': ok('---\n---\n'),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain('.changeset/quiet-owls.md');
+    expect((failure as Error).message).not.toContain('README.md');
+    expect((failure as Error).message).not.toContain('empty-cats');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+    expect(h.commands().some((command) => command.startsWith('bun run'))).toBe(false);
+  });
+
+  test('warns and exits cleanly on a later commit when the bump commit had pending changesets', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(`${bumpCommit}\n`),
+      [pendingAtBump]: ok('.changeset/quiet-owls.md\n'),
+      [`git show ${bumpCommit}:.changeset/quiet-owls.md`]: ok(`---\n"${name}": minor\n---\n`),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(
+      h.lines.some((line) => line.startsWith('::warning::') && line.includes(bumpCommit)),
+    ).toBe(true);
+    expect(h.commands()).toEqual([
+      viewVersion,
+      parentManifest,
+      bumpSearch,
+      pendingAtBump,
+      `git show ${bumpCommit}:.changeset/quiet-owls.md`,
+    ]);
+  });
+
+  test('blocks the publish when a pending changeset cannot be read', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok('.changeset/broken-owls.md\n'),
+      'git show HEAD:.changeset/broken-owls.md': ok(`---\n'${name}': [patch\n---\n`),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('.changeset/broken-owls.md');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('publishes when the only pending changesets are empty or name another package', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok('.changeset/empty-cats.md\n.changeset/other-dogs.md\n'),
+      'git show HEAD:.changeset/empty-cats.md': ok('---\n---\n'),
+      'git show HEAD:.changeset/other-dogs.md': ok("---\n'@lostgradient/other': major\n---\n"),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain('npm publish --ignore-scripts');
+  });
+
+  test('looks up the exact release tag ref, never a tail match such as releases/v<version>', async () => {
+    const h = harness({ [viewVersion]: notFound });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain(`git ls-remote --tags origin refs/tags/v${version}`);
+    expect(h.commands()).not.toContain(`git ls-remote --tags origin v${version}`);
+  });
+
+  test('fails rather than guess when the parent commit cannot be read', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: failure('', "fatal: invalid object name 'HEAD^'"),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('HEAD^');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('runs the package commands in the package and the git commands at the repository root', async () => {
+    const h = harness({ [viewVersion]: notFound });
+
+    await publishIfMissing(h.options());
+
+    for (const call of h.calls) {
+      const isGit = call.command.startsWith('git ');
+      expect(call.cwd).toBe(isGit ? repositoryRoot : packageRoot);
+    }
+  });
+
+  test('keeps provenance off the dry run, exactly as the previous publish job did', async () => {
+    const h = harness({ [viewVersion]: notFound });
+
+    await publishIfMissing(h.options());
+
+    const dryRun = h.calls.find(
+      (call) => call.command === 'npm publish --dry-run --ignore-scripts',
+    );
+    const publish = h.calls.find((call) => call.command === 'npm publish --ignore-scripts');
+    expect(dryRun?.environment).toEqual({ NPM_CONFIG_PROVENANCE: 'false' });
+    expect(publish?.environment).toBeUndefined();
+  });
+
+  test('stops before publishing when the version check fails', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      'bun run scripts/verify-release-version.ts': failure('', 'Version mismatch'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('Version mismatch');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('never publishes when the dry run fails', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      'npm publish --dry-run': failure('', 'EPUBLISHCONFLICT'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('EPUBLISHCONFLICT');
+    expect(h.commands()).not.toContain('npm publish --ignore-scripts');
+  });
+
+  test('does not tag a version whose publish failed', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      'npm publish --ignore-scripts': failure('', 'E403 forbidden'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('E403');
+    expect(h.commands().some((command) => /^git (?:.* )?(?:tag|push)\b/.test(command))).toBe(false);
+  });
+
+  test('leaves a failed tag push to the next run, which heals it from gitHead', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      'git push': failure('', 'remote: rejected'),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('rejected');
+    expect(h.commands()).toContain('npm publish --ignore-scripts');
+  });
+});
+
+describe('publishIfMissing: registry error', () => {
+  test('fails on a registry error that is not a 404, without publishing or tagging', async () => {
+    const h = harness({
+      [viewVersion]: failure(
+        JSON.stringify({ error: { code: 'E503', summary: 'Service Unavailable' } }),
+        'npm error code E503',
+      ),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('E503');
+    expect(h.commands()).toEqual([viewVersion]);
+  });
+
+  test('fails on a failure that prints no parseable error', async () => {
+    const h = harness({ [viewVersion]: failure('', 'getaddrinfo ENOTFOUND registry.npmjs.org') });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('ENOTFOUND');
+    expect(h.commands()).toEqual([viewVersion]);
+  });
+
+  test('fails when a successful lookup answers with a different version', async () => {
+    const h = harness({ [viewVersion]: ok(JSON.stringify('9.9.9')) });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('unexpected');
+    expect(h.commands()).toEqual([viewVersion]);
+  });
+});
+
+describe('publish-if-missing CLI', () => {
+  const temporaryDirectories: string[] = [];
+  afterEach(() => {
+    for (const directory of temporaryDirectories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('exits non-zero with the message when package.json has no version', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'weft-publish-if-missing-'));
+    temporaryDirectories.push(root);
+    const scripts = path.join(root, 'packages', 'weft', 'scripts');
+    fs.mkdirSync(scripts, { recursive: true });
+    fs.writeFileSync(path.join(root, 'packages', 'weft', 'package.json'), JSON.stringify({ name }));
+    const copy = path.join(scripts, 'publish-if-missing.ts');
+    fs.copyFileSync(path.join(import.meta.dir, 'publish-if-missing.ts'), copy);
+
+    const result = Bun.spawnSync(['bun', copy], {
+      cwd: os.tmpdir(),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('missing a name or version');
+  });
+});
+
+describe('changesetReleases', () => {
+  test('reads the frontmatter as YAML: quoted, unquoted, commented and CRLF entries', () => {
+    expect(changesetReleases(`---\n'${name}': patch\n---\n`, name)).toBe(true);
+    expect(changesetReleases(`---\n"${name}": minor\n---\n`, name)).toBe(true);
+    expect(changesetReleases(`---\n"${name}": patch # urgent fix\n---\n\nFix.\n`, name)).toBe(true);
+    expect(changesetReleases(`---\r\nweft: major\r\n---\r\n`, 'weft')).toBe(true);
+  });
+
+  test('does not count empty changesets, other packages, none bumps, or names outside the frontmatter', () => {
+    expect(changesetReleases('---\n---\n', name)).toBe(false);
+    expect(changesetReleases("---\n'@lostgradient/other': patch\n---\n", name)).toBe(false);
+    expect(changesetReleases(`---\n'${name}': none\n---\n`, name)).toBe(false);
+    expect(changesetReleases(`---\n---\n\n'${name}': patch\n`, name)).toBe(false);
+  });
+
+  test('fails closed on a file it cannot read as a changeset', () => {
+    expect(() => changesetReleases(`no frontmatter '${name}': patch`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n'${name}': [patch\n---\n`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n- ${name}\n---\n`, name)).toThrow(PublishError);
+    expect(() => changesetReleases(`---\n'${name}': huge\n---\n`, name)).toThrow('huge');
+  });
+});
