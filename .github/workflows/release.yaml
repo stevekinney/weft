@@ -26,9 +26,15 @@ permissions:
   contents: read
 
 # Releases must not overlap: two runs would race on the Version Packages branch and on the registry.
+# GitHub keeps only one pending run per group unless the queue is raised, and a newer push would
+# cancel the pending run for the Version Packages merge. `queue: max` keeps up to 100 pending runs,
+# roughly first in, first out, and runs are never cancelled (the default for cancel-in-progress,
+# which cannot be combined with a queue). release:publish also refuses to publish from a commit
+# that did not set the manifest version. If a run for a bump commit was lost anyway, re-run that
+# commit's release run from the Actions UI; a re-run uses its original commit.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   verify:

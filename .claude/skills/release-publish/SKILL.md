@@ -34,6 +34,24 @@ A tag is the result of a release, never the trigger. If a publish succeeded but
 the tag push failed, the next run tags the commit npm records as `gitHead`. An
 existing tag that points at any other commit fails the run and is never moved.
 
+## Recovery: a superseded bump run
+
+`release:publish` publishes a version npm lacks only from the commit that set it
+in `packages/weft/package.json`, meaning HEAD's first parent has a different
+version. GitHub can cancel or supersede the run for the Version Packages merge
+commit when a later push lands, and the later commit then carries the bumped
+version without being the commit that bumped it. In that case the later run
+exits non-zero without publishing, and its message names the bump commit:
+
+```bash
+git log -1 --format=%H -S'"version": "<version>"' -- packages/weft/package.json
+```
+
+Re-run the release workflow run for that commit from the Actions UI (or
+`gh run rerun <run-id>`); a re-run uses its original commit, so it publishes
+that commit and tags it. The workflow's `queue: max` concurrency keeps pending
+runs from being dropped in the first place.
+
 ## Release intent
 
 Release intent is a changeset in `.changeset/`. A change that originates in

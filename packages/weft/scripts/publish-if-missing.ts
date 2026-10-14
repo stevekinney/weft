@@ -181,6 +181,45 @@ async function reconcileTag(options: PublishIfMissingOptions, tag: string): Prom
 }
 
 /**
+ * Refuse to publish a version from any commit but the one that set it.
+ *
+ * Releases run once per push to main and GitHub keeps only one pending run per concurrency group,
+ * so a newer push can supersede the run for the Version Packages merge. That newer commit still
+ * carries the bumped manifest, and publishing from it would ship later, unversioned code under the
+ * bumped version. The bump commit is the one whose first parent has a different version.
+ */
+async function assertHeadSetTheVersion(options: PublishIfMissingOptions): Promise<void> {
+  const manifestPath = path
+    .relative(options.repositoryRoot, path.join(options.packageRoot, 'package.json'))
+    .split(path.sep)
+    .join('/');
+  const git = { cwd: options.repositoryRoot };
+  const parent = await expectSuccess(options, ['git', 'show', `HEAD^:${manifestPath}`], git);
+  let parentVersion: unknown;
+  try {
+    parentVersion = (JSON.parse(parent.stdout) as { version?: unknown }).version;
+  } catch {
+    throw new PublishError(`Could not read the version in HEAD^:${manifestPath}.`);
+  }
+  if (parentVersion !== options.version) return;
+
+  const search = await expectSuccess(
+    options,
+    ['git', 'log', '-1', '--format=%H', `-S"version": "${options.version}"`, '--', manifestPath],
+    git,
+  );
+  const bump = search.stdout.trim();
+  throw new PublishError(
+    `${options.name}@${options.version} is not on npm, but HEAD did not set that version, so it ` +
+      'is not published from here: a later commit would ship under a version it was never ' +
+      'bumped for. ' +
+      (bump
+        ? `Re-run the release workflow run for ${bump}, the commit that bumped it, from the Actions UI; a re-run uses its original commit.`
+        : 'Re-run the release workflow run for the commit that bumped it from the Actions UI; a re-run uses its original commit. History did not show which commit that is.'),
+  );
+}
+
+/**
  * Publish `options.name@options.version` unless the registry already has it.
  *
  * Releases run on every push to main, and most pushes carry no new version. Asking the registry
@@ -198,6 +237,7 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
     return;
   }
 
+  await assertHeadSetTheVersion(options);
   await expectSuccess(options, ['bun', 'run', 'scripts/verify-release-version.ts'], packageCommand);
   await expectSuccess(options, ['bun', 'run', 'prepack'], packageCommand);
   // Provenance is requested for the real publish only, as it was before releases moved here.

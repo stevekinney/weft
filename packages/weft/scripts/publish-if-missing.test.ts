@@ -19,6 +19,9 @@ const packageRoot = '/repository/packages/weft';
 const viewVersion = `npm view ${name}@${version} version --json`;
 const viewGitHead = `npm view ${name}@${version} gitHead`;
 const lsRemote = `git ls-remote --tags origin v${version}`;
+const parentManifest = 'git show HEAD^:packages/weft/package.json';
+const bumpSearch = `git log -1 --format=%H -S"version": "${version}" -- packages/weft/package.json`;
+const bumpCommit = 'b'.repeat(40);
 const lsRemotePeeled = `git ls-remote --tags origin refs/tags/v${version}^{}`;
 
 const ok = (stdout = ''): CommandResult => ({ exitCode: 0, stdout, stderr: '' });
@@ -45,7 +48,11 @@ function harness(responses: Record<string, CommandResult>) {
     run: (command: readonly string[], options: CommandOptions): CommandResult => {
       const text = command.join(' ');
       calls.push({ command: text, cwd: options.cwd, environment: options.environment });
-      const matched = Object.entries(responses).find(([key]) => text.startsWith(key));
+      // By default HEAD is the commit that set the version: its parent carries an older one.
+      const defaults = { [parentManifest]: ok(JSON.stringify({ version: '0.27.17' })) };
+      const matched = Object.entries({ ...defaults, ...responses }).find(([key]) =>
+        text.startsWith(key),
+      );
       return matched ? matched[1] : ok();
     },
     options() {
@@ -211,18 +218,59 @@ describe('publishIfMissing: version absent from npm', () => {
     await publishIfMissing(h.options());
 
     const commands = h.commands();
-    expect(commands[0]).toBe(viewVersion);
-    expect(commands.slice(1, 5)).toEqual([
+    expect(commands.slice(0, 2)).toEqual([viewVersion, parentManifest]);
+    expect(commands.slice(2, 6)).toEqual([
       'bun run scripts/verify-release-version.ts',
       'bun run prepack',
       'npm publish --dry-run --ignore-scripts',
       'npm publish --ignore-scripts',
     ]);
-    expect(commands[5]).toContain(`tag -a v${version} -m Weft ${version}`);
-    expect(commands[5]).not.toContain(gitHead);
-    expect(commands[6]).toBe(`git push origin refs/tags/v${version}`);
-    expect(commands).toHaveLength(7);
+    expect(commands[6]).toContain(`tag -a v${version} -m Weft ${version}`);
+    expect(commands[6]).not.toContain(gitHead);
+    expect(commands[7]).toBe(`git push origin refs/tags/v${version}`);
+    expect(commands).toHaveLength(8);
     expect(h.lines.some((line) => line.includes('skipping publish'))).toBe(false);
+  });
+
+  test('refuses to publish from a commit that did not set the version, naming the one that did', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(`${bumpCommit}\n`),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    const message = (failure as Error).message;
+    expect(message).toContain(version);
+    expect(message).toContain(bumpCommit);
+    expect(message).toContain('Re-run');
+    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch]);
+  });
+
+  test('still refuses, without a commit to name, when history does not show where the version was set', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(''),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow(version);
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('fails rather than guess when the parent commit cannot be read', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: failure('', "fatal: invalid object name 'HEAD^'"),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow('HEAD^');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
   });
 
   test('runs the package commands in the package and the git commands at the repository root', async () => {
@@ -276,7 +324,7 @@ describe('publishIfMissing: version absent from npm', () => {
     });
 
     await expect(publishIfMissing(h.options())).rejects.toThrow('E403');
-    expect(h.commands().some((command) => command.startsWith('git'))).toBe(false);
+    expect(h.commands().some((command) => /^git (?:.* )?(?:tag|push)\b/.test(command))).toBe(false);
   });
 
   test('leaves a failed tag push to the next run, which heals it from gitHead', async () => {
