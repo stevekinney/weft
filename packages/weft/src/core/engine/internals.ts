@@ -443,6 +443,14 @@ export interface EngineInternals {
    */
   workflowVisibilityWatermark: 'current' | 'stale' | undefined;
   workflowVisibilityWatermarkExpiresAt: number | undefined;
+  /**
+   * Cached answer to "must state writes maintain the visibility indexes?" (see
+   * `workflow-visibility-maintenance.ts`). `undefined` until first read; an
+   * expired entry is treated as "maintain" until the next write re-reads it.
+   */
+  workflowVisibilityMaintenance: { maintain: boolean; expiresAt: number } | undefined;
+  /** The in-flight read behind {@link workflowVisibilityMaintenance}, shared by concurrent writers. */
+  workflowVisibilityMaintenanceRefresh: Promise<void> | undefined;
   pendingTimelineEntries: Map<string, PendingTimelineEntry>;
   pendingAtomicWorkflowCommitSideEffects: Map<
     string,

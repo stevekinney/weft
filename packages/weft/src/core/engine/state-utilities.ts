@@ -47,13 +47,17 @@ const TEARDOWN_TIMER_PREFIX = 'teardown:';
  * - `token`: ties the marker to its `wf-teardown:` timer so a stale timer for a
  *   re-armed (different-token) claim cannot drive it.
  * - `claimedAt`: engine clock at the `owed → running` transition; `undefined` while
- *   `'owed'`. Drives the time-based reclaim of an abandoned `'running'` claim.
+ *   `'owed'`. The attempt's original start; never moves, so status reports it as `startedAt`.
+ * - `renewedAt`: engine clock of the latest liveness heartbeat from the holder of a
+ *   `'running'` claim (COR-1422); absent until the first renewal. The time-based reclaim of an
+ *   abandoned `'running'` claim measures staleness from `renewedAt ?? claimedAt`.
  */
 export type TeardownClaim = {
   status: 'owed' | 'running';
   attempts: number;
   token: string;
   claimedAt?: number;
+  renewedAt?: number;
 };
 
 /** Build the durable teardown timer id from its claim token (parsed by {@link parseTeardownTimerId}). */
@@ -91,7 +95,8 @@ export function isTeardownClaim(value: unknown): value is TeardownClaim {
     (candidate['status'] === 'owed' || candidate['status'] === 'running') &&
     typeof candidate['token'] === 'string' &&
     isNonNegativeSafeInteger(candidate['attempts']) &&
-    isAbsentOrFiniteNonNegative(candidate['claimedAt'])
+    isAbsentOrFiniteNonNegative(candidate['claimedAt']) &&
+    isAbsentOrFiniteNonNegative(candidate['renewedAt'])
   );
 }
 

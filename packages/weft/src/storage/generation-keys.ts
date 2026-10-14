@@ -30,6 +30,19 @@ import { encodeStorageKeyComponent } from './key-encoding.ts';
  * gap changes this key even though `wf:<id>` reads the same, so the stale
  * loser's condition fails where a value-only comparison could not detect it.
  *
+ * The row exists exactly when the id has ever been started with a
+ * caller-supplied id (COR-1387): every explicit-id create bumps it in its own
+ * create batch, and a purge bumps it only when the row already exists. A run
+ * started under an engine-generated UUID never writes the row, because the
+ * stale loser this fence defends against must have read `wf:<id>` absent
+ * BEFORE that run existed, which for a fresh UUID requires predicting it —
+ * the same assumption a generated-id start already makes by skipping the
+ * duplicate-id read entirely. Writing a permanent row per generated run made
+ * storage grow without bound under sustained load. A later explicit-id start
+ * that reuses such an id writes the row in its create batch, so from then on
+ * the id is fenced like any other explicit id (including against an in-flight
+ * `pruneCheckpoints`, whose chunk CAS pins the absent generation it observed).
+ *
  * Like `wf-owner-epoch:<id>` (`ownership-keys.ts`), which is the precedent
  * this key's mechanism and permanence both follow, this key is
  * **permanently retained**: never deleted by release, purge, retention, or a

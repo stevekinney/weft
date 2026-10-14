@@ -97,17 +97,6 @@ export function teardownStaleThresholdMs(finalizer: RunnableFinalizer): number {
   return perAttemptBudget + TEARDOWN_STALE_MARGIN_MS;
 }
 
-/** Whether a `running` claim is reclaimable: its holder has not settled within the stale window. */
-export function runningClaimIsStale(
-  internals: EngineInternals,
-  claim: TeardownClaim,
-  finalizer: RunnableFinalizer,
-): boolean {
-  if (claim.status !== 'running') return true; // an `owed` claim is always claimable.
-  if (claim.claimedAt === undefined) return true; // malformed `running` (no stamp) — reclaim.
-  return internals.options.getNow() - claim.claimedAt >= teardownStaleThresholdMs(finalizer);
-}
-
 /**
  * Durable audit record written to {@link KEYS.teardownDeadLetter} when a workflow's
  * finalizer permanently fails — the retry horizon was reached, or the recorded resource
@@ -209,8 +198,19 @@ export function encodeOwedClaim(attempts: number, token: string): Uint8Array {
 }
 
 /** Encode the `running` claim a holder writes to atomically claim the marker. */
-export function encodeRunningClaim(attempts: number, token: string, claimedAt: number): Uint8Array {
-  const runningClaim: TeardownClaim = { status: 'running', attempts, token, claimedAt };
+export function encodeRunningClaim(
+  attempts: number,
+  token: string,
+  claimedAt: number,
+  renewedAt?: number,
+): Uint8Array {
+  const runningClaim: TeardownClaim = {
+    status: 'running',
+    attempts,
+    token,
+    claimedAt,
+    ...(renewedAt === undefined ? {} : { renewedAt }),
+  };
   return encode(runningClaim);
 }
 
@@ -281,22 +281,6 @@ export async function rearmTeardownTimer(
   );
 }
 
-/**
- * The fire time of the watchdog a drive re-arms when it yields to a `running` claim it judged
- * fresh: the claim CAS armed one watchdog, and the yield consumed it (the scheduler deletes
- * the fired key), which happens whenever this engine's horizon or clock disagrees with the
- * claimer's. The target is `claimedAt` plus THIS drive's horizon, a key every engine computes
- * identically so concurrent yields collapse onto one timer; the write moves it past the fired
- * key when needed (see {@link fireAtAfterFired}).
- */
-export function liveClaimWatchdogFireAt(
-  claim: TeardownClaim,
-  finalizer: RunnableFinalizer,
-  firedAt: number,
-): number {
-  return (claim.claimedAt ?? firedAt) + teardownStaleThresholdMs(finalizer);
-}
-
 /** Re-arm the watchdog for a live `running` claim this drive yielded to (see above). */
 export async function rearmLiveClaimWatchdog(
   internals: EngineInternals,
@@ -343,6 +327,8 @@ export async function clearTeardownMarker(
  */
 export interface TeardownHold {
   bytes: Uint8Array;
+  /** The claim's original `claimedAt`, which every renewal carries forward unchanged. */
+  claimedAt?: number;
   watchdogCleanup: BatchOperation[];
 }
 
@@ -396,6 +382,7 @@ export async function claimTeardownMarker(
   if (!claimed) return null;
   return {
     bytes: runningBytes,
+    claimedAt,
     watchdogCleanup: watchdogOperations.map((operation) => ({
       type: 'delete',
       key: operation.key,
@@ -431,7 +418,8 @@ export async function settleOnRunningClaim(
  * {@link settleOnRunningClaim} as every other settle, so it needs no per-workflow claim and
  * lands under `workflow-lease` and `none` (both tested). Under global `ownership: 'lease'`
  * disposal may release the lease first, in which case the settle cannot land: the marker stays
- * `running` and the watchdog the claim armed reclaims it once the stale horizon passes. A
+ * `running` and the watchdog the claim armed reclaims it once the stale horizon passes; that
+ * abandoned attempt then counts as spent (COR-1422), the same as a crash. A
  * lost CAS means a reclaimer owns the marker and its watchdog; nothing is re-armed.
  */
 export async function reassertOwedAfterShutdown(

@@ -80,7 +80,7 @@ describe('BunSQLite workflow visibility backfill', () => {
       }),
     );
 
-    const report = await runWorkflowVisibilityBackfill(storage);
+    const report = await runWorkflowVisibilityBackfill(storage, { settleMilliseconds: 0 });
 
     expect(report).toEqual({ processed: 2, conflicts: 0, watermarkWritten: true });
     expect(await getWorkflowVisibilityWatermark(storage)).toBe('current');
@@ -137,7 +137,7 @@ describe('BunSQLite workflow visibility backfill', () => {
     ]);
 
     const indexedKeysAfterFirstBackfill = await collectKeys(storage, 'wf-idx-');
-    const secondReport = await runWorkflowVisibilityBackfill(storage);
+    const secondReport = await runWorkflowVisibilityBackfill(storage, { settleMilliseconds: 0 });
 
     expect(secondReport).toEqual({ processed: 2, conflicts: 0, watermarkWritten: true });
     expect(await collectKeys(storage, 'wf-idx-')).toEqual(indexedKeysAfterFirstBackfill);
@@ -162,10 +162,10 @@ describe('BunSQLite workflow visibility backfill', () => {
         executionDeadline: 1_700_000_010_000,
       }),
     );
-    await runWorkflowVisibilityBackfill(storage);
+    await runWorkflowVisibilityBackfill(storage, { settleMilliseconds: 0 });
     expect(await getWorkflowVisibilityWatermark(storage)).toBe('current');
 
-    const report = await runWorkflowVisibilityDrop(storage);
+    const report = await runWorkflowVisibilityDrop(storage, { settleMilliseconds: 0 });
 
     expect(report.rowsDeleted).toBeGreaterThan(0);
     expect(await getWorkflowVisibilityWatermark(storage)).toBe('stale');

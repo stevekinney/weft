@@ -14,7 +14,11 @@
 import type { FailureCategory, ListFilter } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { intersectIdentifierSets } from './state-utilities.ts';
-import { getCachedWorkflowVisibilityWatermark } from './workflow-indexes.ts';
+import {
+  getCachedWorkflowVisibilityWatermark,
+  readWorkflowVisibilityBuild,
+  sameWorkflowVisibilityBuild,
+} from './workflow-indexes.ts';
 import { queryAttributeIndex, resolveConstrainedIds } from './workflow-state-stream.ts';
 import {
   queryWorkflowIdPrefixCandidates,
@@ -99,8 +103,9 @@ function collectVisibilityQueries(
   internals: EngineInternals,
   filter: ListFilter,
   dimensions: readonly ListFilterDimension[],
-): Array<Promise<Set<string>>> {
-  const queries: Array<Promise<Set<string>>> = [];
+): Array<() => Promise<Set<string>>> {
+  // Deferred, not started: the indexed path must read the build stamp before any scan begins.
+  const queries: Array<() => Promise<Set<string>>> = [];
   for (const dimension of dimensions) {
     const value = filter[dimension];
     if (value === undefined) continue;
@@ -110,7 +115,7 @@ function collectVisibilityQueries(
       internals: EngineInternals,
       value: unknown,
     ) => Promise<Set<string>>;
-    queries.push(query(internals, value));
+    queries.push(() => query(internals, value));
   }
   return queries;
 }
@@ -126,17 +131,20 @@ export async function resolveListCandidateIds(
   ]);
 
   const watermark = await getCachedWorkflowVisibilityWatermark(internals);
-
-  if (watermark === 'stale') {
+  const withoutVisibilityIndexes = async () => {
     // idPrefix is independent of the watermark — primary-key scan is always available.
     const queries =
       filter === undefined ? [] : collectVisibilityQueries(internals, filter, ['idPrefix']);
-    const visibilitySets = await Promise.all(queries);
+    const visibilitySets = await Promise.all(queries.map((query) => query()));
     return combineCandidateSets([
       baseConstrainedIds,
       failureCategoryCandidateIds,
       ...visibilitySets,
     ]);
+  };
+
+  if (watermark === 'stale') {
+    return withoutVisibilityIndexes();
   }
 
   const indexedDimensions: readonly ListFilterDimension[] = [
@@ -154,7 +162,22 @@ export async function resolveListCandidateIds(
     return combineCandidateSets([baseConstrainedIds, failureCategoryCandidateIds]);
   }
 
-  const visibilitySets = await Promise.all(visibilityQueries);
+  // The cached watermark says the index was live a moment ago, not that it still is. Read the
+  // build stamp before any index scan starts and again after they all finish, and require it
+  // unchanged: a backfill or drop removes the watermark and its stamp before it touches any row,
+  // and every publish writes a new stamp, so a scan that overlapped a sweep or a rebuild sees the
+  // stamp missing or changed and the query falls back to the scan path instead of returning a
+  // partial index. Reading it first matters: a scan that started during a rebuild and finished
+  // before the publish would otherwise see the new stamp on both reads.
+  const buildBefore = await readWorkflowVisibilityBuild(internals.storage);
+  if (buildBefore === null) {
+    return withoutVisibilityIndexes();
+  }
+  const visibilitySets = await Promise.all(visibilityQueries.map((query) => query()));
+  const buildAfter = await readWorkflowVisibilityBuild(internals.storage);
+  if (!sameWorkflowVisibilityBuild(buildBefore, buildAfter)) {
+    return withoutVisibilityIndexes();
+  }
   return combineCandidateSets([baseConstrainedIds, failureCategoryCandidateIds, ...visibilitySets]);
 }
 

@@ -15,6 +15,7 @@ import type {
   WorkflowServicesResolverInfo,
 } from './services-resolution.ts';
 import type { WorkflowLogRecord } from './workflow-log.ts';
+import type { WorkflowVisibilityIndexOptions } from './workflow-visibility-index-options.ts';
 
 // ---------------------------------------------------------------------------
 // Start options for engine.start()
@@ -246,7 +247,7 @@ export interface ForkOptions {
  * const engine = new Engine({ development: true });
  * ```
  */
-export interface EngineOptions<TServices = unknown> {
+export interface EngineOptions<TServices = unknown> extends WorkflowVisibilityIndexOptions {
   storage?: WeftStorage;
   development?: boolean;
   workerStartOverrideSigningSecret?: string;

@@ -88,8 +88,16 @@ export function buildWorkflowGenerationBumpOperation(
  *
  * Runs under EVERY ownership mode — unlike the `wf-owner-epoch` rotation
  * fragment, which is a no-op outside `ownership: 'workflow-lease'`, this
- * always reads and bumps: the ABA hole it closes exists under `'none'` and
- * `'lease'` too.
+ * always reads: the ABA hole it closes exists under `'none'` and `'lease'`
+ * too.
+ *
+ * An ABSENT generation is not bumped (COR-1387): absence means the id was
+ * only ever started under an engine-generated UUID, and only explicit-id
+ * starts can be the stale loser this counter fences — see
+ * `storage/generation-keys.ts`. The condition pinning the absent value is
+ * still folded in, so a concurrent explicit `'start-new'` restart that
+ * displaces this run (and writes the row in its create batch) still fails
+ * this purge's CAS instead of letting it delete the replacement.
  */
 export async function foldWorkflowGenerationBumpForPurge(
   internals: EngineInternals,
@@ -98,12 +106,18 @@ export async function foldWorkflowGenerationBumpForPurge(
 ): Promise<WorkflowClaimTransitionFragment> {
   const key = KEYS.workflowGeneration(workflowId);
   const observedGenerationBytes = await internals.storage.get(key);
-  const operation = buildWorkflowGenerationBumpOperation(workflowId, observedGenerationBytes);
   const condition = internals.storage.capabilities().conditionalBatch
     ? { key, expectedValue: observedGenerationBytes }
     : undefined;
+  const operations =
+    observedGenerationBytes === null
+      ? base.operations
+      : [
+          ...base.operations,
+          buildWorkflowGenerationBumpOperation(workflowId, observedGenerationBytes),
+        ];
   return {
-    operations: [...base.operations, operation],
+    operations,
     conditions: base.conditions.concat(condition ?? []),
   };
 }

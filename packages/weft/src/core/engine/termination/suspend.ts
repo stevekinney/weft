@@ -6,7 +6,10 @@ import { releaseSuspendedCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowSuspendNotSupportedError } from '../errors.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
-import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
+import {
+  refreshWorkflowVisibilityMaintenance,
+  visibilityIndexOperations,
+} from '../workflow-visibility-maintenance.ts';
 import { evictSuspendedWorkflowWaiters, type TerminationCallbacks } from './cleanup.ts';
 
 /**
@@ -156,9 +159,11 @@ export async function suspendWorkflow(
     // is a public API any caller may invoke against an engine that is not the
     // running owner, so this rotates the claim epoch under `ownership:
     // 'workflow-lease'` rather than fencing on this engine's own claim.
+    const visibilityMaintenance = refreshWorkflowVisibilityMaintenance(internals);
+    if (visibilityMaintenance !== undefined) await visibilityMaintenance;
     await callbacks.commitExternalTerminalWorkflowStateOperations(state, [
       { type: 'put', key: KEYS.workflow(workflowId), value: encode(updatedState) },
-      ...buildWorkflowVisibilityIndexTransition(workflowId, state, updatedState).batchOps,
+      ...visibilityIndexOperations(internals, workflowId, state, updatedState),
       // Delete the absolute execution-deadline timer in the same batch as the
       // flip (atomic, lock-ordered before any resume re-arm). Symmetric to
       // resume's durable re-arm via buildTimerBatchOperations.

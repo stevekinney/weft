@@ -51,7 +51,7 @@ import {
   throwWorkflowClaimUnavailable,
 } from './workflow-claim-fold.ts';
 import { buildWorkflowConcurrencyStartOperations } from './workflow-concurrency.ts';
-import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
+import { visibilityIndexOperations } from './workflow-visibility-maintenance.ts';
 
 const FAILED_WORKFLOW_STATUSES: WorkflowStatus[] = ['failed'];
 const CHECKPOINT_RETRY_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
@@ -364,6 +364,7 @@ async function buildReactivationCommit(
   const reactivatedState = buildReactivatedWorkflowState(internals, currentState);
   const currentAttributes = await loadSearchAttributes(internals, workflowId);
   const operations = buildReactivationBatchOperations(
+    internals,
     workflowId,
     currentState,
     reactivatedState,
@@ -383,6 +384,7 @@ async function buildReactivationCommit(
 }
 
 function buildReactivationBatchOperations(
+  internals: EngineInternals,
   workflowId: string,
   currentState: WorkflowState,
   reactivatedState: WorkflowState,
@@ -402,7 +404,7 @@ function buildReactivationBatchOperations(
   return [
     ...buildTerminalWorkflowIndexOperations(currentState, reactivatedState),
     { type: 'put', key: KEYS.workflow(workflowId), value: encode(reactivatedState) },
-    ...buildWorkflowVisibilityIndexTransition(workflowId, currentState, reactivatedState).batchOps,
+    ...visibilityIndexOperations(internals, workflowId, currentState, reactivatedState),
     ...buildRetrySearchAttributeOperations(
       workflowId,
       currentAttributes,

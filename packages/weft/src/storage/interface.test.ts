@@ -205,6 +205,7 @@ describe('KEYS insertion order', () => {
       'workflowVisibilityMetaVersion',
       'workflowVisibilityMetaBuiltAt',
       'workflowVisibilityMetaCursor',
+      'workflowVisibilityMetaBuilding',
     ]);
   });
 });
@@ -364,6 +365,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowVisibilityMetaVersion(),
       KEYS.workflowVisibilityMetaBuiltAt(),
       KEYS.workflowVisibilityMetaCursor(),
+      KEYS.workflowVisibilityMetaBuilding(),
       KEYS.leaseEpoch(),
       KEYS.leaseHolder(),
       KEYS.workflowOwnerEpoch('workflow-id'),
@@ -1026,6 +1028,7 @@ describe('KEYS', () => {
     expect(KEYS.workflowVisibilityMetaVersion()).toBe('wf-idx-meta:version');
     expect(KEYS.workflowVisibilityMetaBuiltAt()).toBe('wf-idx-meta:built-at');
     expect(KEYS.workflowVisibilityMetaCursor()).toBe('wf-idx-meta:cursor');
+    expect(KEYS.workflowVisibilityMetaBuilding()).toBe('wf-idx-meta:building');
   });
 
   it('encodes both dimensions of the schedule-run reverse index', () => {

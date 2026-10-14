@@ -19,7 +19,13 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
-import { waitForCondition } from '../../../testing/fake-timers.test-support.ts';
+import {
+  advanceTimersByTime,
+  flushMicrotasks,
+  restoreRealTimers,
+  useFakeTimers,
+  waitForCondition,
+} from '../../../testing/fake-timers.test-support.ts';
 import { collectTeardownEvents } from '../../__tests__/finalizer-teardown.test-support.ts';
 import { decode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';
@@ -34,6 +40,7 @@ import {
   encodeOwedClaim,
   encodeRunningClaim,
   fireAtAfterFired,
+  MAX_TEARDOWN_ATTEMPTS,
   observedMarkerHold,
   OUTSIDE_FIRED_TIMER,
   rearmLiveClaimWatchdog,
@@ -347,6 +354,267 @@ for (const mode of MULTI_ENGINE_MODES) {
       expect(second.destroyed).toHaveLength(1);
     });
 
+    it('a finalizer that crashes its host on every attempt dead-letters after exactly MAX_TEARDOWN_ATTEMPTS attempts (COR-1422)', async () => {
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 20_000_000 };
+      // Every attempt "crashes": the finalizer never settles, so its drive never returns and
+      // its engine never writes the settle. Only the stale horizon lets a new engine adopt.
+      let starts = 0;
+      const crashed: Array<() => void> = [];
+      const destroy = activity({
+        name: `destroy-crash-loop-${mode}`,
+        execute: async () => {
+          starts += 1;
+          await new Promise<void>((resolve) => crashed.push(resolve));
+        },
+      });
+      const type = `crash-loop-${mode}`;
+      const id = `${type}-1`;
+      const engines: Engine[] = [];
+      const drives: Promise<void>[] = [];
+      try {
+        for (let attempt = 1; attempt <= MAX_TEARDOWN_ATTEMPTS; attempt += 1) {
+          const engine = await createEngine(mode, storage, clock);
+          engines.push(engine);
+          registerTeardownType(engine, type, destroy);
+          if (attempt === 1) await startAndTerminate(engine, storage, type, id);
+          drives.push(engine.scheduler.tick(clock.now));
+          await waitForCondition(() => starts === attempt, {
+            label: `attempt ${attempt} started`,
+            timeoutMs: 2000,
+            intervalMs: 5,
+          });
+          expect(await engine.getFinalizerStatus(id)).toMatchObject({
+            status: 'running',
+            attempts: attempt,
+          });
+          clock.now += STALE_RUNNING_HORIZON_MS;
+        }
+
+        // The next adopter finds every attempt consumed: it dead-letters without a ninth run.
+        const adopter = await createEngine(mode, storage, clock);
+        engines.push(adopter);
+        registerTeardownType(adopter, type, destroy);
+        const events = collectTeardownEvents(adopter);
+        await adopter.scheduler.tick(clock.now);
+
+        expect(starts).toBe(MAX_TEARDOWN_ATTEMPTS);
+        expect(events).toEqual([
+          {
+            workflowId: id,
+            status: 'dead-lettered',
+            attempts: MAX_TEARDOWN_ATTEMPTS,
+            error: 'finalizer attempt crashed its host without settling',
+          },
+        ]);
+        expect(await adopter.getFinalizerStatus(id)).toMatchObject({
+          status: 'failed',
+          attempts: MAX_TEARDOWN_ATTEMPTS,
+        });
+        expect(await storage.get(KEYS.teardownOwed(id))).toBeNull();
+        expect(await timerCount(storage)).toBe(0);
+      } finally {
+        for (const release of crashed) release();
+        await Promise.all(drives);
+        for (const engine of engines) await engine[Symbol.asyncDispose]();
+      }
+      // The released zombies lost their settle CAS: the dead-letter stands.
+      expect(await storage.get(KEYS.teardownDeadLetter(id))).not.toBeNull();
+      expect(await storage.get(KEYS.teardownSucceeded(id))).toBeNull();
+    });
+
+    it('counts an abandoned running attempt but not a graceful abort, so the next run is attempt 3 (COR-1422)', async () => {
+      // Decision pin: a `running` marker that reaches a drive was abandoned without settling
+      // (a crash, or a disposal whose settle could not land under global `lease`), and that
+      // attempt is spent. A disposal whose settle lands re-asserts `owed` at the unchanged
+      // count (see the abort test above) and spends nothing.
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 30_000_000 };
+      const second = countingFinalizer(`destroy-abandoned-${mode}`);
+      await using engine = await createEngine(mode, storage, clock);
+      const type = `abandoned-${mode}`;
+      const id = `${type}-1`;
+      registerTeardownType(engine, type, second.destroy);
+      await startAndTerminate(engine, storage, type, id);
+      const owed = (await readClaim(storage, id))!;
+      // Attempt 2 is abandoned mid-run: one settled attempt plus a stale `running` marker.
+      await storage.put(KEYS.teardownOwed(id), encodeRunningClaim(1, owed.token, clock.now));
+      clock.now += STALE_RUNNING_HORIZON_MS;
+      const events = collectTeardownEvents(engine);
+      await engine.scheduler.tick(clock.now);
+      expect(events).toEqual([{ workflowId: id, status: 'completed', attempts: 3 }]);
+    });
+
+    it('renews the running marker so a long no-timeout finalizer is never reclaimed and settles succeeded (COR-1422)', async () => {
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 40_000_000 };
+      const parked = parkedFinalizer(`destroy-heartbeat-${mode}`);
+      await using engineA = await createEngine(mode, storage, clock);
+      await using engineB = await createEngine(mode, storage, clock);
+      for (const engine of [engineA, engineB]) {
+        registerTeardownType(engine, `heartbeat-${mode}`, parked.destroy);
+      }
+      const id = `heartbeat-${mode}-1`;
+      await startAndTerminate(engineA, storage, `heartbeat-${mode}`, id);
+      const eventsB = collectTeardownEvents(engineB);
+      useFakeTimers();
+      try {
+        const driveA = engineA.scheduler.tick(clock.now);
+        await parked.started;
+        const claimedAtStart = (await readClaim(storage, id))!.claimedAt!;
+        // Twice the default stale horizon passes in heartbeat-sized steps while a peer polls.
+        for (let step = 0; step < 6; step += 1) {
+          clock.now += DEFAULT_STALE_HORIZON_MS / 3;
+          await advanceTimersByTime(DEFAULT_STALE_HORIZON_MS / 3);
+          await flushMicrotasks(50);
+          await engineB.scheduler.tick(clock.now);
+        }
+        expect(parked.starts()).toBe(1);
+        expect((await readClaim(storage, id))!.renewedAt!).toBeGreaterThan(claimedAtStart);
+        expect(eventsB).toEqual([]);
+
+        parked.release();
+        await driveA;
+        expect(parked.starts()).toBe(1);
+        expect(await engineA.getFinalizerStatus(id)).toMatchObject({
+          status: 'succeeded',
+          attempts: 1,
+        });
+        expect(await timerCount(storage)).toBe(0);
+      } finally {
+        restoreRealTimers();
+      }
+    });
+
+    it('retries a failed renewal on the next tick and reports the original start time (COR-1422)', async () => {
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 43_000_000 };
+      const parked = parkedFinalizer(`destroy-heartbeat-retry-${mode}`);
+      await using engine = await createEngine(mode, storage, clock);
+      registerTeardownType(engine, `heartbeat-retry-${mode}`, parked.destroy);
+      const id = `heartbeat-retry-${mode}-1`;
+      await startAndTerminate(engine, storage, `heartbeat-retry-${mode}`, id);
+      useFakeTimers();
+      try {
+        const drive = engine.scheduler.tick(clock.now);
+        await parked.started;
+        const startedAt = clock.now;
+        const step = DEFAULT_STALE_HORIZON_MS / 3;
+
+        // One transient write failure: the renewal throws, the marker stays as claimed.
+        const engineStorage = getInternals(engine).storage;
+        const realBatch = engineStorage.conditionalBatch!.bind(engineStorage);
+        let failures = 1;
+        engineStorage.conditionalBatch = async (
+          ...batchArguments: Parameters<typeof realBatch>
+        ) => {
+          if (failures > 0) {
+            failures -= 1;
+            throw new Error('transient storage failure');
+          }
+          return realBatch(...batchArguments);
+        };
+        clock.now += step;
+        await advanceTimersByTime(step);
+        await flushMicrotasks(50);
+        expect((await readClaim(storage, id))!.renewedAt).toBeUndefined();
+
+        // The next tick retries and lands; the status keeps the attempt's original start.
+        clock.now += step;
+        await advanceTimersByTime(step);
+        await flushMicrotasks(50);
+        expect((await readClaim(storage, id))!.renewedAt).toBe(clock.now);
+        expect(await engine.getFinalizerStatus(id)).toEqual({
+          status: 'running',
+          attempts: 1,
+          startedAt,
+        });
+
+        parked.release();
+        await drive;
+        expect(await engine.getFinalizerStatus(id)).toMatchObject({ status: 'succeeded' });
+      } finally {
+        restoreRealTimers();
+      }
+    });
+
+    it('stops renewing once its host is disposed, so a peer reclaims the attempt and counts it (COR-1422)', async () => {
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 41_000_000 };
+      const parked = parkedFinalizer(`destroy-heartbeat-dispose-${mode}`);
+      const engineA = await createEngine(mode, storage, clock);
+      await using engineB = await createEngine(mode, storage, clock);
+      for (const engine of [engineA, engineB]) {
+        registerTeardownType(engine, `heartbeat-dispose-${mode}`, parked.destroy);
+      }
+      const id = `heartbeat-dispose-${mode}-1`;
+      await startAndTerminate(engineA, storage, `heartbeat-dispose-${mode}`, id);
+      useFakeTimers();
+      try {
+        const driveA = engineA.scheduler.tick(clock.now);
+        await parked.started;
+        clock.now += DEFAULT_STALE_HORIZON_MS / 3;
+        await advanceTimersByTime(DEFAULT_STALE_HORIZON_MS / 3);
+        await flushMicrotasks(50);
+        const renewed = (await readClaim(storage, id))!.renewedAt!;
+        expect(renewed).toBe(clock.now);
+
+        engineA[Symbol.dispose]();
+        for (let step = 0; step < 4; step += 1) {
+          clock.now += DEFAULT_STALE_HORIZON_MS / 3;
+          await advanceTimersByTime(DEFAULT_STALE_HORIZON_MS / 3);
+          await flushMicrotasks(50);
+        }
+        expect((await readClaim(storage, id))!.renewedAt).toBe(renewed);
+
+        const eventsB = collectTeardownEvents(engineB);
+        await engineB.scheduler.tick(clock.now);
+        expect(parked.starts()).toBe(2);
+        expect(eventsB).toEqual([{ workflowId: id, status: 'completed', attempts: 2 }]);
+        parked.release();
+        await driveA;
+      } finally {
+        restoreRealTimers();
+      }
+    });
+
+    it('stops renewing, and never settles, when a renewal loses its CAS to another drive (COR-1422)', async () => {
+      const storage = new MemoryStorage();
+      const clock: Clock = { now: 42_000_000 };
+      const parked = parkedFinalizer(`destroy-heartbeat-lost-${mode}`);
+      await using engine = await createEngine(mode, storage, clock);
+      registerTeardownType(engine, `heartbeat-lost-${mode}`, parked.destroy);
+      const events = collectTeardownEvents(engine);
+      const id = `heartbeat-lost-${mode}-1`;
+      await startAndTerminate(engine, storage, `heartbeat-lost-${mode}`, id);
+      useFakeTimers();
+      try {
+        const drive = engine.scheduler.tick(clock.now);
+        await parked.started;
+        clock.now += DEFAULT_STALE_HORIZON_MS / 3;
+        await advanceTimersByTime(DEFAULT_STALE_HORIZON_MS / 3);
+        await flushMicrotasks(50);
+        expect((await readClaim(storage, id))!.renewedAt).toBe(clock.now);
+        // Another drive reclaimed the marker: the holder's bytes no longer match.
+        const foreign = encodeRunningClaim(5, 'foreign-token', clock.now);
+        await storage.put(KEYS.teardownOwed(id), foreign);
+        for (let step = 0; step < 4; step += 1) {
+          clock.now += DEFAULT_STALE_HORIZON_MS / 3;
+          await advanceTimersByTime(DEFAULT_STALE_HORIZON_MS / 3);
+          await flushMicrotasks(50);
+        }
+        expect(await storage.get(KEYS.teardownOwed(id))).toEqual(foreign);
+
+        parked.release();
+        await drive;
+        expect(await storage.get(KEYS.teardownOwed(id))).toEqual(foreign);
+        expect(await storage.get(KEYS.teardownSucceeded(id))).toBeNull();
+        expect(events).toEqual([]);
+      } finally {
+        restoreRealTimers();
+      }
+    });
+
     it('a rearm resolution leaves exactly one live timer after the tick, even when the slot collides with the fired key', async () => {
       // The first engine terminates the workflow and dies; the second engine has no
       // registration for the type, so the fired teardown timer resolves to `rearm`. Its clock
@@ -456,8 +724,9 @@ for (const mode of MULTI_ENGINE_MODES) {
 
       // The first run never settled, so exactly one more run happens.
       expect(parked.starts()).toBe(2);
+      // The crashed first attempt is consumed (COR-1422), so the reclaim is attempt 2.
       expect([...eventsB, ...eventsC]).toEqual([
-        { workflowId: id, status: 'completed', attempts: 1 },
+        { workflowId: id, status: 'completed', attempts: 2 },
       ]);
       expect(await engineB.getFinalizerStatus(id)).toMatchObject({ status: 'succeeded' });
       expect(await storage.get(KEYS.teardownOwed(id))).toBeNull();

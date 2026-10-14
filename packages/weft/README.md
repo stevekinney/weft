@@ -343,7 +343,7 @@ const orders = await engine.list({
 });
 ```
 
-Workflow visibility extends the same list surface with operator filters for `idPrefix`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /api/v1/workflows/aggregate` for grouped counts by status, type, failure category, or a search attribute. Existing Bun SQLite deployments should run the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) before relying on the indexed fast path for older workflows.
+Workflow visibility extends the same list surface with operator filters for `idPrefix`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /api/v1/workflows/aggregate` for grouped counts by status, type, failure category, or a search attribute. The engine writes the visibility indexes only after the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) has run against a Bun SQLite database, so run it once to get the indexed fast path; until then filtered `list` and `aggregate` calls scan every workflow.
 
 Failure-category filters use the current execution taxonomy only: `application`, `timeout`, `cancellation`, `resource`, and `system`. Older category names from pre-1.0 experiments are dropped during decode and are not expanded in list or aggregate filters.
 

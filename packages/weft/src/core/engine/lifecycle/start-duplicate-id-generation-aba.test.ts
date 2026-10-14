@@ -38,7 +38,10 @@ import { waitForCondition } from '../../../testing/fake-timers.test-support.ts';
 import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
+import { encodeGeneration } from '../generation-codec.ts';
 import { Engine } from '../index.ts';
+import { getInternals } from '../internals.ts';
+import { runRetentionSweep } from '../retention.ts';
 
 const abaWorkflow = workflow({ name: 'aba-race' }).execute(async function* (ctx: WorkflowContext) {
   return yield* ctx.run(() => 'ran');
@@ -129,16 +132,17 @@ describe('WFT-153: explicit-id start fence pre-CAS ABA (purge between read and c
     });
 
     // Engine A now starts, completes, and purges the SAME id — entirely while
-    // B's read is parked. The purge bumps `wf-gen:<id>` from absent to `1` in
-    // the same atomic batch that deletes `wf:<id>`.
+    // B's read is parked. A's explicit-id create writes `wf-gen:<id>` (absent ->
+    // `1`, COR-1387) and its purge bumps it again (`1` -> `2`) in the same
+    // atomic batch that deletes `wf:<id>`.
     const winner = await engineA.start('aba-race', null, { id: workflowId });
     await winner.result();
     const generationBeforePurge = await baseStorage.get(generationKey);
-    expect(generationBeforePurge).toBeNull();
+    expect(generationBeforePurge).toEqual(encodeGeneration(1));
     const purgeResult = await engineA.purge({ idPrefix: workflowId });
     expect(purgeResult.deleted).toBe(1);
     const generationAfterPurge = await baseStorage.get(generationKey);
-    expect(generationAfterPurge).not.toBeNull();
+    expect(generationAfterPurge).toEqual(encodeGeneration(2));
 
     // Release B's stalled read. `wf:<id>` is absent again (post-purge), so its
     // VALUE-only duplicate-id condition would match — but `wf-gen:<id>` has
@@ -167,7 +171,8 @@ describe('WFT-153: onTerminalConflict "start-new" reads the post-bump generation
     // own legitimate restart — the exact bug WFT-153's design has to avoid.
     const first = await engine.start('aba-race', null, { id: workflowId });
     await first.result();
-    expect(await storage.get(generationKey)).toBeNull();
+    const generationAfterCreate = await storage.get(generationKey);
+    expect(generationAfterCreate).toEqual(encodeGeneration(1));
 
     const second = await engine.start('aba-race', null, {
       id: workflowId,
@@ -175,7 +180,7 @@ describe('WFT-153: onTerminalConflict "start-new" reads the post-bump generation
     });
     await second.result();
     const generationAfterFirstRestart = await storage.get(generationKey);
-    expect(generationAfterFirstRestart).not.toBeNull();
+    expect(generationAfterFirstRestart).toEqual(encodeGeneration(2));
 
     const third = await engine.start('aba-race', null, {
       id: workflowId,
@@ -184,9 +189,74 @@ describe('WFT-153: onTerminalConflict "start-new" reads the post-bump generation
     await third.result();
     const generationAfterSecondRestart = await storage.get(generationKey);
     expect(generationAfterSecondRestart).not.toBeNull();
-    expect(generationAfterSecondRestart).not.toEqual(generationAfterFirstRestart);
+    expect(generationAfterSecondRestart).toEqual(encodeGeneration(3));
 
     const finalState = await engine.get(workflowId);
     expect(finalState?.status).toBe('completed');
+  });
+});
+
+describe('COR-1387: generated-id runs never write wf-gen:<id>', () => {
+  async function countGenerationRows(storage: Storage): Promise<number> {
+    let count = 0;
+    for await (const _entry of storage.scan('wf-gen:')) count += 1;
+    return count;
+  }
+
+  it('purging generated-id runs leaves no generation rows behind', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, recover: false });
+
+    const handles = await Promise.all(
+      Array.from({ length: 5 }, () => engine.start('aba-race', null)),
+    );
+    await Promise.all(handles.map((handle) => handle.result()));
+    expect(await countGenerationRows(storage)).toBe(0);
+
+    const purgeResult = await engine.purge({ status: 'completed' });
+    expect(purgeResult.deleted).toBe(5);
+    expect(await countGenerationRows(storage)).toBe(0);
+  });
+
+  it('the retention sweep leaves no generation rows behind for generated-id runs', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({
+      storage,
+      workflows,
+      recover: false,
+      retention: { completed: 0 },
+    });
+
+    const handles = await Promise.all(
+      Array.from({ length: 5 }, () => engine.start('aba-race', null)),
+    );
+    await Promise.all(handles.map((handle) => handle.result()));
+    await runRetentionSweep(
+      getInternals(engine),
+      () => undefined,
+      () => undefined,
+    );
+
+    for (const handle of handles) {
+      expect(await engine.get(handle.id)).toBeNull();
+    }
+    expect(await countGenerationRows(storage)).toBe(0);
+  });
+
+  it('an explicit start reusing a purged generated id writes the generation row', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await Engine.create({ storage, workflows, recover: false });
+
+    const generated = await engine.start('aba-race', null);
+    await generated.result();
+    await engine.purge({ idPrefix: generated.id });
+    const generationKey = KEYS.workflowGeneration(generated.id);
+    expect(await storage.get(generationKey)).toBeNull();
+
+    // From here the id is fenced like any explicit id: an in-flight
+    // `pruneCheckpoints` anchored on the absent generation now loses its CAS.
+    const reused = await engine.start('aba-race', null, { id: generated.id });
+    await reused.result();
+    expect(await storage.get(generationKey)).toEqual(encodeGeneration(1));
   });
 });

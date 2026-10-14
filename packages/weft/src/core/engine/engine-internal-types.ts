@@ -71,6 +71,8 @@ export interface ResolvedOptions {
   /** Server-side authority for destructive worker start override previews. */
   workerStartOverrideSigningSecret: string | null;
   broadcastEvents: boolean;
+  /** {@link EngineOptions.maintainWorkflowVisibilityIndexes}, defaulted to `false`. */
+  maintainWorkflowVisibilityIndexes: boolean;
   retention: NormalizedRetentionPolicy | null;
   retentionSweepIntervalMs: number;
   retentionSweepBatchSize: number;

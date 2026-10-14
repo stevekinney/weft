@@ -28,7 +28,7 @@ import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.t
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
-import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
+import { visibilityIndexOperations } from '../workflow-visibility-maintenance.ts';
 import { prepareResumeState } from './persist.ts';
 import {
   reprovideRecoveredServices,
@@ -327,7 +327,7 @@ async function reactivateSuspendedWorkflowState(
     state.id,
     [
       { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
-      ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
+      ...visibilityIndexOperations(internals, state.id, previousState, state),
       ...(state.executionDeadline !== undefined
         ? buildTimerBatchOperations({
             id: `deadline:${state.id}`,
