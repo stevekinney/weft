@@ -1,7 +1,7 @@
 ---
 name: release-publish
 description: >-
-  Use this skill when cutting, preparing, validating, tagging, publishing, or
+  Use this skill when cutting, preparing, validating, publishing, or
   troubleshooting a Weft npm release for @lostgradient/weft.
 ---
 
@@ -12,46 +12,58 @@ description: >-
 ## Release contract
 
 Publish Weft through the GitHub Actions release workflow, not by defaulting to a
-local `npm publish`. The workflow triggers from a pushed `vX.Y.Z` tag, verifies
-that the tag, `package.json.version`, and `src/version.ts` agree, runs
-`bun run validate`, runs `bun run prepack`, performs
-`npm publish --dry-run --ignore-scripts`, and publishes with npm provenance via
-`npm publish --ignore-scripts`.
+local `npm publish`. The workflow runs on every push to `main`, after
+`verify` (package.json and `src/version.ts` agree) and `verify-mirror` (the
+`mirror-verify.yaml` build, typecheck, pack, and consumer gates) pass. It runs
+`changesets/action`, which has two outcomes:
 
-## Preparation
+- While changesets are pending, it opens or updates the "Version Packages"
+  pull request. That pull request shows the version bump, the changelog entries,
+  and the regenerated `src/version.ts`.
+- When that pull request has merged and no changesets are left, it runs
+  `bun run release:publish` (`scripts/publish-if-missing.ts`). If npm already has
+  the version, it logs that it is skipping the publish and publishes nothing.
+  Otherwise it runs `scripts/verify-release-version.ts`, `bun run prepack`, and
+  `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
+  `npm publish --ignore-scripts`, and creates and pushes the annotated
+  `v<version>` tag on the checked-out commit.
 
-1. Confirm the target SemVer version. If the user did not provide it, inspect
-   the current package and npm state before choosing:
+A tag is the result of a release, never the trigger. If a publish succeeded but
+the tag push failed, the next run tags the commit npm records as `gitHead`. An
+existing tag that points at any other commit fails the run and is never moved.
+
+## Release intent
+
+Release intent is a changeset in `.changeset/`. A change that originates in
+corvidae carries its changeset there, and the mirror sync delivers it as
+`.changeset/corvidae-<12 hex>-<name>.md`. A change authored in this repository
+adds one with `bunx changeset`. Choose the bump (patch, minor, or major) and
+write the summary that should reach the changelog. Do not edit
+`package.json.version`, `src/version.ts`, or `CHANGELOG.md` by hand;
+`bun run changeset:version` (run by the workflow) updates all three together.
+
+## Preparing a release
+
+1. Confirm the changesets on `main` describe what should ship, and check the
+   registry and the existing tags:
 
    ```bash
+   ls ../../.changeset
    jq -r '.version' package.json
    npm view @lostgradient/weft version
    git fetch origin main --tags
    git tag --list 'v*' --sort=-version:refname | head -5
    ```
 
-2. Work from a clean branch based on current `origin/main`. Do not release from
-   a detached head, dirty checkout, stale base, or unmerged pull request branch.
+2. Find the open "Version Packages" pull request, or wait for the release run on
+   `main` to open it. Review its bump, changelog entries, and `src/version.ts`
+   change. Validate its title with the repository helper if you edit it:
 
    ```bash
-   git status --short --branch
-   git fetch origin main --tags
-   git switch -c steve/release-vX.Y.Z origin/main
+   bun run scripts/pr-title.ts validate --title "Version Packages"
    ```
 
-3. Update every shipped version surface together:
-   - `package.json` `version`
-   - `src/version.ts` `VERSION`
-   - `README.md` current release line
-
-4. Search for the old version and update only release-version references that
-   are meant to track the current package version:
-
-   ```bash
-   rg '0\.0\.0|X\.Y\.Z|Current release|VERSION' README.md documentation src package.json
-   ```
-
-5. If the release adds compiled modules, let `prepack` establish the packed
+3. If the release adds compiled modules, let `prepack` establish the packed
    entry count before updating `maximumEntryCount` in
    `scripts/check-package-contents.ts`. Keep packed-consumer starts keyed by
    the registered `workflow({ name })` value in
@@ -59,11 +71,11 @@ that the tag, `package.json.version`, and `src/version.ts` agree, runs
 
 ## Local gates
 
-Run the release-specific checks before opening the release pull request:
+Run the release-specific checks locally when a change touches the release
+pipeline or the packed output:
 
 ```bash
-bun run scripts/verify-release-version.ts --tag=vX.Y.Z
-bun run validate
+bun run scripts/verify-release-version.ts
 bun run prepack
 npm publish --dry-run --ignore-scripts
 ```
@@ -71,56 +83,36 @@ npm publish --dry-run --ignore-scripts
 Treat every failing gate as blocking. Do not skip, weaken, retry-count bump, or
 timeout-bump a gate to keep the release moving.
 
-## Pull request
+## Publication gate
 
-Open a normal pull request, not a draft, after the local gates pass. Validate the
-title with the repository title helper:
+Merging the "Version Packages" pull request is what publishes to npm, so that is
+where confirmation belongs. Confirm before merging unless the user already
+explicitly authorized release publication. Keep monitoring the pull request
+until CI is green, review comments are resolved, and the branch has no
+conflicts with `origin/main`, then merge it.
 
-```bash
-draft_title="Release vX.Y.Z"
-normalized_title=$(bun run scripts/pr-title.ts normalize --title "$draft_title" | jq -r '.normalizedTitle // empty')
-pull_request_title="${normalized_title:-$draft_title}"
-bun run scripts/pr-title.ts validate --title "$pull_request_title"
-```
-
-The pull request body must list the target version and the exact release gates
-that passed. Keep monitoring until CI is green, review comments are resolved, and
-the branch has no conflicts with `origin/main`.
-
-## Tag and publish
-
-After the release pull request is merged, fetch the merged commit and create the
-release tag from current `origin/main`:
-
-```bash
-git fetch origin main --tags
-git switch main
-git pull --ff-only origin main
-bun run scripts/verify-release-version.ts --tag=vX.Y.Z
-git tag vX.Y.Z
-git show --stat vX.Y.Z
-```
-
-Pushing the tag starts the real npm publish. Confirm before pushing the tag
-unless the user already explicitly authorized release publication:
-
-```bash
-git push origin vX.Y.Z
-```
-
-Monitor `.github/workflows/release.yaml` until every job is terminal and green:
+Monitor `.github/workflows/release.yaml` on the merge commit until every job is
+terminal and green:
 
 ```bash
 gh run list --workflow release.yaml --limit 5
 gh run watch <run-id> --exit-status
 npm view @lostgradient/weft version
+git ls-remote --tags origin 'v<version>'
 ```
 
-The release is complete only when the workflow succeeded and npm reports the
-new version. If the tag workflow fails, diagnose the failing job, fix the
-repository state through a pull request when code changes are needed, delete
-or move the tag only with explicit user confirmation, and re-run the release
-from a clean tag.
+The release is complete only when the workflow succeeded, npm reports the new
+version, and the `v<version>` tag exists on the remote. If the release job fails
+before publishing, diagnose it and re-run it; a re-run publishes nothing that is
+already on npm. If it fails after publishing, re-run it: the tag is created or
+checked against npm's `gitHead`. Delete or move a tag only with explicit user
+confirmation.
+
+## Snapshots
+
+A prerelease to the `next` dist-tag is published by dispatching
+`release.yaml` with `snapshot: true` and the `expected_sha` the mirror sync
+verified. That path is unchanged and does not use changesets.
 
 ## Emergency manual publish
 
@@ -128,4 +120,4 @@ Use local `npm publish --ignore-scripts` only when the user explicitly asks for
 manual publication and understands it bypasses the normal trusted-publishing
 workflow. Before doing that, rerun `bun run prepack`,
 `npm publish --dry-run --ignore-scripts`, and
-`bun run scripts/verify-release-version.ts --tag=vX.Y.Z`.
+`bun run scripts/verify-release-version.ts`.

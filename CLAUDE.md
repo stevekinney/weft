@@ -13,4 +13,4 @@ This repository is a Turborepo-powered monorepo using Bun workspaces.
 - There are no Git hooks. The repository's own CI, hooks and gate scripts were retired when it became a mirror (corvidae COR-1286).
 - CI is `.github/workflows/mirror-verify.yaml`, emitted by the corvidae mirror transform from the same steps its sync runs, plus `pr-title.yaml` and `release.yaml`. Do not edit `mirror-verify.yaml` by hand; a sync overwrites it.
 - Each package keeps its own lint, formatting, TypeScript, and test configuration. Do not hoist package configuration to the root.
-- The `v*.*.*` release tags publish `@lostgradient/weft` only. The operator console (`@lostgradient/weft-ui`) is developed and built from its own repository, and is not yet published to npm.
+- Releases publish `@lostgradient/weft` only, when the "Version Packages" pull request merges; `release:publish` then tags the release `v<version>`. The operator console (`@lostgradient/weft-ui`) is developed and built from its own repository, and is not yet published to npm.

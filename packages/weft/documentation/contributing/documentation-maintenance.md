@@ -14,7 +14,7 @@ The documentation is part of the public API. Keep it tied to executable source, 
 ## Verification
 
 > [!NOTE] This repository is a publication mirror
-> `stevekinney/weft` is synced from the private corvidae workspace, which is the source of truth. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; the retired commands below are corvidae's. Here, `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag.
+> `stevekinney/weft` is synced from the private corvidae workspace, which is the source of truth. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; the retired commands below are corvidae's. Here, `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it when the "Version Packages" pull request merges.
 
 `verify:documentation`, `verify:markdown-doctests` and `verify:jsdoc:full` run in corvidae, where the documentation is edited; a sync brings the verified result here. In this repository, `bun run format:check` is the only documentation check that runs.
 

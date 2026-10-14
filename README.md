@@ -2,7 +2,7 @@
 
 A Bun-native durable execution engine with pluggable key-value storage.
 
-This repository is a **publication mirror** of the private corvidae workspace, which is the source of truth for `@lostgradient/weft`. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; here, the transform-emitted `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it on a tag. Pull requests are welcome, but they cannot be merged as submitted: a change is ported into corvidae by hand and arrives back through a sync.
+This repository is a **publication mirror** of the private corvidae workspace, which is the source of truth for `@lostgradient/weft`. Lint, tests, coverage, documentation audits and benchmarks run there before a sync reaches this repository; here, the transform-emitted `mirror-verify.yaml` builds, typechecks, packs and lints the published package on every pull request, and `release.yaml` publishes it when the "Version Packages" pull request merges. Pull requests are welcome, but they cannot be merged as submitted: a change is ported into corvidae by hand and arrives back through a sync.
 
 ## Packages
 

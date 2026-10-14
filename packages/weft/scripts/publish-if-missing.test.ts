@@ -61,16 +61,67 @@ function harness(responses: Record<string, CommandResult>) {
 }
 
 describe('publishIfMissing: version already on npm', () => {
-  test('skips the publish and leaves an existing tag alone', async () => {
+  test('skips the publish and leaves a tag that points at the published commit alone', async () => {
     const h = harness({
       [viewVersion]: ok(JSON.stringify(version)),
       [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok(`${gitHead}\n`),
     });
 
     await publishIfMissing(h.options());
 
     expect(h.lines).toContain(`${name}@${version} is already on npm; skipping publish`);
-    expect(h.commands()).toEqual([viewVersion, lsRemote]);
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+  });
+
+  test('compares the commit an annotated tag peels to, not the tag object', async () => {
+    const tagObject = 'c'.repeat(40);
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n${gitHead}\trefs/tags/v${version}^{}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+  });
+
+  test('fails, naming both commits, when the tag points at another commit', async () => {
+    const other = 'd'.repeat(40);
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(
+        `${'c'.repeat(40)}\trefs/tags/v${version}\n${other}\trefs/tags/v${version}^{}\n`,
+      ),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain(other);
+    expect((failure as Error).message).toContain(gitHead);
+    // A mismatched tag is reported, never moved.
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+  });
+
+  test('warns and exits cleanly when the tag exists and the registry has no gitHead', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok('\n'),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.lines.some((line) => line.startsWith('::warning::') && line.includes(version))).toBe(
+      true,
+    );
+    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
   });
 
   test('creates and pushes the missing tag on the commit that published', async () => {
@@ -158,6 +209,7 @@ describe('publishIfMissing: version absent from npm', () => {
     expect(commands[6]).toBe(`git push origin refs/tags/v${version}`);
     expect(commands).toHaveLength(7);
     expect(h.lines.some((line) => line.includes('skipping publish'))).toBe(false);
+    expect(h.lines.some((line) => line.startsWith('New tag:'))).toBe(false);
   });
 
   test('runs the package commands in the package and the git commands at the repository root', async () => {
@@ -250,6 +302,60 @@ describe('publishIfMissing: registry error', () => {
 
     await expect(publishIfMissing(h.options())).rejects.toThrow('unexpected');
     expect(h.commands()).toEqual([viewVersion]);
+  });
+});
+
+describe('publishIfMissing: changesets/action output', () => {
+  const directories: string[] = [];
+  afterEach(() => {
+    for (const directory of directories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  function outputFile(): string {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'weft-changesets-output-'));
+    directories.push(directory);
+    return path.join(directory, 'output.ndjson');
+  }
+
+  test('records the published tag as an event for the action to read', async () => {
+    const h = harness({ [viewVersion]: notFound });
+    const file = outputFile();
+
+    await publishIfMissing({ ...h.options(), outputFile: file });
+
+    const events = fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as unknown);
+    expect(events).toEqual([{ type: 'git-tag', tag: `v${version}`, packageName: name }]);
+  });
+
+  test('leaves an empty file, not a missing one, when nothing was published', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+    const file = outputFile();
+
+    await publishIfMissing({ ...h.options(), outputFile: file });
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('');
+  });
+
+  test('records nothing for a publish that failed', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      'npm publish --ignore-scripts': failure('', 'E403 forbidden'),
+    });
+    const file = outputFile();
+
+    await expect(publishIfMissing({ ...h.options(), outputFile: file })).rejects.toThrow('E403');
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('');
   });
 });
 

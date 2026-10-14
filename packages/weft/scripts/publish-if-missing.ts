@@ -31,6 +31,11 @@ export interface PublishIfMissingOptions {
   version: string;
   run: CommandRunner;
   log: (line: string) => void;
+  /**
+   * The file changesets/action v2 reads to learn what a custom publish script published
+   * (`CHANGESETS_OUTPUT`). Unset outside the action.
+   */
+  outputFile?: string | undefined;
 }
 
 const commitIdPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -111,8 +116,28 @@ async function isPublished(options: PublishIfMissingOptions): Promise<boolean> {
   );
 }
 
-/** Tag the commit that published a version whose tag never reached the remote. */
-async function healMissingTag(options: PublishIfMissingOptions, tag: string): Promise<void> {
+/** The commit a remote tag resolves to: the peeled line of an annotated tag, else the tag itself. */
+function remoteTagTarget(listing: string, tag: string): string | undefined {
+  let direct: string | undefined;
+  for (const line of listing.split('\n')) {
+    const [commit, reference] = line.trim().split(/\s+/);
+    if (reference === `refs/tags/${tag}^{}`) return commit;
+    if (reference === `refs/tags/${tag}`) direct = commit;
+  }
+  return direct;
+}
+
+/**
+ * Reconcile the remote tag with the commit npm says published the version.
+ *
+ * A missing tag goes on `gitHead`. An existing tag must already point there: a tag on any other
+ * commit is a discrepancy for a person to resolve, so it fails the run and is never moved.
+ */
+async function reconcileTag(options: PublishIfMissingOptions, tag: string): Promise<void> {
+  const remote = await expectSuccess(options, ['git', 'ls-remote', '--tags', 'origin', tag], {
+    cwd: options.repositoryRoot,
+  });
+  const existing = remoteTagTarget(remote.stdout, tag);
   const view = await expectSuccess(
     options,
     ['npm', 'view', `${options.name}@${options.version}`, 'gitHead'],
@@ -121,8 +146,9 @@ async function healMissingTag(options: PublishIfMissingOptions, tag: string): Pr
   const commit = view.stdout.trim();
   if (!commit) {
     options.log(
-      `::warning::${options.name}@${options.version} is on npm but ${tag} is not on the remote, ` +
-        'and the registry records no gitHead to tag. Create the tag by hand.',
+      `::warning::${options.name}@${options.version} is on npm but the registry records no ` +
+        `gitHead, so ${tag} cannot be ${existing ? 'checked against it' : 'created'}. ` +
+        (existing ? `${tag} points at ${existing}.` : 'Create the tag by hand.'),
     );
     return;
   }
@@ -130,6 +156,15 @@ async function healMissingTag(options: PublishIfMissingOptions, tag: string): Pr
     throw new PublishError(
       `The registry gitHead for ${options.version} is not a commit id: ${commit}`,
     );
+  }
+  if (existing) {
+    if (existing.toLowerCase() !== commit.toLowerCase()) {
+      throw new PublishError(
+        `${tag} points at ${existing}, but ${options.name}@${options.version} was published from ` +
+          `${commit}. Fix the tag by hand; it is not moved automatically.`,
+      );
+    }
+    return;
   }
   options.log(`${tag} is missing from the remote; tagging ${commit}, the commit that published it`);
   await expectSuccess(options, ['git', 'fetch', 'origin', commit], { cwd: options.repositoryRoot });
@@ -147,14 +182,12 @@ async function healMissingTag(options: PublishIfMissingOptions, tag: string): Pr
 export async function publishIfMissing(options: PublishIfMissingOptions): Promise<void> {
   const tag = `v${options.version}`;
   const packageCommand = { cwd: options.packageRoot, stream: true };
+  // changesets/action warns when the file is absent, so a run that publishes nothing leaves it empty.
+  if (options.outputFile) fs.appendFileSync(options.outputFile, '');
 
   if (await isPublished(options)) {
     options.log(`${options.name}@${options.version} is already on npm; skipping publish`);
-    const remote = await expectSuccess(options, ['git', 'ls-remote', '--tags', 'origin', tag], {
-      cwd: options.repositoryRoot,
-    });
-    if (remote.stdout.trim()) return;
-    await healMissingTag(options, tag);
+    await reconcileTag(options, tag);
     return;
   }
 
@@ -166,8 +199,11 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
     environment: { NPM_CONFIG_PROVENANCE: 'false' },
   });
   await expectSuccess(options, ['npm', 'publish', '--ignore-scripts'], packageCommand);
-  // changesets/action reads this line to report what was published.
-  options.log(`New tag: ${options.name}@${options.version}`);
+  // changesets/action v2 reads published packages from this file, not from the script's output.
+  if (options.outputFile) {
+    const event = { type: 'git-tag', tag, packageName: options.name };
+    fs.appendFileSync(options.outputFile, `${JSON.stringify(event)}\n`);
+  }
   await tagAndPush(options, tag, undefined);
 }
 
@@ -213,6 +249,7 @@ if (import.meta.main) {
       version: manifest.version,
       run: defaultRunner,
       log: (line) => console.log(line),
+      outputFile: process.env['CHANGESETS_OUTPUT'],
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
