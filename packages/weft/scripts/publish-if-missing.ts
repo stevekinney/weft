@@ -116,15 +116,32 @@ async function isPublished(options: PublishIfMissingOptions): Promise<boolean> {
   );
 }
 
-/** The commit a remote tag resolves to: the peeled line of an annotated tag, else the tag itself. */
-function remoteTagTarget(listing: string, tag: string): string | undefined {
-  let direct: string | undefined;
-  for (const line of listing.split('\n')) {
-    const [commit, reference] = line.trim().split(/\s+/);
-    if (reference === `refs/tags/${tag}^{}`) return commit;
-    if (reference === `refs/tags/${tag}`) direct = commit;
-  }
-  return direct;
+/** The object id on the first line of an `ls-remote` listing, if any. */
+function firstObjectId(listing: string): string | undefined {
+  return listing.trim().split(/\s+/)[0] || undefined;
+}
+
+/**
+ * The commit the remote tag resolves to, or `undefined` when there is no such tag.
+ *
+ * `ls-remote` shows an annotated tag's own object id, not the commit it points at, and a pattern
+ * only matches the exact ref, so the peeled `^{}` ref has to be asked for by its full name. A
+ * lightweight tag has no peeled ref and its listed id already is the commit.
+ */
+async function remoteTagTarget(
+  options: PublishIfMissingOptions,
+  tag: string,
+): Promise<string | undefined> {
+  const git = { cwd: options.repositoryRoot };
+  const listing = await expectSuccess(options, ['git', 'ls-remote', '--tags', 'origin', tag], git);
+  const direct = firstObjectId(listing.stdout);
+  if (!direct) return undefined;
+  const peeled = await expectSuccess(
+    options,
+    ['git', 'ls-remote', '--tags', 'origin', `refs/tags/${tag}^{}`],
+    git,
+  );
+  return firstObjectId(peeled.stdout) ?? direct;
 }
 
 /**
@@ -134,10 +151,7 @@ function remoteTagTarget(listing: string, tag: string): string | undefined {
  * commit is a discrepancy for a person to resolve, so it fails the run and is never moved.
  */
 async function reconcileTag(options: PublishIfMissingOptions, tag: string): Promise<void> {
-  const remote = await expectSuccess(options, ['git', 'ls-remote', '--tags', 'origin', tag], {
-    cwd: options.repositoryRoot,
-  });
-  const existing = remoteTagTarget(remote.stdout, tag);
+  const existing = await remoteTagTarget(options, tag);
   const view = await expectSuccess(
     options,
     ['npm', 'view', `${options.name}@${options.version}`, 'gitHead'],

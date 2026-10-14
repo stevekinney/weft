@@ -19,6 +19,7 @@ const packageRoot = '/repository/packages/weft';
 const viewVersion = `npm view ${name}@${version} version --json`;
 const viewGitHead = `npm view ${name}@${version} gitHead`;
 const lsRemote = `git ls-remote --tags origin v${version}`;
+const lsRemotePeeled = `git ls-remote --tags origin refs/tags/v${version}^{}`;
 
 const ok = (stdout = ''): CommandResult => ({ exitCode: 0, stdout, stderr: '' });
 const failure = (stdout: string, stderr = ''): CommandResult => ({
@@ -61,7 +62,10 @@ function harness(responses: Record<string, CommandResult>) {
 }
 
 describe('publishIfMissing: version already on npm', () => {
-  test('skips the publish and leaves a tag that points at the published commit alone', async () => {
+  const tagObject = 'c'.repeat(40);
+  const existingTagCommands = [viewVersion, lsRemote, lsRemotePeeled, viewGitHead];
+
+  test('skips the publish and leaves a lightweight tag at the published commit alone', async () => {
     const h = harness({
       [viewVersion]: ok(JSON.stringify(version)),
       [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
@@ -71,29 +75,28 @@ describe('publishIfMissing: version already on npm', () => {
     await publishIfMissing(h.options());
 
     expect(h.lines).toContain(`${name}@${version} is already on npm; skipping publish`);
-    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+    expect(h.commands()).toEqual(existingTagCommands);
   });
 
   test('compares the commit an annotated tag peels to, not the tag object', async () => {
-    const tagObject = 'c'.repeat(40);
     const h = harness({
       [viewVersion]: ok(JSON.stringify(version)),
-      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n${gitHead}\trefs/tags/v${version}^{}\n`),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${gitHead}\trefs/tags/v${version}^{}\n`),
       [viewGitHead]: ok(gitHead),
     });
 
     await publishIfMissing(h.options());
 
-    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+    expect(h.commands()).toEqual(existingTagCommands);
   });
 
   test('fails, naming both commits, when the tag points at another commit', async () => {
     const other = 'd'.repeat(40);
     const h = harness({
       [viewVersion]: ok(JSON.stringify(version)),
-      [lsRemote]: ok(
-        `${'c'.repeat(40)}\trefs/tags/v${version}\n${other}\trefs/tags/v${version}^{}\n`,
-      ),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${other}\trefs/tags/v${version}^{}\n`),
       [viewGitHead]: ok(gitHead),
     });
 
@@ -106,13 +109,24 @@ describe('publishIfMissing: version already on npm', () => {
     expect((failure as Error).message).toContain(other);
     expect((failure as Error).message).toContain(gitHead);
     // A mismatched tag is reported, never moved.
-    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+    expect(h.commands()).toEqual(existingTagCommands);
+  });
+
+  test('fails when a lightweight tag points at another commit', async () => {
+    const h = harness({
+      [viewVersion]: ok(JSON.stringify(version)),
+      [lsRemote]: ok(`${'d'.repeat(40)}\trefs/tags/v${version}\n`),
+      [viewGitHead]: ok(gitHead),
+    });
+
+    await expect(publishIfMissing(h.options())).rejects.toThrow(PublishError);
   });
 
   test('warns and exits cleanly when the tag exists and the registry has no gitHead', async () => {
     const h = harness({
       [viewVersion]: ok(JSON.stringify(version)),
-      [lsRemote]: ok(`${gitHead}\trefs/tags/v${version}\n`),
+      [lsRemote]: ok(`${tagObject}\trefs/tags/v${version}\n`),
+      [lsRemotePeeled]: ok(`${gitHead}\trefs/tags/v${version}^{}\n`),
       [viewGitHead]: ok('\n'),
     });
 
@@ -121,7 +135,7 @@ describe('publishIfMissing: version already on npm', () => {
     expect(h.lines.some((line) => line.startsWith('::warning::') && line.includes(version))).toBe(
       true,
     );
-    expect(h.commands()).toEqual([viewVersion, lsRemote, viewGitHead]);
+    expect(h.commands()).toEqual(existingTagCommands);
   });
 
   test('creates and pushes the missing tag on the commit that published', async () => {
