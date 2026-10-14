@@ -75,13 +75,12 @@ jobs:
     if: github.event_name == 'push' || inputs.snapshot
     uses: ./.github/workflows/mirror-verify.yaml
 
-  # Every push to main first publishes any version npm does not have yet; only then does the
-  # version-pull-request job let changesets/action open or update the "Version Packages" pull
-  # request if changesets are pending. The order matters: changesets/action v2 runs its publish
-  # script only when no changesets are pending, so a changeset landing before an already-bumped version published would otherwise
-  # leave that version unpublished and untagged. release:publish asks npm first, so a push that
-  # changes no version publishes nothing. It uses the OIDC trusted publishing and provenance setup
-  # the tag-triggered publish job had; there is no NPM_TOKEN, because its presence can suppress OIDC.
+  # Every push to main publishes any version npm does not have yet. This is not left to
+  # changesets/action's publish-script: v2 runs that only when no changesets are pending, so a
+  # changeset landing before an already-bumped version published would leave that version
+  # unpublished and untagged. release:publish asks npm first, so a push that changes no version
+  # publishes nothing. It uses the OIDC trusted publishing and provenance setup the tag-triggered
+  # publish job had; there is no NPM_TOKEN, because its presence can suppress OIDC.
   release:
     if: github.event_name == 'push'
     needs: [verify, verify-mirror]
@@ -129,10 +128,12 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
 
   # Kept out of the release job so this third-party action never holds npm's trusted-publishing
-  # OIDC permission: it only opens or updates a pull request, so it gets no id-token at all.
+  # OIDC permission: it only opens or updates a pull request, so it gets no id-token at all. It
+  # does not wait for the release job either, so a refused publish never stops the next Version
+  # Packages pull request from being opened.
   version-pull-request:
     if: github.event_name == 'push'
-    needs: [release]
+    needs: [verify, verify-mirror]
     runs-on: ubuntu-latest
     permissions:
       contents: write

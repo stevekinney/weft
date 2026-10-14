@@ -15,7 +15,7 @@ Publish Weft through the GitHub Actions release workflow, not by defaulting to a
 local `npm publish`. The workflow runs on every push to `main`, after
 `verify` (package.json and `src/version.ts` agree) and `verify-mirror` (the
 `mirror-verify.yaml` build, typecheck, pack, and consumer gates) pass. It runs
-two steps in order:
+two jobs:
 
 1. `bun run release:publish` (`scripts/publish-if-missing.ts`) publishes any
    version npm does not have yet. If npm already has the manifest version, it
@@ -24,11 +24,12 @@ two steps in order:
    commit, then runs `scripts/verify-release-version.ts`, `bun run prepack`, and
    `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
    `npm publish --ignore-scripts`, and creates and pushes the annotated
-   `v<version>` tag on the checked-out commit. This runs before the next step
-   because `changesets/action` v2 skips publishing whenever changesets are
-   pending, which would strand an already-bumped version.
+   `v<version>` tag on the checked-out commit. It publishes only from the commit
+   that set the version, and only when that commit has no pending changesets.
+   This is not left to `changesets/action`, because v2 skips publishing whenever
+   changesets are pending, which would strand an already-bumped version.
 2. `changesets/action` opens or updates the "Version Packages" pull request when
-   changesets are pending. It runs in its own job, after the publish, without the
+   changesets are pending. It runs in its own job, beside the publish, without the
    `id-token: write` permission npm's trusted publishing needs. That pull request
    shows the version bump, the changelog entries, and the regenerated
    `src/version.ts`. `scripts/version-pull-request-body.ts` then rewrites the
@@ -65,6 +66,17 @@ Re-run the release workflow run for that commit from the Actions UI (or
 `gh run rerun <run-id>`); a re-run uses its original commit, so it publishes
 that commit and tags it. The workflow's `queue: max` concurrency keeps pending
 runs from being dropped in the first place.
+
+## A Version Packages pull request merged behind newer changes
+
+`main` does not require a pull request to be up to date before it merges, so a
+Version Packages pull request can merge after another pull request added a
+changeset it never versioned. Its merge commit still has that changeset pending,
+and publishing from it would ship the newer change under the older version. The
+release run on that merge fails without publishing and names the pending
+changesets; later pushes log a warning instead. That version is abandoned, not
+recovered: the next Version Packages pull request versions the pending changes
+and publishes the version after it, so npm skips one version number.
 
 ## Release intent
 

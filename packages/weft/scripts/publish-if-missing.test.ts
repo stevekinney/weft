@@ -18,12 +18,14 @@ const packageRoot = '/repository/packages/weft';
 
 const viewVersion = `npm view ${name}@${version} version --json`;
 const viewGitHead = `npm view ${name}@${version} gitHead`;
-const lsRemote = `git ls-remote --tags origin v${version}`;
+const lsRemote = `git ls-remote --tags origin refs/tags/v${version}`;
 const parentManifest = 'git show HEAD^:packages/weft/package.json';
 const bumpSearch = `git log -1 --format=%H -S"version": "${version}" -- packages/weft/package.json`;
 const bumpCommit = 'b'.repeat(40);
 const lsRemotePeeled = `git ls-remote --tags origin refs/tags/v${version}^{}`;
 const revParseHead = 'git rev-parse HEAD';
+const pendingAtHead = 'git ls-tree --name-only HEAD -- .changeset/';
+const pendingAtBump = `git ls-tree --name-only ${'b'.repeat(40)} -- .changeset/`;
 const headCommit = 'e'.repeat(40);
 
 const ok = (stdout = ''): CommandResult => ({ exitCode: 0, stdout, stderr: '' });
@@ -52,9 +54,10 @@ function harness(responses: Record<string, CommandResult>) {
       calls.push({ command: text, cwd: options.cwd, environment: options.environment });
       // By default HEAD is the commit that set the version: its parent carries an older one.
       const defaults = { [parentManifest]: ok(JSON.stringify({ version: '0.27.17' })) };
-      const matched = Object.entries({ ...defaults, ...responses }).find(([key]) =>
-        text.startsWith(key),
-      );
+      // An exact key wins over a prefix: the tag lookup is a prefix of its peeled lookup.
+      const entries = Object.entries({ ...defaults, ...responses });
+      const matched =
+        entries.find(([key]) => text === key) ?? entries.find(([key]) => text.startsWith(key));
       return matched ? matched[1] : ok();
     },
     options() {
@@ -220,17 +223,17 @@ describe('publishIfMissing: version absent from npm', () => {
     await publishIfMissing(h.options());
 
     const commands = h.commands();
-    expect(commands.slice(0, 3)).toEqual([viewVersion, parentManifest, lsRemote]);
-    expect(commands.slice(3, 7)).toEqual([
+    expect(commands.slice(0, 4)).toEqual([viewVersion, parentManifest, pendingAtHead, lsRemote]);
+    expect(commands.slice(4, 8)).toEqual([
       'bun run scripts/verify-release-version.ts',
       'bun run prepack',
       'npm publish --dry-run --ignore-scripts',
       'npm publish --ignore-scripts',
     ]);
-    expect(commands[7]).toContain(`tag -a v${version} -m Weft ${version}`);
-    expect(commands[7]).not.toContain(gitHead);
-    expect(commands[8]).toBe(`git push origin refs/tags/v${version}`);
-    expect(commands).toHaveLength(9);
+    expect(commands[8]).toContain(`tag -a v${version} -m Weft ${version}`);
+    expect(commands[8]).not.toContain(gitHead);
+    expect(commands[9]).toBe(`git push origin refs/tags/v${version}`);
+    expect(commands).toHaveLength(10);
     expect(h.lines.some((line) => line.includes('skipping publish'))).toBe(false);
   });
 
@@ -254,6 +257,7 @@ describe('publishIfMissing: version absent from npm', () => {
     expect(h.commands()).toEqual([
       viewVersion,
       parentManifest,
+      pendingAtHead,
       lsRemote,
       lsRemotePeeled,
       revParseHead,
@@ -293,7 +297,7 @@ describe('publishIfMissing: version absent from npm', () => {
     expect(message).toContain(version);
     expect(message).toContain(bumpCommit);
     expect(message).toContain('Re-run');
-    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch]);
+    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch, pendingAtBump]);
   });
 
   test('still refuses, without a commit to name, when history does not show where the version was set', async () => {
@@ -305,6 +309,51 @@ describe('publishIfMissing: version absent from npm', () => {
 
     await expect(publishIfMissing(h.options())).rejects.toThrow(version);
     expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+  });
+
+  test('refuses, without publishing, when the commit that set the version still has pending changesets', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok(
+        '.changeset/README.md\n.changeset/config.json\n.changeset/quiet-owls.md\n',
+      ),
+    });
+
+    const failure = await publishIfMissing(h.options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(PublishError);
+    expect((failure as Error).message).toContain('.changeset/quiet-owls.md');
+    expect((failure as Error).message).not.toContain('README.md');
+    expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
+    expect(h.commands().some((command) => command.startsWith('bun run'))).toBe(false);
+  });
+
+  test('warns and exits cleanly on a later commit when the bump commit had pending changesets', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [parentManifest]: ok(JSON.stringify({ version })),
+      [bumpSearch]: ok(`${bumpCommit}\n`),
+      [pendingAtBump]: ok('.changeset/quiet-owls.md\n'),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(
+      h.lines.some((line) => line.startsWith('::warning::') && line.includes(bumpCommit)),
+    ).toBe(true);
+    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch, pendingAtBump]);
+  });
+
+  test('looks up the exact release tag ref, never a tail match such as releases/v<version>', async () => {
+    const h = harness({ [viewVersion]: notFound });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain(`git ls-remote --tags origin refs/tags/v${version}`);
+    expect(h.commands()).not.toContain(`git ls-remote --tags origin v${version}`);
   });
 
   test('fails rather than guess when the parent commit cannot be read', async () => {

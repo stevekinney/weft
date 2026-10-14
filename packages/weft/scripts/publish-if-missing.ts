@@ -128,7 +128,12 @@ async function remoteTagTarget(
   tag: string,
 ): Promise<string | undefined> {
   const git = { cwd: options.repositoryRoot };
-  const listing = await expectSuccess(options, ['git', 'ls-remote', '--tags', 'origin', tag], git);
+  // A bare pattern matches the tail of any ref, so `releases/v1.0.0` would answer for `v1.0.0`.
+  const listing = await expectSuccess(
+    options,
+    ['git', 'ls-remote', '--tags', 'origin', `refs/tags/${tag}`],
+    git,
+  );
   const direct = firstObjectId(listing.stdout);
   if (!direct) return undefined;
   const peeled = await expectSuccess(
@@ -180,15 +185,34 @@ async function reconcileTag(options: PublishIfMissingOptions, tag: string): Prom
   await tagAndPush(options, tag, commit);
 }
 
+/** The changeset files still pending at `commit`: `.changeset/*.md` except its README. */
+async function pendingChangesets(
+  options: PublishIfMissingOptions,
+  commit: string,
+): Promise<string[]> {
+  const listing = await expectSuccess(
+    options,
+    ['git', 'ls-tree', '--name-only', commit, '--', '.changeset/'],
+    { cwd: options.repositoryRoot },
+  );
+  return listing.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((file) => file.endsWith('.md') && file !== '.changeset/README.md');
+}
+
 /**
- * Refuse to publish a version from any commit but the one that set it.
+ * Decide whether this commit may publish a version npm does not have.
  *
- * Releases run once per push to main and GitHub keeps only one pending run per concurrency group,
- * so a newer push can supersede the run for the Version Packages merge. That newer commit still
- * carries the bumped manifest, and publishing from it would ship later, unversioned code under the
- * bumped version. The bump commit is the one whose first parent has a different version.
+ * Only the commit that set the version publishes it: the one whose first parent has a different
+ * manifest version. A later commit still carries the bumped manifest, and publishing from it would
+ * ship later, unversioned code under that version, so it refuses and names the bump commit to
+ * re-run. A bump commit that still has pending changesets was a Version Packages pull request
+ * merged behind changes it did not version (main does not require branches to be up to date), so
+ * that version is abandoned rather than published: the next Version Packages pull request versions
+ * those changes too and publishes the version after it. Returns whether to publish.
  */
-async function assertHeadSetTheVersion(options: PublishIfMissingOptions): Promise<void> {
+async function headMayPublish(options: PublishIfMissingOptions): Promise<boolean> {
   const manifestPath = path
     .relative(options.repositoryRoot, path.join(options.packageRoot, 'package.json'))
     .split(path.sep)
@@ -201,21 +225,43 @@ async function assertHeadSetTheVersion(options: PublishIfMissingOptions): Promis
   } catch {
     throw new PublishError(`Could not read the version in HEAD^:${manifestPath}.`);
   }
-  if (parentVersion !== options.version) return;
+  const headSetTheVersion = parentVersion !== options.version;
 
-  const search = await expectSuccess(
-    options,
-    ['git', 'log', '-1', '--format=%H', `-S"version": "${options.version}"`, '--', manifestPath],
-    git,
-  );
-  const bump = search.stdout.trim();
+  let bump = 'HEAD';
+  if (!headSetTheVersion) {
+    const search = await expectSuccess(
+      options,
+      ['git', 'log', '-1', '--format=%H', `-S"version": "${options.version}"`, '--', manifestPath],
+      git,
+    );
+    bump = search.stdout.trim();
+    if (!bump) {
+      throw new PublishError(
+        `${options.name}@${options.version} is not on npm, but HEAD did not set that version, ` +
+          'and history did not show which commit did. Find the commit that bumped it and re-run ' +
+          'its release workflow run from the Actions UI; a re-run uses its original commit.',
+      );
+    }
+  }
+
+  const pending = await pendingChangesets(options, bump);
+  if (pending.length > 0) {
+    const abandoned =
+      `${options.name}@${options.version} is not published: the commit that set it ` +
+      `(${bump}) still has pending changesets (${pending.join(', ')}), so the Version Packages ` +
+      'pull request merged behind changes it did not version. The next Version Packages pull ' +
+      'request versions them and publishes the version after this one.';
+    if (headSetTheVersion) throw new PublishError(abandoned);
+    options.log(`::warning::${abandoned}`);
+    return false;
+  }
+
+  if (headSetTheVersion) return true;
   throw new PublishError(
     `${options.name}@${options.version} is not on npm, but HEAD did not set that version, so it ` +
       'is not published from here: a later commit would ship under a version it was never ' +
-      'bumped for. ' +
-      (bump
-        ? `Re-run the release workflow run for ${bump}, the commit that bumped it, from the Actions UI; a re-run uses its original commit.`
-        : 'Re-run the release workflow run for the commit that bumped it from the Actions UI; a re-run uses its original commit. History did not show which commit that is.'),
+      `bumped for. Re-run the release workflow run for ${bump}, the commit that bumped it, from ` +
+      'the Actions UI; a re-run uses its original commit.',
   );
 }
 
@@ -261,7 +307,7 @@ export async function publishIfMissing(options: PublishIfMissingOptions): Promis
     return;
   }
 
-  await assertHeadSetTheVersion(options);
+  if (!(await headMayPublish(options))) return;
   const tagAlreadyOnHead = await assertTagFreeOrOnHead(options, tag);
   await expectSuccess(options, ['bun', 'run', 'scripts/verify-release-version.ts'], packageCommand);
   await expectSuccess(options, ['bun', 'run', 'prepack'], packageCommand);
