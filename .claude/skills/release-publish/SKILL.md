@@ -29,8 +29,20 @@ two steps in order:
    pending, which would strand an already-bumped version.
 2. `changesets/action` opens or updates the "Version Packages" pull request when
    changesets are pending. It runs in its own job, after the publish, without the
-   `id-token: write` permission npm's trusted publishing needs. That pull request shows the version bump, the
-   changelog entries, and the regenerated `src/version.ts`.
+   `id-token: write` permission npm's trusted publishing needs. That pull request
+   shows the version bump, the changelog entries, and the regenerated
+   `src/version.ts`. `scripts/version-pull-request-body.ts` then rewrites the
+   action's "publish to npm yourself" sentence: merging that pull request is the
+   release, because the push to main runs `release:publish`.
+3. The action opens and updates that pull request with `GITHUB_TOKEN`, so GitHub
+   holds its `mirror-verify` run for approval, as it does for the Version
+   Packages pull requests in Cinder and agent-bureau. Approve the held run from
+   the pull request's Checks tab, or with the API, and let `verify` pass before
+   merging. Merging is the publication gate, so it stays a human step:
+
+   ```bash
+   gh api -X POST repos/stevekinney/weft/actions/runs/<run-id>/approve
+   ```
 
 A tag is the result of a release, never the trigger. If a publish succeeded but
 the tag push failed, the next run tags the commit npm records as `gitHead`. An

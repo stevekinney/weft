@@ -152,6 +152,7 @@ jobs:
         run: bun install --frozen-lockfile --linker=isolated
 
       - name: Create or update Version Packages pull request
+        id: changesets
         uses: changesets/action@v2.1.2
         with:
           version-script: bun run changeset:version
@@ -161,6 +162,19 @@ jobs:
           # release:publish creates the tag itself, so the action must not tag as well.
           push-git-tags: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # With no publish-script the action tells maintainers to merge and then publish by hand, but
+      # here the merge itself publishes. Say so on the pull request that acts as the release gate.
+      - name: State that merging the Version Packages pull request publishes
+        if: steps.changesets.outputs.pr-number != ''
+        working-directory: packages/weft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.changesets.outputs.pr-number }}
+        run: |
+          gh pr view "$PR_NUMBER" --json body --jq .body > "$RUNNER_TEMP/version-body.md"
+          bun run scripts/version-pull-request-body.ts < "$RUNNER_TEMP/version-body.md" > "$RUNNER_TEMP/version-body-rewritten.md"
+          gh pr edit "$PR_NUMBER" --body-file "$RUNNER_TEMP/version-body-rewritten.md"
 
   publish-npm:
     if: github.event_name == 'workflow_dispatch' && inputs.snapshot
