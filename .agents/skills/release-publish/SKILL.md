@@ -25,7 +25,8 @@ two jobs:
    `npm publish --dry-run --ignore-scripts`, publishes with npm provenance via
    `npm publish --ignore-scripts`, and creates and pushes the annotated
    `v<version>` tag on the checked-out commit. It publishes only from the commit
-   that set the version, and only when that commit has no pending changesets.
+   that set the version, and only when that commit has no pending changesets that
+   release `@lostgradient/weft` (an empty changeset does not count).
    This is not left to `changesets/action`, because v2 skips publishing whenever
    changesets are pending, which would strand an already-bumped version.
 2. `changesets/action` opens or updates the "Version Packages" pull request when

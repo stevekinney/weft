@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  changesetReleases,
   PublishError,
   publishIfMissing,
   type CommandOptions,
@@ -315,8 +316,10 @@ describe('publishIfMissing: version absent from npm', () => {
     const h = harness({
       [viewVersion]: notFound,
       [pendingAtHead]: ok(
-        '.changeset/README.md\n.changeset/config.json\n.changeset/quiet-owls.md\n',
+        '.changeset/README.md\n.changeset/config.json\n.changeset/quiet-owls.md\n.changeset/empty-cats.md\n',
       ),
+      'git show HEAD:.changeset/quiet-owls.md': ok(`---\n'${name}': patch\n---\n\nFix a thing.\n`),
+      'git show HEAD:.changeset/empty-cats.md': ok('---\n---\n'),
     });
 
     const failure = await publishIfMissing(h.options()).then(
@@ -327,6 +330,7 @@ describe('publishIfMissing: version absent from npm', () => {
     expect(failure).toBeInstanceOf(PublishError);
     expect((failure as Error).message).toContain('.changeset/quiet-owls.md');
     expect((failure as Error).message).not.toContain('README.md');
+    expect((failure as Error).message).not.toContain('empty-cats');
     expect(h.commands().some((command) => command.startsWith('npm publish'))).toBe(false);
     expect(h.commands().some((command) => command.startsWith('bun run'))).toBe(false);
   });
@@ -337,6 +341,7 @@ describe('publishIfMissing: version absent from npm', () => {
       [parentManifest]: ok(JSON.stringify({ version })),
       [bumpSearch]: ok(`${bumpCommit}\n`),
       [pendingAtBump]: ok('.changeset/quiet-owls.md\n'),
+      [`git show ${bumpCommit}:.changeset/quiet-owls.md`]: ok(`---\n"${name}": minor\n---\n`),
     });
 
     await publishIfMissing(h.options());
@@ -344,7 +349,26 @@ describe('publishIfMissing: version absent from npm', () => {
     expect(
       h.lines.some((line) => line.startsWith('::warning::') && line.includes(bumpCommit)),
     ).toBe(true);
-    expect(h.commands()).toEqual([viewVersion, parentManifest, bumpSearch, pendingAtBump]);
+    expect(h.commands()).toEqual([
+      viewVersion,
+      parentManifest,
+      bumpSearch,
+      pendingAtBump,
+      `git show ${bumpCommit}:.changeset/quiet-owls.md`,
+    ]);
+  });
+
+  test('publishes when the only pending changesets are empty or name another package', async () => {
+    const h = harness({
+      [viewVersion]: notFound,
+      [pendingAtHead]: ok('.changeset/empty-cats.md\n.changeset/other-dogs.md\n'),
+      'git show HEAD:.changeset/empty-cats.md': ok('---\n---\n'),
+      'git show HEAD:.changeset/other-dogs.md': ok("---\n'@lostgradient/other': major\n---\n"),
+    });
+
+    await publishIfMissing(h.options());
+
+    expect(h.commands()).toContain('npm publish --ignore-scripts');
   });
 
   test('looks up the exact release tag ref, never a tail match such as releases/v<version>', async () => {
@@ -484,5 +508,20 @@ describe('publish-if-missing CLI', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain('missing a name or version');
+  });
+});
+
+describe('changesetReleases', () => {
+  test('recognizes quoted and unquoted package names with a release bump', () => {
+    expect(changesetReleases(`---\n'${name}': patch\n---\n`, name)).toBe(true);
+    expect(changesetReleases(`---\n"${name}": minor\n---\n`, name)).toBe(true);
+    expect(changesetReleases(`---\r\nweft: major\r\n---\r\n`, 'weft')).toBe(true);
+  });
+
+  test('ignores empty changesets, other packages, and a name outside the frontmatter', () => {
+    expect(changesetReleases('---\n---\n', name)).toBe(false);
+    expect(changesetReleases("---\n'@lostgradient/other': patch\n---\n", name)).toBe(false);
+    expect(changesetReleases(`---\n---\n\n'${name}': patch\n`, name)).toBe(false);
+    expect(changesetReleases(`no frontmatter '${name}': patch`, name)).toBe(false);
   });
 });

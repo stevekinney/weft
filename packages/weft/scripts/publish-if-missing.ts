@@ -185,20 +185,40 @@ async function reconcileTag(options: PublishIfMissingOptions, tag: string): Prom
   await tagAndPush(options, tag, commit);
 }
 
-/** The changeset files still pending at `commit`: `.changeset/*.md` except its README. */
+/** Whether a changeset's frontmatter releases `name` with a major, minor or patch bump. */
+export function changesetReleases(content: string, name: string): boolean {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n?---/.exec(content.trimStart());
+  if (!frontmatter?.[1]) return false;
+  return frontmatter[1].split(/\r?\n/).some((line) => {
+    const entry = /^\s*(["']?)(.+?)\1\s*:\s*(major|minor|patch)\s*$/.exec(line);
+    return entry?.[2] === name;
+  });
+}
+
+/**
+ * The changesets still pending at `commit` that release this package. An empty changeset
+ * (`changeset --empty`) or one for another package bumps nothing here, so it is not counted.
+ */
 async function pendingChangesets(
   options: PublishIfMissingOptions,
   commit: string,
 ): Promise<string[]> {
+  const git = { cwd: options.repositoryRoot };
   const listing = await expectSuccess(
     options,
     ['git', 'ls-tree', '--name-only', commit, '--', '.changeset/'],
-    { cwd: options.repositoryRoot },
+    git,
   );
-  return listing.stdout
+  const files = listing.stdout
     .split('\n')
     .map((line) => line.trim())
     .filter((file) => file.endsWith('.md') && file !== '.changeset/README.md');
+  const releasing: string[] = [];
+  for (const file of files) {
+    const shown = await expectSuccess(options, ['git', 'show', `${commit}:${file}`], git);
+    if (changesetReleases(shown.stdout, options.name)) releasing.push(file);
+  }
+  return releasing;
 }
 
 /**
