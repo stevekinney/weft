@@ -1,6 +1,7 @@
 import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
 import { releaseAllCheckpoints } from './checkpoint-commit-snapshots.ts';
 import { clearAllPendingAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { disposeChildOutcomePolls } from './child-outcome-poll.ts';
 import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
@@ -159,6 +160,7 @@ export function disposeEngine(
   disposeLeaseManager(internals);
   internals.handleCache.clear();
   rejectPendingResultResolvers(internals);
+  disposeChildOutcomePolls(internals);
   rejectAllSleepTimerAcknowledgements(internals, new EngineDisposedError());
   internals.resultResolvers.clear();
   internals.updateWaiters.clear();

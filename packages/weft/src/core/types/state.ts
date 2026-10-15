@@ -97,6 +97,14 @@ export interface WorkflowState {
   startedAt?: number;
   updatedAt: number;
   terminalCleanupToken?: string;
+  /**
+   * The ID of the engine that committed this workflow's terminal state (it
+   * completed, failed, was cancelled, or timed out). Written inside the terminal
+   * write itself, only under `ownership: 'workflow-lease'`; absent otherwise and
+   * on records written before this field existed. A handle's `result()` reads it
+   * to tell which engine's outcome it settled with, for `Engine.lostWorkflowClaim`.
+   */
+  terminalCommittedBy?: string;
   executionDeadline?: number;
   /**
    * Lineage metadata recorded when this workflow was created by a fork from

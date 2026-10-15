@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { Context } from '../context.ts';
-import { readOrInitConditionDeadline } from './durable-operations.ts';
+import { prepareSleepOperation, readOrInitConditionDeadline } from './durable-operations.ts';
 import { getInternals } from './internals.ts';
 
 const CONDITION_DEADLINE_LOCAL_PREFIX = '__weftConditionDeadline:';
@@ -58,5 +58,74 @@ describe('readOrInitConditionDeadline', () => {
     expect(() => readOrInitConditionDeadline(internals, 3, '1m')).toThrow(
       'Invalid checkpointed wait-condition deadline "not-a-number" for step 3',
     );
+  });
+
+  it('consumes the resume reference time when replaying an anchored deadline', () => {
+    // Resumed from a checkpoint created at 35_000 while a `waitUntil` anchored at
+    // 95_000 was still pending. The replay returns the anchor, and the reference
+    // time must not leak to the next uncached sleep, which would otherwise fire
+    // from the stale checkpoint time instead of now.
+    const internals = getInternals(
+      createContext({
+        getNow: () => 90_000,
+        locals: { [`${CONDITION_DEADLINE_LOCAL_PREFIX}0`]: 95_000 },
+        sleepReferenceTime: 35_000,
+      }),
+    );
+
+    expect(readOrInitConditionDeadline(internals, 0, '1m')).toBe(95_000);
+    expect(internals.sleepReferenceTime).toBeUndefined();
+
+    internals.stepIndex = 1;
+    const prepared = prepareSleepOperation(internals, '1m');
+    if (prepared.cached) throw new Error('Expected an uncached sleep');
+    expect(prepared.request).toMatchObject({ scheduledFireAt: 90_000 + 60_000 });
+  });
+
+  it('consumes the resume reference time when replaying a wait with no timeout', () => {
+    const internals = getInternals(
+      createContext({ getNow: () => 90_000, sleepReferenceTime: 35_000 }),
+    );
+
+    expect(readOrInitConditionDeadline(internals, 0, undefined)).toBeUndefined();
+    expect(internals.sleepReferenceTime).toBeUndefined();
+
+    internals.stepIndex = 1;
+    const prepared = prepareSleepOperation(internals, '1m');
+    if (prepared.cached) throw new Error('Expected an uncached sleep');
+    expect(prepared.request).toMatchObject({ scheduledFireAt: 90_000 + 60_000 });
+  });
+
+  it('keeps the resume reference time when an invalid timeout throws', () => {
+    // A workflow that catches the invalid-timeout error and then sleeps must still
+    // schedule from the checkpoint time, as if the wait had never run.
+    const internals = getInternals(
+      createContext({ getNow: () => 90_000, sleepReferenceTime: 35_000 }),
+    );
+
+    expect(() => readOrInitConditionDeadline(internals, 0, 'not a duration')).toThrow(
+      'Invalid duration string',
+    );
+    expect(internals.sleepReferenceTime).toBe(35_000);
+
+    internals.stepIndex = 1;
+    const prepared = prepareSleepOperation(internals, '1m');
+    if (prepared.cached) throw new Error('Expected an uncached sleep');
+    expect(prepared.request).toMatchObject({ scheduledFireAt: 35_000 + 60_000 });
+  });
+
+  it('keeps the resume reference time when a corrupt anchor throws', () => {
+    const internals = getInternals(
+      createContext({
+        getNow: () => 90_000,
+        locals: { [`${CONDITION_DEADLINE_LOCAL_PREFIX}0`]: 'not-a-number' },
+        sleepReferenceTime: 35_000,
+      }),
+    );
+
+    expect(() => readOrInitConditionDeadline(internals, 0, '1m')).toThrow(
+      'Invalid checkpointed wait-condition deadline',
+    );
+    expect(internals.sleepReferenceTime).toBe(35_000);
   });
 });

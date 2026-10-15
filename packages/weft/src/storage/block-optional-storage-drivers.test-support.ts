@@ -1,25 +1,23 @@
 /**
- * Temporarily hides every optional storage-driver peer dependency from this
- * workspace's `node_modules`, so a fixture spawned while they're hidden
- * proves a module graph does not need one merely to be imported.
+ * Runs a fixture in a sandbox where no optional storage-driver peer dependency is installed, so a
+ * fixture spawned there proves a module graph does not need one merely to be imported.
  *
- * A Bun runtime plugin's `onResolve` was tried first and rejected: it only
- * intercepts a specifier Bun's own resolver would otherwise fail to find.
- * Every driver here genuinely IS installed in this workspace (proven with
- * `bun --preload <plugin> zz-probe.ts` importing `@libsql/client/web`
- * directly — it resolved fine despite the plugin), so a plugin-based block
- * is a no-op for the exact case this gate needs to simulate. Actually
- * renaming the package directories out of the way is the only mechanism
- * that reproduces "a consumer without this optional peer installed" using
- * Bun's real resolution algorithm rather than a hook that only fires for
- * specifiers that were already going to fail.
+ * A Bun runtime plugin's `onResolve` was tried first and rejected: it only intercepts a specifier
+ * Bun's own resolver would otherwise fail to find, and every driver here genuinely is installed in
+ * this workspace. The sandbox reproduces "a consumer without this optional peer installed" with
+ * Bun's real resolution algorithm: it holds a copy of this package's `src` and manifests, and a
+ * `node_modules` that links every dependency of this package except the optional drivers. Nothing
+ * outside the sandbox changes. An earlier version renamed the drivers out of the shared
+ * `node_modules` instead, and a typecheck running beside the test then failed to find them.
  *
  * @module storage/block-optional-storage-drivers.test-support
  */
-import { rename, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const OPTIONAL_STORAGE_DRIVER_PACKAGES = [
+/** Top-level `node_modules` entries (a scope or a package) that hold optional storage drivers. */
+export const OPTIONAL_STORAGE_DRIVER_ENTRIES = [
   '@libsql',
   '@neondatabase',
   'lmdb',
@@ -27,39 +25,45 @@ const OPTIONAL_STORAGE_DRIVER_PACKAGES = [
   'better-sqlite3',
 ] as const;
 
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
+const OPTIONAL_ENTRIES = new Set<string>(OPTIONAL_STORAGE_DRIVER_ENTRIES);
+
+async function linkDependencies(source: string, target: string): Promise<void> {
+  await mkdir(target, { recursive: true });
+  for (const entry of await readdir(source, { withFileTypes: true })) {
+    if (OPTIONAL_ENTRIES.has(entry.name) || entry.name.startsWith('.')) continue;
+    const from = join(source, entry.name);
+    if (entry.isDirectory() && entry.name.startsWith('@')) {
+      await linkDependencies(from, join(target, entry.name));
+    } else {
+      // A dangling link left by an earlier install resolves to nothing a fixture could import;
+      // any other failure would leave a required dependency out, so it propagates.
+      const resolved = await realpath(from).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      });
+      if (resolved !== undefined) await symlink(resolved, join(target, entry.name));
+    }
   }
 }
 
 /**
- * Run `body` with every optional storage-driver package directory renamed
- * out of `weftRoot`'s `node_modules`, then restore them — even if `body`
- * throws. A package this workspace never installed (`better-sqlite3` isn't,
- * today) is simply skipped rather than treated as an error.
+ * Run `body` with the root of a sandbox copy of the package at `packageRoot` whose
+ * `node_modules` lacks every optional storage driver, then remove the sandbox, even if `body`
+ * throws.
  */
-export async function withOptionalStorageDriversHidden<T>(
-  weftRoot: string,
-  body: () => Promise<T>,
+export async function withOptionalStorageDriversAbsent<T>(
+  packageRoot: string,
+  body: (sandboxRoot: string) => Promise<T>,
 ): Promise<T> {
-  const nodeModules = join(weftRoot, 'node_modules');
-  const hidden: Array<{ from: string; to: string }> = [];
+  const sandboxRoot = await mkdtemp(join(tmpdir(), 'weft-without-optional-drivers-'));
   try {
-    for (const name of OPTIONAL_STORAGE_DRIVER_PACKAGES) {
-      const from = join(nodeModules, name);
-      if (!(await exists(from))) continue;
-      const to = join(nodeModules, `.hidden-${name}`);
-      await rename(from, to);
-      hidden.push({ from, to });
+    await cp(join(packageRoot, 'src'), join(sandboxRoot, 'src'), { recursive: true });
+    for (const manifest of ['package.json', 'tsconfig.json']) {
+      await cp(join(packageRoot, manifest), join(sandboxRoot, manifest));
     }
-    return await body();
+    await linkDependencies(join(packageRoot, 'node_modules'), join(sandboxRoot, 'node_modules'));
+    return await body(sandboxRoot);
   } finally {
-    for (const { from, to } of hidden.toReversed()) {
-      await rename(to, from).catch(() => {});
-    }
+    await rm(sandboxRoot, { recursive: true, force: true });
   }
 }

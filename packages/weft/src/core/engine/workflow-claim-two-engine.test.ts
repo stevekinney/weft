@@ -21,7 +21,7 @@
  * build fragment, THEN commit), which naturally interleave at each `await`
  * boundary and is exactly what a real cross-process race looks like.
  */
-import { ExtData, encode as msgpackEncode } from '@msgpack/msgpack';
+import { ExtData, decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack';
 import { describe, expect, it } from 'bun:test';
 
 import { GENERATION_KEYS } from '../../storage/generation-keys.ts';
@@ -282,6 +282,337 @@ describe('WFT-78: two engines sharing one store under ownership: "workflow-lease
     expect(getInternals(engine).workflowClaimRegistry?.currentEpoch('explicit-resume-race')).toBe(
       null,
     );
+  });
+});
+
+// COR-1390: a holder whose claim lapses (a starved renewal on a loaded host)
+// still sees the run's outcome through `handle.result()`, which reads it from
+// the store. `lostWorkflowClaim` is how it learns the outcome is not its own: the
+// answer comes from the engine ID each terminal write records, kept on the handle
+// when its `result()` settles.
+describe('Engine.lostWorkflowClaim', () => {
+  const lapseMs = 60_000 + 2 * 5_000 + 1;
+
+  /** Two `workflow-lease` engines on one store whose claim registries share a controllable clock. */
+  async function createLapsingEngines(storage: MemoryStorage) {
+    const clock = { now: 1_000_000 };
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    const createEngine = async (engineId: string) => {
+      const engine = await Engine.create({
+        storage,
+        workflows,
+        ownership: 'workflow-lease',
+        workflowClaimTtl: 60_000,
+        workflowClaimRenewInterval: 5_000,
+        recover: false,
+        backgroundTasks: 'manual',
+      });
+      const registry = new WorkflowClaimRegistry({
+        storage,
+        engineId,
+        getNow: () => clock.now,
+        claimTtlMs: 60_000,
+        claimRenewIntervalMs: 5_000,
+        warn: () => {},
+      });
+      getInternals(engine).workflowClaimRegistry = registry;
+      return { engine, registry };
+    };
+    return { clock, first: await createEngine('engine-a'), second: await createEngine('engine-b') };
+  }
+
+  /** Engine B takes engine A's lapsed claim on `workflowId`, drives the run, and completes it. */
+  async function takeOverAndComplete(
+    clock: { now: number },
+    second: Awaited<ReturnType<typeof createLapsingEngines>>['second'],
+    workflowId: string,
+  ) {
+    clock.now += lapseMs;
+    expect(await second.registry.takeover(workflowId)).toMatchObject({ status: 'acquired' });
+    await second.engine.recoverAll();
+    const handleOnSecond = second.engine.getHandle(workflowId);
+    await handleOnSecond.signal('go');
+    expect(await handleOnSecond.result()).toBe('ran');
+    return handleOnSecond;
+  }
+
+  it('is false under ownership: "none"', async () => {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-recovery': claimRaceRecoveryWorkflow };
+    await using engine = await Engine.create({ storage, workflows, recover: false });
+    const handle = await engine.start('claim-race-recovery', null, { id: 'any-workflow' });
+    await handle.signal('go');
+    expect(await handle.result()).toBe('ran');
+
+    expect(engine.lostWorkflowClaim(handle)).toBe(false);
+  });
+
+  it('is false for a handle whose result has not settled', async () => {
+    const storage = new MemoryStorage();
+    const { first } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    const handle = await firstEngine.start('claim-race-recovery', null, { id: 'unsettled-run' });
+    expect(firstEngine.lostWorkflowClaim(handle)).toBe(false);
+
+    const outcome = handle.result();
+    void outcome.catch(() => {});
+    expect(firstEngine.lostWorkflowClaim(handle)).toBe(false);
+  });
+
+  it('tells the holder whose lapsed claim another engine reclaimed that the result it observes is not its own', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'lapsed-claim-handoff';
+    await seedParkedWorkflow(storage, workflowId);
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    // The first engine recovers the parked run and holds its claim.
+    const recoveredByFirst = await firstEngine.recoverAll();
+    expect(recoveredByFirst.map((handle) => handle.id)).toEqual([workflowId]);
+    const handleOnFirst = firstEngine.getHandle(workflowId);
+    const observedByFirst = handleOnFirst.result();
+    expect(firstEngine.lostWorkflowClaim(handleOnFirst)).toBe(false);
+
+    // Its claim lapses without a renewal; the second engine reclaims the run and finishes it.
+    const handleOnSecond = await takeOverAndComplete(clock, second, workflowId);
+
+    // The first engine's waiter settles with the run's outcome, read from the store...
+    await firstEngine.runMaintenance();
+    expect(await observedByFirst).toBe('ran');
+    // ...but the outcome is the second engine's, not the first's.
+    expect(firstEngine.lostWorkflowClaim(handleOnFirst)).toBe(true);
+    expect(secondEngine.lostWorkflowClaim(handleOnSecond)).toBe(false);
+    expect(activityRunCounts.get(workflowId)).toBe(1);
+  });
+
+  it('keeps answering for the run that lost its claim after a start-new replacement reuses the workflow id', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'lost-claim-then-replaced';
+    await seedParkedWorkflow(storage, workflowId);
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    const [originalOnFirst] = await firstEngine.recoverAll();
+    expect(originalOnFirst?.id).toBe(workflowId);
+    const originalOutcome = originalOnFirst?.result();
+    await takeOverAndComplete(clock, second, workflowId);
+    await firstEngine.runMaintenance();
+    expect(await originalOutcome).toBe('ran');
+    expect(firstEngine.lostWorkflowClaim(originalOnFirst!)).toBe(true);
+
+    // Engine A then starts a replacement run under the same id, with a fresh claim.
+    const replacementOnFirst = await firstEngine.start('claim-race-recovery', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    const replacementOutcome = replacementOnFirst.result();
+    expect(firstEngine.lostWorkflowClaim(replacementOnFirst)).toBe(false);
+    expect(firstEngine.lostWorkflowClaim(originalOnFirst!)).toBe(true);
+
+    // The replacement settles with an outcome its own engine committed.
+    await firstEngine.signal(workflowId, 'go');
+    expect(await replacementOutcome).toBe('ran');
+    expect(firstEngine.lostWorkflowClaim(replacementOnFirst)).toBe(false);
+    expect(firstEngine.lostWorkflowClaim(originalOnFirst!)).toBe(true);
+    expect(secondEngine.lostWorkflowClaim(secondEngine.getHandle(workflowId))).toBe(false);
+  });
+
+  it('keeps reporting a lost claim through a same-engine suspend and resume', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'suspended-resumed-then-lost';
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    const handle = await firstEngine.start('claim-race-recovery', null, { id: workflowId });
+    const outcome = handle.result();
+    await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
+      label: 'checkpoint for the started run',
+    });
+    const epochBeforeSuspend = first.registry.currentEpoch(workflowId);
+    await handle.suspend();
+    await firstEngine.resume(workflowId);
+    expect(first.registry.currentEpoch(workflowId)).not.toBe(epochBeforeSuspend);
+    expect(firstEngine.lostWorkflowClaim(handle)).toBe(false);
+
+    // Engine A's claim lapses; engine B takes the run and completes it.
+    await takeOverAndComplete(clock, second, workflowId);
+    await firstEngine.runMaintenance();
+    expect(await outcome).toBe('ran');
+
+    expect(firstEngine.lostWorkflowClaim(handle)).toBe(true);
+    expect(firstEngine.lostWorkflowClaim(firstEngine.getHandle(workflowId))).toBe(true);
+    expect(secondEngine.lostWorkflowClaim(secondEngine.getHandle(workflowId))).toBe(false);
+  });
+
+  it('keeps reporting a lost claim when a resume that won a fresh claim is rejected by the status re-check', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'lost-then-rejected-resume';
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    const handle = await firstEngine.start('claim-race-recovery', null, { id: workflowId });
+    const outcome = handle.result();
+    void outcome.catch(() => {});
+    await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
+      label: 'checkpoint for the started run',
+    });
+    clock.now += lapseMs;
+    // Engine B takes the lapsed claim and suspends the run, so A holds nothing durable for it.
+    expect(await second.registry.takeover(workflowId)).toMatchObject({ status: 'acquired' });
+    await secondEngine.recoverAll();
+    await secondEngine.getHandle(workflowId).suspend();
+
+    // Hold engine A's resume after it read the suspended state, before it acquires a claim.
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let workflowReads = 0;
+    const workflowKey = KEYS.workflow(workflowId);
+    const internalsA = getInternals(firstEngine);
+    const realStorageA = internalsA.storage;
+    internalsA.storage = new Proxy(realStorageA, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string) => {
+            const value = await target.get(key);
+            if (key === workflowKey) {
+              workflowReads += 1;
+              if (workflowReads === 2) {
+                reached.resolve();
+                await release.promise;
+              }
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const resumePromise = firstEngine.resume(workflowId);
+    await reached.promise;
+    // Engine B cancels the suspended run while A's resume is held.
+    await secondEngine.cancel(workflowId);
+
+    // A's resume wins a fresh claim, then its status re-check rejects it and releases that claim.
+    release.resolve();
+    expect(await throwingRejectionOf(resumePromise)).toThrow(/status is "cancelled"/);
+    expect(first.registry.currentEpoch(workflowId)).toBeNull();
+
+    // A's result settles with the cancellation B committed, so the loss is still reported.
+    await firstEngine.runMaintenance();
+    await rejectionOf(outcome);
+    expect(firstEngine.lostWorkflowClaim(handle)).toBe(true);
+  });
+
+  it('reports no loss for a run this engine reacquired after a loss and then failed at an early exit', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'reacquired-then-early-exit';
+    let now = 1_000_000;
+    const lapseTimeMs = 3_000 + 2 * 1_000 + 1;
+    const createEngine = async () => {
+      const engine = new Engine({
+        storage,
+        ownership: 'workflow-lease',
+        backgroundTasks: 'manual',
+        getNow: () => now,
+        workflowClaimTtl: 3_000,
+        workflowClaimRenewInterval: 1_000,
+      });
+      engine.register(claimRaceRecoveryWorkflow);
+      await engine.recoverAll();
+      return engine;
+    };
+    await using engineA = await createEngine();
+    await using engineB = await createEngine();
+
+    const handle = await engineA.start('claim-race-recovery', null, {
+      id: workflowId,
+      services: {},
+    });
+    const outcome = handle.result();
+    void outcome.catch(() => {});
+    await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
+      label: 'checkpoint for the started run',
+    });
+
+    // Engine B takes the lapsed claim and holds it without driving the run, then its claim lapses too.
+    now += lapseTimeMs;
+    expect(await getInternals(engineB).workflowClaimRegistry!.takeover(workflowId)).toMatchObject({
+      status: 'acquired',
+    });
+    now += lapseTimeMs;
+
+    // Engine A reclaims the run. Its live services are gone and no resolver can re-provide them,
+    // so the run fails at the services check, under the new claim, before the resume commits.
+    getInternals(engineA).workflowServices.delete(workflowId);
+    // The first pass renews, finds the claim lost, and starts the takeover cooldown; the second reclaims.
+    await engineA.runMaintenance(now);
+    now += 1_500;
+    await engineA.runMaintenance(now);
+    const error = await rejectionOf(outcome);
+
+    expect((error as Error).message).toMatch(/services/i);
+    expect(engineA.lostWorkflowClaim(handle)).toBe(false);
+  });
+
+  it('stamps the committing engine on every terminal write under workflow-lease, and nothing under ownership: "none"', async () => {
+    const storage = new MemoryStorage();
+    const failingWorkflow = workflow({ name: 'claim-race-fail' }).execute(async function* () {
+      throw new Error('boom');
+    });
+    const workflows = {
+      'claim-race-start': claimRaceStartWorkflow,
+      'claim-race-recovery': claimRaceRecoveryWorkflow,
+      'claim-race-fail': failingWorkflow,
+    } as unknown as ClaimWorkflows;
+    await using engine = await createClaimEngine(storage, 'engine-a', workflows);
+    const committedBy = async (workflowId: string) => {
+      const bytes = await storage.get(KEYS.workflow(workflowId));
+      return (msgpackDecode(bytes!) as { terminalCommittedBy?: string }).terminalCommittedBy;
+    };
+
+    const completed = await engine.start('claim-race-start', null, { id: 'stamp-completed' });
+    expect(await completed.result()).toBe('ran');
+    const failed = await engine.start('claim-race-fail', null, { id: 'stamp-failed' });
+    await rejectionOf(failed.result());
+    const cancelled = await engine.start('claim-race-recovery', null, { id: 'stamp-cancelled' });
+    await cancelled.cancel();
+    await rejectionOf(cancelled.result());
+
+    expect(await committedBy('stamp-completed')).toBe('engine-a');
+    expect(await committedBy('stamp-failed')).toBe('engine-a');
+    expect(await committedBy('stamp-cancelled')).toBe('engine-a');
+
+    const plainStorage = new MemoryStorage();
+    await using plain = await Engine.create({ storage: plainStorage, workflows, recover: false });
+    const plainRun = await plain.start('claim-race-start', null, { id: 'stamp-plain' });
+    expect(await plainRun.result()).toBe('ran');
+    const plainBytes = await plainStorage.get(KEYS.workflow('stamp-plain'));
+    expect(
+      (msgpackDecode(plainBytes!) as { terminalCommittedBy?: string }).terminalCommittedBy,
+    ).toBe(undefined);
+  });
+
+  it('stays false for a run this engine completed and replaced itself', async () => {
+    const storage = new MemoryStorage();
+    const workflows: ClaimWorkflows = { 'claim-race-start': claimRaceStartWorkflow };
+    await using engine = await createClaimEngine(storage, 'engine-a', workflows);
+    const workflowId = 'completed-then-replaced';
+
+    const original = await engine.start('claim-race-start', null, { id: workflowId });
+    expect(await original.result()).toBe('ran');
+    const replacement = await engine.start('claim-race-start', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    expect(await replacement.result()).toBe('ran');
+
+    expect(engine.lostWorkflowClaim(original)).toBe(false);
+    expect(engine.lostWorkflowClaim(replacement)).toBe(false);
   });
 });
 

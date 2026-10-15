@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from 'bun:test';
 
+import { outcomeOf, rethrow } from '../testing/module-scope-scenario.test-support.ts';
 import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   createPostgresTestServer,
@@ -104,12 +105,14 @@ describe('choosing where the live suites get a database', () => {
     expect(selectPostgresTestDatabase(undefined, { ...none, control: '/bin/pg_ctl' })).toBeNull();
   });
 
+  // spawn-free: a null database selection throws before any process starts.
   it('names the gate when asked for a database that cannot be obtained', async () => {
     expect(await throwingRejectionOf(createPostgresTestServer(null))).toThrow(
       'postgresTestDatabase',
     );
   });
 
+  // spawn-free: a null database selection returns before any process starts.
   it('opens nothing at load, rather than throwing, when a runner has no database', async () => {
     expect(await openPostgresTestDatabase(null)).toBeNull();
   });
@@ -120,6 +123,7 @@ describe('choosing where the live suites get a database', () => {
     );
   });
 
+  // spawn-free: a supplied URL is parsed, and no cluster process is started.
   it('reads host and port off a supplied URL and never stops that server', async () => {
     // The runner owns the server's lifetime, so disposal is a no-op — stopping it here
     // would pull the database out from under the next file in the sweep.
@@ -133,6 +137,7 @@ describe('choosing where the live suites get a database', () => {
     await supplied[Symbol.asyncDispose]();
   });
 
+  // spawn-free: a supplied URL is parsed, and no cluster process is started.
   it('defaults a supplied URL without a port to 5432', async () => {
     const supplied = await createPostgresTestServer({
       kind: 'supplied',
@@ -144,21 +149,27 @@ describe('choosing where the live suites get a database', () => {
   });
 });
 
+// The initdb-failure scenario below runs real executables, so it runs here at module scope, off
+// Bun's five-second per-test clock; its test rethrows the outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  // `/usr/bin/false` is a real, always-present executable that exits 1
+  // immediately — no real PostgreSQL install required to exercise the
+  // startDisposablePostgres catch block deterministically.
+  expect(
+    await throwingRejectionOf(
+      createPostgresTestServer({
+        kind: 'cluster',
+        initialize: '/usr/bin/false',
+        control: '/usr/bin/false',
+      }),
+    ),
+  ).toThrow('Could not start disposable PostgreSQL:');
+});
+
 describe('the disposable cluster failure path', () => {
-  it('cleans up the working directory and reports the server log detail when initdb fails', async () => {
-    // `/usr/bin/false` is a real, always-present executable that exits 1
-    // immediately — no real PostgreSQL install required to exercise the
-    // startDisposablePostgres catch block deterministically.
-    expect(
-      await throwingRejectionOf(
-        createPostgresTestServer({
-          kind: 'cluster',
-          initialize: '/usr/bin/false',
-          control: '/usr/bin/false',
-        }),
-      ),
-    ).toThrow('Could not start disposable PostgreSQL:');
-  });
+  it('cleans up the working directory and reports the server log detail when initdb fails', () =>
+    rethrow(scenario1));
 });
 
 describe.skipIf(cluster === null)('the disposable PostgreSQL cluster', () => {

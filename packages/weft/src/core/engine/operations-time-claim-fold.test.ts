@@ -95,6 +95,42 @@ describe('operations-time.ts: delayed-start timer fire folds acquire() under wor
     expect(activityRunCounts.get(workflowId)).toBe(1);
   });
 
+  it('reports no loss for a delayed-start run its own engine fired and completed', async () => {
+    const storage = new MemoryStorage();
+    await using engine = await createClaimEngine(storage, 'engine-a');
+    const workflowId = 'wf-delayed-fold-own-outcome';
+
+    const handle = await engine.start('delayed-claim-fold', null, {
+      id: workflowId,
+      startAt: Date.now() + 60_000,
+    });
+    await engine.fireTimer(await loadDelayedStartTimerEntry(storage, workflowId));
+
+    expect(await handle.result()).toBe('ran');
+    expect(engine.lostWorkflowClaim(handle)).toBe(false);
+  });
+
+  it('reports the loss to the engine that created a delayed-start run another engine fired and completed', async () => {
+    const storage = new MemoryStorage();
+    await using engineA = await createClaimEngine(storage, 'engine-a');
+    await using engineB = await createClaimEngine(storage, 'engine-b');
+    const workflowId = 'wf-delayed-fold-other-outcome';
+
+    const handleOnA = await engineA.start('delayed-claim-fold', null, {
+      id: workflowId,
+      startAt: Date.now() + 60_000,
+    });
+    const outcomeOnA = handleOnA.result();
+    await engineB.fireTimer(await loadDelayedStartTimerEntry(storage, workflowId));
+    const handleOnB = engineB.getHandle(workflowId);
+    expect(await handleOnB.result()).toBe('ran');
+    await engineA.runMaintenance();
+
+    expect(await outcomeOnA).toBe('ran');
+    expect(engineA.lostWorkflowClaim(handleOnA)).toBe(true);
+    expect(engineB.lostWorkflowClaim(handleOnB)).toBe(false);
+  });
+
   it('two engines racing the same delayed-start fire: exactly one wins and the loser silently skips (never throws)', async () => {
     const storage = new MemoryStorage();
     await using engineA = await createClaimEngine(storage, 'engine-a');

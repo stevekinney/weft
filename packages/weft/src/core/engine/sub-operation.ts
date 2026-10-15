@@ -128,6 +128,7 @@ const subOperationExecutors: SubOperationExecutorMap = {
       context.workflowId,
       operation,
       context.callbacks,
+      context.signal,
     ),
   memo: (_context, operation) => Promise.resolve(callMemoFunction(operation.fn)),
   'state-read': (context, operation) => executeStateReadSubOperation(context.internals, operation),
@@ -201,6 +202,7 @@ async function executeChildWorkflowSubOperation(
   workflowId: string,
   operation: Extract<ContextOperationRequest, { type: 'child-workflow' }>,
   callbacks: SubOperationCallbacks,
+  signal: AbortSignal | undefined,
 ): Promise<unknown> {
   return executeChildWorkflow(
     internals,
@@ -208,6 +210,7 @@ async function executeChildWorkflowSubOperation(
     operation,
     assertChildWorkflowNestingDepth(internals, workflowId),
     callbacks.createChildWorkflowOperationCallbacks(),
+    signal,
   );
 }
 

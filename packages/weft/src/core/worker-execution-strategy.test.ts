@@ -7,6 +7,11 @@ import {
   waitForCondition as waitForTestingCondition,
 } from '../testing/fake-timers.test-support.ts';
 
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
 import { buildInternalRealmManifest } from '../worker/manifest/internal-realm.ts';
 import type { WorkerPool } from '../workers/pool.ts';
 import type { WorkerOutboundMessage } from './types.ts';
@@ -172,6 +177,124 @@ function createMockPool(workers: MockWorker[]): WorkerPool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// Each scenario below runs a script in a fresh `bun -e` process, which takes seconds on a loaded
+// host, so it runs here at module scope, off Bun's five-second per-test clock; its test rethrows
+// the scenario's outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const script = String.raw`
+    import { WorkerExecutionStrategy } from './src/core/worker-execution-strategy.ts';
+
+    function createMockWorker() {
+      const listeners = new Map();
+
+      return {
+        postMessage() {},
+        terminate() {},
+        addEventListener(type, listener) {
+          if (!listeners.has(type)) {
+            listeners.set(type, new Set());
+          }
+
+          listeners.get(type).add(listener);
+        },
+        removeEventListener(type, listener) {
+          listeners.get(type)?.delete(listener);
+        },
+        listeners,
+      };
+    }
+
+    const worker = createMockWorker();
+    const pool = {
+      acquire: async () => worker,
+      release() {},
+      get availableCount() {
+        return 0;
+      },
+      get totalCount() {
+        return 1;
+      },
+      get pendingCount() {
+        return 0;
+      },
+      [Symbol.dispose]() {},
+      async [Symbol.asyncDispose]() {},
+    };
+
+    const strategy = new WorkerExecutionStrategy(pool);
+
+    process.on('unhandledRejection', (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    });
+
+    strategy.onMessage(async () => {
+      throw new Error('handler failed');
+    });
+
+    // Deterministic readiness signal: spin the microtask queue until the
+    // strategy has registered its 'message' listener, rather than guessing
+    // a wall-clock delay (the old setTimeout(20) flaked under CI load).
+    async function waitForMessageListener() {
+      for (let attempt = 0; attempt < 10_000; attempt++) {
+        if ((worker.listeners.get('message')?.size ?? 0) > 0) return;
+        await Promise.resolve();
+      }
+      throw new Error('strategy never registered a message listener');
+    }
+
+    // Let any pending unhandled rejection surface before exit, without a
+    // wall-clock guess: drain the nextTick + microtask queues, then take one
+    // zero-delay macrotask turn — the real event-loop boundary at which an
+    // unhandledRejection would fire, deterministic regardless of CPU load.
+    async function settleRejections() {
+      await new Promise((resolve) => process.nextTick(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    strategy.startWorkflow({
+      workflowId: 'wf-1',
+      workflowType: 'test',
+      input: null,
+      checkpoint: new ArrayBuffer(0),
+    });
+
+    await waitForMessageListener();
+
+    for (const listener of worker.listeners.get('message') ?? []) {
+      listener(
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            workflowId: 'wf-1',
+            result: 'done',
+          },
+        }),
+      );
+    }
+
+    await settleRejections();
+    strategy[Symbol.dispose]();
+    process.exit(0);
+  `;
+
+  const childProcess = Bun.spawn(['bun', '-e', script], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    cwd: globalThis.process.cwd(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const exitCode = await childProcess.exited;
+  const stdoutText = await new Response(childProcess.stdout).text();
+  const stderrText = await new Response(childProcess.stderr).text();
+
+  expect(exitCode).toBe(0);
+  expect(stdoutText.trim()).toBe('');
+  expect(stderrText.trim()).toBe('');
+});
 
 describe('WorkerExecutionStrategy', () => {
   let strategy: WorkerExecutionStrategy;
@@ -890,118 +1013,8 @@ describe('WorkerExecutionStrategy', () => {
       expect(mockPool.release).toHaveBeenCalledTimes(1);
     });
 
-    it('does not surface unhandled rejections when an async message handler fails', async () => {
-      const script = String.raw`
-        import { WorkerExecutionStrategy } from './src/core/worker-execution-strategy.ts';
-
-        function createMockWorker() {
-          const listeners = new Map();
-
-          return {
-            postMessage() {},
-            terminate() {},
-            addEventListener(type, listener) {
-              if (!listeners.has(type)) {
-                listeners.set(type, new Set());
-              }
-
-              listeners.get(type).add(listener);
-            },
-            removeEventListener(type, listener) {
-              listeners.get(type)?.delete(listener);
-            },
-            listeners,
-          };
-        }
-
-        const worker = createMockWorker();
-        const pool = {
-          acquire: async () => worker,
-          release() {},
-          get availableCount() {
-            return 0;
-          },
-          get totalCount() {
-            return 1;
-          },
-          get pendingCount() {
-            return 0;
-          },
-          [Symbol.dispose]() {},
-          async [Symbol.asyncDispose]() {},
-        };
-
-        const strategy = new WorkerExecutionStrategy(pool);
-
-        process.on('unhandledRejection', (error) => {
-          console.error(error instanceof Error ? error.message : String(error));
-          process.exit(1);
-        });
-
-        strategy.onMessage(async () => {
-          throw new Error('handler failed');
-        });
-
-        // Deterministic readiness signal: spin the microtask queue until the
-        // strategy has registered its 'message' listener, rather than guessing
-        // a wall-clock delay (the old setTimeout(20) flaked under CI load).
-        async function waitForMessageListener() {
-          for (let attempt = 0; attempt < 10_000; attempt++) {
-            if ((worker.listeners.get('message')?.size ?? 0) > 0) return;
-            await Promise.resolve();
-          }
-          throw new Error('strategy never registered a message listener');
-        }
-
-        // Let any pending unhandled rejection surface before exit, without a
-        // wall-clock guess: drain the nextTick + microtask queues, then take one
-        // zero-delay macrotask turn — the real event-loop boundary at which an
-        // unhandledRejection would fire, deterministic regardless of CPU load.
-        async function settleRejections() {
-          await new Promise((resolve) => process.nextTick(resolve));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-
-        strategy.startWorkflow({
-          workflowId: 'wf-1',
-          workflowType: 'test',
-          input: null,
-          checkpoint: new ArrayBuffer(0),
-        });
-
-        await waitForMessageListener();
-
-        for (const listener of worker.listeners.get('message') ?? []) {
-          listener(
-            new MessageEvent('message', {
-              data: {
-                type: 'completed',
-                workflowId: 'wf-1',
-                result: 'done',
-              },
-            }),
-          );
-        }
-
-        await settleRejections();
-        strategy[Symbol.dispose]();
-        process.exit(0);
-      `;
-
-      const childProcess = Bun.spawn(['bun', '-e', script], {
-        cwd: globalThis.process.cwd(),
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const exitCode = await childProcess.exited;
-      const stdoutText = await new Response(childProcess.stdout).text();
-      const stderrText = await new Response(childProcess.stderr).text();
-
-      expect(exitCode).toBe(0);
-      expect(stdoutText.trim()).toBe('');
-      expect(stderrText.trim()).toBe('');
-    });
+    it('does not surface unhandled rejections when an async message handler fails', () =>
+      rethrow(scenario1));
   });
 
   describe('hardened worker turns', () => {
