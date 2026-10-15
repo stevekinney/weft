@@ -10,8 +10,9 @@ export class VersionPullRequestBodyError extends Error {}
 const manualPublishClause =
   /publish to npm yourself or \[setup this action to publish automatically\]\([^)]*\)/;
 
+// No closing period: the action's own sentence supplies it after the replaced clause.
 export const automaticPublishClause =
-  'the release workflow publishes `@lostgradient/weft` to npm automatically. **Merging this pull request publishes the release.**';
+  'the release workflow publishes `@lostgradient/weft` to npm automatically. **Merging this pull request publishes the release**';
 
 /** The body with the manual-publish instruction replaced. Throws if the action's wording changed. */
 export function rewriteVersionPullRequestBody(body: string): string {

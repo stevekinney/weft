@@ -17,6 +17,8 @@ describe('rewriteVersionPullRequestBody', () => {
     expect(rewritten).not.toContain('publish to npm yourself');
     expect(rewritten).toContain(automaticPublishClause);
     expect(rewritten).toContain('# Releases\n\n## @lostgradient/weft@0.27.18');
+    expect(rewritten).toContain('publishes the release**. If');
+    expect(rewritten).not.toContain('.**.');
   });
 
   test('leaves an already rewritten body unchanged', () => {
