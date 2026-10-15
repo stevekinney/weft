@@ -9,4 +9,4 @@
  * console.log(`Running Weft ${VERSION}`);
  * ```
  */
-export const VERSION = '0.28.0';
+export const VERSION = '0.29.0';
