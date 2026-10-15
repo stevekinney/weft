@@ -20,6 +20,7 @@
 import {
   AUTHORIZATION_SCOPES,
   extractScopesFromClaims,
+  type AdditionalScopeSet,
   type AuthorizationScope,
 } from './authorization-scope.ts';
 
@@ -104,7 +105,10 @@ export type UnauthenticatedPrincipal = {
 export type Principal = AuthenticatedPrincipal | UnauthenticatedPrincipal;
 
 /**
- * Build an `AuthenticatedPrincipal` from a JWT claims payload.
+ * Build an `AuthenticatedPrincipal` from a JWT claims payload. Scopes come
+ * from the `scope`, `scp`, and `permissions` claims; only built-in scopes and
+ * those in `options.additionalScopes` (the package scopes the admitting
+ * handler registered) are kept.
  *
  * @example
  * ```ts
@@ -117,8 +121,11 @@ export type Principal = AuthenticatedPrincipal | UnauthenticatedPrincipal;
  * console.log(principal.hasScope('workflows:read'));
  * ```
  */
-export function principalFromJwtClaims(claims: JwtClaims): AuthenticatedPrincipal {
-  const scopes = extractScopesFromClaims(claims);
+export function principalFromJwtClaims(
+  claims: JwtClaims,
+  options: { readonly additionalScopes?: AdditionalScopeSet } = {},
+): AuthenticatedPrincipal {
+  const scopes = extractScopesFromClaims(claims, options.additionalScopes);
   const subject = typeof claims['sub'] === 'string' ? claims['sub'] : undefined;
 
   return {
@@ -211,8 +218,10 @@ export function anonymousPrincipal(): UnauthenticatedPrincipal {
  * Build the privileged `stdio-local` principal for the Phase 13
  * runtime stdio subcommand. Admission is gated at the CLI boundary
  * (`--startup-token <hex>` or `--allow-unauthenticated-local-admin`);
- * once admitted, the session has every scope because it's running as
- * a local process that can already invoke the binary directly.
+ * once admitted, the session has every built-in scope because it's
+ * running as a local process that can already invoke the binary directly.
+ * It holds no package scope: no handler's `additionalScopes` reach it, so
+ * an operation that requires a package scope is `Forbidden` to it.
  *
  * @example
  * ```ts

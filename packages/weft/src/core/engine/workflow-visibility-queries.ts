@@ -19,6 +19,7 @@ import {
 } from '../../storage/interface.ts';
 import type { FailureCategory, WorkflowStatus } from '../types/identity.ts';
 import type { TimeRange } from '../types/list-options.ts';
+import { workflowVisibilityUpdatedBucket } from './workflow-indexes.ts';
 
 function isFinitePositive(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
@@ -76,6 +77,13 @@ export async function queryWorkflowTimeRangeIndex(
   range: TimeRange,
 ): Promise<Set<string>> {
   const prefix = `wf-idx-${kind}:`;
+  if (kind === 'updated') {
+    return collectWorkflowIdsFromIndex(
+      storage,
+      prefix,
+      buildUpdatedBucketScanOptions(prefix, range),
+    );
+  }
   const scanOptions: ScanOptions = {};
 
   if (range.gte !== undefined && isFinitePositive(range.gte)) {
@@ -93,6 +101,25 @@ export async function queryWorkflowTimeRangeIndex(
   }
 
   return collectWorkflowIdsFromIndex(storage, prefix, scanOptions);
+}
+
+/**
+ * `wf-idx-updated:` keys hold the bucket start, so each bound widens to the
+ * whole bucket containing it: an exclusive bound cannot skip its bucket, which
+ * may still hold later (or earlier) timestamps. The result is a superset; the
+ * list/aggregate post-filter applies the exact range.
+ */
+function buildUpdatedBucketScanOptions(prefix: string, range: TimeRange): ScanOptions {
+  const scanOptions: ScanOptions = {};
+  const lower = range.gte ?? range.gt;
+  if (lower !== undefined && isFinitePositive(lower)) {
+    scanOptions.gte = `${prefix}${sortableTimestamp(workflowVisibilityUpdatedBucket(lower))}:`;
+  }
+  const upper = range.lte ?? range.lt;
+  if (upper !== undefined && isFinitePositive(upper)) {
+    scanOptions.lte = `${prefix}${sortableTimestamp(workflowVisibilityUpdatedBucket(upper))}:\xff`;
+  }
+  return scanOptions;
 }
 
 /**

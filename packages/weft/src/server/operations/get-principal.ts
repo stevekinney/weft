@@ -13,7 +13,10 @@
 
 import { z } from 'zod';
 
-import { AUTHORIZATION_SCOPES } from '../authorization-scope.ts';
+import {
+  AUTHORIZATION_SCOPES,
+  PACKAGE_AUTHORIZATION_SCOPE_PATTERN,
+} from '../authorization-scope.ts';
 import { shapeOperationFaultAsJson } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -23,7 +26,13 @@ const getPrincipalInput = z.object({});
 const getPrincipalOutput = z.object({
   method: principalMethodSchema,
   subject: z.string().nullable(),
-  scopes: z.array(z.enum(AUTHORIZATION_SCOPES)),
+  // Built-in scopes, or a package scope a handler registered through
+  // `additionalScopes`. The schema is shared by every handler, so it accepts
+  // any well-formed package scope; the authenticator is what limits a
+  // principal to the scopes its own handler registered.
+  scopes: z.array(
+    z.union([z.enum(AUTHORIZATION_SCOPES), z.string().regex(PACKAGE_AUTHORIZATION_SCOPE_PATTERN)]),
+  ),
 });
 
 export type GetPrincipalInput = z.infer<typeof getPrincipalInput>;

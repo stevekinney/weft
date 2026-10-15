@@ -17,9 +17,11 @@ describe('order-processing server smoke check', () => {
       await engine.schedule(orderProcessingSchedule);
 
       await using server = serve({
-        dashboard: new Response('<html><body>order shell</body></html>', {
-          headers: { 'Content-Type': 'text/html' },
-        }),
+        routes: {
+          '/': new Response('<html><body>order shell</body></html>', {
+            headers: { 'Content-Type': 'text/html' },
+          }),
+        },
         engine,
         hostname: '127.0.0.1',
         unauthenticatedAccess: 'allow',
@@ -35,7 +37,7 @@ describe('order-processing server smoke check', () => {
       const apiHealthResponse = await fetch(new URL('/api/v1/health', server.url));
       expect(apiHealthResponse.ok).toBe(true);
 
-      // A caller-supplied shell can still mount on the origin root.
+      // A caller-supplied route can serve a shell at the origin root.
       const shellResponse = await fetch(new URL('/', server.url));
       expect(shellResponse.ok).toBe(true);
       expect(await shellResponse.text()).toContain('order shell');

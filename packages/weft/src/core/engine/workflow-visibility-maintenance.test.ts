@@ -112,12 +112,14 @@ describe('workflow visibility index maintenance', () => {
 
       expect(await indexKeys(storage)).toEqual(
         expect.arrayContaining([
-          KEYS.workflowVisibilityManifest('current-1'),
           KEYS.workflowVisibilityStatus('completed', 'current-1'),
           KEYS.workflowVisibilityType('visibility-maintenance', 'current-1'),
         ]),
       );
       expect(await storage.has(KEYS.workflowVisibilityStatus('running', 'current-1'))).toBe(false);
+      // Layout version 2 writes no per-workflow manifest row (COR-1387).
+      const writtenKeys = await indexKeys(storage);
+      expect(writtenKeys.filter((key) => key.startsWith('wf-idx-manifest:'))).toEqual([]);
     } finally {
       engine[Symbol.dispose]();
     }
@@ -152,7 +154,7 @@ describe('workflow visibility index maintenance', () => {
       await runToCompletion(engine, 'option-1');
 
       expect(await storage.has(KEYS.workflowVisibilityStatus('completed', 'option-1'))).toBe(true);
-      expect(await storage.has(KEYS.workflowVisibilityManifest('option-1'))).toBe(true);
+      expect(await storage.has('wf-idx-manifest:option-1')).toBe(false);
       expect(storage.getCounts.get(KEYS.workflowVisibilityMetaVersion())).toBeUndefined();
     } finally {
       engine[Symbol.dispose]();

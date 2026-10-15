@@ -1,5 +1,5 @@
 import type { Context } from './index.ts';
-import type { ContextInternals } from './internals.ts';
+import { yieldOperation, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { captureCallerStack } from './validation.ts';
 
@@ -20,12 +20,12 @@ export function* speculate<TResult>(
 
   const operationId = crypto.randomUUID();
   const callerStack = captureCallerStack();
-  const result = yield {
+  const result = yield* yieldOperation(internals, {
     type: 'speculate' as const,
     operationId,
     execute,
     callerStack,
-  };
+  });
 
   context.accumulatedResults.set(step, result);
   return result as TResult;

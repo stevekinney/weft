@@ -327,7 +327,7 @@ async function reactivateSuspendedWorkflowState(
     state.id,
     [
       { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
-      ...visibilityIndexOperations(internals, state.id, previousState, state),
+      ...visibilityIndexOperations(internals, previousState, state),
       ...(state.executionDeadline !== undefined
         ? buildTimerBatchOperations({
             id: `deadline:${state.id}`,

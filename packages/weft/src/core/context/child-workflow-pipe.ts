@@ -9,7 +9,7 @@ import type {
   WorkflowReduceOptions,
 } from '../types.ts';
 import type { Context } from './index.ts';
-import type { ContextInternals } from './internals.ts';
+import { yieldOperation, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { captureCallerStack } from './validation.ts';
 
@@ -185,7 +185,7 @@ export function* startChild<TResult = unknown>(
     callerStack,
     ...(options !== undefined ? { options } : {}),
   };
-  const result = yield request;
+  const result = yield* yieldOperation(internals, request);
 
   context.accumulatedResults.set(step, result);
   return resolveCachedStartChildResult<TResult>(result, options);

@@ -22,9 +22,9 @@
 /**
  * External URL prefix under which the functional HTTP/WebSocket API is served
  * (REST workflows/schedules/tasks, `/mcp`, `/jsonrpc`, and the workflow/task
- * WebSocket upgrades). Optional dashboard shells can be mounted at specific
- * root-level page routes, so the API is namespaced beneath this prefix on the
- * wire.
+ * WebSocket upgrades). Caller-supplied `serve({ routes })`, such as the page
+ * routes `dashboard()` registers, can occupy root-level paths, so the API is
+ * namespaced beneath this prefix on the wire.
  *
  * This is purely an *external* (wire) concern. Internal routing — the
  * `DIRECT_HTTP_ROUTES` table, every `RestBinding`, the WebSocket-upgrade
@@ -42,6 +42,21 @@ export const API_PREFIX = '/api';
 
 /** Root-relative namespace for the functional REST and WebSocket API. */
 export const ROOT_API_PREFIX = '/v1';
+
+/**
+ * Canonical, root-relative MCP streamable-HTTP path. Runtime routing matches
+ * this form (after the front door strips the `/api` prefix), and the discovery
+ * document advertises the external `/api`-prefixed URL via `externalApiPath`.
+ */
+export const MCP_STREAMABLE_HTTP_PATH = '/mcp';
+
+/**
+ * Canonical, root-relative JSON-RPC path, answered over HTTP `POST` and as a
+ * WebSocket upgrade. Like {@link MCP_STREAMABLE_HTTP_PATH}, it is dispatched
+ * by this literal path rather than through `DIRECT_HTTP_ROUTES` or a
+ * `RestBinding`.
+ */
+export const JSON_RPC_PATH = '/jsonrpc';
 
 /**
  * Map a canonical, root-relative server path to its external (`/api`-prefixed)
@@ -273,6 +288,58 @@ export const DIRECT_HTTP_ROUTES = [
     access: 'public',
   },
 ] as const satisfies readonly DirectHttpRouteDefinition[];
+
+// ---------------------------------------------------------------------------
+// Reserved route space
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefixes whose whole subtree belongs to Weft: the external API namespace and
+ * the root-relative versioned namespace beneath it.
+ */
+const RESERVED_ROUTE_PREFIXES: readonly string[] = [API_PREFIX, ROOT_API_PREFIX];
+
+/**
+ * Every concrete path Weft answers itself: both prefixes, the MCP and JSON-RPC
+ * transports (which the front door also answers at the origin root, because it
+ * leaves a path without the `/api` prefix unchanged), and each direct route.
+ */
+const RESERVED_ROUTE_PATHS: readonly string[] = [
+  ...RESERVED_ROUTE_PREFIXES,
+  MCP_STREAMABLE_HTTP_PATH,
+  JSON_RPC_PATH,
+  ...DIRECT_HTTP_ROUTES.map(({ path }) => path),
+];
+
+function isUnderReservedPrefix(path: string): boolean {
+  return RESERVED_ROUTE_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+/**
+ * Report whether a caller-supplied Bun route key would claim a request that
+ * Weft serves itself.
+ *
+ * Bun matches its `routes` table before the `fetch` handler that dispatches
+ * every API and discovery request, so a route that overlaps Weft's own paths
+ * silently shadows them. A key without `*` or `:` overlaps when it equals a
+ * reserved path (either prefix, {@link MCP_STREAMABLE_HTTP_PATH},
+ * {@link JSON_RPC_PATH}, or a direct route) or falls under {@link API_PREFIX}
+ * or {@link ROOT_API_PREFIX}.
+ * A key with `*` or `:` can match many paths, so its static prefix (the text
+ * before its first `*` or `:`) overlaps when it equals or falls under one of
+ * those prefixes, or when any reserved path begins with it.
+ */
+export function overlapsReservedRoute(routeKey: string): boolean {
+  const patternStart = routeKey.search(/[*:]/);
+  if (patternStart === -1) {
+    return RESERVED_ROUTE_PATHS.includes(routeKey) || isUnderReservedPrefix(routeKey);
+  }
+  const staticPrefix = routeKey.slice(0, patternStart);
+  return (
+    isUnderReservedPrefix(staticPrefix) ||
+    RESERVED_ROUTE_PATHS.some((reservedPath) => reservedPath.startsWith(staticPrefix))
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Helpers

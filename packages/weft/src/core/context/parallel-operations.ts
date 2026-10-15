@@ -1,6 +1,6 @@
 import { primeParallelOperations } from './child-workflow-pipe.ts';
 import type { Context } from './index.ts';
-import type { ContextInternals } from './internals.ts';
+import { yieldOperation, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import {
   assertValidParallelOperationCacheEntry,
@@ -88,14 +88,14 @@ export function* all(
       const subOperations = primeParallelOperations(operations);
       stampDeterministicOperationIds(subOperations, `parallel:${step}`);
       const callerStack = captureCallerStack();
-      const result = yield {
+      const result = yield* yieldOperation(internals, {
         type: 'parallel',
         operationId: `parallel:${step}`,
         operations: subOperations,
         step,
         resumedCacheEntry: cached,
         callerStack,
-      };
+      });
       // Engine wrote the v2 cache entry; don't overwrite.
       return result as unknown[];
     }
@@ -107,13 +107,13 @@ export function* all(
   const operationId = `parallel:${step}`;
   stampDeterministicOperationIds(subOperations, operationId);
   const callerStack = captureCallerStack();
-  const result = yield {
+  const result = yield* yieldOperation(internals, {
     type: 'parallel',
     operationId,
     operations: subOperations,
     step,
     callerStack,
-  };
+  });
 
   // Write a fully-fulfilled v2 entry on success so resume sees a proper
   // cache entry regardless of execution mode (worker mode bypasses the
@@ -193,13 +193,13 @@ export function* race(
   }
   stampDeterministicOperationIds(subOperations, operationId);
   const callerStack = captureCallerStack();
-  const result = yield {
+  const result = yield* yieldOperation(internals, {
     type: 'race',
     operationId,
     operations: subOperations,
     ...(branchNames !== undefined ? { branchNames } : {}),
     callerStack,
-  };
+  });
 
   // For race, the engine writes the winner directly via the existing
   // operation outcome path; we wrap it in a v2 entry here for symmetry
@@ -320,14 +320,14 @@ export function* memo<T>(
 
   const operationId = crypto.randomUUID();
   const callerStack = captureCallerStack();
-  const result = yield {
+  const result = yield* yieldOperation(internals, {
     type: 'memo',
     operationId,
     key,
     step,
     fn,
     callerStack,
-  };
+  });
 
   internals.memoCache ??= new Map();
   internals.memoCache.set(key, result);
@@ -386,14 +386,14 @@ export function* runAll<
       // Partial cache: re-yield with the cached entry attached.
       const operationId = `run-all:${step}`;
       const callerStack = captureCallerStack();
-      const result = yield {
+      const result = yield* yieldOperation(internals, {
         type: 'run-all' as const,
         operationId,
         branches,
         step,
         resumedCacheEntry: cached,
         callerStack,
-      };
+      });
       // Engine wrote the v2 cache entry; don't overwrite.
       return result as Record<keyof T, unknown>;
     }
@@ -408,13 +408,13 @@ export function* runAll<
 
   const operationId = `run-all:${step}`;
   const callerStack = captureCallerStack();
-  const result = yield {
+  const result = yield* yieldOperation(internals, {
     type: 'run-all' as const,
     operationId,
     branches,
     step,
     callerStack,
-  };
+  });
 
   // Write a fully-fulfilled v2 entry on success so resume sees a proper
   // cache entry regardless of execution mode.

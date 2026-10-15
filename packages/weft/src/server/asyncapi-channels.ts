@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import type { DefinitionSchemaDirection } from '../core/types/definition-schema-to-json.ts';
 import { compareStrings } from './json-schema-utilities.ts';
 import type { ErasedOperation } from './operation-catalog.ts';
-import { externalApiPath } from './route-model.ts';
+import { externalApiPath, JSON_RPC_PATH } from './route-model.ts';
 
 const JSON_RPC_VERSION = '2.0';
 const EVENT_DELIVER_METHOD = 'weft.events.deliver';
@@ -62,7 +62,7 @@ export function buildWebSocketChannel(operation: ErasedOperation): Record<string
     // External wire address: the JSON-RPC WebSocket is served under the `/api`
     // prefix. Internal routing matches the canonical `/jsonrpc` after the front
     // door strips the prefix.
-    address: externalApiPath('/jsonrpc'),
+    address: externalApiPath(JSON_RPC_PATH),
     bindings: {
       ws: {
         method: 'GET',

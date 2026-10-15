@@ -25,7 +25,7 @@ import {
   processPendingUpdatesForHandlers,
 } from './pending-updates.ts';
 import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registration.ts';
-import { cleanupReviews } from './reviews.ts';
+import { cleanupReviews } from './review-cleanup.ts';
 import {
   commitExternalTerminalWorkflowStateOperations,
   commitSelfWorkflowStateOperations,
@@ -238,7 +238,8 @@ export function createTerminationCallbacksWith<
         operations,
         options,
       ),
-    cleanupReviews: (workflowId) => cleanupReviews(getInternals(engine), workflowId),
+    cleanupReviews: (workflowId, fencedCommit) =>
+      cleanupReviews(getInternals(engine), workflowId, fencedCommit),
   };
 }
 

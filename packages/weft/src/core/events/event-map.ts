@@ -8,6 +8,7 @@ import type {
   RemoteActivityQueuedEvent,
   TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
+  TaskResultDeliveryEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
 import type {
@@ -90,6 +91,7 @@ export type WeftEventMap = {
   'activity:remote-queued': RemoteActivityQueuedEvent;
   'activity:remote-cancellation-requested': RemoteActivityCancellationRequestedEvent;
   'task:dead-lettered': TaskResultDeadLetteredEvent;
+  'task:result-delivery': TaskResultDeliveryEvent;
   'task:attempt-transition': TaskAttemptTransitionEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;

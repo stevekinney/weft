@@ -163,7 +163,7 @@ export async function suspendWorkflow(
     if (visibilityMaintenance !== undefined) await visibilityMaintenance;
     await callbacks.commitExternalTerminalWorkflowStateOperations(state, [
       { type: 'put', key: KEYS.workflow(workflowId), value: encode(updatedState) },
-      ...visibilityIndexOperations(internals, workflowId, state, updatedState),
+      ...visibilityIndexOperations(internals, state, updatedState),
       // Delete the absolute execution-deadline timer in the same batch as the
       // flip (atomic, lock-ordered before any resume re-arm). Symmetric to
       // resume's durable re-arm via buildTimerBatchOperations.

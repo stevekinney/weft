@@ -123,11 +123,10 @@ async function readWorkflowVisibilityMaintenance(internals: EngineInternals): Pr
  */
 export function visibilityIndexOperations(
   internals: EngineInternals,
-  workflowId: string,
   previousState: WorkflowState | null,
   nextState: WorkflowState | null,
 ): BatchOperation[] {
   return shouldMaintainWorkflowVisibilityIndexes(internals)
-    ? buildWorkflowVisibilityIndexTransition(workflowId, previousState, nextState).batchOps
+    ? buildWorkflowVisibilityIndexTransition(previousState, nextState)
     : [];
 }

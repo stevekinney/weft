@@ -479,7 +479,7 @@ async function commitPendingToRunning(
       key: KEYS.workflow(workflowId),
       value: encode(nextRunningState),
     },
-    ...visibilityIndexOperations(internals, workflowId, latestState, nextRunningState),
+    ...visibilityIndexOperations(internals, latestState, nextRunningState),
     ...(executionDeadline !== undefined
       ? buildTimerBatchOperations({
           id: `deadline:${workflowId}`,

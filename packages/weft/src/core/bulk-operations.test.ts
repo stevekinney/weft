@@ -235,7 +235,7 @@ class BulkCancelFailureStorage extends MemoryStorage {
   shouldFail = false;
   workflowIdToFail: string | null = null;
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  #failIfTargeted(operations: BatchOperation[]): void {
     if (
       this.shouldFail &&
       this.workflowIdToFail !== null &&
@@ -246,8 +246,20 @@ class BulkCancelFailureStorage extends MemoryStorage {
     ) {
       throw new Error(`simulated bulk cancellation failure for ${this.workflowIdToFail}`);
     }
+  }
 
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.#failIfTargeted(operations);
     await super.batch(operations);
+  }
+
+  // A terminal commit is conditioned on the state it decided from, so it goes through here.
+  override async conditionalBatch(
+    conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.#failIfTargeted(operations);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 

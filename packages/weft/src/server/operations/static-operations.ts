@@ -27,6 +27,10 @@ import { getReviewOperation } from './get-review.ts';
 import { getScheduleOperation } from './get-schedule.ts';
 import { getStreamChunksOperation } from './get-stream-chunks.ts';
 import { getSystemLeaseOperation } from './get-system-lease.ts';
+import {
+  getTaskDeadLetterOperation,
+  getTaskResultDeliveriesOperation,
+} from './get-task-deliveries.ts';
 import { getTaskDetailOperation } from './get-task-detail.ts';
 import { getUpdateResultOperation } from './get-update-result.ts';
 import { getWorkflowAttributesOperation } from './get-workflow-attributes.ts';
@@ -146,6 +150,8 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   fleetEventsSubscriptionOperation,
   clearTaskDeadLetterOperation,
   getTaskDetailOperation,
+  getTaskResultDeliveriesOperation,
+  getTaskDeadLetterOperation,
   // Operation-catalog-backed routes
   listSchedulesOperation,
   listAlertsOperation,

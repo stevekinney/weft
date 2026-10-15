@@ -154,6 +154,9 @@ describe('workflow forking', () => {
 
     await engine.signal(forked.id, 'continue');
     await sleepForTesting(0);
+    // Drive the forked run past the signal at the fork's virtual time, so its
+    // sleep starts there rather than after the next clock advance.
+    await engine.advanceTime(0);
 
     const forkedStateBeforeFinalAdvance = await engine.get(forked.id);
     expect(forkedStateBeforeFinalAdvance?.status).toBe('running');

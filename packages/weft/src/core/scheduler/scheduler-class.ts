@@ -1,5 +1,9 @@
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS, resolvePrefixRangeEnd } from '../../storage/interface.ts';
+import type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  Storage,
+} from '../../storage/interface.ts';
+import { KEYS, resolvePrefixRangeEnd, storageConditionalBatch } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
 import { DEFAULT_POLL_INTERVAL_MS } from '../types/constants.ts';
@@ -111,8 +115,16 @@ export class Scheduler implements Disposable {
     await this.#storage.batch(buildTimerBatchOperations(entry));
   }
 
-  /** Cancel a timer (removes from storage). */
-  async cancel(id: string, _workflowId: string): Promise<void> {
+  /**
+   * Cancel a timer (removes from storage). With `conditions`, the removal is one conditional
+   * batch that also requires the timer index to still hold the value read here, so a timer
+   * re-scheduled under the same id by a same-id replacement is never removed by a stale caller.
+   */
+  async cancel(
+    id: string,
+    _workflowId: string,
+    conditions?: ConditionalBatchCondition[],
+  ): Promise<void> {
     const indexKey = `timer-idx:${id}`;
     const indexValue = await this.#storage.get(indexKey);
 
@@ -127,10 +139,19 @@ export class Scheduler implements Disposable {
     }
     const deadlineKey = decoded;
 
-    await this.#storage.batch([
+    const deletes: BatchOperation[] = [
       { type: 'delete', key: deadlineKey },
       { type: 'delete', key: indexKey },
-    ]);
+    ];
+    if (conditions === undefined) {
+      await this.#storage.batch(deletes);
+      return;
+    }
+    await storageConditionalBatch(
+      this.#storage,
+      [...conditions, { key: indexKey, expectedValue: indexValue }],
+      deletes,
+    );
   }
 
   /** Force an immediate scan for expired timers (for tests). */

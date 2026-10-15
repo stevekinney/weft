@@ -432,7 +432,7 @@ await using server = serve({ engine, port: 7233 });
 // server.url is e.g. "http://0.0.0.0:7233"
 ```
 
-Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. JSON-RPC over WebSocket also exposes workflow and fleet event subscriptions for operator UIs that need live state without polling. Content negotiation supports JSON and MessagePack. `engine.workflows` and the matching `/v1/registry/` operations expose the durable workflow catalog for admin tooling — install a revision's manifest and activate it as the advertised active revision — bookkeeping only, never workflow execution routing; see [`workflow-versioning.md`](documentation/guides/workflow-versioning.md#engineworkflows-public-catalog-control). `workflowSource()` pairs a typed, serializable source descriptor with a never-serialized loader capability, so one workflow can register lazily while another stays eagerly registered; `engine.registerSource()` records the candidate without importing it, and `engine.resolveWorkflowSource()` (or its `engine.workflows.preload()` alias) loads, validates, and installs it into the same catalog with single-flight deduplication per `(name, revision)`. Every execution entry point — `start()`, `startOrSignal()`, `schedule()`, `fork()`, `resume()`, and recovery — awaits resolution for a lazy type before running any handler code, with bounded diagnostics and process-local events for the load pipeline; see [Engine Integration](documentation/guides/workflow-versioning.md#engine-integration-wft-1516). The server can also mount an externally supplied dashboard shell at known page routes; see the [server guide](documentation/guides/server.md#external-dashboard-mounting) for the hosting contract.
+Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. JSON-RPC over WebSocket also exposes workflow and fleet event subscriptions for operator UIs that need live state without polling. Content negotiation supports JSON and MessagePack. `engine.workflows` and the matching `/v1/registry/` operations expose the durable workflow catalog for admin tooling — install a revision's manifest and activate it as the advertised active revision — bookkeeping only, never workflow execution routing; see [`workflow-versioning.md`](documentation/guides/workflow-versioning.md#engineworkflows-public-catalog-control). `workflowSource()` pairs a typed, serializable source descriptor with a never-serialized loader capability, so one workflow can register lazily while another stays eagerly registered; `engine.registerSource()` records the candidate without importing it, and `engine.resolveWorkflowSource()` (or its `engine.workflows.preload()` alias) loads, validates, and installs it into the same catalog with single-flight deduplication per `(name, revision)`. Every execution entry point — `start()`, `startOrSignal()`, `schedule()`, `fork()`, `resume()`, and recovery — awaits resolution for a lazy type before running any handler code, with bounded diagnostics and process-local events for the load pipeline; see [Engine Integration](documentation/guides/workflow-versioning.md#engine-integration-wft-1516). To serve Weft's dashboard on the same origin, or extra routes of your own, see [`dashboard()` and `routes`](#dashboard-and-extra-routes).
 
 Workflow and fleet event feeds resume from an opaque `Cursor` string. Treat a cursor as a token: pass back exactly what an envelope's `cursor` field gave you, and never build or compare one by hand. When a consumer needs the underlying sequence position (for example to compare against a retention floor), use the codec exported from `@lostgradient/weft`:
 
@@ -445,6 +445,34 @@ import { decodeCursor, encodeCursor } from '@lostgradient/weft';
 decodeCursor(encodeCursor(42)); // 42
 decodeCursor('-1'); // -1 (start of the feed)
 decodeCursor('garbage'); // null
+```
+
+### Dashboard and Extra Routes
+
+`dashboard()` starts the same server with Weft's prebuilt dashboard mounted on the same origin, and returns the same `WeftServer` handle. It accepts every `serve()` option plus `distDir`: the directory holding the built `index.html` and its `assets/` directory, which defaults to the `dashboard/` directory in the `@lostgradient/weft` package. It throws before binding the port when that directory has no `index.html`.
+
+```typescript
+import { dashboard, Engine, MemoryStorage } from '@lostgradient/weft';
+
+await using engine = new Engine({ storage: new MemoryStorage() });
+await using server = dashboard({ engine, port: 7233 });
+// The dashboard is at server.url, and Weft's API is under /api on the same origin.
+```
+
+Both functions accept `routes`, Bun's own route table, for anything else the same origin should serve. Bun matches those routes before Weft's API, so `serve()` throws before binding the port when a route would shadow one of Weft's endpoints: `/api` or `/v1` or anything under them, the root `/mcp` and `/jsonrpc` transports, a root discovery document such as `/openapi.json`, or a pattern such as `/*` that could match one of those. `dashboard()` also rejects a route it registers itself.
+
+```typescript
+import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+
+await using engine = new Engine({ storage: new MemoryStorage() });
+await using server = serve({
+  engine,
+  port: 7233,
+  routes: {
+    '/status': new Response('ok'),
+    '/reports/:id': (request) => Response.json({ id: request.params['id'] }),
+  },
+});
 ```
 
 ### Remote Workers
@@ -643,7 +671,7 @@ Getting started:
 
 Guides:
 
-- [Workflows](documentation/guides/workflows.md), [Activities](documentation/guides/activities.md), [Storage](documentation/guides/storage.md), [Server](documentation/guides/server.md)
+- [Workflows](documentation/guides/workflows.md), [Activities](documentation/guides/activities.md), [Storage](documentation/guides/storage.md), [Server](#server-mode)
 - [Signals and Queries](documentation/guides/signals-and-queries.md), [Synchronous Updates](documentation/guides/synchronous-updates.md)
 - [Durable Timers](documentation/guides/durable-timers.md), [Timeouts](documentation/guides/timeouts.md), [Parallel Execution](documentation/guides/parallel-execution.md)
 - [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)

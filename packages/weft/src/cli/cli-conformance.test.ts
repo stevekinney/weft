@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createRegisterCheck } from '../conformance/run-conformance.ts';
 import { outcomeOf, rethrow } from '../testing/module-scope-scenario.test-support.ts';
-import { createRegisterCheck } from './conformance.ts';
 import { executeConformance } from './index.ts';
 
 describe('createRegisterCheck', () => {

@@ -195,7 +195,7 @@ export async function collectWorkflowPurgeDeleteOperations(
   appendKeyDeleteOperations(deleteOperations, deleteKeys);
   const visibilityMaintenance = refreshWorkflowVisibilityMaintenance(internals);
   if (visibilityMaintenance !== undefined) await visibilityMaintenance;
-  deleteOperations.push(...visibilityIndexOperations(internals, workflowId, state, null));
+  deleteOperations.push(...visibilityIndexOperations(internals, state, null));
   return deleteOperations;
 }
 

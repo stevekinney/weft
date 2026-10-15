@@ -14,7 +14,7 @@ import {
   type WebSocketData,
 } from '../json-rpc-websocket-runtime.ts';
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
-import { API_PREFIX } from '../route-model.ts';
+import { API_PREFIX, JSON_RPC_PATH, MCP_STREAMABLE_HTTP_PATH } from '../route-model.ts';
 import type { ServerContext } from './context.ts';
 import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
 import { gateRequest } from './request-gate.ts';
@@ -181,7 +181,7 @@ async function dispatchServerFetchRequest(
     return websocketResponse;
   }
 
-  if (url.pathname === '/mcp') {
+  if (url.pathname === MCP_STREAMABLE_HTTP_PATH) {
     return handleMcpHttpRequest({
       request,
       engine: options.engine,
@@ -250,7 +250,7 @@ async function dispatchServerFetchRequest(
   // error envelope instead of escaping as an uncaught exception.
   // `handleRequest`'s REST path already does this via its own inner
   // try/catch; `/jsonrpc` has no such boundary without this wrapping.
-  if (url.pathname === '/jsonrpc') {
+  if (url.pathname === JSON_RPC_PATH) {
     return handleJsonRpcHttpRequestSafely({
       request,
       registry: context.liveOperationRegistry,

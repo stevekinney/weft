@@ -13,7 +13,10 @@ import {
  * that transport authentication result into the `Principal` used by the
  * operation pipeline.
  * Returns `anonymousPrincipal()` when no context is provided (public
- * request).
+ * request). A forwarded `principal` is used verbatim; without one, a `jwt`
+ * context is rebuilt from its claims with built-in scopes only, because the
+ * package scopes a handler registered are known only to its authenticator.
+ * Forward the authenticator's `principal` to keep them.
  *
  * @example
  * ```ts

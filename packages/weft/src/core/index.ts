@@ -103,6 +103,7 @@ export {
   StorageSizeReportedEvent,
   TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
+  TaskResultDeliveryEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,
   WorkflowCancelledEvent,

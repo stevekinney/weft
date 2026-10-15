@@ -21,6 +21,7 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskTerminal,
 } from '../../core/task-ledger/task-ledger.ts';
+import { taskResultDeliveryKey } from '../../core/task-ledger/task-result-delivery.ts';
 import { storageKeys } from '../../storage/interface.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
@@ -282,7 +283,8 @@ async function reapRetainedTerminalRecord(
         expectedRetentionGeneration: decoded.retentionGeneration,
       }),
     1,
-    attemptKeys,
+    // COR-1366: the operation's delivery history is purged with it.
+    [...attemptKeys, taskResultDeliveryKey(decoded.operationId)],
   );
   if (!deleted.ok) {
     console.error(

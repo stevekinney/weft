@@ -25,6 +25,11 @@ import {
   type RemoteTaskRecord,
   type RemoteTaskTerminal,
 } from '../core/task-ledger/task-ledger.ts';
+import {
+  appendTaskResultDelivery,
+  encodeTaskResultDeliveryHistory,
+  taskResultDeliveryKey,
+} from '../core/task-ledger/task-result-delivery.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
@@ -221,12 +226,27 @@ describe('COR-205 dead-letter, hostile decode, purge, and retention', () => {
       adoptedAt: Date.now() - 5_000,
     });
     await putTerminalWithAttempt(storage, terminal);
+    await storage.put(
+      taskResultDeliveryKey('op-purge'),
+      encodeTaskResultDeliveryHistory(
+        appendTaskResultDelivery(null, 'op-purge', {
+          attemptTokenDigest: sha256HexSync('attempt-token'),
+          transport: 'longPoll',
+          submittedStatus: 'completed',
+          receivedAt: Date.now(),
+          outcome: 'acknowledged',
+          disposition: 'applied',
+        }),
+      ),
+    );
     expect(await listAttemptKeys(options, 'op-purge')).toHaveLength(1);
 
     await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
 
     expect(await storage.get(taskLedgerKey('op-purge'))).toBeNull();
     expect(await listAttemptKeys(options, 'op-purge')).toHaveLength(0);
+    // COR-1366: the delivery history is reaped with its ledger record.
+    expect(await storage.get(taskResultDeliveryKey('op-purge'))).toBeNull();
   });
 
   it('purge with several prior attempts: reaping removes every attempt record under the operationId atomically with the ledger record (COR-200 residual)', async () => {
@@ -294,8 +314,10 @@ describe('COR-205 dead-letter, hostile decode, purge, and retention', () => {
     );
     if (purgeCall === undefined) throw new Error('Expected a conditionalBatch call for the purge');
     const deletedKeys = purgeCall.filter((op) => op.type === 'delete').map((op) => op.key);
-    expect(deletedKeys).toHaveLength(4);
+    // Ledger record + three attempt records + the delivery history key (COR-1366).
+    expect(deletedKeys).toHaveLength(5);
     expect(deletedKeys).toContain(taskLedgerKey('op-purge-multi'));
+    expect(deletedKeys).toContain(taskResultDeliveryKey('op-purge-multi'));
     for (const token of ['attempt-token-1', 'attempt-token-2', 'attempt-token-3']) {
       expect(deletedKeys).toContain(taskAttemptKey('op-purge-multi', sha256HexSync(token)));
     }

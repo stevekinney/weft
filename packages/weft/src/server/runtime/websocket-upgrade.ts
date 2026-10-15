@@ -5,6 +5,7 @@ import type { ServeOptions } from '../index.ts';
 import { finalizeWebSocketUpgrade } from '../json-rpc-transport-helpers.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { isAuthenticated } from '../principal.ts';
+import { JSON_RPC_PATH } from '../route-model.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
 import type { ServerContext } from './context.ts';
 import { isOriginAllowed } from './cors.ts';
@@ -58,7 +59,7 @@ export function classifyConnection(
     return queue === null ? null : { connectionType: 'worker', queue };
   }
 
-  if (pathname === '/jsonrpc') {
+  if (pathname === JSON_RPC_PATH) {
     return { connectionType: 'jsonrpc' };
   }
 

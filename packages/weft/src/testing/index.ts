@@ -1,3 +1,4 @@
+export type { ConformanceTarget, ConformanceTargets } from '../conformance/targets.ts';
 export {
   ChaosNonRetryableError,
   ChaosTimeoutError,
@@ -5,6 +6,7 @@ export {
   withChaos,
 } from './chaos.ts';
 export type { ChaosScenario, FaultClass } from './chaos.ts';
+export { createConformanceTargets } from './conformance-targets.ts';
 export { flushPortableMicrotasks, yieldToPortableEventLoop } from './event-loop.ts';
 export { ActivityMockRegistry } from './mocks.ts';
 export type { MockCall, MockHandle, MockedActivity } from './mocks.ts';

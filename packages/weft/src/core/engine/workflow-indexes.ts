@@ -1,19 +1,20 @@
 /**
  * Build the storage operations that keep the workflow visibility indexes in
  * sync with workflow state writes. Called from every state-mutation chokepoint
- * (start, status transition, attribute/tag updates, termination cleanup).
+ * (start, status transition, attribute/tag updates, termination cleanup)
+ * through `visibilityIndexOperations`, whenever the engine maintains the index.
  *
- * The runtime path mirrors the backfill path: read the per-workflow manifest
- * to learn which index keys are currently occupied, delete them, write the
- * new index keys derived from `nextState`, and persist the new manifest. When
- * `nextState` is `null` the workflow is being removed and we simply drop the
- * manifest and every key it lists.
+ * The index is a deterministic function of workflow state, so every write
+ * derives the previous keys from the previous state, deletes the ones that
+ * changed, and puts the new ones — no extra storage read and no per-workflow
+ * bookkeeping row. When the next state is `null` the workflow is being removed
+ * and every key derived from the previous state is dropped.
  *
  * @module core/engine/workflow-indexes
  */
 
 import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
-import { decode, encode } from '../codec.ts';
+import { decode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import type { EngineInternals } from './internals.ts';
@@ -21,9 +22,11 @@ import type { EngineInternals } from './internals.ts';
 /**
  * Bumped whenever the index layout or population rules change. The engine
  * compares this to the watermark stored at `wf-idx-meta:version` to decide
- * whether the indexes are trustworthy for query-time use.
+ * whether the indexes are trustworthy for query-time use. Version 2 dropped
+ * the per-workflow manifest rows and bucketed `wf-idx-updated:` keys, so a
+ * version-1 store reads as stale until the backfill rebuilds it.
  */
-export const WORKFLOW_VISIBILITY_INDEX_VERSION = 1;
+export const WORKFLOW_VISIBILITY_INDEX_VERSION = 2;
 
 /**
  * Hard cap on the number of candidate workflow ids the engine will
@@ -52,159 +55,67 @@ export class WorkflowListScanCapExceededError extends WeftError<'WorkflowListSca
 }
 
 /**
- * Per-workflow manifest payload — the exact set of visibility-index keys
- * this workflow occupies right now. Decoded from the
- * `wf-idx-manifest:{id}` storage entry.
+ * Width of the `wf-idx-updated:` buckets. A workflow's `updatedAt` moves on
+ * every state write, so an exact-timestamp key would cost a delete and a put
+ * on each one; bucketing keeps the row in place for every write inside the
+ * same minute, which covers the whole lifetime of a short workflow. Queries
+ * widen their bounds to whole buckets and the list/aggregate post-filter
+ * applies the exact range (`matchesListFilter`).
  */
-export type WorkflowVisibilityManifest = {
-  /** Schema version that wrote this manifest. */
-  version: number;
-  /** Sorted list of index keys this workflow currently owns. */
-  keys: string[];
-};
+export const WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS = 60_000;
+
+/** Start of the `wf-idx-updated:` bucket holding `updatedAt`. */
+export function workflowVisibilityUpdatedBucket(updatedAt: number): number {
+  return (
+    Math.floor(updatedAt / WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS) *
+    WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS
+  );
+}
 
 /**
  * Compute the visibility-index keys a workflow should occupy given its
- * current state. Returns a deterministic, sorted list so manifests compare
- * stably across runs.
+ * current state.
  */
 export function deriveWorkflowVisibilityIndexKeys(state: WorkflowState): string[] {
   const keys: string[] = [
     KEYS.workflowVisibilityStatus(state.status, state.id),
     KEYS.workflowVisibilityType(state.type, state.id),
     KEYS.workflowVisibilityCreated(state.createdAt, state.id),
-    KEYS.workflowVisibilityUpdated(state.updatedAt, state.id),
+    KEYS.workflowVisibilityUpdated(workflowVisibilityUpdatedBucket(state.updatedAt), state.id),
   ];
   if (state.executionDeadline !== undefined) {
     keys.push(KEYS.workflowVisibilityDeadline(state.executionDeadline, state.id));
   }
-  return keys.toSorted();
+  return keys;
 }
 
 /**
- * Decode a manifest payload read from storage. Returns `null` for missing or
- * malformed values so callers fall back to the "treat as empty" path — the
- * derived diff still produces the right set of inserts.
- */
-export function decodeWorkflowVisibilityManifest(
-  bytes: Uint8Array | null,
-): WorkflowVisibilityManifest | null {
-  if (!bytes) return null;
-  let payload: unknown;
-  try {
-    payload = decode(bytes);
-  } catch {
-    return null;
-  }
-  if (typeof payload !== 'object' || payload === null) return null;
-  const candidate = payload as { version?: unknown; keys?: unknown };
-  if (typeof candidate.version !== 'number') return null;
-  if (!Array.isArray(candidate.keys)) return null;
-  const keys: string[] = [];
-  for (const entry of candidate.keys) {
-    if (typeof entry !== 'string') return null;
-    keys.push(entry);
-  }
-  return { version: candidate.version, keys };
-}
-
-/**
- * Result of {@link buildWorkflowVisibilityIndexOperations}. `nextManifestKeys`
- * is `null` when the workflow is being removed (delete manifest + all keys).
- */
-export type WorkflowVisibilityIndexUpdate = {
-  batchOps: BatchOperation[];
-  nextManifestKeys: string[] | null;
-};
-
-/**
- * Build the batch operations required to transition a workflow's visibility
- * indexes from `currentManifest` (whatever the storage currently records) to
- * the keys derived from `nextState`. Pass `nextState = null` to drop the
- * workflow's index footprint entirely.
+ * Build the batch operations that move a workflow's visibility-index rows
+ * from the keys derived from `previousState` to the keys derived from
+ * `nextState`. Pass `previousState = null` for a workflow that has no rows
+ * yet (a create, or a backfill of an unindexed record) and `nextState = null`
+ * to drop the workflow's index footprint entirely.
  *
- * The caller is responsible for appending the returned `batchOps` to its own
- * write batch so storage commits the index update atomically with the state
- * write it accompanies.
- */
-export function buildWorkflowVisibilityIndexOperations(
-  workflowId: string,
-  currentManifest: WorkflowVisibilityManifest | null,
-  nextState: WorkflowState | null,
-): WorkflowVisibilityIndexUpdate {
-  return buildWorkflowVisibilityIndexOperationsInternal(
-    workflowId,
-    currentManifest?.keys ?? [],
-    currentManifest !== null,
-    nextState,
-  );
-}
-
-/**
- * Variant of {@link buildWorkflowVisibilityIndexOperations} that derives the
- * previous index keys directly from `previousState` instead of from a stored
- * manifest. Use this on every runtime state-transition write — it avoids an
- * extra storage round-trip per write and is always correct because the index
- * is a deterministic function of state.
- *
- * The manifest-based variant remains the right choice for backfill, which
- * may need to delete rows produced by a different schema version.
+ * The caller appends the returned operations to its own write batch so
+ * storage commits the index update atomically with the state write it
+ * accompanies.
  */
 export function buildWorkflowVisibilityIndexTransition(
-  workflowId: string,
   previousState: WorkflowState | null,
   nextState: WorkflowState | null,
-): WorkflowVisibilityIndexUpdate {
+): BatchOperation[] {
   const previousKeys = previousState ? deriveWorkflowVisibilityIndexKeys(previousState) : [];
-  const hadManifest = previousState !== null;
-  return buildWorkflowVisibilityIndexOperationsInternal(
-    workflowId,
-    previousKeys,
-    hadManifest,
-    nextState,
-  );
-}
-
-function buildWorkflowVisibilityIndexOperationsInternal(
-  workflowId: string,
-  previousKeys: readonly string[],
-  hadPriorManifest: boolean,
-  nextState: WorkflowState | null,
-): WorkflowVisibilityIndexUpdate {
-  const manifestKey = KEYS.workflowVisibilityManifest(workflowId);
-
-  if (nextState === null) {
-    const batchOps: BatchOperation[] = [];
-    for (const key of previousKeys) {
-      batchOps.push({ type: 'delete', key });
-    }
-    if (hadPriorManifest) {
-      batchOps.push({ type: 'delete', key: manifestKey });
-    }
-    return { batchOps, nextManifestKeys: null };
-  }
-
-  const nextKeys = deriveWorkflowVisibilityIndexKeys(nextState);
-  const previousSet = new Set(previousKeys);
-  const nextSet = new Set(nextKeys);
-
-  const batchOps: BatchOperation[] = [];
+  const nextKeys = nextState ? deriveWorkflowVisibilityIndexKeys(nextState) : [];
+  const operations: BatchOperation[] = [];
   for (const key of previousKeys) {
-    if (!nextSet.has(key)) batchOps.push({ type: 'delete', key });
+    if (!nextKeys.includes(key)) operations.push({ type: 'delete', key });
   }
   for (const key of nextKeys) {
-    if (!previousSet.has(key)) {
-      batchOps.push({ type: 'put', key, value: EMPTY_INDEX_VALUE });
+    if (!previousKeys.includes(key)) {
+      operations.push({ type: 'put', key, value: EMPTY_INDEX_VALUE });
     }
   }
-  // Always rewrite the manifest — even when keys are unchanged, the version
-  // field gives backfill an unambiguous "managed by current schema" marker.
-  const manifestPayload: WorkflowVisibilityManifest = {
-    version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-    keys: nextKeys,
-  };
-  batchOps.push({ type: 'put', key: manifestKey, value: encode(manifestPayload) });
-  return { batchOps, nextManifestKeys: nextKeys };
+  return operations;
 }
 
 /**
@@ -214,8 +125,8 @@ function buildWorkflowVisibilityIndexOperationsInternal(
 const EMPTY_INDEX_VALUE = new Uint8Array(0);
 
 /**
- * Watermark recorded by the backfill once every workflow has a manifest at
- * the current schema version. `engine.list()` and `engine.aggregate()` only
+ * Watermark recorded by the backfill once every workflow is indexed at the
+ * current layout version. `engine.list()` and `engine.aggregate()` only
  * consult the new `wf-idx-*` rows when the watermark is `current`.
  */
 export type WorkflowVisibilityWatermark = 'current' | 'stale';

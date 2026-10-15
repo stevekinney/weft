@@ -39,7 +39,7 @@ export function createLaunchAdoption(
   let adopted = false;
   return {
     adopt(checkpoint, serialized, run) {
-      adoptLaunchCheckpoint(internals, workflowId, checkpoint, serialized);
+      adoptLaunchCheckpoint(internals, workflowId, checkpoint, serialized, false);
       adopted = true;
       installRunTransientState(internals, workflowId, run);
     },

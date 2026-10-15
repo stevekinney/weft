@@ -26,6 +26,10 @@ import { getReviewRestBinding } from './get-review.ts';
 import { getScheduleRestBinding } from './get-schedule.ts';
 import { getStreamChunksRestBinding } from './get-stream-chunks.ts';
 import { getSystemLeaseRestBinding } from './get-system-lease.ts';
+import {
+  getTaskDeadLetterRestBinding,
+  getTaskResultDeliveriesRestBinding,
+} from './get-task-deliveries.ts';
 import { getTaskDetailRestBinding } from './get-task-detail.ts';
 import { getTaskDiagnosticsRestBinding } from './get-task-diagnostics.ts';
 import { getUpdateResultRestBinding } from './get-update-result.ts';
@@ -150,6 +154,8 @@ export const STATIC_REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
   getTaskDetailRestBinding,
+  getTaskResultDeliveriesRestBinding,
+  getTaskDeadLetterRestBinding,
   // Operation-catalog-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,

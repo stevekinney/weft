@@ -25,7 +25,13 @@ describe('the root entry and the testing barrel', () => {
   test('the root does not export the subprocess engine, which the testing subpath keeps', () => {
     const rootExports = root as Record<string, unknown>;
     const testingExports = testing as Record<string, unknown>;
-    for (const name of ['spawnServerSubprocess', 'withSubprocessServer', 'killAndReboot']) {
+    for (const name of [
+      'spawnServerSubprocess',
+      'withSubprocessServer',
+      'killAndReboot',
+      // COR-1365: running a conformance target spawns the worker under test.
+      'createConformanceTargets',
+    ]) {
       expect(rootExports[name], name).toBeUndefined();
       expect(typeof testingExports[name], name).toBe('function');
     }

@@ -9,9 +9,9 @@ import {
   bulkMutateWorkflowTags,
   cleanupAttributeIndex,
   mutateWorkflowTags,
-  updateWorkflowState,
 } from './attributes-tags.ts';
 import { decodeEpoch, encodeEpoch } from './workflow-claim-codec.ts';
+import { updateWorkflowState } from './workflow-state-update.ts';
 
 function createWorkflowState(
   workflowId: string,

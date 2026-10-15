@@ -114,6 +114,56 @@ engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
 
 **Retention.** Attempt records follow the same task-level retention as the ledger record they belong to: `serve({ taskRetentionWindowMs })` reaps an operation's ENTIRE attempt history in the same bounded delete as its adopted terminal ledger record—never independently, and never partially. There is no separate per-attempt retention setting. An unadopted terminal record's attempt history is retained for exactly as long as the terminal record itself is (see "Adoption and retention" below).
 
+## Result delivery history
+
+An attempt's `disposition` above is what the ledger decided. It does not say what each delivery of that attempt's result was told on the wire. A worker that lost its `taskResultAck` and resent the same result has two deliveries, the first acknowledged `applied` and the second `duplicate`, and one `resolved` attempt. Read the deliveries through `weft.tasks.deliveries` (`GET /api/v1/tasks/detail/:operationId/deliveries`, scope `system:read`):
+
+```ts
+type TaskResultDelivery = {
+  attempt?: number; // the matching attempt; absent for a token the ledger never issued
+  attemptTokenDigest: string; // sha256Hex(attemptToken)—never the raw token
+  transport: 'webSocket' | 'longPoll';
+  workerId?: string;
+  submittedStatus: 'completed' | 'failed' | 'cancelled';
+  receivedAt: number; // epoch ms
+} & (
+  | {
+      outcome: 'acknowledged';
+      disposition: 'applied' | 'duplicate' | 'dead-lettered';
+      oversizedPayload?: true; // the payload was too large; a synthesized failure was applied instead
+    }
+  | {
+      outcome: 'rejected'; // a correlated protocolError (WebSocket) or 403 (long-poll)
+      rejectionCode:
+        | 'stale-attempt'
+        | 'worker-mismatch'
+        | 'attempt-token-mismatch'
+        | 'queue-mismatch'
+        | 'revision-mismatch'
+        | 'conflicting-content'
+        | 'commit-rejected';
+      reason: string; // WebSocket: the protocolError text the worker received; long-poll: server-composed (see below); raw token redacted
+    }
+);
+```
+
+The response wraps the entries, oldest first, as `{ operationId, deliveries, historyLimit, droppedCount }`. The server keeps the most recent 32 deliveries per operation. `droppedCount` counts older entries it no longer holds, so `0` means the history is complete. A submission for an operation with no ledger record is never recorded. The `operationId` comes from the worker, and recording it would let any worker create storage for arbitrary identifiers. Delivery history follows the same retention as attempt history: it is deleted in the same batch as its ledger record, by retention purge or by clearing a dead letter. Recording never changes the answer a worker receives: a storage failure is logged and dropped, and the response is the same either way. The two transports differ in when the entry is written. On WebSocket it is written after the answer is sent, so the acknowledgement is not delayed, and a read made at the same moment may not show the entry yet. On long-poll it is written before the response is returned, so the `200` or `403` waits for the write, which can take up to three compare-and-swap rounds of storage I/O. The reason for that choice is that a long-poll worker or operator who reads the history after the response arrives finds the entry for it, unless the write failed and was logged.
+
+The `reason` text is also transport-specific. On WebSocket it is the `protocolError` message the worker received. A long-poll `403` body carries only `{ error: 'Forbidden', operationId, attemptToken, reason? }`, where `reason` is the bare code. The recorded long-poll `reason` is therefore composed by the server, for example `taskResult for operation "…" rejected — stale-attempt`, and the worker never sees that text.
+
+Every delivery except a first-time `applied` also fires `task:result-delivery` (`TaskResultDeliveryEvent`). That covers duplicates, dead-lettered acknowledgements, and rejections. A result that dead-letters on its first delivery therefore fires both `task:dead-lettered`, for the ledger's decision, and `task:result-delivery`, for the acknowledgement the worker received. The event is client-visible, so fleet and workflow event subscribers see it live. A first-time `applied` delivery does not fire it, because every remote activity produces one and the activity's own completion already reports it.
+
+### Dead-lettered result values
+
+`weft.tasks.get` returns only a dead-lettered attempt's `resultDigest`. A read surface shows which result won without sending the payload to everyone who can read task state. Clearing a dead letter, or recovering its result by hand, needs the value itself. `weft.tasks.deadletters.get` (`GET /api/v1/tasks/detail/:operationId/dead-letter?maxBytes=`) returns it under a stricter access model:
+
+- **Scope `system:admin`.** This is the scope that may clear the dead letter. Whoever may destroy the retained value may read it first, and `system:read` is not enough.
+- **The value is not redacted, and nothing else is exposed.** The server cannot know the shape of an activity's return value, so no field-level redaction rule could be correct. The scope is the control. The raw attempt token, task input, and headers are never returned; `attemptTokenDigest` identifies the attempt.
+- **Size-limited, never truncated.** The value is returned inline up to `maxBytes`: 64 KiB by default, 1 MiB at most. A larger value comes back as `{ kind: 'omitted', reason: 'exceeds-max-bytes', serializedBytes, maxBytes }`, and the caller can retry with a higher limit. A truncated value would look like the real one, so the server never returns one.
+- **Not exposed to MCP.**
+
+The `payload` field is `{ kind: 'value', value, serializedBytes }`, or `{ kind: 'absent' }` when the dead letter retained no value. That happens in two cases. A `failed` result has no value, and its `error` text is returned alongside. A `completed` result whose value is `undefined`, such as an activity that returns nothing, also has no value; its `pendingStatus` is `completed` and it has no `error`. Read `pendingStatus` to tell the two apart. A task that is not dead-lettered answers `NotFound`.
+
 ## Reading a result
 
 `server.getTaskResult(operationId)` returns a public projection of the ledger. It deliberately excludes worker session and attempt credentials.

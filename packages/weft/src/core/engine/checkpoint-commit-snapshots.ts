@@ -1,6 +1,7 @@
 import type { Checkpoint } from '../types.ts';
 import {
   beginExecutionAttempt,
+  captureExecutionAttemptIdentity,
   currentExecutionAttempt,
   retireAllExecutionAttempts,
   retireExecutionAttempt,
@@ -63,10 +64,13 @@ export function adoptLaunchCheckpoint(
   workflowId: string,
   checkpoint: Checkpoint,
   serialized?: Uint8Array,
+  captureIdentity = true,
 ): void {
   if (internals.disposed) return;
   internals.checkpoints.set(workflowId, checkpoint);
   beginExecutionAttempt(internals, workflowId, checkpoint.workflowExecutionToken);
+  // A start passes `false`: its create batch is the identity, recorded when it commits.
+  if (captureIdentity) captureExecutionAttemptIdentity(internals, workflowId);
   if (serialized !== undefined) rememberCommittedCheckpointBytes(internals, workflowId, serialized);
 }
 

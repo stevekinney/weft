@@ -1,18 +1,4 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import * as fileSystem from 'node:fs';
-import {
-  appendFileSync,
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  truncateSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { waitForParityCondition as waitFor } from '../core/parity/real-timer-wait.test-support.ts';
 import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 
@@ -43,11 +29,6 @@ import { METRICS } from '../observability/metrics.ts';
 import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import {
-  outcomeOf,
-  rethrow,
-  SCENARIO_HANG_GUARD_MILLISECONDS,
-} from '../testing/module-scope-scenario.test-support.ts';
 import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import type { WorkerManifest } from '../worker/manifest/index.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
@@ -57,11 +38,10 @@ import {
   testWorkerManifest,
 } from '../worker/registry-fixtures.test-support.ts';
 import { resetPublicOriginWarningForTesting } from './api-catalog.ts';
-import { createDashboardAssetRoute, resolveDashboardAssets } from './dashboard-assets.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import * as handlerModule from './handler.ts';
 import type { ServeOptions, WeftServer } from './index.ts';
-import { DASHBOARD_PAGE_ROUTES, serve, wireEventBroadcasting } from './index.ts';
+import { serve, wireEventBroadcasting } from './index.ts';
 import { anonymousPrincipal } from './principal.ts';
 import { API_PREFIX, DIRECT_HTTP_ROUTES } from './route-model.ts';
 import { useManualTaskReconciliationForTesting } from './runtime/task-reconciliation.ts';
@@ -99,25 +79,6 @@ async function flush(): Promise<void> {
 
 function serveTestServer(options: ServeOptions): WeftServer {
   return serve({ workerShutdownTimeoutMs: TEST_WORKER_SHUTDOWN_TIMEOUT_MS, ...options });
-}
-
-function supportsSymlinks(directory: string): boolean {
-  const probePath = join(directory, '.symlink-probe');
-  try {
-    symlinkSync(directory, probePath);
-    rmSync(probePath);
-    return true;
-  } catch (error) {
-    const errorCode =
-      typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-    if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOTSUP') {
-      console.warn(
-        `Skipping symlink asset test: platform rejected symlink creation (${errorCode})`,
-      );
-      return false;
-    }
-    throw error;
-  }
 }
 
 function createReconnectTestEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -427,29 +388,6 @@ function makeLeasedLedgerRecord(overrides: Partial<RemoteTaskLeased> = {}): Remo
 // Tests
 // ---------------------------------------------------------------------------
 
-// The FIFO scenario below runs the native `mkfifo` binary, so it runs here at module scope, off
-// Bun's five-second per-test clock; its test rethrows the outcome.
-
-const scenario1 = await outcomeOf(async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-  const fifoPath = join(directory, 'asset.fifo');
-  try {
-    try {
-      execFileSync('mkfifo', [fifoPath], { timeout: SCENARIO_HANG_GUARD_MILLISECONDS });
-    } catch (error) {
-      const errorCode =
-        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-      if (errorCode === 'ENOENT' || errorCode === 'EACCES' || errorCode === 'EPERM') return;
-      throw error;
-    }
-    const assets = resolveDashboardAssets({ prefix: '/assets', directory }, DASHBOARD_PAGE_ROUTES);
-    const route = createDashboardAssetRoute(assets);
-    expect(route.GET!(new Request('http://weft.test/assets/asset.fifo')).status).toBe(404);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 describe('serve', () => {
   let engine: Engine;
   let server: WeftServer;
@@ -649,827 +587,135 @@ describe('serve', () => {
     expect(body.status).toBe('ok');
   });
 
-  const dashboardBody = '<html><body>dashboard</body></html>';
-  const makeDashboard = (): Response =>
-    new Response(dashboardBody, { headers: { 'Content-Type': 'text/html' } });
+  const shellBody = '<html><body>shell</body></html>';
+  const makeShell = (): Response =>
+    new Response(shellBody, { headers: { 'Content-Type': 'text/html' } });
 
-  it('serves a supplied dashboard shell at the origin root', async () => {
-    engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
-
-    const rootResponse = await fetch(`${server.url}/`);
-    expect(rootResponse.status).toBe(200);
-    expect(await rootResponse.text()).toContain('dashboard');
-  });
-
-  it('serves a supplied dashboard shell at every supported page route', async () => {
+  it('serves every supplied route and still serves the API and discovery endpoints', async () => {
     engine = createEngine();
     server = serveTestServer({
       engine,
       port: 0,
-      dashboard: makeDashboard(),
       publicOrigin: 'http://discovery.test',
+      routes: {
+        '/': makeShell(),
+        '/workflows/*': makeShell(),
+        '/reports/:id': (request) => Response.json({ report: request.params['id'] }),
+        '/uploads': { POST: () => new Response('accepted', { status: 202 }) },
+      },
     });
 
-    expect(DASHBOARD_PAGE_ROUTES).toEqual([
-      '/',
-      '/workflows',
-      '/workflows/*',
-      '/reviews',
-      '/workers',
-      '/schedules',
-      '/storage',
-      '/system',
-    ]);
+    const root = await fetch(`${server.url}/`);
+    expect(root.status).toBe(200);
+    expect(await root.text()).toBe(shellBody);
 
-    // Enumerating DASHBOARD_PAGE_ROUTES pins the server-owned mount list used by
-    // external dashboard packages.
-    for (const route of DASHBOARD_PAGE_ROUTES) {
-      // `/workflows/*` is a deep-link pattern; exercise it with a concrete id.
-      const path = route.endsWith('/*') ? `${route.slice(0, -2)}/abc123` : route;
-      const response = await fetch(`${server.url}${path}`);
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain('dashboard');
-    }
+    const deepLink = await fetch(`${server.url}/workflows/abc123`);
+    expect(deepLink.status).toBe(200);
+    expect(await deepLink.text()).toBe(shellBody);
+
+    const report = await fetch(`${server.url}/reports/quarterly`);
+    expect(report.status).toBe(200);
+    expect(await report.json()).toEqual({ report: 'quarterly' });
+
+    const upload = await fetch(`${server.url}/uploads`, { method: 'POST' });
+    expect(upload.status).toBe(202);
+    expect(await upload.text()).toBe('accepted');
 
     for (const path of [
-      '/v1/health',
-      '/api/v1/health',
-      '/openapi.json',
-      '/openrpc.json',
-      '/asyncapi.json',
-      '/.well-known/mcp.json',
+      ...DIRECT_HTTP_ROUTES.map((route) => route.path),
+      `${API_PREFIX}/v1/health`,
+      `${API_PREFIX}/v1/workflows`,
+      '/v1/workflows',
     ]) {
       const response = await fetch(`${server.url}${path}`);
-      expect(response.status).toBe(200);
-      expect(await response.text()).not.toContain('dashboard');
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).not.toContain(shellBody);
     }
+
+    const created = await fetch(`${server.url}${API_PREFIX}/v1/workflows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'echo', input: 'hello' }),
+    });
+    expect(created.status).toBe(201);
+
+    // Paths no supplied route matches still reach Weft's own fallback.
+    const unmatched = await fetch(`${server.url}/nonsense`);
+    expect(unmatched.status).toBe(404);
   });
 
-  it('is headless by default on every dashboard page route', async () => {
+  it('serves no root routes when none are supplied', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
-    for (const route of DASHBOARD_PAGE_ROUTES) {
-      const path = route.endsWith('/*') ? `${route.slice(0, -2)}/abc123` : route;
+    for (const path of ['/', '/workflows', '/workflows/abc123']) {
       const response = await fetch(`${server.url}${path}`);
       expect(response.status).toBe(404);
     }
-
-    const canonicalHealthResponse = await fetch(`${server.url}/v1/health`);
-    expect(canonicalHealthResponse.status).toBe(200);
-
-    const prefixedHealthResponse = await fetch(`${server.url}/api/v1/health`);
-    expect(prefixedHealthResponse.status).toBe(200);
-  });
-
-  it('treats a null dashboard option from JavaScript callers as headless', async () => {
-    engine = createEngine();
-    const javascriptOptions = { engine, port: 0, dashboard: null } as unknown as Parameters<
-      typeof serve
-    >[0];
-    server = serveTestServer(javascriptOptions);
-
-    const rootResponse = await fetch(`${server.url}/`);
-    expect(rootResponse.status).toBe(404);
 
     const healthResponse = await fetch(`${server.url}/v1/health`);
     expect(healthResponse.status).toBe(200);
   });
 
-  it('does not serve the dashboard for unknown root paths (no blanket catch-all)', async () => {
+  it('rejects routes that overlap Weft paths before binding a port', () => {
+    const rejectedKeys = [
+      '/api/x',
+      '/v1/health',
+      '/openapi.json',
+      '/.well-known/mcp.json',
+      API_PREFIX,
+      '/v1',
+      '/*',
+      '/api*',
+      '/api/*',
+      '/v1/:id',
+      '/:segment',
+      '/.well-known/*',
+      '/open*',
+      '/mcp',
+      '/jsonrpc',
+      '/json*',
+    ];
+    const bunServe = spyOn(Bun, 'serve');
+    try {
+      for (const routeKey of rejectedKeys) {
+        const routeEngine = createEngine();
+        try {
+          expect(() =>
+            serve({ engine: routeEngine, port: 0, routes: { [routeKey]: makeShell() } }),
+          ).toThrow(`"${routeKey}" overlaps /api, /v1, /mcp, /jsonrpc, or a direct route`);
+        } finally {
+          routeEngine[Symbol.dispose]();
+        }
+      }
+      expect(bunServe).not.toHaveBeenCalled();
+    } finally {
+      bunServe.mockRestore();
+    }
+  });
+
+  it('accepts routes beside the reserved paths', async () => {
     engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({
+      engine,
+      port: 0,
+      routes: {
+        '/workflows/*': makeShell(),
+        '/apis': makeShell(),
+        '/v1beta/:id': makeShell(),
+        '/jsonrpc-explorer': makeShell(),
+        '/.well-known/security.txt': new Response('Contact: mailto:security@example.com'),
+      },
+    });
 
-    const response = await fetch(`${server.url}/nonsense`);
-    expect(response.status).toBe(404);
-  });
-
-  it('serves a dashboard asset directory through explicit GET and HEAD routes', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      mkdirSync(join(directory, 'images'));
-      writeFileSync(join(directory, 'app-abc123.js'), 'console.log("dashboard");');
-      writeFileSync(join(directory, 'styles-def456.css'), 'body { color: red; }');
-      writeFileSync(join(directory, 'images', 'logo.svg'), '<svg></svg>');
-      writeFileSync(join(directory, '%2e%2e.txt'), 'encoded filename');
-      engine = createEngine();
-      server = serveTestServer({
-        engine,
-        port: 0,
-        dashboard: makeDashboard(),
-        publicOrigin: 'http://discovery.test',
-        dashboardAssets: { prefix: '/assets', directory },
-      });
-
-      const javascript = await fetch(`${server.url}/assets/app-abc123.js`);
-      expect(javascript.status).toBe(200);
-      expect(javascript.headers.get('content-type')).toContain('text/javascript');
-      expect(await javascript.text()).toContain('dashboard');
-
-      const stylesheetHead = await fetch(`${server.url}/assets/styles-def456.css`, {
-        method: 'HEAD',
-      });
-      expect(stylesheetHead.status).toBe(200);
-      expect(await stylesheetHead.text()).toBe('');
-
-      const stylesheet = await fetch(`${server.url}/assets/styles-def456.css`);
-      expect(stylesheet.status).toBe(200);
-      expect(stylesheet.headers.get('content-type')).toContain('text/css');
-
-      const image = await fetch(`${server.url}/assets/images/logo.svg`);
-      expect(image.status).toBe(200);
-      expect(image.headers.get('content-type')).toContain('image/svg+xml');
-
-      const missing = await fetch(`${server.url}/assets/missing-999.js`);
-      expect(missing.status).toBe(404);
-      expect(await missing.text()).not.toContain(directory);
-
-      const malformedEncoding = await fetch(`${server.url}/assets/%`);
-      expect(malformedEncoding.status).toBe(404);
-
-      const emptyAssetPath = join(directory, 'empty.txt');
-      writeFileSync(emptyAssetPath, '');
-      const emptyAsset = await fetch(`${server.url}/assets/empty.txt`);
-      expect(emptyAsset.status).toBe(200);
-      expect(await emptyAsset.text()).toBe('');
-
-      const traversal = await fetch(`${server.url}/assets/%2e%2e/%2e%2e/secret.txt`);
-      expect(traversal.status).toBe(404);
-      expect(await traversal.text()).not.toContain(directory);
-
-      const repeatedSeparator = await fetch(`${server.url}/assets//app-abc123.js`);
-      expect(repeatedSeparator.status).toBe(404);
-
-      const post = await fetch(`${server.url}/assets/app-abc123.js`, { method: 'POST' });
-      expect(post.status).toBe(404);
-      expect(await post.text()).not.toContain('dashboard');
-
-      for (const path of ['/v1/health', '/api/v1/health', '/openapi.json']) {
-        const response = await fetch(`${server.url}${path}`);
-        expect(response.status).toBe(200);
-        expect(await response.text()).not.toContain('dashboard');
-      }
-
-      for (const path of ['/.well-known/mcp.json', '/.well-known/api-catalog']) {
-        const response = await fetch(`${server.url}${path}`);
-        expect(response.status).toBe(200);
-        expect(await response.text()).not.toContain('dashboard');
-      }
-
-      const encodedFilename = await fetch(`${server.url}/assets/%252e%252e.txt`);
-      expect(encodedFilename.status).toBe(200);
-      expect(await encodedFilename.text()).toBe('encoded filename');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
+    for (const path of ['/workflows/abc123', '/apis', '/v1beta/7', '/jsonrpc-explorer']) {
+      const response = await fetch(`${server.url}${path}`);
+      expect(response.status, path).toBe(200);
+      expect(await response.text(), path).toBe(shellBody);
     }
+    const securityText = await fetch(`${server.url}/.well-known/security.txt`);
+    expect(await securityText.text()).toContain('security@example.com');
   });
-
-  it('validates dashboard asset prefixes synchronously before binding', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      const directRoutePrefixes = DIRECT_HTTP_ROUTES.flatMap(({ path }) => {
-        const parent = path.slice(0, path.lastIndexOf('/'));
-        return parent.length > 0 ? [path, parent] : [path];
-      });
-      const dashboardRoutePrefixes = DASHBOARD_PAGE_ROUTES.flatMap((route) => {
-        if (route === '/') return [];
-        if (route.endsWith('/*')) {
-          const base = route.slice(0, -2);
-          return [base, `${base}/assets`];
-        }
-        return [route];
-      });
-      for (const prefix of [
-        API_PREFIX,
-        `${API_PREFIX}/assets`,
-        '/v1',
-        '/v1/assets',
-        ...directRoutePrefixes,
-        ...dashboardRoutePrefixes,
-        '/.well-known',
-        '/assets/',
-        '/assets//',
-        '/assets/.',
-        '/assets/..',
-        '/assets/*',
-        '/assets/%2e%2e',
-        '/asset files',
-        '/café',
-      ]) {
-        const assetEngine = createEngine();
-        expect(() =>
-          serve({
-            engine: assetEngine,
-            port: 0,
-            dashboardAssets: { prefix, directory },
-          }),
-        ).toThrow(
-          prefix === '/asset files' || prefix === '/café' ? /URL serialization/ : undefined,
-        );
-        assetEngine[Symbol.dispose]();
-      }
-
-      const filePath = join(directory, 'not-a-directory.txt');
-      writeFileSync(filePath, 'file');
-      const fileEngine = createEngine();
-      expect(() =>
-        serve({
-          engine: fileEngine,
-          port: 0,
-          dashboardAssets: { prefix: '/assets', directory: filePath },
-        }),
-      ).toThrow();
-      fileEngine[Symbol.dispose]();
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects malformed dashboard asset configuration before filesystem access', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      for (const value of [null, [], 'assets', 42]) {
-        expect(() => resolveDashboardAssets(value, DASHBOARD_PAGE_ROUTES)).toThrow(
-          'dashboardAssets must be an object with prefix and directory strings',
-        );
-      }
-
-      expect(() => resolveDashboardAssets({ prefix: '/assets' }, DASHBOARD_PAGE_ROUTES)).toThrow(
-        'dashboardAssets.prefix and dashboardAssets.directory must be strings',
-      );
-      expect(() => resolveDashboardAssets({ directory }, DASHBOARD_PAGE_ROUTES)).toThrow(
-        'dashboardAssets.prefix and dashboardAssets.directory must be strings',
-      );
-      expect(() =>
-        resolveDashboardAssets({ prefix: 42, directory }, DASHBOARD_PAGE_ROUTES),
-      ).toThrow('dashboardAssets.prefix and dashboardAssets.directory must be strings');
-      expect(() =>
-        resolveDashboardAssets({ prefix: '/assets', directory: 42 }, DASHBOARD_PAGE_ROUTES),
-      ).toThrow('dashboardAssets.prefix and dashboardAssets.directory must be strings');
-      expect(() =>
-        resolveDashboardAssets(
-          { prefix: '/assets', directory: join(directory, 'missing') },
-          DASHBOARD_PAGE_ROUTES,
-        ),
-      ).toThrow(`dashboardAssets.directory does not exist: ${join(directory, 'missing')}`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('returns not found for an aborted dashboard asset request', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets);
-      const controller = new AbortController();
-      controller.abort();
-
-      const emptyPathResponse = route.GET!(new Request('http://weft.test/assets/'));
-      expect(emptyPathResponse.status).toBe(404);
-
-      const response = route.GET!(
-        new Request('http://weft.test/assets/app.js', { signal: controller.signal }),
-      );
-      expect(response.status).toBe(404);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('closes the descriptor when constructing an asset response fails', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const originalResponse = globalThis.Response;
-    const originalCloseSync = fileSystem.closeSync;
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      let closeCount = 0;
-      const route = createDashboardAssetRoute(assets, {
-        ...fileSystem,
-        closeSync: (descriptor: number) => {
-          closeCount += 1;
-          return originalCloseSync(descriptor);
-        },
-        read: async (descriptor, buffer, offset, length, position) =>
-          await new Promise<number>((resolve, reject) => {
-            fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-              if (error) reject(error);
-              else resolve(bytesRead);
-            });
-          }),
-      });
-      globalThis.Response = class extends originalResponse {
-        constructor(body?: BodyInit | null, init?: ResponseInit) {
-          if (body instanceof ReadableStream) {
-            throw new Error('response construction failed');
-          }
-          super(body, init);
-        }
-      };
-
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-      expect(response.status).toBe(404);
-      expect(closeCount).toBe(1);
-    } finally {
-      globalThis.Response = originalResponse;
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('does not serve a symlink that escapes the dashboard asset directory', async () => {
-    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const directory = join(parentDirectory, 'assets');
-    const outsideFile = join(parentDirectory, 'outside.txt');
-    try {
-      mkdirSync(directory);
-      writeFileSync(outsideFile, 'outside asset');
-      try {
-        symlinkSync(outsideFile, join(directory, 'outside.txt'));
-        symlinkSync(join(directory, 'missing.txt'), join(directory, 'broken.txt'));
-      } catch (error) {
-        const errorCode =
-          typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-        if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOTSUP') {
-          console.warn(
-            `Skipping symlink asset test: platform rejected symlink creation (${errorCode})`,
-          );
-          return;
-        }
-        throw error;
-      }
-
-      engine = createEngine();
-      server = serveTestServer({
-        engine,
-        port: 0,
-        dashboardAssets: { prefix: '/assets', directory },
-      });
-
-      const response = await fetch(`${server.url}/assets/outside.txt`);
-      expect(response.status).toBe(404);
-      expect(await response.text()).not.toContain(outsideFile);
-
-      const brokenLinkResponse = await fetch(`${server.url}/assets/broken.txt`);
-      expect(brokenLinkResponse.status).toBe(404);
-      expect(await brokenLinkResponse.text()).not.toContain(directory);
-    } finally {
-      rmSync(parentDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('does not serve a symlink installed after canonical validation', async () => {
-    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const directory = join(parentDirectory, 'assets');
-    const assetPath = join(directory, 'app.js');
-    const outsideFile = join(parentDirectory, 'outside.js');
-    try {
-      mkdirSync(directory);
-      writeFileSync(assetPath, 'validated asset');
-      writeFileSync(outsideFile, 'replacement asset');
-      if (!supportsSymlinks(parentDirectory)) return;
-      const originalOpenSync = fileSystem.openSync;
-      let replaced = false;
-      let replacementError: unknown;
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async () => 0,
-        openSync: (
-          path: Parameters<typeof fileSystem.openSync>[0],
-          flags: Parameters<typeof fileSystem.openSync>[1],
-          mode?: Parameters<typeof fileSystem.openSync>[2],
-        ) => {
-          if (String(path).endsWith(join('app.js')) && !replaced) {
-            try {
-              rmSync(assetPath);
-              symlinkSync(outsideFile, assetPath);
-            } catch (error) {
-              replacementError = error;
-              throw error;
-            }
-            replaced = true;
-          }
-          return originalOpenSync(path, flags, mode);
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-      if (replacementError !== undefined) throw replacementError;
-      expect(response.status).toBe(404);
-      expect(await response.text()).not.toContain('replacement asset');
-    } finally {
-      rmSync(parentDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('does not serve an asset after an ancestor directory is replaced', () => {
-    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const directory = join(parentDirectory, 'assets');
-    const nestedDirectory = join(directory, 'nested');
-    const outsideDirectory = join(parentDirectory, 'outside');
-    const outsideFile = join(outsideDirectory, 'app.js');
-    try {
-      mkdirSync(nestedDirectory, { recursive: true });
-      mkdirSync(outsideDirectory);
-      writeFileSync(join(nestedDirectory, 'app.js'), 'validated asset');
-      writeFileSync(outsideFile, 'replacement asset');
-      if (!supportsSymlinks(parentDirectory)) return;
-      const originalOpenSync = fileSystem.openSync;
-      let replaced = false;
-      let replacementError: unknown;
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async () => 0,
-        openSync: (
-          path: Parameters<typeof fileSystem.openSync>[0],
-          flags: Parameters<typeof fileSystem.openSync>[1],
-          mode?: Parameters<typeof fileSystem.openSync>[2],
-        ) => {
-          if (String(path).endsWith(join('nested', 'app.js')) && !replaced) {
-            try {
-              rmSync(nestedDirectory, { recursive: true });
-              symlinkSync(outsideDirectory, nestedDirectory);
-            } catch (error) {
-              replacementError = error;
-              throw error;
-            }
-            replaced = true;
-          }
-          return originalOpenSync(path, flags, mode);
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/nested/app.js'));
-      if (replacementError !== undefined) throw replacementError;
-      expect(response.status).toBe(404);
-    } finally {
-      rmSync(parentDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('does not serve an outside descriptor when an ancestor is restored after opening', async () => {
-    const parentDirectory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const directory = join(parentDirectory, 'assets');
-    const nestedDirectory = join(directory, 'nested');
-    const savedDirectory = join(directory, 'saved-nested');
-    const outsideDirectory = join(parentDirectory, 'outside');
-    try {
-      mkdirSync(nestedDirectory, { recursive: true });
-      mkdirSync(outsideDirectory);
-      writeFileSync(join(nestedDirectory, 'app.js'), 'validated asset');
-      writeFileSync(join(outsideDirectory, 'app.js'), 'outside asset');
-      if (!supportsSymlinks(parentDirectory)) return;
-
-      const originalStatSync = fileSystem.statSync;
-      const originalOpenSync = fileSystem.openSync;
-      let ancestorSwapped = false;
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async () => 0,
-        realpathSync: (path: Parameters<typeof fileSystem.realpathSync>[0]) => {
-          const value = String(path);
-          if (value.startsWith('/proc/self/fd/') || value.startsWith('/dev/fd/')) {
-            throw new Error('Descriptor path aliases are unavailable');
-          }
-          return fileSystem.realpathSync(path);
-        },
-        statSync: (path: Parameters<typeof fileSystem.statSync>[0]) => {
-          if (String(path).endsWith(join('nested', 'app.js')) && !ancestorSwapped) {
-            renameSync(nestedDirectory, savedDirectory);
-            symlinkSync(outsideDirectory, nestedDirectory);
-            ancestorSwapped = true;
-          }
-          return originalStatSync(path);
-        },
-        openSync: (
-          path: Parameters<typeof fileSystem.openSync>[0],
-          flags: Parameters<typeof fileSystem.openSync>[1],
-          mode?: Parameters<typeof fileSystem.openSync>[2],
-        ) => {
-          const descriptor = originalOpenSync(path, flags, mode);
-          if (String(path).endsWith(join('nested', 'app.js')) && ancestorSwapped) {
-            rmSync(nestedDirectory);
-            renameSync(savedDirectory, nestedDirectory);
-          }
-          return descriptor;
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/nested/app.js'));
-
-      expect(response.status).toBe(404);
-      expect(await response.text()).not.toContain('outside asset');
-    } finally {
-      rmSync(parentDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('serves verified assets when descriptor path aliases are unavailable', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async (
-          descriptor: number,
-          buffer: NodeJS.ArrayBufferView,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) =>
-          await new Promise<number>((resolve, reject) => {
-            fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-              if (error) reject(error);
-              else resolve(bytesRead);
-            });
-          }),
-        realpathSync: (path: Parameters<typeof fileSystem.realpathSync>[0]) => {
-          const value = String(path);
-          if (value.startsWith('/proc/self/fd/') || value.startsWith('/dev/fd/')) {
-            throw new Error('Descriptor path aliases are unavailable');
-          }
-          return fileSystem.realpathSync(path);
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe('dashboard');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('serves verified assets when descriptor aliases resolve to their namespace paths', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async (
-          descriptor: number,
-          buffer: NodeJS.ArrayBufferView,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) =>
-          await new Promise<number>((resolve, reject) => {
-            fileSystem.read(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-              if (error) reject(error);
-              else resolve(bytesRead);
-            });
-          }),
-        realpathSync: (path: Parameters<typeof fileSystem.realpathSync>[0]) => {
-          const value = String(path);
-          if (value.startsWith('/proc/self/fd/')) {
-            throw new Error('Linux descriptor path alias is unavailable');
-          }
-          if (value.startsWith('/dev/fd/')) {
-            return value;
-          }
-          return fileSystem.realpathSync(path);
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe('dashboard');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('streams only the file size verified before reading starts', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const assetPath = join(directory, 'app.js');
-    const originalRead = fileSystem.read;
-    try {
-      writeFileSync(assetPath, 'safe');
-      let appended = false;
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async (
-          descriptor: number,
-          buffer: NodeJS.ArrayBufferView,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) => {
-          if (!appended) {
-            appendFileSync(assetPath, ' outside');
-            appended = true;
-          }
-          return await new Promise<number>((resolve, reject) => {
-            originalRead(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-              if (error) reject(error);
-              else resolve(bytesRead);
-            });
-          });
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-
-      expect(response.headers.get('content-length')).toBe('4');
-      expect(await response.text()).toBe('safe');
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('errors the response stream when an asset is truncated after verification', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const assetPath = join(directory, 'app.js');
-    try {
-      writeFileSync(assetPath, 'dashboard');
-      let truncated = false;
-      const assetFileSystem = {
-        ...fileSystem,
-        read: async () => {
-          if (!truncated) {
-            truncateSync(assetPath, 0);
-            truncated = true;
-          }
-          return 0;
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-
-      expect(response.headers.get('content-length')).toBe('9');
-      expect(await throwingRejectionOf(response.text())).toThrow(
-        'Dashboard asset ended before its verified content length was read.',
-      );
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('waits for an in-flight asset read before closing on cancellation', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const originalCloseSync = fileSystem.closeSync;
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      let closed = 0;
-      let resolveRead!: (bytesRead: number) => void;
-      let markReadStarted!: () => void;
-      const readStarted = new Promise<void>((resolve) => {
-        markReadStarted = resolve;
-      });
-      const pendingRead = new Promise<number>((resolve) => {
-        resolveRead = resolve;
-      });
-      const assetFileSystem = {
-        ...fileSystem,
-        closeSync: (descriptor: number) => {
-          closed += 1;
-          return originalCloseSync(descriptor);
-        },
-        read: async () => {
-          markReadStarted();
-          return await pendingRead;
-        },
-      };
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-      const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-      const reader = response.body!.getReader();
-      const read = reader.read();
-      await readStarted;
-
-      const cancellation = reader.cancel();
-      await Promise.resolve();
-      expect(closed).toBe(0);
-
-      resolveRead(0);
-      await cancellation;
-      await read;
-      expect(closed).toBe(1);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects non-regular dashboard assets without blocking on a FIFO', () => rethrow(scenario1));
-
-  it('closes dashboard asset descriptors for successful, rejected, and cancelled requests', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'weft-dashboard-assets-'));
-    const originalOpenSync = fileSystem.openSync;
-    const originalCloseSync = fileSystem.closeSync;
-    const originalRead = fileSystem.read;
-    try {
-      writeFileSync(join(directory, 'app.js'), 'dashboard');
-      const assets = resolveDashboardAssets(
-        { prefix: '/assets', directory },
-        DASHBOARD_PAGE_ROUTES,
-      );
-      let opened = 0;
-      let closed = 0;
-      let readCount = 0;
-      let readFailure = false;
-      const assetFileSystem = {
-        ...fileSystem,
-        openSync: (
-          path: Parameters<typeof fileSystem.openSync>[0],
-          flags: Parameters<typeof fileSystem.openSync>[1],
-          mode?: Parameters<typeof fileSystem.openSync>[2],
-        ) => {
-          opened += 1;
-          return originalOpenSync(path, flags, mode);
-        },
-        closeSync: (descriptor: number) => {
-          closed += 1;
-          return originalCloseSync(descriptor);
-        },
-        read: async (
-          descriptor: number,
-          buffer: NodeJS.ArrayBufferView,
-          offset: number,
-          length: number,
-          position: number | null,
-        ) => {
-          if (readFailure) throw new Error('asset read failed');
-          readCount += 1;
-          return await new Promise<number>((resolve, reject) => {
-            originalRead(descriptor, buffer, offset, length, position, (error, bytesRead) => {
-              if (error) reject(error);
-              else resolve(bytesRead);
-            });
-          });
-        },
-      };
-      const route = createDashboardAssetRoute(assets, assetFileSystem);
-
-      for (let index = 0; index < 5; index += 1) {
-        const response = route.GET!(new Request('http://weft.test/assets/app.js'));
-        expect(response.status).toBe(200);
-        expect(await response.text()).toBe('dashboard');
-        const readsBeforeHead = readCount;
-        expect(
-          route.HEAD!(new Request('http://weft.test/assets/app.js', { method: 'HEAD' })).status,
-        ).toBe(200);
-        expect(readCount).toBe(readsBeforeHead);
-      }
-      expect(readCount).toBeGreaterThan(0);
-      expect(route.GET!(new Request('http://weft.test/assets/missing.js')).status).toBe(404);
-      readFailure = true;
-      const failedResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
-      expect(failedResponse.status).toBe(200);
-      expect(await throwingRejectionOf(failedResponse.text())).toThrow('asset read failed');
-      readFailure = false;
-      const cancelledResponse = route.GET!(new Request('http://weft.test/assets/app.js'));
-      const reader = cancelledResponse.body!.getReader();
-      await reader.cancel();
-
-      expect(closed).toBe(opened);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it('handles workflow API routes (POST /v1/workflows)', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
@@ -1518,7 +764,11 @@ describe('serve', () => {
 
   it('keeps health and metrics at the origin root and exposes them as /api aliases', async () => {
     engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({
+      engine,
+      port: 0,
+      routes: { '/': makeShell(), '/workflows/*': makeShell() },
+    });
 
     // Canonical root-stable forms.
     const health = await fetch(`${server.url}/v1/health`);
@@ -1551,7 +801,11 @@ describe('serve', () => {
 
   it('returns 404 for bare /api and /api/ (no aliasing of the root)', async () => {
     engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({
+      engine,
+      port: 0,
+      routes: { '/': makeShell(), '/workflows/*': makeShell() },
+    });
 
     const bareApi = await fetch(`${server.url}/api`);
     const bareApiSlash = await fetch(`${server.url}/api/`);
@@ -1561,7 +815,11 @@ describe('serve', () => {
 
   it('does not strip a doubled slash after the /api prefix', async () => {
     engine = createEngine();
-    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({
+      engine,
+      port: 0,
+      routes: { '/': makeShell(), '/workflows/*': makeShell() },
+    });
 
     // `/api//v1/health` must NOT canonicalize to `//v1/health` (which would
     // route surprisingly). Only a clean `/api/<segment>` is stripped, so this

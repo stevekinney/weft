@@ -392,7 +392,7 @@ export function buildForkBatchOperations(
       key: KEYS.checkpoint(workflowId),
       value: serializedCheckpoint,
     },
-    ...visibilityIndexOperations(internals, workflowId, null, state),
+    ...visibilityIndexOperations(internals, null, state),
   ];
 
   if (Object.keys(checkpoint.searchAttributes).length > 0) {

@@ -8,21 +8,11 @@ import {
   validateEncodedValueSize,
 } from '../search-attributes.ts';
 import { assertWorkflowTagCount, coerceStartWorkflowTags } from '../start-workflow-validation.ts';
-import type {
-  BulkTagResult,
-  ListFilter,
-  SearchAttributeValue,
-  WorkflowState,
-  WorkflowStatus,
-} from '../types.ts';
+import type { BulkTagResult, ListFilter, SearchAttributeValue, WorkflowState } from '../types.ts';
 import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workflow-tags.ts';
 import { WorkflowNotFoundError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
-import {
-  commitExternalTerminalWorkflowStateOperations,
-  commitSelfWorkflowStateOperations,
-  runSerializedWorkflowStateWrite,
-} from './storage-io.ts';
+import { runSerializedWorkflowStateWrite } from './storage-io.ts';
 import {
   decodeWorkflowState,
   isTerminalWorkflowStatus,
@@ -36,34 +26,15 @@ import {
 
 const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 
-/**
- * `updateWorkflowState`'s two callers commit very different transitions per
- * ADR 0002: `failWorkflow` is a SELF-transition (this engine finishing its
- * own workflow) while `terminateWorkflow` (cancel/timeout) is an EXTERNAL
- * terminal transition (any engine may commit it, and it rotates the claim
- * epoch under `ownership: 'workflow-lease'`). `category` is a REQUIRED
- * positional parameter rather than an optional options field so a caller
- * cannot silently default into the wrong fencing shape.
- */
-export type WorkflowStateTransitionCategory = 'self' | 'external-terminal';
-
-type WorkflowStateUpdateOptions = {
-  allowedStatuses?: readonly WorkflowStatus[];
-  buildAdditionalOperations?: (previousState: WorkflowState, updatedAt: number) => BatchOperation[];
-  /** Checked with the decoded state after the last read before the commit; `true` skips the write. */
-  skipCommitIf?: (state: WorkflowState) => boolean;
-};
-
-type WorkflowStateUpdateResult = {
-  previousState: WorkflowState;
-  updatedAt: number;
-};
+/** Commits one teardown batch; the default applies it unconditionally. */
+type TeardownBatchCommit = (operations: BatchOperation[]) => Promise<unknown>;
 
 /** Delete a workflow's stored search attributes and their secondary index entries. */
 export async function cleanupAttributeIndex(
   internals: EngineInternals,
   workflowId: string,
   currentAttributes?: Record<string, SearchAttributeValue>,
+  commitBatch: TeardownBatchCommit = (operations) => internals.storage.batch(operations),
 ): Promise<void> {
   if (currentAttributes === undefined) {
     const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
@@ -78,7 +49,7 @@ export async function cleanupAttributeIndex(
   deleteOperations.push({ type: 'delete', key: KEYS.attribute(workflowId) });
 
   if (deleteOperations.length > 0) {
-    await internals.storage.batch(deleteOperations);
+    await commitBatch(deleteOperations);
   }
 }
 
@@ -102,16 +73,16 @@ export function buildRetainedTerminalSearchAttributes(
 
 /** Write retained terminal search attributes and their index entries. */
 export async function writeRetainedTerminalSearchAttributes(
-  internals: EngineInternals,
   workflowId: string,
   attributes: Record<string, SearchAttributeValue>,
+  commitBatch: TeardownBatchCommit,
 ): Promise<void> {
   if (Object.keys(attributes).length === 0) {
     return;
   }
 
   const indexOperations = buildIndexOperations(workflowId, {}, attributes);
-  await internals.storage.batch([
+  await commitBatch([
     { type: 'put', key: KEYS.attribute(workflowId), value: encode(attributes) },
     ...indexOperations,
   ]);
@@ -140,70 +111,6 @@ export function buildTerminalWorkflowIndexOperations(
   }
 
   return operations;
-}
-
-/** Apply a serialized workflow-state update and return the previous state metadata. */
-export async function updateWorkflowState(
-  internals: EngineInternals,
-  workflowId: string,
-  updates: Partial<WorkflowState>,
-  category: WorkflowStateTransitionCategory,
-  options: WorkflowStateUpdateOptions = {},
-): Promise<WorkflowStateUpdateResult | null> {
-  return await runSerializedWorkflowStateWrite(internals, workflowId, async () => {
-    const bytes = await internals.storage.get(KEYS.workflow(workflowId));
-    if (!bytes) {
-      return null;
-    }
-
-    const state = decodeWorkflowState(bytes);
-    if (options.allowedStatuses && !options.allowedStatuses.includes(state.status)) {
-      return null;
-    }
-    if (options.skipCommitIf?.(state) === true) {
-      return null;
-    }
-
-    const updatedAt = internals.options.getNow();
-    const updated = {
-      ...state,
-      ...updates,
-      updatedAt,
-    };
-    const additionalOperations = options.buildAdditionalOperations?.(state, updatedAt) ?? [];
-
-    // `updateWorkflowState` applies an engine-generator-owned workflow STATUS
-    // transition, always fenced — a deposed engine cannot write terminal
-    // state over a successor's run. WHICH fence depends on `category`: a
-    // SELF-transition (failWorkflow) fences on this engine's own claim; an
-    // EXTERNAL terminal transition (terminateWorkflow: cancel/timeout)
-    // rotates the claim epoch instead (ADR 0002). Operator tag/attribute
-    // mutations do NOT use this helper; they batch directly.
-    const commit =
-      category === 'self'
-        ? commitSelfWorkflowStateOperations
-        : commitExternalTerminalWorkflowStateOperations;
-    const visibilityMaintenance = refreshWorkflowVisibilityMaintenance(internals);
-    if (visibilityMaintenance !== undefined) await visibilityMaintenance;
-    await commit(
-      internals,
-      state,
-      [
-        ...buildTerminalWorkflowIndexOperations(state, updated),
-        { type: 'put', key: KEYS.workflow(workflowId), value: encode(updated) },
-        ...visibilityIndexOperations(internals, workflowId, state, updated),
-        ...additionalOperations,
-      ],
-      {
-        includePendingAtomicSideEffects: isTerminalWorkflowStatus(updated.status),
-      },
-    );
-
-    return {
-      previousState: state,
-      updatedAt,
-    };
-  });
 }
 
 /** Add or remove tags for a single workflow under the serialized state-write lock. */
@@ -246,7 +153,7 @@ export async function mutateWorkflowTags(
     await internals.storage.batch([
       ...buildTerminalWorkflowIndexOperations(state, updatedState),
       { type: 'put', key: KEYS.workflow(workflowId), value: encode(updatedState) },
-      ...visibilityIndexOperations(internals, workflowId, state, updatedState),
+      ...visibilityIndexOperations(internals, state, updatedState),
       ...buildWorkflowTagIndexOperations(workflowId, currentTags, nextTags),
     ]);
 

@@ -2,6 +2,7 @@ import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import type { SearchAttributeSchema, SearchAttributeValue } from '../types.ts';
 import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 import type { Context, ContextOptions } from './index.ts';
+import type { ContextOperationRequest } from './operation-request.ts';
 import { createCheckpointLocals } from './session-state.ts';
 
 export interface ContextInternals {
@@ -92,6 +93,26 @@ export function getInternals(context: Context): ContextInternals {
   const internals = INTERNALS.get(context);
   if (!internals) throw new Error('Context internals not initialized');
   return internals;
+}
+
+/**
+ * Yield an uncached operation request and, however it settles, retire the
+ * resumed checkpoint's `sleepReferenceTime`. That anchor stands for "now" only
+ * at the parked moment the run resumed from; once the engine hands back a result
+ * (or throws in) time has moved on, so a later `ctx.sleep` or `ctx.waitUntil`
+ * deadline must read the clock. Clearing after the yield rather than before keeps
+ * the anchor for every operation issued at that moment, including sibling
+ * branches that `ctx.all`/`ctx.race` prime before their own yield.
+ */
+export function* yieldOperation(
+  internals: ContextInternals,
+  request: ContextOperationRequest,
+): Generator<ContextOperationRequest, unknown, unknown> {
+  try {
+    return yield request;
+  } finally {
+    internals.sleepReferenceTime = undefined;
+  }
 }
 
 /**
