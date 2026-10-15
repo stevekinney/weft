@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.28.0
+
+### Minor Changes
+
+- 057b6ac: Add `Engine.lostWorkflowClaim(handle)`. Under `ownership: 'workflow-lease'`, a holder whose claim lapsed and was reclaimed by another engine still sees the workflow's outcome through `handle.result()`, which reads it from the store. Every terminal write now records the engine that committed it, and this method reports `true` once `handle`'s result has settled with an outcome another engine committed. A caller that publishes a run's terminal outcome exactly once can then leave publication to the engine that committed it. The answer belongs to the run the handle drives, so a later `start-new` run under the same workflow ID never changes it.
+- 057b6ac: `Engine.create` accepts `onRecoveredWorkflow`, the same hook `recoverAll()` takes, and installs it when the engine is created. Under `ownership: 'workflow-lease'` the engine reclaims and resumes stranded workflows on its own interval from the moment it exists, which can be before the host calls `recoverAll()`. A run resumed that early now reaches the hook instead of advancing without one. A hook passed to `recoverAll()` still replaces it.
+  
+  A resumed `ctx.waitUntil` no longer leaks the checkpoint's time to the next `ctx.sleep`. That sleep used to schedule from the stale time and fire early.
+
+### Patch Changes
+
+- 057b6ac: A parent that awaits a child its engine lost to a checkpoint compare-and-swap race (`ownership: 'none'`) now settles from the winner's durable child outcome instead of staying parked forever: it completes with the child's result, fails with the child's failure, or rejects like a missing workflow if that child generation is gone. The parent stays parked, without an error, if the winner never finishes the child.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
