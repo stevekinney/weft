@@ -24,6 +24,7 @@ import { encode } from '../codec.ts';
 import { DevelopmentWarningEvent, ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleOverlapPolicy, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
+import { ASYNC_ACTIVITY_KEY_PREFIX } from './async-activity-records.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 import { runRetentionSweep } from './retention.ts';
@@ -274,6 +275,208 @@ describe('ctx.services — recovery re-provision', () => {
     await handles[0]!.signal('continue');
     expect(await handles[0]!.result()).toBe('account-42:second-engine');
     await secondEngine[Symbol.asyncDispose]();
+  });
+
+  it('hands a run recovered by a plain recoverAll() to the hook installed at Engine.create', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'create-time-hook' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('continue');
+      return 'completed';
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'create-time-hook': wf },
+    });
+    await firstEngine.start('create-time-hook', null, { id: 'create-time-run' });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const recovered: string[] = [];
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'create-time-hook': wf },
+      onRecoveredWorkflow: ({ workflowId }) => {
+        recovered.push(workflowId);
+      },
+    });
+    // No hook is passed here: the one installed at creation is the one a reclaim-driven resume
+    // would also use, and a plain recoverAll() must not discard it.
+    const handles = await secondEngine.recoverAll();
+
+    expect(recovered).toEqual(['create-time-run']);
+    await handles[0]!.signal('continue');
+    expect(await handles[0]!.result()).toBe('completed');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
+  /**
+   * Stage a `workflow-lease` engine whose `recoverAll()` is parked in its early awaits (the
+   * async-activity token reload) while a reclaim-driven resume of an ownerless running run lands.
+   */
+  async function reclaimDuringRecoverAll(
+    recoverAllHook: ((info: { workflowId: string }) => void) | undefined,
+  ) {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'reclaim-hook' }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('continue');
+      return 'completed';
+    });
+    {
+      await using seedEngine = await Engine.create({
+        storage,
+        recover: false,
+        workflows: { 'reclaim-hook': wf },
+      });
+      await seedEngine.start('reclaim-hook', null, { id: 'reclaimed-run' });
+      await flush();
+    }
+
+    const createdWith: string[] = [];
+    const overriddenWith: string[] = [];
+    const engine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'reclaim-hook': wf },
+      ownership: 'workflow-lease',
+      backgroundTasks: 'manual',
+      onRecoveredWorkflow: ({ workflowId }) => {
+        createdWith.push(workflowId);
+      },
+    });
+    const internals = getInternals(engine);
+    const realStorage = internals.storage;
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let parked = false;
+    internals.storage = new Proxy(realStorage, {
+      get(target, property, receiver) {
+        if (property === 'scan') {
+          return (prefix: string, ...rest: unknown[]) => {
+            const scan = Reflect.get(target, 'scan', target) as (
+              ...scanArguments: unknown[]
+            ) => AsyncIterable<[string, Uint8Array]>;
+            if (parked || prefix !== ASYNC_ACTIVITY_KEY_PREFIX)
+              return scan.call(target, prefix, ...rest);
+            parked = true;
+            return (async function* () {
+              reached.resolve();
+              await release.promise;
+              yield* scan.call(target, prefix, ...rest);
+            })();
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const recovering = engine.recoverAll(
+      recoverAllHook === undefined
+        ? undefined
+        : {
+            onRecoveredWorkflow: ({ workflowId }) => {
+              recoverAllHook({ workflowId });
+              overriddenWith.push(workflowId);
+            },
+          },
+    );
+    await reached.promise;
+    // recoverAll() is parked before its own recovery pass; the reclaim scan resumes the run now.
+    await engine.runMaintenance();
+    release.resolve();
+    await recovering;
+    return { engine, createdWith, overriddenWith };
+  }
+
+  it('hands a run reclaimed while recoverAll() is still starting to the hook recoverAll() was given', async () => {
+    const { engine, createdWith, overriddenWith } = await reclaimDuringRecoverAll(() => {});
+
+    expect(overriddenWith).toEqual(['reclaimed-run']);
+    expect(createdWith).toEqual([]);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('keeps the hook installed at Engine.create for a reclaim during a recoverAll() with no hook', async () => {
+    const { engine, createdWith, overriddenWith } = await reclaimDuringRecoverAll(undefined);
+
+    expect(createdWith).toEqual(['reclaimed-run']);
+    expect(overriddenWith).toEqual([]);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('runs each overlapping recoverAll() with its own hook, not whichever call wrote the shared hook last', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'overlap-hook' }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('continue');
+      return 'completed';
+    });
+    {
+      await using seedEngine = await Engine.create({
+        storage,
+        recover: false,
+        workflows: { 'overlap-hook': wf },
+      });
+      await seedEngine.start('overlap-hook', null, { id: 'overlap-run' });
+      await flush();
+    }
+    await using engine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'overlap-hook': wf },
+    });
+    // Park every recoverAll() in its async-activity reload, so both calls are in flight at once.
+    const internals = getInternals(engine);
+    const realStorage = internals.storage;
+    const parked: Array<PromiseWithResolvers<void>> = [];
+    const bothParked = Promise.withResolvers<void>();
+    internals.storage = new Proxy(realStorage, {
+      get(target, property, receiver) {
+        if (property === 'scan') {
+          return (prefix: string, ...rest: unknown[]) => {
+            const scan = Reflect.get(target, 'scan', target) as (
+              ...scanArguments: unknown[]
+            ) => AsyncIterable<[string, Uint8Array]>;
+            if (prefix !== ASYNC_ACTIVITY_KEY_PREFIX) return scan.call(target, prefix, ...rest);
+            const gate = Promise.withResolvers<void>();
+            parked.push(gate);
+            if (parked.length === 2) bothParked.resolve();
+            return (async function* () {
+              await gate.promise;
+              yield* scan.call(target, prefix, ...rest);
+            })();
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const firstHookRuns: string[] = [];
+    const secondHookRuns: string[] = [];
+    const first = engine.recoverAll({
+      onRecoveredWorkflow: ({ workflowId }) => {
+        firstHookRuns.push(workflowId);
+      },
+    });
+    await waitForCondition(() => parked.length === 1, { label: 'first recoverAll() parks' });
+    const second = engine.recoverAll({
+      onRecoveredWorkflow: ({ workflowId }) => {
+        secondHookRuns.push(workflowId);
+      },
+    });
+    await bothParked.promise;
+    // The first call resumes and recovers the run while the second is still parked.
+    parked[0]!.resolve();
+    await first;
+    parked[1]!.resolve();
+    await second;
+
+    expect(firstHookRuns).toEqual(['overlap-run']);
+    expect(secondHookRuns).toEqual([]);
   });
 
   it('isolates a recovery hook failure to its run and continues recovering siblings', async () => {

@@ -9,6 +9,7 @@ import type {
 import type { UnknownNameWhenRegistryHasNoKnownNames } from '../types/registry-type-helpers.ts';
 import type { KnownWorkflowNames } from './construction.ts';
 import type { EngineConstructorOptions } from './engine-internal-types.ts';
+import type { RecoverAllOptions } from './lifecycle.ts';
 
 /**
  * Options accepted by `Engine.create`. Definition maps are used for type
@@ -56,6 +57,17 @@ export type EngineCreateOptions<
    * the scheduler deterministically).
    */
   startScheduler?: boolean;
+  /**
+   * The recovery hook a host-owned recovery would pass to `recoverAll()`, installed when the
+   * engine is created instead of when `recoverAll()` is first called. Under
+   * `ownership: 'workflow-lease'` the engine reclaims and resumes stranded workflows on its own
+   * interval from the moment it exists, which can be before the host calls `recoverAll()`; a
+   * reclaim-driven resume uses the hook installed at that moment, so without this a run resumed
+   * early advances with no hook and the host never sees its first steps. The hook is awaited
+   * before the resumed workflow advances, so a host whose hook is not ready yet may simply await
+   * its own readiness inside it. A hook passed to `recoverAll()` replaces this one.
+   */
+  onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'];
 } & (
     | {
         /**

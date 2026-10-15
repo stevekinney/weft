@@ -4,6 +4,8 @@ export type CliShutdownSignal = (typeof CLI_SHUTDOWN_SIGNALS)[number];
 
 export type CliShutdownDependencies = {
   readonly stopServer: () => Promise<void>;
+  /** Stops the engine's background work, so nothing outlives the server it served. */
+  readonly shutdownEngine: () => Promise<void>;
   readonly removeRunLockfile: () => Promise<void>;
   readonly disposeStorage: () => void;
   readonly log: (message: string) => void;
@@ -28,6 +30,7 @@ async function runCliShutdown(
   };
 
   await attempt('[weft] Failed to stop server:', dependencies.stopServer);
+  await attempt('[weft] Failed to shut down engine:', dependencies.shutdownEngine);
   await attempt('[weft] Failed to remove run lockfile:', dependencies.removeRunLockfile);
   await attempt('[weft] Failed to dispose storage:', dependencies.disposeStorage);
   dependencies.exit(failed ? 1 : 0);

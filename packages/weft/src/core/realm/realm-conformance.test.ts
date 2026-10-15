@@ -22,7 +22,10 @@ import type {
   ConformanceRealm,
   RealmConformanceCreateOptions,
 } from './realm-conformance.test-support.ts';
-import { describeRealmConformance } from './realm-conformance.test-support.ts';
+import {
+  describeRealmConformance,
+  runRealmConformanceAtModuleScope,
+} from './realm-conformance.test-support.ts';
 import type { RealmLifecycleState } from './realm-lifecycle.ts';
 import type { RealmTurnEnvelope } from './realm-protocol.ts';
 import { WorkerRealm } from './worker-realm.ts';
@@ -177,4 +180,13 @@ function childProcessRealmConformance(
 
 describeRealmConformance({ label: 'FakeRealm', create: fakeRealmConformance });
 describeRealmConformance({ label: 'WorkerRealm', create: workerRealmConformance });
-describeRealmConformance({ label: 'ChildProcessRealm', create: childProcessRealmConformance });
+// Every ChildProcessRealm case spawns a real child process, which takes seconds on a loaded host,
+// so its cases run here at module scope, off Bun's five-second per-test clock.
+const childProcessRealmHarness = {
+  label: 'ChildProcessRealm',
+  create: childProcessRealmConformance,
+};
+describeRealmConformance(
+  childProcessRealmHarness,
+  await runRealmConformanceAtModuleScope(childProcessRealmHarness),
+);

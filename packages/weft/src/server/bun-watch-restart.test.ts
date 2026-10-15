@@ -31,9 +31,14 @@ import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
 
 const REVISION_MODULE_NAME = 'revision.ts';
 
@@ -116,32 +121,19 @@ async function waitForWorkflowCompleted(
   throw new Error(`Workflow ${workflowId} did not complete within ${timeoutMs}ms`);
 }
 
-describe('bun --watch drives durable-run recovery across a real restart (COR-243)', () => {
+/**
+ * The whole scenario: a real `bun --watch` process, its restart, and a durable resume. It takes
+ * seconds on a loaded host, so it runs at module scope, off Bun's five-second per-test clock, and
+ * the test below rethrows its outcome. The `finally` block does the cleanup an `afterEach` did.
+ */
+async function recoverAcrossWatchRestart(): Promise<void> {
   const cleanupDirs: string[] = [];
   let subprocess: ReturnType<typeof Bun.spawn> | undefined;
   let stdoutReaderTask: Promise<void> | undefined;
   let stdoutReaderError: unknown;
   let stoppingSubprocess = false;
 
-  afterEach(async () => {
-    stoppingSubprocess = true;
-    if (subprocess) {
-      subprocess.kill();
-      await subprocess.exited.catch(() => {});
-      subprocess = undefined;
-    }
-    await stdoutReaderTask;
-    stdoutReaderTask = undefined;
-    for (const dir of cleanupDirs.splice(0)) {
-      rmSync(dir, { force: true, recursive: true });
-    }
-    const readerError = stdoutReaderError;
-    stdoutReaderError = undefined;
-    stoppingSubprocess = false;
-    if (readerError !== undefined) throw readerError;
-  });
-
-  it('recovers a workflow parked on ctx.waitForSignal after bun --watch reloads the module', async () => {
+  try {
     const directory = join(tmpdir(), `weft-bun-watch-${crypto.randomUUID()}`);
     await Bun.write(join(directory, REVISION_MODULE_NAME), 'export const GENERATION = 1;\n');
     const entrypoint = join(directory, 'entry.ts');
@@ -151,6 +143,7 @@ describe('bun --watch drives durable-run recovery across a real restart (COR-243
 
     let stdoutText = '';
     const watchProcess = Bun.spawn({
+      timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
       cmd: ['bun', '--watch', entrypoint, '--database', databasePath],
       cwd: directory,
       stdout: 'pipe',
@@ -216,5 +209,27 @@ describe('bun --watch drives durable-run recovery across a real restart (COR-243
     // nothing observes a torn mix of old-generator/new-engine state -- the
     // failure mode this project's documentation names `bun --hot` for.
     expect(result).toEqual({ value: 'go', generation: 2 });
-  }, 30_000);
+  } finally {
+    stoppingSubprocess = true;
+    if (subprocess) {
+      subprocess.kill();
+      await subprocess.exited.catch(() => {});
+      subprocess = undefined;
+    }
+    await stdoutReaderTask;
+    stdoutReaderTask = undefined;
+    for (const dir of cleanupDirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  }
+  // Reached only when the scenario itself passed: a stdout reader that failed while the process
+  // was still meant to be running is then the failure to report.
+  if (stdoutReaderError !== undefined) throw stdoutReaderError;
+}
+
+const watchRestartOutcome = await outcomeOf(recoverAcrossWatchRestart);
+
+describe('bun --watch drives durable-run recovery across a real restart (COR-243)', () => {
+  it('recovers a workflow parked on ctx.waitForSignal after bun --watch reloads the module', () =>
+    rethrow(watchRestartOutcome));
 });

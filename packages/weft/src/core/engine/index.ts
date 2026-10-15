@@ -143,6 +143,7 @@ import {
   listCheckpoints as listCheckpointHistory,
   replayTo as replayWorkflowToCheckpoint,
 } from './checkpoint-reads.ts';
+import { pollChildOutcomes } from './child-outcome-poll.ts';
 import {
   copyWorkflowDefinition,
   createActivityWorkerDispatcher,
@@ -205,7 +206,12 @@ import {
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
   pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';
-import { HANDLE_RESULT_PROMISE, WorkflowHandle, type PreparedWorkflowHandle } from './handles.ts';
+import {
+  HANDLE_RESULT_PROMISE,
+  WorkflowHandle,
+  type PreparedWorkflowHandle,
+  type WorkflowClaimHandle,
+} from './handles.ts';
 import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
 import {
   handleStrategyMessage as handleStrategyMessageFromInternals,
@@ -261,6 +267,7 @@ import {
   resolveWorkflowTypeTarget as resolveWorkflowTypeTargetFromRegistration,
   type RegistrationCallbacks,
 } from './registration.ts';
+import { readHandleResultCommitter } from './result-committer.ts';
 import {
   ensureRetentionSweepInterval,
   getRetentionOverview as getRetentionOverviewSnapshot,
@@ -398,7 +405,7 @@ export {
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
-export type { PreparedWorkflowHandle } from './handles.ts';
+export type { PreparedWorkflowHandle, WorkflowClaimHandle } from './handles.ts';
 export { getWorkflowCatalog } from './internals.ts';
 export {
   WeftWorkflowClaimLostWarning,
@@ -640,6 +647,7 @@ export class Engine<
   static async create(options: EngineCreateRuntimeOptions): Promise<unknown> {
     validateEngineCreateBackgroundTaskOptions(options);
     const engine = new Engine<object, object>(options);
+    getInternals(engine).onRecoveredWorkflowHook = options.onRecoveredWorkflow;
 
     try {
       await assertCompatiblePersistedDataVersion(getInternals(engine).storage);
@@ -2085,6 +2093,8 @@ export class Engine<
     // Without it a manual-mode engine awaiting a child claimed by another
     // engine would never observe that child terminate.
     await pollPendingCrossEngineResultWaiters(internals);
+    // The same, for a parent awaiting a child this engine lost to a checkpoint race.
+    await pollChildOutcomes(internals);
     await internals.scheduler.tick(now);
     try {
       await internals.updateCoordinator.cleanupExpiredResponses();
@@ -2648,6 +2658,20 @@ export class Engine<
    * siblings in the same call.
    */
   async recoverAll(options?: RecoverAllOptions): Promise<WorkflowHandle[]> {
+    // Install a supplied hook before anything below can yield. Under
+    // `ownership: 'workflow-lease'` the reclaim interval may already be running
+    // with the hook passed to `Engine.create`, and a reclaim-driven resume that
+    // lands during the awaits below must use this call's override, as documented.
+    // Retained for a LATER same-engine reclaim (ADR 0002's recurring scan) to
+    // reuse — see `onRecoveredWorkflowHook`'s doc on `EngineInternals` for why
+    // a reclaim-driven resume must not silently skip this hook just because it
+    // was installed here rather than passed to that reclaim's own call.
+    if (options?.onRecoveredWorkflow !== undefined) {
+      getInternals(this).onRecoveredWorkflowHook = options.onRecoveredWorkflow;
+    }
+    // Captured now: an overlapping `recoverAll()` may replace the shared field
+    // while this call yields, and this call must keep running its own hook.
+    const recoveredWorkflowHook = getInternals(this).onRecoveredWorkflowHook;
     // Run the `ownership: 'workflow-lease'` boot gates on the `new Engine()` +
     // `recoverAll()` construction path too, not just via `Engine.create` — ADR
     // 0002 is explicit that attaching them to `Engine.create` alone leaves a
@@ -2680,12 +2704,13 @@ export class Engine<
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));
     await recoverOrphanedScheduleTimers(getInternals(this));
-    // Retained for a LATER same-engine reclaim (ADR 0002's recurring scan) to
-    // reuse — see `onRecoveredWorkflowHook`'s doc on `EngineInternals` for why
-    // a reclaim-driven resume must not silently skip this hook just because it
-    // was installed here rather than passed to that reclaim's own call.
-    getInternals(this).onRecoveredWorkflowHook = options?.onRecoveredWorkflow;
-    return recoverAllFromLifecycle(getInternals(this), this.#createLifecycleCallbacks(), options);
+    return recoverAllFromLifecycle(
+      getInternals(this),
+      this.#createLifecycleCallbacks(),
+      recoveredWorkflowHook === undefined
+        ? options
+        : { ...options, onRecoveredWorkflow: recoveredWorkflowHook },
+    );
   }
 
   /**
@@ -2883,6 +2908,29 @@ export class Engine<
    */
   async claimHolder(workflowId: string): Promise<WorkflowClaimHolderStatus | undefined> {
     return getInternals(this).workflowClaimRegistry?.holderStatus(workflowId);
+  }
+  /**
+   * Whether `handle`'s run settled with a terminal outcome another engine committed,
+   * under `ownership: 'workflow-lease'`: the engine took the run's claim and finished
+   * it, so {@link WorkflowHandle.result} reports the other engine's outcome, read from
+   * the store, and this engine must not publish it again. A caller that publishes a
+   * run's terminal outcome exactly once checks this after `result()` settles and
+   * leaves publication to the committing engine.
+   *
+   * The answer comes from the terminal commit itself: each terminal write (complete,
+   * fail, cancel, timeout) records the committing engine's ID, and the handle keeps
+   * that ID when its `result()` settles. It is exact for every terminal outcome,
+   * belongs to the run the handle awaited (a later `start-new` run under the same
+   * workflow id never changes it), and reads no storage. `false` while the result is
+   * unsettled or was never requested, when no committer was recorded (a result
+   * settled without a terminal commit, or a record written before the engine
+   * recorded one), and under every other ownership mode.
+   */
+  lostWorkflowClaim(handle: WorkflowClaimHandle): boolean {
+    const engineId = getInternals(this).workflowClaimRegistry?.engineId;
+    if (engineId === undefined) return false;
+    const committedBy = readHandleResultCommitter(handle);
+    return committedBy !== undefined && committedBy !== engineId;
   }
   async getCurrentCheckpointStep(workflowId: string): Promise<number | null> {
     // Prefer the in-memory checkpoint: for a run live in this engine it is the

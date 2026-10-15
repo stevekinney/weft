@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import { runCliInProcess } from './cli-main.test-support.ts';
+
 describe('CLI direct execution', () => {
   it('runs the CLI binary with --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('weft');
@@ -20,26 +19,20 @@ describe('CLI direct execution', () => {
   });
 
   it('runs the CLI binary with -h short flag and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', '-h'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['-h']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('weft');
   });
 
   it('runs doctor --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'doctor', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['doctor', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('doctor');
@@ -48,13 +41,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs version:check --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'version:check', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['version:check', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('version:check');
@@ -64,13 +54,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs conformance --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'conformance', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['conformance', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('conformance');
@@ -79,13 +66,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs timeline --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'timeline', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['timeline', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('timeline');
@@ -94,13 +78,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs serve --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'serve', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['serve', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('weft');

@@ -24,7 +24,11 @@ import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
 } from '../index.ts';
+import { outcomeOf, rethrow } from '../testing/module-scope-scenario.test-support.ts';
 import { executeConformance } from './index.ts';
+
+// executeConformance() spawns the worker fixture as a real process, which takes seconds on a loaded host, so each scenario runs here at
+// module scope, off Bun's five-second per-test clock; its test rethrows the outcome.
 
 /**
  * COR-233 "Transport and Conformance Integration" — the headline deliverable
@@ -65,72 +69,79 @@ import { executeConformance } from './index.ts';
  * conforming worker fixture" test), so routing through it here removes the
  * timing dependency instead of narrowing it.
  */
-describe('conformance command — lost acknowledgement resend (COR-233)', () => {
-  it('passes the full conformance check list against the lost-ack fixture', async () => {
-    const result = await executeConformance({
-      timeoutMs: 3_000,
-      json: true,
-      workerCommand: ['bun', './src/cli/__fixtures__/conformance-lost-ack-worker.ts'],
-    });
-
-    expect(result.exitCode).toBe(0);
-    const report: {
-      ok: boolean;
-      checks: Array<{ name: string; ok: boolean }>;
-    } = JSON.parse(result.stdout);
-    expect(report.ok).toBe(true);
-    expect(report.checks.map((check) => check.name)).toEqual([
-      'register',
-      'task completion',
-      'heartbeat',
-      'cancellation',
-      'reconnect',
-      'revision echo',
-      'graceful shutdown',
-    ]);
+const scenario1 = await outcomeOf(async () => {
+  const result = await executeConformance({
+    timeoutMs: 3_000,
+    json: true,
+    workerCommand: ['bun', './src/cli/__fixtures__/conformance-lost-ack-worker.ts'],
   });
+
+  expect(result.exitCode).toBe(0);
+  const report: {
+    ok: boolean;
+    checks: Array<{ name: string; ok: boolean }>;
+  } = JSON.parse(result.stdout);
+  expect(report.ok).toBe(true);
+  expect(report.checks.map((check) => check.name)).toEqual([
+    'register',
+    'task completion',
+    'heartbeat',
+    'cancellation',
+    'reconnect',
+    'revision echo',
+    'graceful shutdown',
+  ]);
+});
+
+describe('conformance command — lost acknowledgement resend (COR-233)', () => {
+  it('passes the full conformance check list against the lost-ack fixture', () =>
+    rethrow(scenario1));
+});
+
+const scenario2 = await outcomeOf(async () => {
+  const result = await executeConformance({
+    timeoutMs: 3_000,
+    json: true,
+    workerCommand: ['bun', './src/cli/__fixtures__/conformance-worker.ts'],
+  });
+
+  expect(result.exitCode).toBe(0);
+  const report: { protocolVersion: number; supportedProtocolVersions: number[] } = JSON.parse(
+    result.stdout,
+  );
+  expect(report.protocolVersion).toBe(REMOTE_WORKER_PROTOCOL_VERSION);
+  expect(report.protocolVersion).toBe(8);
+  expect(report.supportedProtocolVersions).toEqual([...REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS]);
+  expect(report.supportedProtocolVersions).toEqual([8]);
+});
+
+const scenario3 = await outcomeOf(async () => {
+  const result = await executeConformance({
+    timeoutMs: 1_000,
+    json: true,
+    workerCommand: ['bun', './src/cli/__fixtures__/conformance-legacy-protocol-worker.ts'],
+  });
+
+  // Registration is rejected before it ever reaches the worker registry,
+  // so the very first check ("register") times out waiting for a worker to
+  // appear — the same failure shape an unrecognized future version would
+  // produce, not a distinguishable "legacy version accepted" path.
+  expect(result.exitCode).toBe(1);
+  const report: {
+    ok: boolean;
+    checks: Array<{ name: string; ok: boolean; message: string }>;
+  } = JSON.parse(result.stdout);
+  expect(report.ok).toBe(false);
+  expect(report.checks).toHaveLength(1);
+  expect(report.checks[0]).toMatchObject({ name: 'conformance', ok: false });
+  expect(report.checks[0]?.message).toContain('Timed out');
+  expect(report.checks[0]?.message).toContain('worker register');
 });
 
 describe('conformance command — protocol version (COR-240)', () => {
-  it('reports the current protocol version and supported set in the JSON output', async () => {
-    const result = await executeConformance({
-      timeoutMs: 3_000,
-      json: true,
-      workerCommand: ['bun', './src/cli/__fixtures__/conformance-worker.ts'],
-    });
+  it('reports the current protocol version and supported set in the JSON output', () =>
+    rethrow(scenario2));
 
-    expect(result.exitCode).toBe(0);
-    const report: { protocolVersion: number; supportedProtocolVersions: number[] } = JSON.parse(
-      result.stdout,
-    );
-    expect(report.protocolVersion).toBe(REMOTE_WORKER_PROTOCOL_VERSION);
-    expect(report.protocolVersion).toBe(8);
-    expect(report.supportedProtocolVersions).toEqual([
-      ...REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
-    ]);
-    expect(report.supportedProtocolVersions).toEqual([8]);
-  });
-
-  it('rejects a worker that still registers with the retired protocol version 3 — no dual compatibility parser', async () => {
-    const result = await executeConformance({
-      timeoutMs: 1_000,
-      json: true,
-      workerCommand: ['bun', './src/cli/__fixtures__/conformance-legacy-protocol-worker.ts'],
-    });
-
-    // Registration is rejected before it ever reaches the worker registry,
-    // so the very first check ("register") times out waiting for a worker to
-    // appear — the same failure shape an unrecognized future version would
-    // produce, not a distinguishable "legacy version accepted" path.
-    expect(result.exitCode).toBe(1);
-    const report: {
-      ok: boolean;
-      checks: Array<{ name: string; ok: boolean; message: string }>;
-    } = JSON.parse(result.stdout);
-    expect(report.ok).toBe(false);
-    expect(report.checks).toHaveLength(1);
-    expect(report.checks[0]).toMatchObject({ name: 'conformance', ok: false });
-    expect(report.checks[0]?.message).toContain('Timed out');
-    expect(report.checks[0]?.message).toContain('worker register');
-  });
+  it('rejects a worker that still registers with the retired protocol version 3 — no dual compatibility parser', () =>
+    rethrow(scenario3));
 });

@@ -11,11 +11,11 @@ import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
+import { getGeneratorOwnedWorkflowResultPromise } from './generator-owned-result.ts';
 import {
   bootstrapWorkflowResultResolver,
   createWorkflowHandleWithResultPromise,
   createWorkflowResultWaiter,
-  getGeneratorOwnedWorkflowResultPromise,
   getWorkflowResultPromise,
   pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';

@@ -214,7 +214,7 @@ describe('child workflows', () => {
   });
 
   it('child failure propagates to parent', async () => {
-    const engine = new Engine();
+    await using engine = new Engine();
 
     const failingChildWorkflow = workflow({ name: 'failing-child' }).execute(async function* () {
       throw new Error('child exploded');
