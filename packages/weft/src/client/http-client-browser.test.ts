@@ -55,11 +55,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import type { Browser, BrowserContext } from 'playwright';
 import { chromium } from 'playwright';
 
 import { browserSmokeEnabled } from '../testing/browser-smoke-gate.test-support.ts';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -86,7 +91,13 @@ async function buildClientScript(): Promise<string> {
   try {
     const proc = Bun.spawn(
       ['bun', 'build', entryPath, '--target=browser', '--format=esm', `--outfile=${outfilePath}`],
-      { cwd: repositoryRoot, stdout: 'pipe', stderr: 'pipe' },
+      // The scenario hang guard: a stalled build is killed rather than holding the smoke run.
+      {
+        cwd: repositoryRoot,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+      },
     );
     const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
     if (exitCode !== 0) {
@@ -114,37 +125,44 @@ let server: ReturnType<typeof Bun.serve>;
 let clientScriptSource: string;
 let baseUrl: string;
 
-describe.skipIf(!browserSmokeEnabled)('HttpClient — real Chromium construction', () => {
-  beforeAll(async () => {
-    clientScriptSource = await buildClientScript();
+/**
+ * Builds the client with the `bun build` CLI, serves it, and launches Chromium. All three are real
+ * processes or servers that take seconds on a loaded host, so the opt-in smoke run starts them
+ * here at module scope, off Bun's five-second per-test clock, rather than in a `beforeAll`.
+ */
+async function startSmokeEnvironment(): Promise<void> {
+  clientScriptSource = await buildClientScript();
 
-    server = Bun.serve({
-      port: 0,
-      fetch(request) {
-        const url = new URL(request.url);
-        if (url.pathname === '/client.js') {
-          return new Response(clientScriptSource, {
-            headers: { 'Content-Type': 'application/javascript' },
-          });
-        }
-        if (url.pathname === '/') {
-          return new Response(buildTestPageHtml('/client.js'), {
-            headers: { 'Content-Type': 'text/html' },
-          });
-        }
-        if (url.pathname === '/v1/health') {
-          return Response.json({ status: 'ok' });
-        }
-        return new Response(null, { status: 404 });
-      },
-    });
-
-    baseUrl = `http://127.0.0.1:${server.port}`;
-
-    browser = await chromium.launch({ headless: true });
-    context = await browser.newContext();
+  server = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === '/client.js') {
+        return new Response(clientScriptSource, {
+          headers: { 'Content-Type': 'application/javascript' },
+        });
+      }
+      if (url.pathname === '/') {
+        return new Response(buildTestPageHtml('/client.js'), {
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+      if (url.pathname === '/v1/health') {
+        return Response.json({ status: 'ok' });
+      }
+      return new Response(null, { status: 404 });
+    },
   });
 
+  baseUrl = `http://127.0.0.1:${server.port}`;
+
+  browser = await chromium.launch({ headless: true });
+  context = await browser.newContext();
+}
+
+const smokeSetup = browserSmokeEnabled ? await outcomeOf(startSmokeEnvironment) : undefined;
+
+describe.skipIf(!browserSmokeEnabled)('HttpClient — real Chromium construction', () => {
   afterAll(async () => {
     await context?.close();
     await browser?.close();
@@ -152,6 +170,7 @@ describe.skipIf(!browserSmokeEnabled)('HttpClient — real Chromium construction
   });
 
   it('new HttpClient({ baseUrl, token }) does not throw with no Bun global and no Node built-ins', async () => {
+    rethrow(smokeSetup);
     const page = await context.newPage();
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -203,6 +222,7 @@ describe.skipIf(!browserSmokeEnabled)('HttpClient — real Chromium construction
   }, 30_000);
 
   it('a browser-constructed HttpClient can make a real request against a live server', async () => {
+    rethrow(smokeSetup);
     const page = await context.newPage();
     try {
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });

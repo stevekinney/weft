@@ -17,6 +17,9 @@ function createDependencies(overrides: Partial<CliShutdownDependencies> = {}): {
       stopServer: async () => {
         operations.push('stop server');
       },
+      shutdownEngine: async () => {
+        operations.push('shut down engine');
+      },
       removeRunLockfile: async () => {
         operations.push('remove run lockfile');
       },
@@ -48,6 +51,7 @@ describe('createCliShutdownHandler', () => {
       expect(operations).toEqual([
         `log: \nReceived ${signal}; shutting down...`,
         'stop server',
+        'shut down engine',
         'remove run lockfile',
         'dispose storage',
         'exit: 0',
@@ -109,6 +113,7 @@ describe('createCliShutdownHandler', () => {
     expect(operations).toEqual([
       'log: \nReceived SIGTERM; shutting down...',
       'stop server',
+      'shut down engine',
       'error: [weft] Failed to remove run lockfile: Error: lockfile unavailable',
       'dispose storage',
       'exit: 1',
@@ -130,6 +135,29 @@ describe('createCliShutdownHandler', () => {
       'log: \nReceived SIGINT; shutting down...',
       'stop server',
       'error: [weft] Failed to stop server: Error: stop failed',
+      'shut down engine',
+      'remove run lockfile',
+      'dispose storage',
+      'exit: 1',
+    ]);
+  });
+
+  it('reports engine shutdown errors, still runs later cleanup, and exits unsuccessfully', async () => {
+    const { dependencies, operations } = createDependencies({
+      shutdownEngine: async () => {
+        operations.push('shut down engine');
+        throw new Error('lease release failed');
+      },
+    });
+    const shutdown = createCliShutdownHandler(dependencies);
+
+    await shutdown('SIGTERM');
+
+    expect(operations).toEqual([
+      'log: \nReceived SIGTERM; shutting down...',
+      'stop server',
+      'shut down engine',
+      'error: [weft] Failed to shut down engine: Error: lease release failed',
       'remove run lockfile',
       'dispose storage',
       'exit: 1',
@@ -150,6 +178,7 @@ describe('createCliShutdownHandler', () => {
     expect(operations).toEqual([
       'log: \nReceived SIGTERM; shutting down...',
       'stop server',
+      'shut down engine',
       'remove run lockfile',
       'dispose storage',
       'error: [weft] Failed to dispose storage: Error: disposal failed',

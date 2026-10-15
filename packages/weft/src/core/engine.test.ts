@@ -16,6 +16,11 @@ import type {
 } from '../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
 import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { ActivityRegistry } from './activity-registry.ts';
 import { AtomicStateConflictEvent } from './atomic-state.ts';
@@ -293,6 +298,311 @@ function clearTimeoutCallCountFor(timerSpies: TimerApiSpies, handle: unknown): n
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// Each scenario below runs a script in a fresh `bun -e` process, which takes seconds on a loaded
+// host, so it runs here at module scope, off Bun's five-second per-test clock; its test rethrows
+// the scenario's outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const script = String.raw`
+    import { Engine } from './src/core/engine.ts';
+    import { workflow } from './src/core/types.ts';
+    import { MemoryStorage } from './src/storage/memory.ts';
+
+    const storage = new MemoryStorage();
+    const originalBatch = storage.batch.bind(storage);
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    const checkpointFailure = Promise.withResolvers<void>();
+    let engine;
+
+    // Fail the SECOND checkpoint commit, identified by the checkpoint-history
+    // record it writes rather than by a batch call count. A count is fragile:
+    // it silently retargets whenever the number of preceding storage.batch
+    // calls changes, and it did — since WFT-152 an explicit-id start commits
+    // through conditionalBatch, so counting batch calls moved the injection off
+    // the second checkpoint and onto the terminal-completion write, letting both
+    // checkpoints land. Only the second checkpoint's own batch carries
+    // ckpt:0000000002; the completion batch does not.
+    //
+    // Intercept BOTH storage.batch AND storage.conditionalBatch (WFT-21,
+    // Codex review round 5, P1): a fresh start's checkpoint commits are
+    // now CAS-fenced against their own last-known bytes from the FIRST
+    // commit onward (start.ts primes the baseline), so every checkpoint
+    // commit routes through conditionalBatch on a backend that supports
+    // it — including this second one — never plain batch.
+    const checkpointCommitTwoFailure = (operations: { type: string; key: string }[]) =>
+      operations.some(
+        (operation) =>
+          operation.type === 'put' && operation.key === 'wf:wf-batch:ckpt:0000000002',
+      );
+    storage.batch = async (operations) => {
+      if (checkpointCommitTwoFailure(operations)) {
+        checkpointFailure.resolve();
+        throw new Error('simulated checkpoint batch failure');
+      }
+      return await originalBatch(operations);
+    };
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (checkpointCommitTwoFailure(operations)) {
+        checkpointFailure.resolve();
+        throw new Error('simulated checkpoint batch failure');
+      }
+      return await originalConditionalBatch(conditions, operations);
+    };
+
+    engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'wf' }).execute(async function* (ctx) {
+      yield* ctx.run(async () => 'one');
+      return yield* ctx.run(async () => 'two');
+    }),
+    );
+
+    const handle = await engine.start('wf', null, { id: 'wf-batch' });
+    void handle.result().catch(() => {});
+
+    await checkpointFailure.promise;
+    await engine.cancel('wf-batch');
+    const timeline = await engine.getTimeline('wf-batch');
+    console.log(JSON.stringify(timeline));
+    engine[Symbol.dispose]();
+    storage[Symbol.dispose]();
+    process.exit(0);
+  `;
+
+  const process = Bun.spawn(['bun', '-e', script], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exitCode = await process.exited;
+  const stdoutText = await new Response(process.stdout).text();
+  const stderrText = await new Response(process.stderr).text();
+  const stdout = stdoutText.trim();
+  const stderr = stderrText.trim();
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+
+  const timeline = JSON.parse(stdout) as Array<{
+    outputSummary?: string;
+    status: string;
+    step: number;
+  }>;
+
+  expect(timeline).toHaveLength(1);
+  expect(timeline[0]).toMatchObject({
+    step: 1,
+    status: 'cancelled',
+  });
+  expect(timeline[0]?.outputSummary).toContain('Workflow cancelled');
+});
+
+const scenario2 = await outcomeOf(async () => {
+  const script = String.raw`
+    import { Engine } from './src/core/engine.ts';
+    import { workflow } from './src/core/types.ts';
+    import { KEYS } from './src/storage/interface.ts';
+    import { MemoryStorage } from './src/storage/memory.ts';
+
+    const workflowId = 'wf-fail-atomic';
+    const storage = new MemoryStorage();
+    const originalBatch = storage.batch.bind(storage);
+    const timeout = setTimeout(() => process.exit(2), 250);
+
+    process.on('unhandledRejection', (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(3);
+    });
+
+    storage.batch = async (operations) => {
+      const isStandaloneTimelineWrite =
+        operations.length === 1 &&
+        operations[0]?.type === 'put' &&
+        operations[0].key.startsWith(KEYS.timelinePrefix(workflowId));
+      if (isStandaloneTimelineWrite) {
+        throw new Error('simulated standalone timeline write failure');
+      }
+      return await originalBatch(operations);
+    };
+
+    const engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'wf' }).execute(async function* (ctx) {
+      return yield* ctx.run(async () => {
+        throw new Error('boom');
+      });
+    }),
+    );
+
+    const handle = await engine.start('wf', null, { id: workflowId });
+    try {
+      await handle.result();
+      process.exit(1);
+    } catch (error) {
+      const state = await engine.get(workflowId);
+      const timeline = await engine.getTimeline(workflowId);
+      console.log(
+        JSON.stringify({
+          message: error instanceof Error ? error.message : String(error),
+          status: state?.status,
+          timeline,
+        }),
+      );
+      clearTimeout(timeout);
+      engine[Symbol.dispose]();
+      storage[Symbol.dispose]();
+      process.exit(0);
+    }
+  `;
+
+  const process = Bun.spawn(['bun', '-e', script], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exitCode = await process.exited;
+  const stdoutText = await new Response(process.stdout).text();
+  const stderrText = await new Response(process.stderr).text();
+  const stdout = stdoutText.trim();
+  const stderr = stderrText.trim();
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+
+  const result = JSON.parse(stdout) as {
+    message: string;
+    status?: string;
+    timeline: Array<{
+      outputSummary?: string;
+      status: string;
+      step: number;
+    }>;
+  };
+
+  expect(result.message).toBe('boom');
+  expect(result.status).toBe('failed');
+  expect(result.timeline).toHaveLength(1);
+  expect(result.timeline[0]).toMatchObject({
+    step: 1,
+    status: 'failed',
+  });
+  expect(result.timeline[0]?.outputSummary).toContain('boom');
+});
+
+const scenario3 = await outcomeOf(async () => {
+  const script = String.raw`
+    import { Engine } from './src/core/engine.ts';
+    import { workflow } from './src/core/types.ts';
+    import { KEYS } from './src/storage/interface.ts';
+    import { MemoryStorage } from './src/storage/memory.ts';
+
+    const workflowId = 'wf-cancel-atomic';
+    const storage = new MemoryStorage();
+    const originalBatch = storage.batch.bind(storage);
+    const timeout = setTimeout(() => process.exit(2), 250);
+
+    process.on('unhandledRejection', (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(3);
+    });
+
+    storage.batch = async (operations) => {
+      const isStandaloneTimelineWrite =
+        operations.length === 1 &&
+        operations[0]?.type === 'put' &&
+        operations[0].key.startsWith(KEYS.timelinePrefix(workflowId));
+      if (isStandaloneTimelineWrite) {
+        throw new Error('simulated standalone timeline write failure');
+      }
+      return await originalBatch(operations);
+    };
+
+    const engine = new Engine({ storage, checkpointHistory: 10 });
+    engine.register(
+      workflow({ name: 'wf' }).execute(async function* (ctx) {
+      yield* ctx.waitForSignal('never');
+      return 'unreachable';
+    }),
+    );
+
+    const handle = await engine.start('wf', null, { id: workflowId });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const resultPromise = handle.result().then(
+      () => ({ kind: 'resolved' }),
+      (error) => ({
+        kind: 'rejected',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+
+    try {
+      await engine.cancel(workflowId);
+      const result = await resultPromise;
+      const state = await engine.get(workflowId);
+      const timeline = await engine.getTimeline(workflowId);
+      console.log(JSON.stringify({ cancelError: null, result, status: state?.status, timeline }));
+      clearTimeout(timeout);
+      engine[Symbol.dispose]();
+      storage[Symbol.dispose]();
+      process.exit(0);
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          cancelError: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      clearTimeout(timeout);
+      engine[Symbol.dispose]();
+      storage[Symbol.dispose]();
+      process.exit(0);
+    }
+  `;
+
+  const process = Bun.spawn(['bun', '-e', script], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exitCode = await process.exited;
+  const stdoutText = await new Response(process.stdout).text();
+  const stderrText = await new Response(process.stderr).text();
+  const stdout = stdoutText.trim();
+  const stderr = stderrText.trim();
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+
+  const result = JSON.parse(stdout) as
+    | {
+        cancelError: null;
+        result: { kind: string; message?: string };
+        status?: string;
+        timeline: Array<{
+          outputSummary?: string;
+          status: string;
+          step: number;
+        }>;
+      }
+    | { cancelError: string };
+
+  if (result.cancelError !== null) {
+    throw new Error(result.cancelError);
+  }
+
+  expect(result.result).toMatchObject({
+    kind: 'rejected',
+    message: 'Workflow cancelled',
+  });
+  expect(result.status).toBe('cancelled');
+  expect(result.timeline).toHaveLength(1);
+  expect(result.timeline[0]).toMatchObject({
+    step: 1,
+    status: 'cancelled',
+  });
+  expect(result.timeline[0]?.outputSummary).toContain('Workflow cancelled');
+});
 
 describe('Engine', () => {
   it('wraps configured storage with compression support', () => {
@@ -6267,303 +6577,14 @@ describe('Engine', () => {
   });
 
   describe('terminal state bookkeeping', () => {
-    it('cancelling after a checkpoint batch failure does not invent a phantom timeline step', async () => {
-      const script = String.raw`
-        import { Engine } from './src/core/engine.ts';
-        import { workflow } from './src/core/types.ts';
-        import { MemoryStorage } from './src/storage/memory.ts';
+    it('cancelling after a checkpoint batch failure does not invent a phantom timeline step', () =>
+      rethrow(scenario1));
 
-        const storage = new MemoryStorage();
-        const originalBatch = storage.batch.bind(storage);
-        const originalConditionalBatch = storage.conditionalBatch.bind(storage);
-        const checkpointFailure = Promise.withResolvers<void>();
-        let engine;
+    it('failing a workflow does not split the terminal state and timeline writes', () =>
+      rethrow(scenario2));
 
-        // Fail the SECOND checkpoint commit, identified by the checkpoint-history
-        // record it writes rather than by a batch call count. A count is fragile:
-        // it silently retargets whenever the number of preceding storage.batch
-        // calls changes, and it did — since WFT-152 an explicit-id start commits
-        // through conditionalBatch, so counting batch calls moved the injection off
-        // the second checkpoint and onto the terminal-completion write, letting both
-        // checkpoints land. Only the second checkpoint's own batch carries
-        // ckpt:0000000002; the completion batch does not.
-        //
-        // Intercept BOTH storage.batch AND storage.conditionalBatch (WFT-21,
-        // Codex review round 5, P1): a fresh start's checkpoint commits are
-        // now CAS-fenced against their own last-known bytes from the FIRST
-        // commit onward (start.ts primes the baseline), so every checkpoint
-        // commit routes through conditionalBatch on a backend that supports
-        // it — including this second one — never plain batch.
-        const checkpointCommitTwoFailure = (operations: { type: string; key: string }[]) =>
-          operations.some(
-            (operation) =>
-              operation.type === 'put' && operation.key === 'wf:wf-batch:ckpt:0000000002',
-          );
-        storage.batch = async (operations) => {
-          if (checkpointCommitTwoFailure(operations)) {
-            checkpointFailure.resolve();
-            throw new Error('simulated checkpoint batch failure');
-          }
-          return await originalBatch(operations);
-        };
-        storage.conditionalBatch = async (conditions, operations) => {
-          if (checkpointCommitTwoFailure(operations)) {
-            checkpointFailure.resolve();
-            throw new Error('simulated checkpoint batch failure');
-          }
-          return await originalConditionalBatch(conditions, operations);
-        };
-
-        engine = new Engine({ storage, checkpointHistory: 10 });
-        engine.register(
-          workflow({ name: 'wf' }).execute(async function* (ctx) {
-          yield* ctx.run(async () => 'one');
-          return yield* ctx.run(async () => 'two');
-        }),
-        );
-
-        const handle = await engine.start('wf', null, { id: 'wf-batch' });
-        void handle.result().catch(() => {});
-
-        await checkpointFailure.promise;
-        await engine.cancel('wf-batch');
-        const timeline = await engine.getTimeline('wf-batch');
-        console.log(JSON.stringify(timeline));
-        engine[Symbol.dispose]();
-        storage[Symbol.dispose]();
-        process.exit(0);
-      `;
-
-      const process = Bun.spawn(['bun', '-e', script], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const exitCode = await process.exited;
-      const stdoutText = await new Response(process.stdout).text();
-      const stderrText = await new Response(process.stderr).text();
-      const stdout = stdoutText.trim();
-      const stderr = stderrText.trim();
-
-      expect(exitCode).toBe(0);
-      expect(stderr).toBe('');
-
-      const timeline = JSON.parse(stdout) as Array<{
-        outputSummary?: string;
-        status: string;
-        step: number;
-      }>;
-
-      expect(timeline).toHaveLength(1);
-      expect(timeline[0]).toMatchObject({
-        step: 1,
-        status: 'cancelled',
-      });
-      expect(timeline[0]?.outputSummary).toContain('Workflow cancelled');
-    });
-
-    it('failing a workflow does not split the terminal state and timeline writes', async () => {
-      const script = String.raw`
-        import { Engine } from './src/core/engine.ts';
-        import { workflow } from './src/core/types.ts';
-        import { KEYS } from './src/storage/interface.ts';
-        import { MemoryStorage } from './src/storage/memory.ts';
-
-        const workflowId = 'wf-fail-atomic';
-        const storage = new MemoryStorage();
-        const originalBatch = storage.batch.bind(storage);
-        const timeout = setTimeout(() => process.exit(2), 250);
-
-        process.on('unhandledRejection', (error) => {
-          console.error(error instanceof Error ? error.message : String(error));
-          process.exit(3);
-        });
-
-        storage.batch = async (operations) => {
-          const isStandaloneTimelineWrite =
-            operations.length === 1 &&
-            operations[0]?.type === 'put' &&
-            operations[0].key.startsWith(KEYS.timelinePrefix(workflowId));
-          if (isStandaloneTimelineWrite) {
-            throw new Error('simulated standalone timeline write failure');
-          }
-          return await originalBatch(operations);
-        };
-
-        const engine = new Engine({ storage, checkpointHistory: 10 });
-        engine.register(
-          workflow({ name: 'wf' }).execute(async function* (ctx) {
-          return yield* ctx.run(async () => {
-            throw new Error('boom');
-          });
-        }),
-        );
-
-        const handle = await engine.start('wf', null, { id: workflowId });
-        try {
-          await handle.result();
-          process.exit(1);
-        } catch (error) {
-          const state = await engine.get(workflowId);
-          const timeline = await engine.getTimeline(workflowId);
-          console.log(
-            JSON.stringify({
-              message: error instanceof Error ? error.message : String(error),
-              status: state?.status,
-              timeline,
-            }),
-          );
-          clearTimeout(timeout);
-          engine[Symbol.dispose]();
-          storage[Symbol.dispose]();
-          process.exit(0);
-        }
-      `;
-
-      const process = Bun.spawn(['bun', '-e', script], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const exitCode = await process.exited;
-      const stdoutText = await new Response(process.stdout).text();
-      const stderrText = await new Response(process.stderr).text();
-      const stdout = stdoutText.trim();
-      const stderr = stderrText.trim();
-
-      expect(exitCode).toBe(0);
-      expect(stderr).toBe('');
-
-      const result = JSON.parse(stdout) as {
-        message: string;
-        status?: string;
-        timeline: Array<{
-          outputSummary?: string;
-          status: string;
-          step: number;
-        }>;
-      };
-
-      expect(result.message).toBe('boom');
-      expect(result.status).toBe('failed');
-      expect(result.timeline).toHaveLength(1);
-      expect(result.timeline[0]).toMatchObject({
-        step: 1,
-        status: 'failed',
-      });
-      expect(result.timeline[0]?.outputSummary).toContain('boom');
-    });
-
-    it('cancelling a workflow does not split the terminal state and timeline writes', async () => {
-      const script = String.raw`
-        import { Engine } from './src/core/engine.ts';
-        import { workflow } from './src/core/types.ts';
-        import { KEYS } from './src/storage/interface.ts';
-        import { MemoryStorage } from './src/storage/memory.ts';
-
-        const workflowId = 'wf-cancel-atomic';
-        const storage = new MemoryStorage();
-        const originalBatch = storage.batch.bind(storage);
-        const timeout = setTimeout(() => process.exit(2), 250);
-
-        process.on('unhandledRejection', (error) => {
-          console.error(error instanceof Error ? error.message : String(error));
-          process.exit(3);
-        });
-
-        storage.batch = async (operations) => {
-          const isStandaloneTimelineWrite =
-            operations.length === 1 &&
-            operations[0]?.type === 'put' &&
-            operations[0].key.startsWith(KEYS.timelinePrefix(workflowId));
-          if (isStandaloneTimelineWrite) {
-            throw new Error('simulated standalone timeline write failure');
-          }
-          return await originalBatch(operations);
-        };
-
-        const engine = new Engine({ storage, checkpointHistory: 10 });
-        engine.register(
-          workflow({ name: 'wf' }).execute(async function* (ctx) {
-          yield* ctx.waitForSignal('never');
-          return 'unreachable';
-        }),
-        );
-
-        const handle = await engine.start('wf', null, { id: workflowId });
-        await new Promise((resolve) => setTimeout(resolve, 25));
-
-        const resultPromise = handle.result().then(
-          () => ({ kind: 'resolved' }),
-          (error) => ({
-            kind: 'rejected',
-            message: error instanceof Error ? error.message : String(error),
-          }),
-        );
-
-        try {
-          await engine.cancel(workflowId);
-          const result = await resultPromise;
-          const state = await engine.get(workflowId);
-          const timeline = await engine.getTimeline(workflowId);
-          console.log(JSON.stringify({ cancelError: null, result, status: state?.status, timeline }));
-          clearTimeout(timeout);
-          engine[Symbol.dispose]();
-          storage[Symbol.dispose]();
-          process.exit(0);
-        } catch (error) {
-          console.log(
-            JSON.stringify({
-              cancelError: error instanceof Error ? error.message : String(error),
-            }),
-          );
-          clearTimeout(timeout);
-          engine[Symbol.dispose]();
-          storage[Symbol.dispose]();
-          process.exit(0);
-        }
-      `;
-
-      const process = Bun.spawn(['bun', '-e', script], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      const exitCode = await process.exited;
-      const stdoutText = await new Response(process.stdout).text();
-      const stderrText = await new Response(process.stderr).text();
-      const stdout = stdoutText.trim();
-      const stderr = stderrText.trim();
-
-      expect(exitCode).toBe(0);
-      expect(stderr).toBe('');
-
-      const result = JSON.parse(stdout) as
-        | {
-            cancelError: null;
-            result: { kind: string; message?: string };
-            status?: string;
-            timeline: Array<{
-              outputSummary?: string;
-              status: string;
-              step: number;
-            }>;
-          }
-        | { cancelError: string };
-
-      if (result.cancelError !== null) {
-        throw new Error(result.cancelError);
-      }
-
-      expect(result.result).toMatchObject({
-        kind: 'rejected',
-        message: 'Workflow cancelled',
-      });
-      expect(result.status).toBe('cancelled');
-      expect(result.timeline).toHaveLength(1);
-      expect(result.timeline[0]).toMatchObject({
-        step: 1,
-        status: 'cancelled',
-      });
-      expect(result.timeline[0]?.outputSummary).toContain('Workflow cancelled');
-    });
+    it('cancelling a workflow does not split the terminal state and timeline writes', () =>
+      rethrow(scenario3));
   });
 
   // ---------------------------------------------------------------------------

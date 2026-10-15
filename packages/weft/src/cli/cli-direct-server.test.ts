@@ -1,38 +1,24 @@
 import { describe, expect, it } from 'bun:test';
 
-async function waitForCondition(
-  predicate: () => boolean | Promise<boolean>,
-  options: { timeoutMs: number; intervalMs: number; label: string },
-): Promise<void> {
-  const deadline = performance.now() + options.timeoutMs;
-  while (!(await predicate())) {
-    if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${options.label}`);
-    await Bun.sleep(options.intervalMs);
-  }
-}
+import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { runCliInProcess, startCliServerInProcess } from './cli-main.test-support.ts';
 
 describe('CLI direct execution', () => {
   it('rejects ignored serve positionals before starting the server', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', './workflows.ts'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['./workflows.ts']);
 
-    const exitCode = await process.exited;
-    const stderr = await new Response(process.stderr).text();
+    const exitCode = result.exitCode;
+    const stderr = result.stderr;
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Unknown command './workflows.ts'");
   });
 
   it('rejects a misspelled subcommand before starting the server', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'timelin'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['timelin']);
 
-    const exitCode = await process.exited;
-    const stderr = await new Response(process.stderr).text();
+    const exitCode = result.exitCode;
+    const stderr = result.stderr;
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Unknown command 'timelin'");
@@ -40,13 +26,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs schedule --help and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'schedule', '--help'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['schedule', '--help']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('schedule list');
@@ -57,13 +40,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs doctor against an in-memory database and exits 0', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', 'doctor', '--database', ':memory:'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['doctor', '--database', ':memory:']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('Database:');
@@ -73,16 +53,10 @@ describe('CLI direct execution', () => {
   });
 
   it('runs doctor with --json flag and outputs valid JSON', async () => {
-    const process = Bun.spawn(
-      ['bun', './src/cli-main.ts', 'doctor', '--database', ':memory:', '--json'],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    );
+    const result = await runCliInProcess(['doctor', '--database', ':memory:', '--json']);
 
-    const exitCode = await process.exited;
-    const stdout = await new Response(process.stdout).text();
+    const exitCode = result.exitCode;
+    const stdout = result.stdout;
 
     expect(exitCode).toBe(0);
     const report = JSON.parse(stdout);
@@ -93,86 +67,85 @@ describe('CLI direct execution', () => {
   });
 
   it('exits with an error for an invalid storage backend', async () => {
-    const process = Bun.spawn(['bun', './src/cli-main.ts', '--storage', 'postgres'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = await runCliInProcess(['--storage', 'postgres']);
 
-    const exitCode = await process.exited;
-    const stderr = await new Response(process.stderr).text();
+    const exitCode = result.exitCode;
+    const stderr = result.stderr;
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Invalid storage backend 'postgres'");
   });
 
   it('exits with error when version:check is missing --workflows flag', async () => {
-    const process = Bun.spawn(
-      ['bun', './src/cli-main.ts', 'version:check', '--database', ':memory:'],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    );
+    const result = await runCliInProcess(['version:check', '--database', ':memory:']);
 
-    const exitCode = await process.exited;
-    const stderr = await new Response(process.stderr).text();
+    const exitCode = result.exitCode;
+    const stderr = result.stderr;
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain('--workflows');
   });
 
   it('starts the server and responds to health check', async () => {
-    const port = 17233 + Math.floor(Math.random() * 1000);
-    const apiMessage = `Weft API running at http://0.0.0.0:${port}/api/v1`;
-    const healthMessage = `Health check: http://0.0.0.0:${port}/v1/health`;
-    const process = Bun.spawn(
-      ['bun', './src/cli-main.ts', '--port', String(port), '--database', ':memory:'],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    );
+    const session = await startCliServerInProcess(['--port', '0', '--database', ':memory:']);
+    const { url } = session.serving;
 
-    let stdout = '';
-    const stdoutReader = process.stdout.getReader();
-    const stdoutDrain = (async () => {
-      const decoder = new TextDecoder();
-      try {
-        while (true) {
-          const chunk = await stdoutReader.read();
-          if (chunk.done) break;
-          stdout += decoder.decode(chunk.value, { stream: true });
-        }
-      } finally {
-        stdout += decoder.decode();
-        stdoutReader.releaseLock();
-      }
-    })();
-
+    let exitCode: number | undefined;
     try {
-      await waitForCondition(
-        async () => {
-          try {
-            const response = await fetch(`http://localhost:${port}/v1/health`);
-            return response.ok;
-          } catch {
-            return false;
-          }
-        },
-        { timeoutMs: 3_000, intervalMs: 25, label: 'CLI health endpoint' },
-      );
-
-      await waitForCondition(
-        async () => stdout.includes(apiMessage) && stdout.includes(healthMessage),
-        { timeoutMs: 3_000, intervalMs: 25, label: 'CLI startup output' },
-      );
+      const response = await fetch(new URL('/v1/health', url));
+      expect(response.ok).toBe(true);
+      expect(session.output()).toContain(`Weft API running at ${new URL('/api/v1', url).href}`);
+      expect(session.output()).toContain(`Health check: ${new URL('/v1/health', url).href}`);
+      expect(session.output()).toContain('starting in inspect-only mode');
     } finally {
-      process.kill('SIGTERM');
-      await process.exited;
-      await stdoutDrain;
+      exitCode = await session.stop();
     }
 
-    expect(stdout).toContain(apiMessage);
-    expect(stdout).toContain(healthMessage);
+    expect(exitCode).toBe(0);
+    expect(session.output()).toContain('Received SIGTERM; shutting down...');
+  });
+
+  it('registers the workflows module it is given before serving', async () => {
+    const session = await startCliServerInProcess([
+      '--port',
+      '0',
+      '--database',
+      ':memory:',
+      '--workflows',
+      'src/cli/__fixtures__/validation/hello-world/src/index.ts',
+    ]);
+
+    try {
+      expect(session.output()).not.toContain('inspect-only mode');
+    } finally {
+      expect(await session.stop()).toBe(0);
+    }
+  });
+
+  it('reports a serve command run through runCliInProcess as a test error, after shutting it down', async () => {
+    expect(
+      await throwingRejectionOf(runCliInProcess(['--port', '0', '--database', ':memory:'])),
+    ).toThrow('runCliInProcess: the command started a server; use startCliServerInProcess');
+  });
+
+  it('reports a command that exits instead of serving', async () => {
+    expect(await throwingRejectionOf(startCliServerInProcess(['timelin']))).toThrow(
+      'startCliServerInProcess: the CLI exited 1 instead of serving',
+    );
+  });
+
+  it('releases the storage and engine when the workflows module cannot be loaded', async () => {
+    expect(
+      await throwingRejectionOf(
+        startCliServerInProcess([
+          '--port',
+          '0',
+          '--database',
+          ':memory:',
+          '--workflows',
+          'src/cli/__fixtures__/does-not-exist.ts',
+        ]),
+      ),
+    ).toThrow();
   });
 });

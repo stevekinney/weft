@@ -78,10 +78,8 @@ import {
   isGenerationAbandoned,
   staleFailureGuard,
 } from './execution-attempts.ts';
-import {
-  createWorkflowResultWaiter,
-  getGeneratorOwnedWorkflowResultPromise,
-} from './handle-result.ts';
+import { getGeneratorOwnedWorkflowResultPromise } from './generator-owned-result.ts';
+import { createWorkflowResultWaiter } from './handle-result.ts';
 import { WorkflowHandle } from './handles.ts';
 import { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';

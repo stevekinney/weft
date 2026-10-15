@@ -5,10 +5,37 @@ import {
   loadCustomerProfileActivity,
 } from './customer-profile.test-support.ts';
 import { formatGreetingActivity, helloWorldWorkflow } from './hello-world.test-support.ts';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from './testing/module-scope-scenario.test-support.ts';
 
 async function loadHelloWorldModule() {
   return import('./hello-world-example.test-support.ts');
 }
+
+// This scenario spawns the example entry point as a real process, which takes seconds on a loaded host, so each scenario runs here at
+// module scope, off Bun's five-second per-test clock; its test rethrows the outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const weftRoot = import.meta.dir + '/..';
+  const proc = Bun.spawn(['bun', 'src/hello-world-example.test-support.ts'], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    cwd: weftRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exitCode = await proc.exited;
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+  expect(stdout).toContain('"greeting": "hello Ada"');
+  expect(stdout).toContain('"customerId": "42"');
+  expect(stdout).toContain('"loyaltyTier": "gold"');
+});
 
 describe('bundled examples', () => {
   it('trims greeting subjects before formatting the hello-world example output', async () => {
@@ -98,21 +125,6 @@ describe('bundled examples', () => {
     });
   });
 
-  it('runs the CLI entry point (import.meta.main) when spawned directly, printing both examples', async () => {
-    const weftRoot = import.meta.dir + '/..';
-    const proc = Bun.spawn(['bun', 'src/hello-world-example.test-support.ts'], {
-      cwd: weftRoot,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe('');
-    expect(stdout).toContain('"greeting": "hello Ada"');
-    expect(stdout).toContain('"customerId": "42"');
-    expect(stdout).toContain('"loyaltyTier": "gold"');
-  }, 15_000);
+  it('runs the CLI entry point (import.meta.main) when spawned directly, printing both examples', () =>
+    rethrow(scenario1));
 });

@@ -16,6 +16,11 @@ import ts from 'typescript';
 
 import manifest from '../../package.json';
 
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
 import { codegenPackageName, executeCodegen } from './codegen.ts';
 
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
@@ -91,6 +96,7 @@ type ProcessResult = {
 
 async function runProcess(command: readonly string[], cwd: string): Promise<ProcessResult> {
   const process = Bun.spawn({
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
     cmd: [...command],
     cwd,
     stdout: 'pipe',
@@ -360,6 +366,78 @@ afterAll(() => {
   }
 });
 
+// The packed-artifact scenarios below pack the package, install it into an isolated consumer,
+// and run its CLI, typechecker and generated code, which takes tens of seconds on a loaded host.
+// They run here at module scope, off Bun's five-second per-test clock; each test rethrows its
+// scenario's outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const { tarballPath } = await getPackedTarballFixture();
+  expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
+  expect(existsSync(tarballPath)).toBe(true);
+});
+
+const scenario2 = await outcomeOf(async () => {
+  const { consumerDirectory, generatedWorkerPath, tarballPath } = await getPackedConsumerFixture();
+
+  const installedManifest = readJsonFile(
+    join(consumerDirectory, 'node_modules', '@lostgradient', 'weft', 'package.json'),
+  );
+  expect(installedManifest['name']).toBe('@lostgradient/weft');
+  expect(installedManifest['version']).toBe(PACKED_FIXTURE_VERSION);
+  expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
+  expect(existsSync(join(consumerDirectory, 'node_modules', '.bin', 'weft'))).toBe(true);
+  const generated = await Bun.file(generatedWorkerPath).text();
+  expect(generated).toContain("from '@lostgradient/weft/worker/generated-authoring'");
+  expect(generated).toContain('defineGeneratedWorker');
+
+  const resolution = await runProcess(
+    [
+      process.execPath,
+      '--print',
+      `Bun.resolveSync('@lostgradient/weft/worker/generated-authoring', ${JSON.stringify(consumerDirectory)})`,
+    ],
+    consumerDirectory,
+  );
+  expect(resolution.exitCode, resolution.stderr).toBe(0);
+  expect(
+    realpathSync(resolution.stdout).startsWith(
+      realpathSync(join(consumerDirectory, 'node_modules')),
+    ),
+    resolution.stdout,
+  ).toBe(true);
+  expect(resolution.stdout).not.toContain(PACKAGE_ROOT);
+});
+
+const scenario3 = await outcomeOf(async () => {
+  const { consumerDirectory } = await getPackedConsumerFixture();
+
+  const diagnostics = typecheckConsumerProject(join(consumerDirectory, 'tsconfig.json'));
+  expect(diagnostics).toEqual([]);
+});
+
+const scenario4 = await outcomeOf(async () => {
+  const { consumerDirectory } = await getPackedConsumerFixture();
+
+  const execution = await runProcess(
+    [process.execPath, '--no-install', join(consumerDirectory, 'consumer.ts')],
+    consumerDirectory,
+  );
+  expect(execution.exitCode, execution.stderr).toBe(0);
+  const proof = JSON.parse(execution.stdout) as {
+    readonly resolved?: unknown;
+    readonly workflows?: unknown;
+  };
+  expect(proof.workflows).toEqual(['farewell', 'welcome']);
+  if (typeof proof.resolved !== 'string') {
+    throw new Error(`expected resolver proof to be a string, received ${String(proof.resolved)}`);
+  }
+  expect(
+    realpathSync(proof.resolved).startsWith(realpathSync(join(consumerDirectory, 'node_modules'))),
+  ).toBe(true);
+  expect(proof.resolved).not.toContain(PACKAGE_ROOT);
+});
+
 describe('executeCodegen end-to-end', () => {
   it('emits the expected .d.ts from the registry fixture', async () => {
     const dir = makeTempDir();
@@ -473,75 +551,15 @@ describe('executeCodegen end-to-end', () => {
     expect(PACKED_CONSUMER_INSTALL_ARGUMENTS).not.toContain('--offline');
   });
 
-  it('packs a @lostgradient/weft tarball with the expected package identity', async () => {
-    const { tarballPath } = await getPackedTarballFixture();
-    expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
-    expect(existsSync(tarballPath)).toBe(true);
-  });
+  it('packs a @lostgradient/weft tarball with the expected package identity', () =>
+    rethrow(scenario1));
 
-  it('runs packed CLI codegen from an isolated packed consumer without workspace fallback', async () => {
-    const { consumerDirectory, generatedWorkerPath, tarballPath } =
-      await getPackedConsumerFixture();
+  it('runs packed CLI codegen from an isolated packed consumer without workspace fallback', () =>
+    rethrow(scenario2));
 
-    const installedManifest = readJsonFile(
-      join(consumerDirectory, 'node_modules', '@lostgradient', 'weft', 'package.json'),
-    );
-    expect(installedManifest['name']).toBe('@lostgradient/weft');
-    expect(installedManifest['version']).toBe(PACKED_FIXTURE_VERSION);
-    expect(tarballPath.endsWith('weft-packed-fixture.tgz')).toBe(true);
-    expect(existsSync(join(consumerDirectory, 'node_modules', '.bin', 'weft'))).toBe(true);
-    const generated = await Bun.file(generatedWorkerPath).text();
-    expect(generated).toContain("from '@lostgradient/weft/worker/generated-authoring'");
-    expect(generated).toContain('defineGeneratedWorker');
+  it('typechecks generated worker code against the packed artifact', () => rethrow(scenario3));
 
-    const resolution = await runProcess(
-      [
-        process.execPath,
-        '--print',
-        `Bun.resolveSync('@lostgradient/weft/worker/generated-authoring', ${JSON.stringify(consumerDirectory)})`,
-      ],
-      consumerDirectory,
-    );
-    expect(resolution.exitCode, resolution.stderr).toBe(0);
-    expect(
-      realpathSync(resolution.stdout).startsWith(
-        realpathSync(join(consumerDirectory, 'node_modules')),
-      ),
-      resolution.stdout,
-    ).toBe(true);
-    expect(resolution.stdout).not.toContain(PACKAGE_ROOT);
-  });
-
-  it('typechecks generated worker code against the packed artifact', async () => {
-    const { consumerDirectory } = await getPackedConsumerFixture();
-
-    const diagnostics = typecheckConsumerProject(join(consumerDirectory, 'tsconfig.json'));
-    expect(diagnostics).toEqual([]);
-  });
-
-  it('executes generated worker code against the packed artifact', async () => {
-    const { consumerDirectory } = await getPackedConsumerFixture();
-
-    const execution = await runProcess(
-      [process.execPath, '--no-install', join(consumerDirectory, 'consumer.ts')],
-      consumerDirectory,
-    );
-    expect(execution.exitCode, execution.stderr).toBe(0);
-    const proof = JSON.parse(execution.stdout) as {
-      readonly resolved?: unknown;
-      readonly workflows?: unknown;
-    };
-    expect(proof.workflows).toEqual(['farewell', 'welcome']);
-    if (typeof proof.resolved !== 'string') {
-      throw new Error(`expected resolver proof to be a string, received ${String(proof.resolved)}`);
-    }
-    expect(
-      realpathSync(proof.resolved).startsWith(
-        realpathSync(join(consumerDirectory, 'node_modules')),
-      ),
-    ).toBe(true);
-    expect(proof.resolved).not.toContain(PACKAGE_ROOT);
-  });
+  it('executes generated worker code against the packed artifact', () => rethrow(scenario4));
 
   it('fails with a clear diagnostic on registry version mismatch and writes no output', async () => {
     const dir = makeTempDir();

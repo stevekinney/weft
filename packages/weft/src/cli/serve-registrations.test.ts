@@ -19,6 +19,22 @@ describe('registerModuleExports', () => {
       'No workflow registered with name "exportAlias"',
     );
   });
+
+  it('registers plain-object activity definitions after normalizing them to callables', async () => {
+    const definition: ActivityDefinition = {
+      name: 'plain-object-activity',
+      description: 'Registered from a module export object',
+      execute: async () => 'done',
+    };
+    await using engine = new Engine();
+
+    registerModuleExports(engine, {}, [definition]);
+
+    expect(engine.getActivityDefinition('plain-object-activity')).toMatchObject({
+      name: 'plain-object-activity',
+      description: 'Registered from a module export object',
+    });
+  });
 });
 
 describe('toActivityCallable', () => {

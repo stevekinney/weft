@@ -18,7 +18,8 @@ import {
   registerChildCancellationHandler,
 } from './child-workflow-cancellation.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
-import { getGeneratorOwnedWorkflowResultPromise } from './handle-result.ts';
+import { currentExecutionAttempt } from './execution-attempts.ts';
+import { getGeneratorOwnedWorkflowResultPromise } from './generator-owned-result.ts';
 import type { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { encodedValuesEqual } from './state-utilities.ts';
@@ -329,7 +330,11 @@ export async function executeChildWorkflow(
     ChildWorkflowOperationCallbacks,
     'getComposedWorkflowInterceptor' | 'getHandle' | 'loadWorkflowState' | 'start'
   >,
+  /** Aborted when a `ctx.race` branch awaiting this child loses; its conflicts then concern nobody. */
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  // Before the first await: the attempt of the run that is awaiting this child.
+  const parentAttempt = currentExecutionAttempt(internals, workflowId);
   const rawId = operation.options?.['id'];
   const childWorkflowId = typeof rawId === 'string' ? rawId : crypto.randomUUID();
   const parentHeaders = internals.workflowHeaders.get(workflowId) ?? new Map<string, string>();
@@ -372,7 +377,13 @@ export async function executeChildWorkflow(
     // waiter would advance the deposed parent while the successor advances its
     // replayed one (ADR 0002). Marking it generator-owned fences the settle on
     // the parent's claim generation.
-    return getGeneratorOwnedWorkflowResultPromise(internals, childHandle.id, workflowId);
+    return getGeneratorOwnedWorkflowResultPromise(
+      internals,
+      childHandle.id,
+      workflowId,
+      signal,
+      parentAttempt,
+    );
   };
 
   const composedInterceptor = callbacks.getComposedWorkflowInterceptor();

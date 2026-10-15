@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { resolve } from 'node:path';
 
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../testing/module-scope-scenario.test-support.ts';
+
 // Spawns a real `tsc --noEmit` subprocess against an isolated tsconfig, on
 // purpose: it is the only way to reproduce a genuinely unaugmented
 // `WorkflowRegistry` (see the comment atop consumer.ts for why the shared
@@ -13,29 +19,36 @@ import { resolve } from 'node:path';
 // there rather than raise the LOAD_SENSITIVE_TEST_PATHS cap without cause.
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/no-workflow-registry');
 
-describe('client fallback-overload genericity fixture (no WorkflowRegistry augmentation)', () => {
-  it('compiles start/startOrSignal/schedule with an explicit type argument against WeftClient, LocalClient, and HttpClient', async () => {
-    const tscPath = Bun.resolveSync('typescript/bin/tsc', FIXTURE_DIR);
-    const proc = Bun.spawn(['bun', tscPath, '-p', FIXTURE_DIR, '--noEmit'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).text();
-    const stderr = await new Response(proc.stderr).text();
-    if (exitCode !== 0) {
-      throw new Error(`fallback-overload fixture failed (exit ${exitCode}):
+// This spawns a real process, which takes seconds on a loaded host. The scenarios below run at
+// module scope, off Bun's five-second per-test clock; each test rethrows its scenario's outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const tscPath = Bun.resolveSync('typescript/bin/tsc', FIXTURE_DIR);
+  const proc = Bun.spawn(['bun', tscPath, '-p', FIXTURE_DIR, '--noEmit'], {
+    timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exitCode = await proc.exited;
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  if (exitCode !== 0) {
+    throw new Error(`fallback-overload fixture failed (exit ${exitCode}):
 ${stdout}
 ${stderr}`);
-    }
-    expect(exitCode).toBe(0);
-    // Regression coverage: temporarily dropping this overload's own
-    // `<TName extends string>` on all three client types (rewriting
-    // UnknownNameWhenRegistryEmpty<TName> to
-    // UnknownNameWhenRegistryEmpty<string>) makes every call in consumer.ts
-    // fail with "does not satisfy the constraint 'never'" against the
-    // OTHER (KnownWorkflowName) overload — confirmed manually before this
-    // test was added. This proves the fixture is non-vacuous: it fails
-    // without the fix and passes with it, not just "passes" unconditionally.
-  }, 60_000);
+  }
+  expect(exitCode).toBe(0);
+  // Regression coverage: temporarily dropping this overload's own
+  // `<TName extends string>` on all three client types (rewriting
+  // UnknownNameWhenRegistryEmpty<TName> to
+  // UnknownNameWhenRegistryEmpty<string>) makes every call in consumer.ts
+  // fail with "does not satisfy the constraint 'never'" against the
+  // OTHER (KnownWorkflowName) overload — confirmed manually before this
+  // test was added. This proves the fixture is non-vacuous: it fails
+  // without the fix and passes with it, not just "passes" unconditionally.
+});
+
+describe('client fallback-overload genericity fixture (no WorkflowRegistry augmentation)', () => {
+  it('compiles start/startOrSignal/schedule with an explicit type argument against WeftClient, LocalClient, and HttpClient', () =>
+    rethrow(scenario1));
 });

@@ -11,11 +11,11 @@ import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
+import { getGeneratorOwnedWorkflowResultPromise } from './generator-owned-result.ts';
 import {
   bootstrapWorkflowResultResolver,
   createWorkflowHandleWithResultPromise,
   createWorkflowResultWaiter,
-  getGeneratorOwnedWorkflowResultPromise,
   getWorkflowResultPromise,
   pollPendingCrossEngineResultWaiters,
 } from './handle-result.ts';
@@ -172,6 +172,22 @@ describe('workflow result resolution', () => {
     currentWaiter.resolve('resolved through replacement');
 
     expect(await replacementWaiter.promise).toBe('resolved through replacement');
+  });
+
+  it('rejects a linked replacement waiter with the current waiter rejection', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    const internals = getInternals(engine);
+    const currentWaiter = createWorkflowResultWaiter(internals, 'wf-replacement-rejected');
+    const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+    const replacementWaiter = { promise, resolve, reject };
+
+    await bootstrapWorkflowResultResolver(internals, 'wf-replacement-rejected', replacementWaiter);
+    const replacementRejection = throwingRejectionOf(replacementWaiter.promise);
+    const currentRejection = throwingRejectionOf(currentWaiter.promise);
+    currentWaiter.reject(new Error('replacement run failed'));
+
+    expect(await replacementRejection).toThrow('replacement run failed');
+    expect(await currentRejection).toThrow('replacement run failed');
   });
 
   it('unregisters the previous cached handle token before replacing it', async () => {

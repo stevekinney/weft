@@ -78,6 +78,20 @@ function synthesizeTerminalEventFromState(state: WorkflowState): Event | null {
 
 export const HANDLE_RESULT_PROMISE = Symbol('handleResultPromise');
 
+/**
+ * Key of the accessor `Engine.lostWorkflowClaim` uses to reach the result
+ * promise a handle awaits, which is where the committer of its outcome is kept.
+ */
+export const HANDLE_RESULT_SETTLEMENT = Symbol('handleResultSettlement');
+
+/**
+ * What `Engine.lostWorkflowClaim` accepts: the run's own handle, as returned by
+ * `start`, `getHandle`, or `recoverAll`. Only `id` is part of the type so a
+ * caller holding a narrowed handle shape can pass it; a shape that is not a real
+ * handle has no settled result and reports no loss.
+ */
+export type WorkflowClaimHandle = { readonly id: string };
+
 export interface WorkflowHandleEngine extends EventTarget {
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown>;
   cancel(workflowId: string): Promise<void>;
@@ -167,6 +181,11 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     this.id = id;
     this.#engine = engine;
     this.#resultPromise = undefined;
+  }
+
+  /** The result promise this handle awaits, once `result()` has been requested. */
+  [HANDLE_RESULT_SETTLEMENT](): Promise<unknown> | undefined {
+    return this.#resultPromise;
   }
 
   async result(): Promise<TResult> {

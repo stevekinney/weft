@@ -1,11 +1,15 @@
 import { abandonedGenerationConflict } from './checkpoint-conflict-abandon.ts';
-import { isCheckpointConflictFor } from './checkpoint-conflict-error.ts';
 import type { WorkflowResultWaiter } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
+import { copyResultCommitter, recordResultCommitter } from './result-committer.ts';
 import { deriveWorkflowResultFromState, loadWorkflowState } from './storage-io.ts';
-import { confirmWakeOwnership } from './wake-ownership-guard.ts';
+
+/** What a result waiter rejects with for a workflow that is not (or no longer) in storage. */
+export function workflowNotFoundInStorageError(workflowId: string): Error {
+  return new Error(`Workflow "${workflowId}" not found in storage`);
+}
 
 export function createWorkflowHandleWithResultPromise(
   internals: EngineInternals,
@@ -64,101 +68,6 @@ export function getWorkflowResultPromise(
     scheduleCrossEngineResultPollIfPending(internals, workflowId, waiter),
   );
   return waiter.promise;
-}
-
-/**
- * Result promise for a parent generator parked on `ctx.startChild()`'s
- * default `parentClosePolicy: 'await'` — the ONLY intended caller (see
- * `child-workflow.ts`'s `executeChildWorkflow`, which must call this instead
- * of the plain `childHandle.result()` / `handle.result()` path). Identical to
- * {@link getWorkflowResultPromise} except the waiter this settles is marked
- * generator-owned for `parentWorkflowId`: under `ownership: 'workflow-lease'`
- * a settle attempt first confirms `parentWorkflowId` still holds the claim
- * generation it parked under (`confirmWakeOwnership`, `'child-completion'`),
- * fencing duplicate generator advancement (WFT-79 F1) — see
- * {@link bootstrapWorkflowResultResolver}. Top-level, non-generator callers
- * must keep using {@link getWorkflowResultPromise}, which stays unfenced by
- * design: cross-engine `handle.result()` polling has no generator to
- * duplicate and must remain settleable from durable state alone.
- *
- * If `internals.resultResolvers` already holds a waiter for `workflowId` —
- * e.g. an observational `handle.result()` caller got there first — that
- * SHARED waiter is untouched: {@link fenceResultOnParentGeneration} wraps
- * only THIS caller's derived promise, so the observational caller's own
- * promise settles normally from the shared waiter regardless of the parent's
- * claim generation. See that function's doc for why fencing lives on the
- * parent's view instead of the shared waiter itself.
- */
-export function getGeneratorOwnedWorkflowResultPromise(
-  internals: EngineInternals,
-  workflowId: string,
-  parentWorkflowId: string,
-): Promise<unknown> {
-  return fenceResultOnParentGeneration(
-    internals,
-    parentWorkflowId,
-    getWorkflowResultPromise(internals, workflowId),
-    workflowId,
-  );
-}
-
-/**
- * Withhold a settled child result from a parent generator that no longer holds
- * the claim generation it parked under.
- *
- * This wraps the SHARED waiter's promise rather than marking the waiter itself.
- * `internals.resultResolvers` dedupes to one waiter per workflow id, so an
- * observational `handle.result()` caller and a parked parent can attach to the
- * same waiter in either order. Marking that shared entry applied the parent's
- * fence to the observer too, and a deposed parent then starved an unrelated
- * caller of a result that was already durable — so the fence lives on the
- * parent's view, and the shared waiter settles normally for everyone else.
- *
- * A discarded parent's promise never settles, matching every other discarded
- * claim-requiring wake: the successor engine replays that parent, and this
- * engine's copy must not advance. Inert under `ownership: 'none'`/`'lease'`,
- * where `confirmWakeOwnership` always proceeds.
- */
-function fenceResultOnParentGeneration(
-  internals: EngineInternals,
-  parentWorkflowId: string,
-  promise: Promise<unknown>,
-  childWorkflowId: string,
-): Promise<unknown> {
-  const gate = Promise.withResolvers<unknown>();
-  void promise.then(
-    async (value) => {
-      if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.resolve(value);
-      return undefined;
-    },
-    async (error: unknown) => {
-      // A child abandoned after a lost checkpoint race is healthy under its
-      // winner, which drives the parent too: report nothing, not a false failure.
-      if (isCheckpointConflictFor(error, childWorkflowId)) return undefined;
-      if (await parentStillOwnsGeneration(internals, parentWorkflowId)) gate.reject(error);
-      return undefined;
-    },
-  );
-  return gate.promise;
-}
-
-async function parentStillOwnsGeneration(
-  internals: EngineInternals,
-  parentWorkflowId: string,
-): Promise<boolean> {
-  try {
-    return (
-      (await confirmWakeOwnership(internals, parentWorkflowId, 'child-completion')) === 'proceed'
-    );
-  } catch {
-    // A thrown pre-check is not a confirmed loss of the claim, and this fence
-    // is only a cheap guard — the epoch-conditioned durable write the parent
-    // makes next is the real backstop. Proceeding matches
-    // `confirmWakeOwnership`'s own documented thrown-read policy; swallowing
-    // the throw into a withheld result would strand the parent permanently on
-    // a transient blip.
-    return true;
-  }
 }
 
 /**
@@ -413,7 +322,7 @@ export async function bootstrapWorkflowResultResolver(
     const outcome = await prepareToSettleTerminalWaiter(internals, workflowId, waiter);
     if (outcome !== 'proceed') return outcome;
     internals.resultResolvers.delete(workflowId);
-    waiter.reject(new Error(`Workflow "${workflowId}" not found in storage`));
+    waiter.reject(workflowNotFoundInStorageError(workflowId));
     return 'settled';
   }
 
@@ -436,6 +345,7 @@ export async function bootstrapWorkflowResultResolver(
     // result (or a spurious "still running") to this waiter.
     const result = deriveWorkflowResultFromState(state);
     clearResultWaiter(internals, workflowId, waiter);
+    recordResultCommitter(waiter, state.terminalCommittedBy);
     waiter.resolve(result);
     return 'settled';
   } catch (error) {
@@ -447,6 +357,7 @@ export async function bootstrapWorkflowResultResolver(
     // awaiting a failed child hanging forever (re-deriving throws the same
     // way every time).
     clearResultWaiter(internals, workflowId, waiter);
+    recordResultCommitter(waiter, state.terminalCommittedBy);
     waiter.reject(error);
     return 'settled';
   }
@@ -462,7 +373,16 @@ function linkToReplacementWaiter(
     return false;
   }
 
-  void currentWaiter.promise.then(waiter.resolve, waiter.reject);
+  void currentWaiter.promise.then(
+    (value) => {
+      copyResultCommitter(currentWaiter, waiter);
+      return waiter.resolve(value);
+    },
+    (reason) => {
+      copyResultCommitter(currentWaiter, waiter);
+      return waiter.reject(reason);
+    },
+  );
   return true;
 }
 

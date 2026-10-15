@@ -32,7 +32,12 @@
 
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
+import {
+  outcomeOf,
+  rethrow,
+  SCENARIO_HANG_GUARD_MILLISECONDS,
+} from '../../testing/module-scope-scenario.test-support.ts';
 
 import {
   availableAdapterSpecs,
@@ -403,101 +408,103 @@ async function countMidRows(reader: OpenedAdapter): Promise<number> {
 }
 
 for (const spec of availableAdapterSpecs()) {
-  describe(`mid-transaction kill (3a, adapter batch) — ${spec.name}`, () => {
-    let scope: FixtureScope;
+  // The child is SIGKILLed mid-write, so the scenario needs a real process; it runs here, at
+  // module scope, off Bun's five-second per-test clock, and the test rethrows its outcome.
+  const scope = new FixtureScope();
+  const outcome = await outcomeOf(async () => {
+    const directory = scope.makeTempDirectory('batch-kill');
+    const entrypointPath = join(directory, 'entrypoint.ts');
+    const databasePath = join(directory, 'weft.db');
+    await Bun.write(entrypointPath, adapterBatchEntrypointSource(spec));
 
-    beforeEach(() => {
-      scope = new FixtureScope();
+    const child = Bun.spawn({
+      timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+      cmd: ['bun', entrypointPath, databasePath],
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
 
-    afterEach(() => {
+    const totalBatchEntries = 50_000;
+    let reader: OpenedAdapter | undefined;
+    try {
+      await readUntilMarkerOrExit(child, 'WEFT_DURABILITY_READY', 5000);
+      await killAndWait(child);
+
+      reader = await spec.open(databasePath);
+      expect(await reader.storage.get('before:ok')).not.toBeNull();
+
+      // The atomicity invariant: the SIGKILL must leave the database
+      // in exactly one of the two valid pre-/post-batch states. Either
+      // the WAL rolled back the transaction (count = 0) or it
+      // committed cleanly before the kill arrived (count = total).
+      // Anything in between proves the batch is non-atomic and is the
+      // failure mode this test exists to catch.
+      const midCount = await countMidRows(reader);
+      expect(midCount === 0 || midCount === totalBatchEntries).toBe(true);
+    } catch (error) {
+      scope.markFailed();
+      throw error;
+    } finally {
+      await closeIfOpen(reader);
+      await killAndWait(child);
+    }
+  });
+
+  describe(`mid-transaction kill (3a, adapter batch) — ${spec.name}`, () => {
+    afterAll(() => {
       scope.cleanup();
     });
 
-    it('SIGKILL around the adapter batch call leaves an all-or-nothing outcome (no partial rows)', async () => {
-      const directory = scope.makeTempDirectory('batch-kill');
-      const entrypointPath = join(directory, 'entrypoint.ts');
-      const databasePath = join(directory, 'weft.db');
-      await Bun.write(entrypointPath, adapterBatchEntrypointSource(spec));
-
-      const child = Bun.spawn({
-        cmd: ['bun', entrypointPath, databasePath],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      const totalBatchEntries = 50_000;
-      let reader: OpenedAdapter | undefined;
-      try {
-        await readUntilMarkerOrExit(child, 'WEFT_DURABILITY_READY', 5000);
-        await killAndWait(child);
-
-        reader = await spec.open(databasePath);
-        expect(await reader.storage.get('before:ok')).not.toBeNull();
-
-        // The atomicity invariant: the SIGKILL must leave the database
-        // in exactly one of the two valid pre-/post-batch states. Either
-        // the WAL rolled back the transaction (count = 0) or it
-        // committed cleanly before the kill arrived (count = total).
-        // Anything in between proves the batch is non-atomic and is the
-        // failure mode this test exists to catch.
-        const midCount = await countMidRows(reader);
-        expect(midCount === 0 || midCount === totalBatchEntries).toBe(true);
-      } catch (error) {
-        scope.markFailed();
-        throw error;
-      } finally {
-        await closeIfOpen(reader);
-        await killAndWait(child);
-      }
-    }, 15_000);
+    it('SIGKILL around the adapter batch call leaves an all-or-nothing outcome (no partial rows)', () =>
+      rethrow(outcome));
   });
 }
 
 for (const spec of availableBunNodeAdapterSpecs()) {
-  describe(`mid-transaction kill (3b, deterministic) — ${spec.name}`, () => {
-    let scope: FixtureScope;
+  // The child is SIGKILLed mid-write, so the scenario needs a real process; it runs here, at
+  // module scope, off Bun's five-second per-test clock, and the test rethrows its outcome.
+  const scope = new FixtureScope();
+  const outcome = await outcomeOf(async () => {
+    const directory = scope.makeTempDirectory('in-transaction-kill');
+    const entrypointPath = join(directory, 'entrypoint.ts');
+    const databasePath = join(directory, 'weft.db');
+    await Bun.write(entrypointPath, rawInTransactionEntrypointSource(spec));
 
-    beforeEach(() => {
-      scope = new FixtureScope();
+    const child = Bun.spawn({
+      timeout: SCENARIO_HANG_GUARD_MILLISECONDS,
+      cmd: ['bun', entrypointPath, databasePath],
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
 
-    afterEach(() => {
+    let reader: OpenedAdapter | undefined;
+    try {
+      await readUntilMarkerOrExit(child, 'WEFT_DURABILITY_IN_TRANSACTION', 5000);
+      await killAndWait(child);
+
+      // Verify the child was actually killed by SIGKILL, not by a crash
+      // mid-setup. If the child exited from a thrown error, that's an
+      // environment/test bug, not a durability claim.
+      expect(child.signalCode).toBe('SIGKILL');
+
+      reader = await spec.open(databasePath);
+      expect(await reader.storage.get('before:ok')).not.toBeNull();
+      expect(await reader.storage.get('mid:in-transaction')).toBeNull();
+    } catch (error) {
+      scope.markFailed();
+      throw error;
+    } finally {
+      await closeIfOpen(reader);
+      await killAndWait(child);
+    }
+  });
+
+  describe(`mid-transaction kill (3b, deterministic) — ${spec.name}`, () => {
+    afterAll(() => {
       scope.cleanup();
     });
 
-    it('SIGKILL after BEGIN+INSERT, before COMMIT, rolls back the in-transaction row', async () => {
-      const directory = scope.makeTempDirectory('in-transaction-kill');
-      const entrypointPath = join(directory, 'entrypoint.ts');
-      const databasePath = join(directory, 'weft.db');
-      await Bun.write(entrypointPath, rawInTransactionEntrypointSource(spec));
-
-      const child = Bun.spawn({
-        cmd: ['bun', entrypointPath, databasePath],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-
-      let reader: OpenedAdapter | undefined;
-      try {
-        await readUntilMarkerOrExit(child, 'WEFT_DURABILITY_IN_TRANSACTION', 5000);
-        await killAndWait(child);
-
-        // Verify the child was actually killed by SIGKILL, not by a crash
-        // mid-setup. If the child exited from a thrown error, that's an
-        // environment/test bug, not a durability claim.
-        expect(child.signalCode).toBe('SIGKILL');
-
-        reader = await spec.open(databasePath);
-        expect(await reader.storage.get('before:ok')).not.toBeNull();
-        expect(await reader.storage.get('mid:in-transaction')).toBeNull();
-      } catch (error) {
-        scope.markFailed();
-        throw error;
-      } finally {
-        await closeIfOpen(reader);
-        await killAndWait(child);
-      }
-    }, 15_000);
+    it('SIGKILL after BEGIN+INSERT, before COMMIT, rolls back the in-transaction row', () =>
+      rethrow(outcome));
   });
 }

@@ -16,6 +16,7 @@ import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
 import { commitPurgeOrExplainLoss, isScannedRun } from './purge-supersession.ts';
 import { markPurgeWriteFailures } from './purge-write-tracking.ts';
+import { recordResultCommitter } from './result-committer.ts';
 import { streamExpiredRetentionWorkflowStates } from './retention-scan.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
@@ -258,6 +259,7 @@ function settleAndForgetPurgedResultWaiter(internals: EngineInternals, state: Wo
   const waiter = internals.resultResolvers.get(state.id);
   if (waiter === undefined) return;
   internals.resultResolvers.delete(state.id);
+  recordResultCommitter(waiter, state.terminalCommittedBy);
   try {
     waiter.resolve(deriveWorkflowResultFromState(state));
   } catch (error) {

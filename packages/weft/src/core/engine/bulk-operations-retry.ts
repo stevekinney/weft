@@ -463,6 +463,7 @@ function buildReactivatedWorkflowState(
   delete reactivatedState.result;
   delete reactivatedState.terminationReason;
   delete reactivatedState.terminalCleanupToken;
+  delete reactivatedState.terminalCommittedBy;
   return reactivatedState;
 }
 
