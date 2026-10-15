@@ -22,7 +22,12 @@ import {
   type ScheduleToCloseBudget,
 } from './activity-schedule-to-close.ts';
 import type { Context } from './index.ts';
-import { getInternals, hasContextInternals, type ContextInternals } from './internals.ts';
+import {
+  getInternals,
+  hasContextInternals,
+  yieldOperation,
+  type ContextInternals,
+} from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { getCachedRunActivityRequest } from './run-operation-cached-request.ts';
 import { isActivityCallOptions } from './session-state.ts';
@@ -415,7 +420,10 @@ function* runPreparedActivityWithRetry<TResult>(
       assertScheduleToCloseBudgetNotExhausted(budget, request.activityName, internals.getNow());
     }
     try {
-      const result = yield prepareActivityRetryRequest(request, attempt);
+      const result = yield* yieldOperation(
+        internals,
+        prepareActivityRetryRequest(request, attempt),
+      );
       if (cacheResultStep !== undefined) {
         context.accumulatedResults.set(cacheResultStep, result);
       }

@@ -47,14 +47,16 @@ class TimedOutTransitionFailingStorage implements WeftStorage {
     return this.underlying.scan(prefix, options);
   }
 
+  // The terminal commit is conditioned on the state it decided from, so it arrives here.
   conditionalBatch(
     conditions: Parameters<NonNullable<MemoryStorage['conditionalBatch']>>[0],
     operations: Parameters<NonNullable<MemoryStorage['conditionalBatch']>>[1],
   ): Promise<boolean> {
+    this.#failTimedOutTransitionIfArmed(operations);
     return this.underlying.conditionalBatch(conditions, operations);
   }
 
-  async batch(operations: BatchOperation[]): Promise<void> {
+  #failTimedOutTransitionIfArmed(operations: BatchOperation[]): void {
     const transitionsToTimedOut = operations.some((operation) => {
       if (operation.type !== 'put' || !/^wf:[^:]+$/.test(operation.key)) return false;
       const decoded = decode(operation.value) as WorkflowState;
@@ -63,6 +65,10 @@ class TimedOutTransitionFailingStorage implements WeftStorage {
     if (this.failTimedOutTransition && transitionsToTimedOut) {
       throw new Error('state write failed during circuit-breaker termination');
     }
+  }
+
+  async batch(operations: BatchOperation[]): Promise<void> {
+    this.#failTimedOutTransitionIfArmed(operations);
     return this.underlying.batch(operations);
   }
 

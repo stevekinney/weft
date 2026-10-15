@@ -6,9 +6,8 @@ import {
 } from '../../scripts/lib/workflow-visibility-backfill.ts';
 import { decode, encode } from '../core/codec.ts';
 import {
-  WORKFLOW_VISIBILITY_INDEX_VERSION,
-  decodeWorkflowVisibilityManifest,
   getWorkflowVisibilityWatermark,
+  workflowVisibilityUpdatedBucket,
 } from '../core/engine/workflow-indexes.ts';
 import type { WorkflowState } from '../core/types.ts';
 import {
@@ -60,7 +59,7 @@ async function seedWorkflow(storage: BunSQLiteStorage, state: WorkflowState): Pr
 }
 
 describe('BunSQLite workflow visibility backfill', () => {
-  it('writes manifests, index rows, and the watermark for an on-disk database', async () => {
+  it('writes index rows and the watermark for an on-disk database', async () => {
     const storage = openDiskStorage();
     await seedWorkflow(
       storage,
@@ -89,41 +88,21 @@ describe('BunSQLite workflow visibility backfill', () => {
     expect(builtAtBytes).not.toBeNull();
     expect(decode(builtAtBytes!)).toEqual(expect.any(Number));
 
-    const manifestA = decodeWorkflowVisibilityManifest(
-      await storage.get(KEYS.workflowVisibilityManifest('workflow-a')),
-    );
-    expect(manifestA).toEqual({
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: [
-        KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-a'),
-        KEYS.workflowVisibilityStatus('running', 'workflow-a'),
-        KEYS.workflowVisibilityType('order-fulfillment', 'workflow-a'),
-        KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-a'),
-      ].toSorted(),
-    });
-
-    const manifestB = decodeWorkflowVisibilityManifest(
-      await storage.get(KEYS.workflowVisibilityManifest('workflow-b')),
-    );
-    expect(manifestB).toEqual({
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: [
-        KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-b'),
-        KEYS.workflowVisibilityDeadline(1_700_000_010_000, 'workflow-b'),
-        KEYS.workflowVisibilityStatus('completed', 'workflow-b'),
-        KEYS.workflowVisibilityType('payment', 'workflow-b'),
-        KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-b'),
-      ].toSorted(),
-    });
-
     expect(await collectKeys(storage, 'wf-idx-created:')).toEqual([
       KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-a'),
       KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-b'),
     ]);
     expect(await collectKeys(storage, 'wf-idx-updated:')).toEqual([
-      KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-a'),
-      KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-b'),
+      KEYS.workflowVisibilityUpdated(
+        workflowVisibilityUpdatedBucket(1_700_000_000_500),
+        'workflow-a',
+      ),
+      KEYS.workflowVisibilityUpdated(
+        workflowVisibilityUpdatedBucket(1_700_000_000_500),
+        'workflow-b',
+      ),
     ]);
+    expect(await collectKeys(storage, 'wf-idx-manifest:')).toEqual([]);
     expect(await collectKeys(storage, 'wf-idx-status:')).toEqual([
       KEYS.workflowVisibilityStatus('completed', 'workflow-b'),
       KEYS.workflowVisibilityStatus('running', 'workflow-a'),
@@ -141,16 +120,6 @@ describe('BunSQLite workflow visibility backfill', () => {
 
     expect(secondReport).toEqual({ processed: 2, conflicts: 0, watermarkWritten: true });
     expect(await collectKeys(storage, 'wf-idx-')).toEqual(indexedKeysAfterFirstBackfill);
-    expect(
-      decodeWorkflowVisibilityManifest(
-        await storage.get(KEYS.workflowVisibilityManifest('workflow-a')),
-      ),
-    ).toEqual(manifestA);
-    expect(
-      decodeWorkflowVisibilityManifest(
-        await storage.get(KEYS.workflowVisibilityManifest('workflow-b')),
-      ),
-    ).toEqual(manifestB);
   });
 
   it('drops visibility rows and watermark without deleting workflow state', async () => {

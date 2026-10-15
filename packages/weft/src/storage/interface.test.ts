@@ -201,7 +201,6 @@ describe('KEYS insertion order', () => {
       'workflowVisibilityCreated',
       'workflowVisibilityUpdated',
       'workflowVisibilityDeadline',
-      'workflowVisibilityManifest',
       'workflowVisibilityMetaVersion',
       'workflowVisibilityMetaBuiltAt',
       'workflowVisibilityMetaCursor',
@@ -361,7 +360,6 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowVisibilityCreated(1, 'workflow-id'),
       KEYS.workflowVisibilityUpdated(1, 'workflow-id'),
       KEYS.workflowVisibilityDeadline(1, 'workflow-id'),
-      KEYS.workflowVisibilityManifest('workflow-id'),
       KEYS.workflowVisibilityMetaVersion(),
       KEYS.workflowVisibilityMetaBuiltAt(),
       KEYS.workflowVisibilityMetaCursor(),
@@ -1021,9 +1019,6 @@ describe('KEYS', () => {
     );
     expect(KEYS.workflowVisibilityDeadline(5_000, workflowId)).toBe(
       `wf-idx-deadline:0000000000005000:${encodedWorkflowId}`,
-    );
-    expect(KEYS.workflowVisibilityManifest(workflowId)).toBe(
-      `wf-idx-manifest:${encodedWorkflowId}`,
     );
     expect(KEYS.workflowVisibilityMetaVersion()).toBe('wf-idx-meta:version');
     expect(KEYS.workflowVisibilityMetaBuiltAt()).toBe('wf-idx-meta:built-at');

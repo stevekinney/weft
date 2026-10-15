@@ -230,6 +230,22 @@ describe('Scheduler — implementation-specific', () => {
     context.makeTimer(overrides);
   const collectStorageKeys = () => context.collectStorageKeys();
 
+  it('cancel with conditions removes the timer only while every condition still holds', async () => {
+    const timer = makeTimer({ id: 'conditional-cancel', workflowId: 'w-conditional' });
+    await scheduler.schedule(timer);
+    await storage.put('guard', new Uint8Array([1]));
+
+    await scheduler.cancel(timer.id, timer.workflowId, [
+      { key: 'guard', expectedValue: new Uint8Array([2]) },
+    ]);
+    expect(await storage.get(`timer-idx:${timer.id}`)).not.toBeNull();
+
+    await scheduler.cancel(timer.id, timer.workflowId, [
+      { key: 'guard', expectedValue: new Uint8Array([1]) },
+    ]);
+    expect(await storage.get(`timer-idx:${timer.id}`)).toBeNull();
+  });
+
   it('limits each expired timer source scan and drains a larger backlog across ticks with one cleanup batch per tick', async () => {
     const timerCount = EXPECTED_EXPIRED_TIMER_SCAN_LIMIT + 2;
     await storage.batch(

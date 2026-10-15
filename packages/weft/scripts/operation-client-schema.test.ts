@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
+import { PACKAGE_AUTHORIZATION_SCOPE_PATTERN } from '../src/server/authorization-scope.ts';
+
 import { renderNode, schemaToNode, type TypeNode } from './operation-client-schema.ts';
 
 const NO_ALIASES = new Map<string, string>();
@@ -227,5 +229,19 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     // variant this renderer has not been updated for).
     const malformed = { kind: 'not-a-real-kind' } as unknown as TypeNode;
     expect(() => renderNode(malformed, NO_ALIASES)).toThrow(/Unsupported schema node/);
+  });
+});
+
+describe('schemaToNode — package authorization scopes', () => {
+  it('renders the package-scope pattern as its template literal type', () => {
+    const scope = { type: 'string', pattern: PACKAGE_AUTHORIZATION_SCOPE_PATTERN.source };
+    expect(renderInline(scope)).toBe('`${string}.${string}:${string}`');
+    expect(renderInline({ anyOf: [{ type: 'string', enum: ['system:read'] }, scope] })).toBe(
+      '"system:read" | `${string}.${string}:${string}`',
+    );
+  });
+
+  it('keeps any other string pattern as string', () => {
+    expect(renderInline({ type: 'string', pattern: '^[a-z]+$' })).toBe('string');
   });
 });

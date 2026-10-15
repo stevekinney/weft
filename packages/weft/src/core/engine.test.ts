@@ -1812,9 +1812,7 @@ describe('Engine', () => {
     const originalBatch = storage.batch.bind(storage);
     let holdCancelledStateWrite = false;
 
-    storage.batch = async (operations) => {
-      await originalBatch(operations);
-
+    const holdAfterCancelledStateWrite = async (operations: BatchOperation[]): Promise<void> => {
       if (!holdCancelledStateWrite) {
         return;
       }
@@ -1831,6 +1829,17 @@ describe('Engine', () => {
 
       cancelledStatePersisted.resolve();
       await releaseCancelledStateWrite.promise;
+    };
+    storage.batch = async (operations) => {
+      await originalBatch(operations);
+      await holdAfterCancelledStateWrite(operations);
+    };
+    // The cancel commit is conditioned on the state it decided from, so it takes this path.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async (conditions, operations) => {
+      const applied = await originalConditionalBatch(conditions, operations);
+      if (applied) await holdAfterCancelledStateWrite(operations);
+      return applied;
     };
 
     engine.register(
@@ -1932,18 +1941,23 @@ describe('Engine', () => {
       }),
     );
 
-    // Patch deletePrefix to throw on the first call, which occurs when the
-    // deferred terminal-cleanup timer runs `#cleanupReviews`. The completion
-    // state write runs before that cleanup, so the workflow is durably
-    // recorded as terminal before the error fires.
-    const originalDeletePrefix = storage.deletePrefix.bind(storage);
-    let deletePrefixCallCount = 0;
-    storage.deletePrefix = async (prefix: string): Promise<number> => {
-      deletePrefixCallCount++;
-      if (deletePrefixCallCount === 1) {
+    // Fail the first guarded delete of the review key, which is the first write the deferred
+    // terminal-cleanup timer makes (`#cleanupReviews`). The completion state write runs before
+    // that cleanup, so the workflow is durably recorded as terminal before the error fires.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let failedReviewDelete = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      const deletesReview = operations.some(
+        (operation) =>
+          operation.type === 'delete' &&
+          operation.key.startsWith('review:') &&
+          operation.key.endsWith(':cleanup-warning-review'),
+      );
+      if (deletesReview && !failedReviewDelete) {
+        failedReviewDelete = true;
         throw new Error('simulated cleanup failure');
       }
-      return originalDeletePrefix(prefix);
+      return originalConditionalBatch(conditions, operations);
     };
 
     const handle = await engine.start('cleanup-throw', null);
@@ -6890,7 +6904,15 @@ describe('Engine', () => {
           );
           await realStorage.batch(operations);
         },
-        conditionalBatch: realStorage.conditionalBatch.bind(realStorage),
+        // The terminal sweep lists keys and deletes them in guarded `conditionalBatch` chunks.
+        conditionalBatch: async (conditions, operations) => {
+          deleteBatches.push(
+            operations
+              .filter((operation) => operation.type === 'delete')
+              .map((operation) => operation.key),
+          );
+          return realStorage.conditionalBatch(conditions, operations);
+        },
         [Symbol.dispose]() {
           realStorage[Symbol.dispose]();
         },

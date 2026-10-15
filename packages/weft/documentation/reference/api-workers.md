@@ -752,6 +752,30 @@ Deliberately excludes the free-text rejection message and any manifest contentâ€
 
 The JSON-RPC operation name is `weft.workers.rejections`.
 
+### `GET /api/v1/conformance/targets` and `POST /api/v1/conformance/targets/:target/report`
+
+Remote-worker protocol conformance reports (COR-1365). `GET` lists the conformance targets registered with `serve({ conformanceTargets: createConformanceTargets({ ... }) })` and requires `system:read`. `POST` runs the `weft conformance` check sequence against one target in a private sandbox server and requires `system:admin`. A request names a target only. It can never supply a worker command.
+
+```ts
+type ListConformanceTargetsResponse = {
+  targets: Array<{ name: string; timeoutMs: number }>; // commands are never returned
+};
+
+type RunConformanceReportResponse = {
+  target: string;
+  startedAt: number; // epoch ms
+  completedAt: number; // epoch ms
+  ok: boolean;
+  protocolVersion: number;
+  supportedProtocolVersions: number[];
+  checks: Array<{ name: string; ok: boolean; message: string }>;
+};
+```
+
+An unregistered target answers `NotFound`. See [Conformance reports as an operation](./remote-worker-protocol.md#conformance-reports-as-an-operation) for how targets are configured and why the operation runs them only in a sandbox.
+
+The JSON-RPC operation names are `weft.conformance.targets` and `weft.conformance.report`.
+
 ### `GET /api/v1/tasks/diagnostics`
 
 Bounded task-attempt diagnostics (COR-198): stuck queued tasks, stale in-flight attempts, retry storms, queues where every worker is at capacity, dead letters, expected-delayed tasks, and terminal records still awaiting adoption. Requires `system:read`. Item shapes vary by `kind`; see [`get-task-diagnostics.ts`](../../src/server/operations/get-task-diagnostics.ts) for the full per-kind response type.
@@ -789,6 +813,18 @@ curl -sS 'http://127.0.0.1:7233/api/v1/tasks/diagnostics?buildId=b47&limit=10' \
 ```
 
 The JSON-RPC operation name is `weft.tasks.diagnostics`.
+
+### `GET /api/v1/tasks/detail/:operationId/deliveries`
+
+The transport-level answer every `taskResult` submission for one operation received, oldest first (COR-1366). Each entry is a `taskResultAck` disposition (`applied`, `duplicate`, `dead-lettered`) or a hard rejection with its `rejectionCode` and redacted `reason`. Requires `system:read`. The server keeps the 32 most recent entries per operation, and `droppedCount` reports older ones. Answers `NotFound` when the operation has no ledger record. The [remote task recovery guide](../guides/remote-task-recovery.md#result-delivery-history) has the full entry shape and its `task:result-delivery` live event.
+
+The JSON-RPC operation name is `weft.tasks.deliveries`.
+
+### `GET /api/v1/tasks/detail/:operationId/dead-letter`
+
+A dead-lettered attempt's retained result value, not only its digest (COR-1366). Requires `system:admin`, the scope that may clear the dead letter. Accepts an optional `maxBytes` query parameter (default `65536`, max `1048576`). A larger value is reported as `{ kind: 'omitted', serializedBytes, maxBytes }` and is never truncated. The raw attempt token, task input, and headers are never returned. Answers `NotFound` unless the task is dead-lettered. The [remote task recovery guide](../guides/remote-task-recovery.md#dead-lettered-result-values) explains the access model.
+
+The JSON-RPC operation name is `weft.tasks.deadletters.get`.
 
 ### `GET /api/v1/task-queues`
 

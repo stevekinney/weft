@@ -239,7 +239,7 @@ export async function startDelayedWorkflow(
           key: KEYS.workflow(entry.workflowId),
           value: encode(nextRunningState),
         },
-        ...visibilityIndexOperations(internals, entry.workflowId, latestState, nextRunningState),
+        ...visibilityIndexOperations(internals, latestState, nextRunningState),
       ];
       if (executionDeadline !== undefined) {
         operations.push(

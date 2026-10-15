@@ -404,7 +404,7 @@ function buildReactivationBatchOperations(
   return [
     ...buildTerminalWorkflowIndexOperations(currentState, reactivatedState),
     { type: 'put', key: KEYS.workflow(workflowId), value: encode(reactivatedState) },
-    ...visibilityIndexOperations(internals, workflowId, currentState, reactivatedState),
+    ...visibilityIndexOperations(internals, currentState, reactivatedState),
     ...buildRetrySearchAttributeOperations(
       workflowId,
       currentAttributes,

@@ -9,6 +9,7 @@ import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import { getCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
+import { recordExecutionAttemptIdentity } from '../execution-attempts.ts';
 import {
   commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
@@ -28,6 +29,7 @@ import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
 import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
 import { tagStartConditions, type TaggedStartCondition } from './start-condition-tags.ts';
+import { identityFromStartOperations } from './start-identity.ts';
 import { attributeLostStartPreconditionOrRetry } from './start-precondition-attribution.ts';
 
 /**
@@ -426,6 +428,13 @@ export async function buildAndCommitStartBatch(
       isDelayedStart,
     );
     if (outcome === 'committed') {
+      // The create batch is this run's identity: the generation and holder marker it wrote.
+      recordExecutionAttemptIdentity(
+        internals,
+        workflowId,
+        state.workflowExecutionToken,
+        identityFromStartOperations(workflowId, startOperations),
+      );
       return;
     }
     // A conflicting duplicate-id condition outranks the signal/idempotency sentinel

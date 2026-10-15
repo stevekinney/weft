@@ -257,6 +257,9 @@ describe('operational parity', () => {
     );
 
     const handle = await engine.start('parity-intercepted-workflow', { value: 3 });
+    // Let the activity result land at virtual time 0 so the sleep after it starts
+    // there; it starts when the workflow handles the result, not when it arrived.
+    await engine.advanceTime(0);
     await engine.advanceTime('1 second');
     await engine.signal(handle.id, 'approval', 'approved');
 
@@ -419,6 +422,9 @@ describe('operational parity', () => {
     );
 
     const handle = await engine.start('parity-observed-workflow', 5);
+    // Let the activity result land at virtual time 0 so the sleep after it starts
+    // there; it starts when the workflow handles the result, not when it arrived.
+    await engine.advanceTime(0);
     await engine.advanceTime('1 second');
     await engine.signal(handle.id, 'finish', 'done');
     expect(await handle.result()).toBe('10:done');

@@ -1,6 +1,12 @@
-import type * as fileSystem from 'node:fs';
+/**
+ * The static-file route `dashboard()` registers for the dashboard's built
+ * assets: a validated URL prefix mapped onto a directory, served through
+ * verified file descriptors that refuse anything outside that directory.
+ *
+ * @module server/dashboard-assets
+ */
 
-import { API_PREFIX, DIRECT_HTTP_ROUTES, ROOT_API_PREFIX } from './route-model.ts';
+import type * as fileSystem from 'node:fs';
 
 type DashboardAssetFileSystem = {
   constants: Pick<typeof fileSystem.constants, 'O_RDONLY' | 'O_NOFOLLOW' | 'O_NONBLOCK'>;
@@ -23,41 +29,13 @@ type DashboardAssetFileSystem = {
 };
 
 /**
- * Static files belonging to an externally supplied dashboard.
- *
- * `prefix` is mounted as `${prefix}/*`; `directory` must exist before
- * `serve()` is called.
- *
- * @example
- * ```ts
- * import type { DashboardAssets } from '@lostgradient/weft';
- *
- * const dashboardAssets: DashboardAssets = {
- *   prefix: '/assets',
- *   directory: './build/assets',
- * };
- * ```
+ * A URL prefix (mounted as `${prefix}/*`) and the directory whose files it
+ * serves, after validation: the prefix is a concrete path and the directory is
+ * an existing directory, resolved to its real path.
  */
-export interface DashboardAssets {
+export interface DashboardAssetDirectory {
   prefix: string;
   directory: string;
-}
-
-export interface ResolvedDashboardAssets {
-  prefix: string;
-  directory: string;
-}
-
-function overlapsDashboardPageRoute(prefix: string, route: string): boolean {
-  if (route.endsWith('/*')) {
-    const base = route.slice(0, -2);
-    return prefix === base || prefix.startsWith(`${base}/`);
-  }
-  return prefix === route;
-}
-
-function overlapsWildcardRoute(prefix: string, route: string): boolean {
-  return prefix === route || prefix.startsWith(`${route}/`) || route.startsWith(`${prefix}/`);
 }
 
 function hasInvalidPrefixShape(prefix: string): boolean {
@@ -70,66 +48,37 @@ function hasInvalidPrefixShape(prefix: string): boolean {
   );
 }
 
-function validateAssetPrefixShape(prefix: string): void {
+function validateAssetPrefix(prefix: string): void {
   if (hasInvalidPrefixShape(prefix)) {
     throw new Error(
-      'dashboardAssets.prefix must be an absolute path prefix without a trailing slash, wildcard, parameter, query, fragment, percent escape, or backslash',
+      'Dashboard asset prefix must be an absolute path prefix without a trailing slash, wildcard, parameter, query, fragment, percent escape, or backslash',
     );
   }
 
   const segments = prefix.split('/').slice(1);
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
-    throw new Error('dashboardAssets.prefix must contain only concrete, non-empty path segments');
+    throw new Error('Dashboard asset prefix must contain only concrete, non-empty path segments');
   }
 
   const serializedPathname = new URL(prefix, 'http://weft.invalid').pathname;
   if (serializedPathname !== prefix) {
     throw new Error(
-      `dashboardAssets.prefix must round-trip through URL serialization unchanged; ${prefix} serializes as ${serializedPathname}`,
+      `Dashboard asset prefix must round-trip through URL serialization unchanged; ${prefix} serializes as ${serializedPathname}`,
     );
   }
 }
 
-function validateAssetPrefixReservations(prefix: string, pageRoutes: readonly string[]): void {
-  const reservedRoutes = [
-    API_PREFIX,
-    ROOT_API_PREFIX,
-    ...DIRECT_HTTP_ROUTES.map(({ path }) => path),
-  ];
-  if (reservedRoutes.some((reserved) => overlapsWildcardRoute(prefix, reserved))) {
-    throw new Error(
-      'dashboardAssets.prefix must not overlap the /api, /v1, or direct HTTP route spaces',
-    );
-  }
-
-  if (pageRoutes.some((route) => overlapsDashboardPageRoute(prefix, route))) {
-    throw new Error('dashboardAssets.prefix must not overlap dashboard page routes');
-  }
-}
-
-function validateAssetPrefix(prefix: string, pageRoutes: readonly string[]): void {
-  validateAssetPrefixShape(prefix);
-  validateAssetPrefixReservations(prefix, pageRoutes);
-}
-
-export function resolveDashboardAssets(
-  value: unknown,
-  pageRoutes: readonly string[],
-): ResolvedDashboardAssets {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('dashboardAssets must be an object with prefix and directory strings');
-  }
-
-  if (!('prefix' in value) || !('directory' in value)) {
-    throw new Error('dashboardAssets.prefix and dashboardAssets.directory must be strings');
-  }
-  const prefix = value.prefix;
-  const directory = value.directory;
-  if (typeof prefix !== 'string' || typeof directory !== 'string') {
-    throw new Error('dashboardAssets.prefix and dashboardAssets.directory must be strings');
-  }
-
-  validateAssetPrefix(prefix, pageRoutes);
+/**
+ * Validate an asset prefix and resolve its directory synchronously, so a bad
+ * prefix or a missing directory fails before any port is bound. Whether the
+ * mounted `${prefix}/*` route overlaps Weft's own endpoints is checked by
+ * `serve()`, which validates every route it is given.
+ */
+export function resolveDashboardAssetDirectory(
+  prefix: string,
+  directory: string,
+): DashboardAssetDirectory {
+  validateAssetPrefix(prefix);
 
   const fileSystem = process.getBuiltinModule('node:fs');
   const paths = process.getBuiltinModule('node:path');
@@ -138,10 +87,10 @@ export function resolveDashboardAssets(
   try {
     directoryStats = fileSystem.statSync(resolvedDirectory);
   } catch {
-    throw new Error(`dashboardAssets.directory does not exist: ${directory}`);
+    throw new Error(`Dashboard asset directory does not exist: ${directory}`);
   }
   if (!directoryStats.isDirectory()) {
-    throw new Error(`dashboardAssets.directory must be a directory: ${directory}`);
+    throw new Error(`Dashboard asset directory must be a directory: ${directory}`);
   }
 
   return { prefix, directory: fileSystem.realpathSync(resolvedDirectory) };
@@ -393,7 +342,7 @@ function assetResponse(
 }
 
 export function createDashboardAssetRoute(
-  assets: ResolvedDashboardAssets,
+  assets: DashboardAssetDirectory,
   assetFileSystem?: DashboardAssetFileSystem,
 ): Partial<Record<'GET' | 'HEAD', (request: Request) => Response>> {
   const fileSystemForAsset = assetFileSystem ?? {

@@ -1,3 +1,4 @@
+import { KEYS } from '../../storage/interface.ts';
 import type { WorkflowState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 
@@ -72,11 +73,37 @@ export type ExecutionAttempt = {
   readonly workflowExecutionToken: string | undefined;
   /** This engine lost the generation's checkpoint compare-and-swap race, so it is the winner's. */
   readonly abandoned: boolean;
+  /** What the engine knows of the run's durable identity; `undefined` until it is known. */
+  readonly identity?: RunIdentity | undefined;
+  /**
+   * The adoption read that will fill `identity`, while it is in flight. A teardown that begins
+   * before the read settles awaits it: it was issued before the run could go terminal, so its
+   * value is still the pre-commit identity.
+   */
+  readonly pendingIdentity?: Promise<RunIdentity | undefined> | undefined;
+};
+
+/**
+ * The durable identity of one run of a workflow id, captured while the run is live so a later
+ * teardown can be fenced on it without reading storage after the run ended.
+ *
+ * `generation` is the `wf-gen:<id>` counter as of the run's creation: it changes only when the id
+ * is reused, so a conditional write on it applies only while the id still belongs to this run.
+ * `holderMarker` is the concurrency holder marker, naming the partition the run's slot lives in.
+ * A start knows both from the create batch it committed, with no read. A run this engine adopts
+ * without creating (resume, recovery, fork, a delayed-start fire) reads them once at adoption,
+ * and a relaunch of the same generation carries them forward.
+ */
+export type RunIdentity = {
+  readonly generation: Uint8Array | null;
+  readonly holderMarker: Uint8Array | null;
 };
 
 type ExecutionAttemptRecord = {
   readonly workflowExecutionToken: string | undefined;
   abandoned: boolean;
+  identity: RunIdentity | undefined;
+  pendingIdentity: Promise<RunIdentity | undefined> | undefined;
 };
 
 const attemptsByEngine = new WeakMap<EngineInternals, Map<string, ExecutionAttemptRecord>>();
@@ -97,7 +124,58 @@ export function beginExecutionAttempt(
     attempts = new Map();
     attemptsByEngine.set(internals, attempts);
   }
-  attempts.set(workflowId, { workflowExecutionToken, abandoned: false });
+  // A relaunch of the same generation (a resume after a suspend) is the same run, whose durable
+  // identity cannot have changed while it was not terminal, so it is carried forward.
+  const previous = attempts.get(workflowId);
+  const identity =
+    workflowExecutionToken !== undefined &&
+    previous !== undefined &&
+    previous.workflowExecutionToken === workflowExecutionToken
+      ? previous.identity
+      : undefined;
+  attempts.set(workflowId, {
+    workflowExecutionToken,
+    abandoned: false,
+    identity,
+    pendingIdentity: undefined,
+  });
+}
+
+/** Record what a start just committed as the identity of the attempt that launched it. */
+export function recordExecutionAttemptIdentity(
+  internals: EngineInternals,
+  workflowId: string,
+  workflowExecutionToken: string | undefined,
+  identity: RunIdentity,
+): void {
+  const attempt = attemptsByEngine.get(internals)?.get(workflowId);
+  if (attempt !== undefined && attempt.workflowExecutionToken === workflowExecutionToken) {
+    attempt.identity = identity;
+  }
+}
+
+/**
+ * Read the identity of an adopted run once, without awaiting: the read is observed by a
+ * side reaction, so the adopting path gains no await. Nothing is recorded if the attempt was
+ * replaced or already knows its identity, and a failed read leaves it unknown, which makes the
+ * teardown that needs it skip its fenced writes rather than guess.
+ */
+export function captureExecutionAttemptIdentity(
+  internals: EngineInternals,
+  workflowId: string,
+): void {
+  const attempt = attemptsByEngine.get(internals)?.get(workflowId);
+  if (attempt === undefined || attempt.identity !== undefined) return;
+  attempt.pendingIdentity = Promise.all([
+    internals.storage.get(KEYS.workflowGeneration(workflowId)),
+    internals.storage.get(KEYS.workflowConcurrencyHolder(workflowId)),
+  ]).then(
+    ([generation, holderMarker]) => {
+      if (attempt.identity === undefined) attempt.identity = { generation, holderMarker };
+      return attempt.identity;
+    },
+    () => undefined,
+  );
 }
 
 /** Retire the workflow's attempt along with the checkpoint it belonged to. */

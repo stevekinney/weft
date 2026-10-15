@@ -208,12 +208,11 @@ export const WORKFLOW_LIFECYCLE_KEYS_EXTENDED = {
     `wf-idx-type:${encodeStorageKeyComponent(type)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityCreated: (createdAt: number, workflowId: string) =>
     `wf-idx-created:${formatSortableTimestamp(createdAt)}:${encodeStorageKeyComponent(workflowId)}`,
-  workflowVisibilityUpdated: (updatedAt: number, workflowId: string) =>
-    `wf-idx-updated:${formatSortableTimestamp(updatedAt)}:${encodeStorageKeyComponent(workflowId)}`,
+  // Takes the bucket start, not the raw `updatedAt`; see `workflowVisibilityUpdatedBucket`.
+  workflowVisibilityUpdated: (updatedAtBucket: number, workflowId: string) =>
+    `wf-idx-updated:${formatSortableTimestamp(updatedAtBucket)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityDeadline: (deadline: number, workflowId: string) =>
     `wf-idx-deadline:${formatSortableTimestamp(deadline)}:${encodeStorageKeyComponent(workflowId)}`,
-  workflowVisibilityManifest: (workflowId: string) =>
-    `wf-idx-manifest:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityMetaVersion: () => 'wf-idx-meta:version',
   workflowVisibilityMetaBuiltAt: () => 'wf-idx-meta:built-at',
   workflowVisibilityMetaCursor: () => 'wf-idx-meta:cursor',

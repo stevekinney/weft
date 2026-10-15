@@ -1,5 +1,5 @@
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS, encodeStorageKeyComponent } from '../../storage/interface.ts';
+import { KEYS, encodeStorageKeyComponent, storageKeys } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
 import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
 import type { CompletedReviewEntry, ReviewListFilter } from '../types.ts';
@@ -119,6 +119,20 @@ export async function persistCompletedReviewRecord(
         `Completed review commit for review "${reviewData.reviewId}" lost its precondition.`,
       ),
   );
+}
+
+/** Every pending and completed review key stored for `workflowId`, listed without deleting any. */
+export async function* listReviewKeysForWorkflow(
+  storage: Storage,
+  workflowId: string,
+): AsyncGenerator<string> {
+  const completedPrefix = completedReviewStoragePrefix(workflowId);
+  yield* storageKeys(storage, `review:${encodeStorageKeyComponent(workflowId)}:`);
+  yield* storageKeys(storage, completedPrefix);
+  for await (const [key, value] of storage.scan('review-decision:')) {
+    if (key.startsWith(completedPrefix)) continue;
+    if (parseCompletedReviewEntry(value)?.workflowId === workflowId) yield key;
+  }
 }
 
 export async function deleteCompletedReviewsForWorkflow(

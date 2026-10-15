@@ -30,6 +30,10 @@ import {
   type TaskResultAuthorizationFailure,
 } from './task-result-authorization.ts';
 import {
+  recordTaskResultDelivery,
+  type TaskResultDeliveryAnswer,
+} from './task-result-delivery-recorder.ts';
+import {
   activityHeartbeatDetailsPayloadSizeError,
   taskResultPayloadSizeError,
 } from './task-result-resolution.ts';
@@ -120,6 +124,56 @@ function activityHeartbeatRejectionMessage(
 }
 
 /**
+ * Record how a `taskResult` was answered in the operation's delivery history
+ * (COR-1366). Called after the answer has been sent, so the worker's ack is
+ * never delayed by the diagnostics write.
+ */
+function recordWebSocketDelivery(
+  options: ServeOptions,
+  workerId: string | undefined,
+  message: TaskResultMessage,
+  answer: TaskResultDeliveryAnswer,
+): Promise<void> {
+  return recordTaskResultDelivery(
+    options,
+    {
+      operationId: message.operationId,
+      attemptToken: message.attemptToken,
+      transport: 'webSocket',
+      workerId,
+      submittedStatus: resolveTaskResultStatus(message),
+    },
+    answer,
+  );
+}
+
+/**
+ * Hard-reject a `taskResult` with a correlated `protocolError` (protocol v7),
+ * then record the rejection (COR-1366).
+ */
+async function rejectTaskResult(
+  options: ServeOptions,
+  ws: ServerWebSocket<WebSocketData>,
+  workerId: string | undefined,
+  message: TaskResultMessage,
+  rejectionCode: Extract<TaskResultDeliveryAnswer, { outcome: 'rejected' }>['rejectionCode'],
+  text: string,
+): Promise<void> {
+  sendWorkerProtocolMessage(ws, {
+    type: 'protocolError',
+    code: 'invalid_message',
+    message: text,
+    operationId: message.operationId,
+    attemptToken: message.attemptToken,
+  });
+  await recordWebSocketDelivery(options, workerId, message, {
+    outcome: 'rejected',
+    rejectionCode,
+    reason: text,
+  });
+}
+
+/**
  * Commit an already-authorized `taskResult` through the shared
  * result-application implementation and acknowledge it, or log a durable
  * commit failure. Shared by `onTaskResultMessage`'s fast (in-flight) path and
@@ -162,7 +216,17 @@ async function commitAndAcknowledgeTaskResult(
     );
     if (rejected.ok) {
       sendTaskResultAck(ws, operationId, message.attemptToken, rejected.disposition);
+      await recordWebSocketDelivery(options, workerId, message, {
+        outcome: 'acknowledged',
+        disposition: rejected.disposition,
+        oversizedPayload: true,
+      });
     } else {
+      await recordWebSocketDelivery(options, workerId, message, {
+        outcome: 'rejected',
+        rejectionCode: rejected.reasonCode ?? 'commit-rejected',
+        reason: `${payloadError.message} — ${rejected.reason}`,
+      });
       console.error(
         `[weft] Failed to persist oversized task result rejection for task "${operationId}":`,
         rejected.reason,
@@ -180,6 +244,10 @@ async function commitAndAcknowledgeTaskResult(
   const applied = await applyWorkerTaskResult(options, context.metricsCollector, input, workerId);
   if (applied.ok) {
     sendTaskResultAck(ws, operationId, message.attemptToken, applied.disposition);
+    await recordWebSocketDelivery(options, workerId, message, {
+      outcome: 'acknowledged',
+      disposition: applied.disposition,
+    });
   } else {
     // `commitTaskLedgerCompletion` never turns this into an ack — conflicting
     // content resubmitted under this exact attempt token, or the record
@@ -188,13 +256,14 @@ async function commitAndAcknowledgeTaskResult(
     // instead of silence. `applyWorkerTaskResult` has no `ws` to answer with
     // itself; this is the one place both callers of this function actually
     // reach the worker.
-    sendWorkerProtocolMessage(ws, {
-      type: 'protocolError',
-      code: 'invalid_message',
-      message: `taskResult for operation "${operationId}" rejected — ${applied.reason}`,
-      operationId,
-      attemptToken: message.attemptToken,
-    });
+    await rejectTaskResult(
+      options,
+      ws,
+      workerId,
+      message,
+      applied.reasonCode ?? 'commit-rejected',
+      `taskResult for operation "${operationId}" rejected — ${applied.reason}`,
+    );
     console.error(
       `[weft] Failed to commit task result for "${operationId}" through the durable ledger:`,
       applied.reason,
@@ -236,13 +305,14 @@ async function applyTaskResultFallback(
     message.attemptToken,
   );
   if (!authorization.ok) {
-    sendWorkerProtocolMessage(ws, {
-      type: 'protocolError',
-      code: 'invalid_message',
-      message: taskResultRejectionMessage(authorization.reason, operationId, workerId),
-      operationId,
-      attemptToken: message.attemptToken,
-    });
+    await rejectTaskResult(
+      options,
+      ws,
+      workerId,
+      message,
+      authorization.reason,
+      taskResultRejectionMessage(authorization.reason, operationId, workerId),
+    );
     return;
   }
 
@@ -259,13 +329,14 @@ async function applyTaskResultFallback(
     record.workflowRevision !== undefined &&
     message.workflowRevision !== record.workflowRevision
   ) {
-    sendWorkerProtocolMessage(ws, {
-      type: 'protocolError',
-      code: 'invalid_message',
-      message: `taskResult for operation "${operationId}" rejected — revision mismatch`,
-      operationId,
-      attemptToken: message.attemptToken,
-    });
+    await rejectTaskResult(
+      options,
+      ws,
+      workerId,
+      message,
+      'revision-mismatch',
+      `taskResult for operation "${operationId}" rejected — revision mismatch`,
+    );
     return;
   }
 
@@ -306,13 +377,14 @@ function onTaskResultMessage(
     message.attemptToken,
   );
   if (!authorization.ok) {
-    sendWorkerProtocolMessage(ws, {
-      type: 'protocolError',
-      code: 'invalid_message',
-      message: taskResultRejectionMessage(authorization.reason, operationId, workerId),
-      operationId,
-      attemptToken: message.attemptToken,
-    });
+    void rejectTaskResult(
+      options,
+      ws,
+      workerId,
+      message,
+      authorization.reason,
+      taskResultRejectionMessage(authorization.reason, operationId, workerId),
+    );
     return;
   }
   // Revision authorization (WFT-20) is ADDITIVE for WebSocket, unlike
@@ -326,13 +398,14 @@ function onTaskResultMessage(
     inFlightTask.workflowRevision !== undefined &&
     message.workflowRevision !== inFlightTask.workflowRevision
   ) {
-    sendWorkerProtocolMessage(ws, {
-      type: 'protocolError',
-      code: 'invalid_message',
-      message: `taskResult for operation "${operationId}" rejected — revision mismatch`,
-      operationId,
-      attemptToken: message.attemptToken,
-    });
+    void rejectTaskResult(
+      options,
+      ws,
+      workerId,
+      message,
+      'revision-mismatch',
+      `taskResult for operation "${operationId}" rejected — revision mismatch`,
+    );
     return;
   }
 

@@ -8,8 +8,13 @@ import { clearPendingAtomicWorkflowCommitSideEffects } from '../checkpoint-side-
 import type { EngineInternals } from '../internals.ts';
 import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
-import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
+import {
+  releaseWorkflowConcurrencySlot,
+  releaseWorkflowConcurrencySlotForRun,
+} from '../workflow-concurrency.ts';
+import { sweepFenced, type CleanupStorageOptions } from './fenced-sweep.ts';
 import type { WorkflowStateCommitCallback } from './state-commit-callbacks.ts';
+import { fencedTeardownCommit, readRunIdentity } from './terminal-fence.ts';
 
 export type TerminationCallbacks = {
   dispatchEvent: (event: Event) => void;
@@ -27,7 +32,10 @@ export type TerminationCallbacks = {
   commitSelfWorkflowStateOperations: WorkflowStateCommitCallback;
   /** EXTERNAL terminal transition (suspend): rotates the claim epoch. See ADR 0002. */
   commitExternalTerminalWorkflowStateOperations: WorkflowStateCommitCallback;
-  cleanupReviews: (workflowId: string) => Promise<void>;
+  cleanupReviews: (
+    workflowId: string,
+    fencedCommit?: (operations: BatchOperation[]) => Promise<boolean>,
+  ) => Promise<void>;
 };
 
 export const TERMINAL_WORKFLOW_STATUSES: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>([
@@ -275,7 +283,19 @@ export async function cleanupWorkflowStorage(
   internals: EngineInternals,
   workflowId: string,
   includeOutputArtifacts: boolean,
+  options: CleanupStorageOptions = {},
 ): Promise<void> {
+  const { releaseConcurrencySlot = true, fencedCommit, extraDeleteKeys = [] } = options;
+  const prefixes = prefixesToSweep(workflowId, includeOutputArtifacts);
+  if (fencedCommit !== undefined && internals.storage.capabilities().conditionalBatch) {
+    await sweepFenced(internals, workflowId, prefixes, extraDeleteKeys, fencedCommit);
+    return;
+  }
+  await sweepUnfenced(internals, workflowId, prefixes, releaseConcurrencySlot);
+}
+
+/** The key prefixes a terminal cleanup sweeps for `workflowId`. */
+function prefixesToSweep(workflowId: string, includeOutputArtifacts: boolean): string[] {
   const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
 
   // Always sweep internal state. Signals are workflow-scoped scratch space,
@@ -299,10 +319,20 @@ export async function cleanupWorkflowStorage(
     // TTL or explicit pruning.
     prefixes.push(`offload:${encodedWorkflowId}:`, `blob:${encodedWorkflowId}:`);
   }
+  return prefixes;
+}
 
+/** The unfenced sweep: native prefix deletion when available, otherwise scan and batch-delete. */
+async function sweepUnfenced(
+  internals: EngineInternals,
+  workflowId: string,
+  prefixes: string[],
+  releaseConcurrencySlot: boolean,
+): Promise<void> {
   await internals.storage.delete(KEYS.workflowHeaders(workflowId));
   await internals.storage.delete(KEYS.signalSequence(workflowId));
-  await releaseWorkflowConcurrencySlot(internals, workflowId);
+  // A terminal commit's own teardown already released its slot, fenced on that commit.
+  if (releaseConcurrencySlot) await releaseWorkflowConcurrencySlot(internals, workflowId);
   // The "expects services" marker is per-run bookkeeping, not an output artifact,
   // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));
@@ -420,6 +450,7 @@ export async function cleanupTerminalWorkflowSynchronously(
   workflowId: string,
   includeOutputArtifacts: boolean,
   callbacks: TerminationCallbacks,
+  fencedCommit?: (operations: BatchOperation[]) => Promise<boolean>,
 ): Promise<void> {
   cleanupTerminalWorkflowMemory(internals, workflowId, callbacks);
   await cleanupTerminalWorkflowDurableState(
@@ -427,6 +458,10 @@ export async function cleanupTerminalWorkflowSynchronously(
     workflowId,
     includeOutputArtifacts,
     callbacks,
+    {
+      releaseConcurrencySlot: false,
+      fencedCommit,
+    },
   );
 }
 
@@ -435,10 +470,20 @@ export async function cleanupTerminalWorkflowDurableState(
   workflowId: string,
   includeOutputArtifacts: boolean,
   callbacks: TerminationCallbacks,
+  options: CleanupStorageOptions = {},
 ): Promise<void> {
-  await callbacks.cleanupReviews(workflowId);
-  await cleanupWorkflowStorage(internals, workflowId, includeOutputArtifacts);
-  await internals.storage.delete(KEYS.terminalCleanupNeeded(workflowId));
+  await (options.fencedCommit === undefined
+    ? callbacks.cleanupReviews(workflowId)
+    : callbacks.cleanupReviews(workflowId, options.fencedCommit));
+  const marker = KEYS.terminalCleanupNeeded(workflowId);
+  await cleanupWorkflowStorage(internals, workflowId, includeOutputArtifacts, {
+    ...options,
+    extraDeleteKeys: [...(options.extraDeleteKeys ?? []), marker],
+  });
+  // The fenced sweep already deleted the marker in its guarded chunk.
+  if (options.fencedCommit === undefined || !internals.storage.capabilities().conditionalBatch) {
+    await internals.storage.delete(marker);
+  }
 }
 
 export async function runDeferredTerminalCleanup(
@@ -457,6 +502,13 @@ export async function runDeferredTerminalCleanup(
     return;
   }
 
+  // The run's identity is read BEFORE the state check. A replacement that lands after the check
+  // then fails every fenced write below on the generation read here, and one that landed before
+  // the read shows in the check as a different terminal token. Reading after the check would
+  // capture the replacement's own identity and authorize deleting its data.
+  const fence = internals.storage.capabilities().conditionalBatch
+    ? { identity: await readRunIdentity(internals, workflowId) }
+    : undefined;
   const state = await callbacks.loadWorkflowState(workflowId);
   if (!state || !TERMINAL_WORKFLOW_STATUSES.has(state.status)) {
     return;
@@ -468,13 +520,24 @@ export async function runDeferredTerminalCleanup(
 
   try {
     await finalizeScheduledWorkflowTerminal(internals, workflowId, callbacks);
+    if (fence !== undefined) {
+      // Crash recovery: a teardown that never ran leaves the slot held; release it fenced.
+      await releaseWorkflowConcurrencySlotForRun(internals, workflowId, fence);
+    }
     await cleanupTerminalWorkflowDurableState(
       internals,
       workflowId,
       parsedTimer.includeOutputArtifacts,
       callbacks,
+      fence === undefined
+        ? {}
+        : {
+            releaseConcurrencySlot: false,
+            fencedCommit: fencedTeardownCommit(internals, workflowId, fence, () => false),
+            extraDeleteKeys: [KEYS.scheduleRun(workflowId)],
+          },
     );
-    await internals.storage.delete(KEYS.scheduleRun(workflowId));
+    if (fence === undefined) await internals.storage.delete(KEYS.scheduleRun(workflowId));
   } catch (error) {
     callbacks.handleCleanupError('cleanupTerminalWorkflowDurableState', error, workflowId);
     throw error;

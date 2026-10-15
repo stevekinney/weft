@@ -60,6 +60,10 @@ describe('#450 ActivityContext.lastHeartbeatDetails', () => {
 
     // The retry is parked on a durable backoff timer until virtual time advances.
     expect(seen).toEqual([undefined]);
+    // Let the engine handle the failed attempt and arm its backoff at virtual
+    // time 0; the backoff starts when the workflow handles the failure, so
+    // advancing first would push it past the window.
+    await engine.advanceTime(0);
     await engine.advanceTime(1);
 
     const result = (await handle.result()) as { resumedFrom: unknown };

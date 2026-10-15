@@ -57,6 +57,7 @@ export type SystemOperationTypes = {
         | 'workers:write'
         | 'system:read'
         | 'system:admin'
+        | `${string}.${string}:${string}`
       >;
       readonly subject: string | null;
     };

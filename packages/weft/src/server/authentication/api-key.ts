@@ -1,4 +1,8 @@
-import type { AuthorizationScope } from '../authorization-scope.ts';
+import {
+  filterRecognizedScopes,
+  type AdditionalScopeSet,
+  type AuthorizationScope,
+} from '../authorization-scope.ts';
 import { principalFromApiKey, type AuthenticatedPrincipal } from '../principal.ts';
 import {
   findConstantTimeApiKeyMatch,
@@ -84,8 +88,20 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function deepFreezeApiKeyPrincipal(principal: AuthenticatedPrincipal): AuthenticatedPrincipal {
-  const guardedScopes = immutableScopeSet(principal.scopes);
+/**
+ * Copy and freeze an admitted API-key principal. Its scopes are narrowed to
+ * the ones this handler recognizes, as JWT claims are: built-in scopes plus
+ * the package scopes the handler registered. A resolver therefore cannot
+ * grant an unregistered package scope, or one in the reserved `weft`
+ * namespace, by returning it.
+ */
+function deepFreezeApiKeyPrincipal(
+  principal: AuthenticatedPrincipal,
+  additionalScopes: AdditionalScopeSet,
+): AuthenticatedPrincipal {
+  const guardedScopes = immutableScopeSet(
+    new Set(filterRecognizedScopes([...principal.scopes], additionalScopes)),
+  );
   const frozen: AuthenticatedPrincipal = {
     method: 'api-key',
     scopes: guardedScopes,
@@ -103,6 +119,7 @@ export async function tryAdmitApiKey(
   resolver: AuthConfig['resolveApiKeyPrincipal'],
   apiKeyEntries: ReadonlyArray<ConstantTimeApiKeyEntry<undefined>> | null,
   defaultApiKeyScopes: ReadonlyArray<AuthorizationScope>,
+  additionalScopes: AdditionalScopeSet,
 ): Promise<AuthResult | 'continue'> {
   if (resolver !== undefined) {
     let resolved: AuthenticatedPrincipal | null;
@@ -116,7 +133,7 @@ export async function tryAdmitApiKey(
       resolved = null;
     }
     if (resolved !== null && validateApiKeyPrincipalMethod(resolved)) {
-      const admitted = deepFreezeApiKeyPrincipal(resolved);
+      const admitted = deepFreezeApiKeyPrincipal(resolved, additionalScopes);
       return { authenticated: true, method: 'api-key', principal: admitted };
     }
     return { authenticated: false, error: 'No valid credentials provided' };
@@ -126,7 +143,7 @@ export async function tryAdmitApiKey(
       subject: 'api-key-caller',
       scopes: defaultApiKeyScopes,
     });
-    const admitted = deepFreezeApiKeyPrincipal(principal);
+    const admitted = deepFreezeApiKeyPrincipal(principal, additionalScopes);
     return { authenticated: true, method: 'api-key', principal: admitted };
   }
   return 'continue';

@@ -34,7 +34,7 @@ export function buildStartBatchOperations(
   /** The checkpoint's serialized bytes when the caller already produced them, so a start serializes it once. */
   serializedCheckpoint?: Uint8Array,
 ): BatchOperation[] {
-  const visibilityOperations = visibilityIndexOperations(internals, workflowId, null, state);
+  const visibilityOperations = visibilityIndexOperations(internals, null, state);
   // Purge deletes (an `onTerminalConflict: 'start-new'` restart removing the prior
   // terminal run under this id) MUST come first: storage batches apply in array
   // order with last-op-wins, so a delete that shares a key with a create put below

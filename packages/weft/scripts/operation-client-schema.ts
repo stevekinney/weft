@@ -1,3 +1,4 @@
+import { PACKAGE_AUTHORIZATION_SCOPE_PATTERN } from '../src/server/authorization-scope.ts';
 import { compareStrings } from '../src/server/json-schema-utilities.ts';
 
 const UNSUPPORTED_COMBINATOR = Symbol('unsupported-combinator');
@@ -113,11 +114,25 @@ export function schemaToNode(schema: Record<string, unknown>): TypeNode {
   return typedSchemaNode(schema);
 }
 
+/**
+ * The TypeScript type for a package authorization scope. A JSON Schema
+ * `pattern` has no general TypeScript form, but this one does, and emitting
+ * `string` instead would swallow the built-in scope literals it is unioned
+ * with (`weft.system.principal`'s `scopes`).
+ */
+const PACKAGE_AUTHORIZATION_SCOPE_TYPE = '`${string}.${string}:${string}`';
+
+function stringSchemaNode(schema: Record<string, unknown>): TypeNode {
+  return schema['pattern'] === PACKAGE_AUTHORIZATION_SCOPE_PATTERN.source
+    ? { kind: 'primitive', text: PACKAGE_AUTHORIZATION_SCOPE_TYPE }
+    : { kind: 'primitive', text: 'string' };
+}
+
 function typedSchemaNode(schema: Record<string, unknown>): TypeNode {
   const type = schema['type'];
   switch (type) {
     case 'string':
-      return { kind: 'primitive', text: 'string' };
+      return stringSchemaNode(schema);
     case 'number':
     case 'integer':
       return { kind: 'primitive', text: 'number' };

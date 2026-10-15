@@ -201,6 +201,77 @@ export class TaskResultDeadLetteredEvent extends Event {
 }
 
 /**
+ * Fired on the {@link Engine} when a server records a remote task result
+ * delivery that did NOT apply cleanly the first time (COR-1366): a
+ * `duplicate` or `dead-lettered` acknowledgement, or a hard rejection. The
+ * same entry is retained in the task's delivery history, which
+ * `weft.tasks.deliveries` returns.
+ *
+ * A first-time `applied` acknowledgement is recorded in that history but does
+ * not fire this event: every remote activity produces one, and the
+ * activity's own completion already announces it, so firing here too would
+ * add one persisted workflow event per activity for no new information. A
+ * result that dead-letters on its first delivery fires both
+ * {@link TaskResultDeadLetteredEvent} (the ledger's decision) and this event
+ * (the acknowledgement the worker received).
+ *
+ * Carries `attemptTokenDigest`, never the raw attempt token, and never the
+ * result payload.
+ *
+ * @example
+ * ```ts
+ * import { Engine, TaskResultDeliveryEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(TaskResultDeliveryEvent.type, (event) => {
+ *   if (event.outcome === 'rejected') {
+ *     console.warn('result rejected:', event.operationId, event.rejectionCode);
+ *   }
+ * });
+ * ```
+ */
+export class TaskResultDeliveryEvent extends Event {
+  static readonly type = 'task:result-delivery' as const;
+  readonly operationId: string;
+  readonly workflowId: string | undefined;
+  readonly activityName: string;
+  readonly queue: string;
+  readonly workerId: string | undefined;
+  readonly transport: 'webSocket' | 'longPoll';
+  readonly attemptTokenDigest: string;
+  readonly outcome: 'acknowledged' | 'rejected';
+  /** Present when `outcome` is `'acknowledged'`. */
+  readonly disposition: 'duplicate' | 'dead-lettered' | undefined;
+  /** Present when `outcome` is `'rejected'`. */
+  readonly rejectionCode: string | undefined;
+
+  constructor(details: {
+    operationId: string;
+    workflowId?: string | undefined;
+    activityName: string;
+    queue: string;
+    workerId?: string | undefined;
+    transport: 'webSocket' | 'longPoll';
+    attemptTokenDigest: string;
+    outcome: 'acknowledged' | 'rejected';
+    disposition?: 'duplicate' | 'dead-lettered' | undefined;
+    rejectionCode?: string | undefined;
+  }) {
+    super(TaskResultDeliveryEvent.type);
+    this.operationId = details.operationId;
+    this.workflowId = details.workflowId;
+    this.activityName = details.activityName;
+    this.queue = details.queue;
+    this.workerId = details.workerId;
+    this.transport = details.transport;
+    this.attemptTokenDigest = details.attemptTokenDigest;
+    this.outcome = details.outcome;
+    this.disposition = details.disposition;
+    this.rejectionCode = details.rejectionCode;
+  }
+}
+
+/**
  * Fired on the {@link Engine} when `ctx.run()` durably enqueues a remote
  * activity task (COR-152) — the engine has just written the task's `queued`
  * ledger record on its own storage and is asking whichever transport is

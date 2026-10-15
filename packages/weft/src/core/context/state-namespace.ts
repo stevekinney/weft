@@ -16,13 +16,14 @@ import type {
   WorkflowStateNamespace,
 } from '../types.ts';
 import type { Context } from './index.ts';
-import type { ContextInternals } from './internals.ts';
+import { yieldOperation, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import * as stateSessionHelpers from './session-state.ts';
 import { captureCallerStack } from './validation.ts';
 
 interface WorkflowAtomicStateOperationCache {
   nextStep(): number;
+  yieldOperation(operation: ContextOperationRequest): Generator<ContextOperationRequest, unknown>;
   has(step: number): boolean;
   get(step: number): unknown;
   set(step: number, value: unknown): void;
@@ -60,6 +61,7 @@ function createContextStateOperationCache(
 ): WorkflowAtomicStateOperationCache {
   return {
     nextStep: () => internals.stepIndex++,
+    yieldOperation: (operation) => yieldOperation(internals, operation),
     has: (step) => internals.accumulatedResults?.has(step) ?? false,
     get: (step: number) => internals.accumulatedResults?.get(step),
     set: (step, value) => {
@@ -219,7 +221,7 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
       return operationCache.get(step) as TResult;
     }
 
-    const result = yield operation;
+    const result = yield* operationCache.yieldOperation(operation);
     operationCache.set(step, result);
     return result as TResult;
   }

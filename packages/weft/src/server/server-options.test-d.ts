@@ -8,14 +8,13 @@ import {
   TaskQueue,
   WorkerRegistry,
   type AuthConfig,
-  type DashboardAssets,
-  type DashboardRouteTarget,
   type DiscoveryInfo,
   type PrometheusExporter,
   type RetryPolicy,
   type RoutingPolicy,
   type SchedulingPolicy,
   type ServeOptions,
+  type ServeRoutes,
   type TaskDispatch,
   type TaskResultView,
   type WeftServer,
@@ -37,37 +36,34 @@ const lockedDownServeOptions: ServeOptions = {
 };
 void lockedDownServeOptions;
 
-const dashboardTarget: DashboardRouteTarget = new Response('<html></html>');
-void dashboardTarget;
+const staticRoutes: ServeRoutes = { '/status': new Response('ok') };
+void staticRoutes;
 
-const dashboardAssets: DashboardAssets = { prefix: '/assets', directory: './dist/assets' };
-void dashboardAssets;
-
-const dashboardHandlerTarget: DashboardRouteTarget = (_request, server) => {
-  void server;
-  return new Response('<html></html>');
+const handlerRoutes: ServeRoutes = {
+  '/reports/:id': (request, server) => {
+    void server.upgrade;
+    return Response.json({ id: request.params['id'] });
+  },
+  '/uploads': { POST: () => new Response(null, { status: 202 }) },
 };
-void dashboardHandlerTarget;
+void handlerRoutes;
 
-const dashboardServeOptions: ServeOptions = {
+const routesServeOptions: ServeOptions = { engine, routes: { ...staticRoutes, ...handlerRoutes } };
+void routesServeOptions;
+
+const invalidRoutesServeOptions: ServeOptions = {
   engine,
+  // @ts-expect-error each route must be a Bun route value.
+  routes: { '/status': { shell: true } },
+};
+void invalidRoutesServeOptions;
+
+const removedDashboardServeOptions: ServeOptions = {
+  engine,
+  // @ts-expect-error `dashboard` is no longer a server option; dashboard() mounts the dashboard.
   dashboard: new Response('<html></html>'),
 };
-void dashboardServeOptions;
-
-const functionDashboardServeOptions: ServeOptions = {
-  engine,
-  dashboard: dashboardHandlerTarget,
-  dashboardAssets,
-};
-void functionDashboardServeOptions;
-
-const invalidDashboardServeOptions: ServeOptions = {
-  engine,
-  // @ts-expect-error dashboard must be a Bun route target.
-  dashboard: { shell: true },
-};
-void invalidDashboardServeOptions;
+void removedDashboardServeOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public server option.
 const rejectedServeOptions: ServeOptions = { engine, metricsCollector: new MetricsCollector() };

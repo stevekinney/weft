@@ -491,6 +491,65 @@ The command starts a localhost Weft server and launches the worker command with 
 
 The conformance runner verifies registration acknowledgement, echo task completion, heartbeat-preserved work, cancellation, in-flight reassignment after disconnect, graceful shutdown, and failure of a deliberately broken worker fixture. `--json` returns a stable machine-readable report. Without `--json`, each check prints as `PASS` or `FAIL`.
 
+The JSON report has this shape. A run that aborts before its first verdict, such as a worker that never registers, reports a single failed check named `conformance` that carries the error message.
+
+```ts
+type ConformanceReport = {
+  ok: boolean; // true only when every check passed
+  protocolVersion: number; // the protocol the sandbox server spoke
+  supportedProtocolVersions: number[];
+  checks: Array<{
+    name: string; // 'register', 'task completion', 'heartbeat', 'cancellation',
+    // 'reconnect', 'revision echo', 'graceful shutdown', or 'conformance'
+    ok: boolean;
+    message: string;
+  }>;
+};
+```
+
+### Conformance reports as an operation
+
+A server can run the same checks on request through two operations, so a console or a generated client can show a worker's conformance without shell access to a CLI. Both share one implementation with `weft conformance` (`src/conformance/run-conformance.ts`): the same check sequence, the same pass/fail rules, and the same report fields. A worker that passes one surface passes the other.
+
+| Operation                  | REST route                                        | Scope          | Returns                                                                                                                                  |
+| -------------------------- | ------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `weft.conformance.targets` | `GET /api/v1/conformance/targets`                 | `system:read`  | `{ targets: Array<{ name: string; timeoutMs: number }> }`. Commands are never returned.                                                  |
+| `weft.conformance.report`  | `POST /api/v1/conformance/targets/:target/report` | `system:admin` | The `ConformanceReport` above plus `target`, `startedAt`, and `completedAt` (epoch milliseconds). `NotFound` for an unregistered target. |
+
+A request selects a **target** by name and supplies nothing else. Targets are worker commands that the host registers when it starts the server. The host builds them with `createConformanceTargets` from `@lostgradient/weft/testing` and passes the result to `serve()`:
+
+```ts
+import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+import { createConformanceTargets } from '@lostgradient/weft/testing';
+
+const engine = new Engine({ storage: new MemoryStorage() });
+await using server = serve({
+  engine,
+  port: 0,
+  conformanceTargets: createConformanceTargets({
+    'python-sdk': { command: ['python', '-m', 'my_worker'], timeoutMs: 15_000 },
+  }),
+});
+console.log(server.url);
+```
+
+The factory lives in the testing subpath, next to the other helpers that spawn processes, because the package root must stay free of `Bun.spawn` so that it still bundles for the browser. `serve()` accepts only the runner the factory returns.
+
+Each target's `command` is spawned directly with no shell. `timeoutMs` bounds each individual wait in the sequence, as `--timeout` does for the CLI, and defaults to `15000`. `createConformanceTargets` throws, before `serve()` is ever called, if a target name is not 1 to 128 characters of letters, digits, `.`, `_`, or `-`, if a command is empty, or if a timeout is not a positive integer. If you omit `conformanceTargets`, the server registers no targets: `weft.conformance.targets` returns an empty list and `weft.conformance.report` answers `NotFound`.
+
+These rules keep the operation from becoming a way to run arbitrary code on the server host:
+
+- **A request never supplies a command.** Accepting a command, arguments, environment, or timeout over the wire would let any caller with the scope run arbitrary processes on the server host. With targets, the set of processes a request can start is fixed when the server boots, by configuration the host process owns.
+- **A run never touches the server that received the request.** Like the CLI, every run starts its own `MemoryStorage`, `Engine`, and loopback server, spawns the target against it, and shuts all three down before it returns. The reconnect check kills a worker and the graceful-shutdown check disconnects one, so running the checks against the live fleet's workers would disrupt production work. Live fleet workers also do not implement the `conformance.*` activities. The operation therefore reports on a worker _build_, given as a command, rather than on a connected worker instance.
+- **Running a target needs `system:admin`.** A run spawns processes and binds a loopback port on the server host, so it needs more than the read-only `system:read` scope that `weft.workers.diagnostics` uses. Listing targets needs only `system:read`, because the list returns names and timeouts, never commands.
+- **Concurrent requests share one run.** A request for a target that is already running joins the run in progress instead of starting another. At most one run per configured target exists at a time, so repeated calls cannot spawn an unbounded number of worker processes.
+
+The spawned worker inherits the server process's environment plus the variables in the table above, exactly as it does under the CLI. Register only commands you would trust to run with the server's own privileges.
+
+The sandbox server is unauthenticated, because the protocol under test carries no worker credentials. It binds only `127.0.0.1` on an ephemeral port and exists for one run. A process that sets `WEFT_SERVER_AUTHENTICATION_REQUIRED` forbids any unauthenticated server, including this one. Under that setting every run reports a single failed `conformance` check that carries the refusal. Run conformance from a process without that setting, or use the CLI.
+
+`weft.conformance.report` does not return until the run finishes, which can take several multiples of `timeoutMs` for a worker that keeps failing late in the sequence. Set the target's timeout with your HTTP client's request timeout in mind.
+
 ### Required activities
 
 The worker command under test must implement exactly the activities named in `WEFT_WORKER_ACTIVITIES` (`conformance.echo`, `conformance.sleep`, `conformance.cancel`):

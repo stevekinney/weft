@@ -1,10 +1,11 @@
 /**
- * Bun.serve() wrapper with WebSocket and SSE support, optional external UI
- * mounting, and clean shutdown.
+ * Bun.serve() wrapper with WebSocket and SSE support, caller-supplied extra
+ * routes, and clean shutdown.
  *
  * @module server
  */
 
+import type { ConformanceTargetRunner } from '../conformance/targets.ts';
 import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
@@ -12,14 +13,11 @@ import { requireStorageCapability } from '../storage/interface.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig, RateLimitConfig } from './authentication.ts';
-import {
-  createDashboardAssetRoute,
-  resolveDashboardAssets,
-  type DashboardAssets,
-} from './dashboard-assets.ts';
+import type { PackageAuthorizationScope } from './authorization-scope.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import type { RegistrableOperation } from './operation-catalog.ts';
+import { overlapsReservedRoute } from './route-model.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
 import type { CorsOptions } from './runtime/cors.ts';
 import {
@@ -52,7 +50,6 @@ export {
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 
-export type { DashboardAssets } from './dashboard-assets.ts';
 export type { CorsOptions } from './runtime/cors.ts';
 export type {
   WorkerAdmissionDecision,
@@ -63,7 +60,11 @@ export type {
 export {
   AUTHORIZATION_SCOPES,
   isAuthorizationScope,
+  isPackageAuthorizationScope,
+  PACKAGE_AUTHORIZATION_SCOPE_PATTERN,
   type AuthorizationScope,
+  type BuiltInAuthorizationScope,
+  type PackageAuthorizationScope,
 } from './authorization-scope.ts';
 
 export type { GetPrincipalOutput } from './operations/get-principal.ts';
@@ -94,6 +95,12 @@ export {
 // not from here. WorkerRegistry stays a value to match the root export, and
 // TaskQueue is a value so direct `handleRequest()` hosts can construct the live
 // worker infrastructure exposed through HandlerOptions.
+export type { ConformanceCheck, ConformanceReport } from '../conformance/run-conformance.ts';
+export type {
+  ConformanceTargetReport,
+  ConformanceTargetRunner,
+  ConformanceTargetSummary,
+} from '../conformance/targets.ts';
 export type { RetryPolicy } from '../core/types.ts';
 export type { PrometheusExporter } from '../observability/metrics.ts';
 export { WorkerRegistry } from '../worker/registry.ts';
@@ -104,69 +111,24 @@ export type { SchedulingPolicy } from './task-queue-types.ts';
 export { TaskQueue } from './task-queue.ts';
 
 /**
- * Static route patterns at which an externally supplied dashboard shell is
- * served. Weft no longer bundles a dashboard, but `serve({ dashboard })`
- * keeps a same-origin mounting point for packages that provide one.
+ * Bun route table accepted by `serve({ routes })`.
  *
- * They are intentionally specific (no blanket `/*`) so they cannot shadow the
- * API served under the `/api` prefix or the root-stable discovery endpoints —
- * those fall through to the `fetch` handler.
- * The supported page routes are `/`, `/workflows`, `/workflows/*`, `/reviews`,
- * `/workers`, `/schedules`, `/storage`, and `/system`.
+ * It is Bun's own `routes` type, parameterized by the data Weft attaches to its
+ * WebSocket connections, so a route handler receives the same `server` that
+ * Weft's own handlers do.
  *
  * @example
  * ```ts
- * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft';
+ * import type { ServeRoutes } from '@lostgradient/weft';
  *
- * // A mounted dashboard shell owns these specific page routes.
- * console.log(DASHBOARD_PAGE_ROUTES[0]); // '/'
- * console.log(DASHBOARD_PAGE_ROUTES.includes('/workflows')); // true
+ * const routes: ServeRoutes = {
+ *   '/status': new Response('ok'),
+ *   '/reports/:id': (request) => Response.json({ id: request.params['id'] }),
+ * };
+ * void routes;
  * ```
  */
-export const DASHBOARD_PAGE_ROUTES = [
-  '/',
-  '/workflows',
-  '/workflows/*',
-  '/reviews',
-  '/workers',
-  '/schedules',
-  '/storage',
-  '/system',
-] as const satisfies readonly string[];
-
-/**
- * Route pattern owned by an externally supplied dashboard shell.
- *
- * Weft mounts a caller-provided `serve({ dashboard })` target only at these
- * page routes, leaving API and discovery routes to the server fetch handler.
- *
- * @example
- * ```ts
- * import type { DashboardPageRoute } from '@lostgradient/weft';
- *
- * const workflowRoute: DashboardPageRoute = '/workflows/*';
- * void workflowRoute;
- * ```
- */
-export type DashboardPageRoute = (typeof DASHBOARD_PAGE_ROUTES)[number];
-
-/**
- * Bun route target accepted by `serve({ dashboard })`.
- *
- * Pass a static `Response` or a Bun route handler supplied by an external
- * dashboard package. Weft serves that target only at {@link DASHBOARD_PAGE_ROUTES}.
- *
- * @example
- * ```ts
- * import type { DashboardRouteTarget } from '@lostgradient/weft';
- *
- * const dashboard: DashboardRouteTarget = new Response('<!doctype html><div id="app"></div>', {
- *   headers: { 'Content-Type': 'text/html; charset=utf-8' },
- * });
- * void dashboard;
- * ```
- */
-export type DashboardRouteTarget = Bun.Serve.Routes<unknown, string>[string];
+export type ServeRoutes = Bun.Serve.Routes<WebSocketData, string>;
 
 /**
  * Startup policy for `serve()` when no `auth` configuration is supplied.
@@ -232,23 +194,74 @@ export interface ServeOptions {
    */
   operations?: ReadonlyArray<RegistrableOperation>;
   /**
+   * Package scopes this server recognizes beyond Weft's built-in vocabulary,
+   * such as `bureau.tasks:read`, for the packages whose `operations` require
+   * them. The server's authenticator retains them from JWT `scope`, `scp`,
+   * and `permissions` claims, from `defaultApiKeyScopes`, and from the
+   * principal `resolveApiKeyPrincipal` returns; any other unknown scope is
+   * still dropped. They belong to this server alone: another
+   * `serve()` in the same process does not see them.
+   *
+   * Each entry must be `<namespace>.<resource>:<action>`, and the `weft`
+   * namespace is reserved. An invalid entry throws synchronously, before a
+   * port is bound.
+   */
+  additionalScopes?: readonly PackageAuthorizationScope[];
+  /**
    * Signing authority for server-issued destructive worker start override
    * previews. Configure this when exposing `weft.worker.startoverrides.preview`
    * and when operation-backed starts should consume those previews atomically
    * with terminal-run replacement.
    */
   workerStartOverrideSigningSecret?: string;
+  /**
+   * The worker commands `weft.conformance.report` may run the RemoteWorker
+   * protocol conformance checks against, built by `createConformanceTargets`
+   * from `@lostgradient/weft/testing`. A request can only name one of these
+   * targets; it can never supply a command, so this runner holds the complete
+   * set of processes the operation can start. Each run happens in a private
+   * sandbox server, never against this server's own fleet. Omit to register
+   * no targets: `weft.conformance.targets` then lists none and
+   * `weft.conformance.report` answers `NotFound`.
+   *
+   * The factory lives in the testing subpath, not here, because running a
+   * target spawns processes: the root entry stays free of `Bun.spawn` so it
+   * still bundles for the browser (COR-1192). `createConformanceTargets`
+   * validates synchronously, so an invalid name, empty command, or
+   * non-positive timeout throws before `serve()` is even called.
+   *
+   * @example
+   * ```ts
+   * import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+   * import { createConformanceTargets } from '@lostgradient/weft/testing';
+   *
+   * const engine = new Engine({ storage: new MemoryStorage() });
+   * await using server = serve({
+   *   engine,
+   *   port: 0,
+   *   conformanceTargets: createConformanceTargets({
+   *     reference: { command: ['bun', './worker.ts'], timeoutMs: 15_000 },
+   *   }),
+   * });
+   * console.log(server.url);
+   * ```
+   */
+  conformanceTargets?: ConformanceTargetRunner;
   port?: number;
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */
   development?: boolean;
-  /** Optional external dashboard shell served at {@link DASHBOARD_PAGE_ROUTES}. */
-  dashboard?: DashboardRouteTarget;
   /**
-   * Static files served below an explicit prefix for the supplied dashboard.
-   * The directory and prefix are validated synchronously before the port binds.
+   * Extra Bun routes served on the same origin as Weft's API, passed through
+   * to `Bun.serve()`'s own `routes` option. Bun matches these before the
+   * handler that serves Weft's API and discovery endpoints, so a key may not
+   * claim any of them: `serve()` throws before binding the port when a key
+   * equals or falls under `/api` or `/v1`, equals `/mcp`, `/jsonrpc`, or a
+   * direct route such as `/openapi.json`, or is a pattern (containing `*` or
+   * `:`) that could match one of those paths. Paths no route matches still
+   * fall through to Weft.
    */
-  dashboardAssets?: DashboardAssets;
+  routes?: ServeRoutes;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
   /**
@@ -566,6 +579,30 @@ export interface WeftServer extends AsyncDisposable {
 // Implementation
 // ---------------------------------------------------------------------------
 
+/** The runner a server without `conformanceTargets` uses: it lists none and runs none. */
+const NO_CONFORMANCE_TARGETS: ConformanceTargetRunner = {
+  list: () => [],
+  run: () => undefined,
+};
+
+/**
+ * Copy the caller's extra routes after rejecting any key that would shadow one
+ * of Weft's own endpoints. Bun matches `routes` before the `fetch` fallback
+ * where the entire API is dispatched, and `fetch` never runs for a path a route
+ * already matched, so an overlapping key would answer in place of the API.
+ */
+function resolveServeRoutes(routes: ServeRoutes | undefined): ServeRoutes {
+  const resolvedRoutes: ServeRoutes = { ...routes };
+  for (const routeKey of Object.keys(resolvedRoutes)) {
+    if (overlapsReservedRoute(routeKey)) {
+      throw new Error(
+        `serve() routes must not claim Weft's own paths, but "${routeKey}" overlaps /api, /v1, /mcp, /jsonrpc, or a direct route such as /openapi.json`,
+      );
+    }
+  }
+  return resolvedRoutes;
+}
+
 /**
  * Start the Weft HTTP + WebSocket + SSE server.
  *
@@ -612,32 +649,16 @@ export function serve(options: ServeOptions): WeftServer {
     'conditionalBatch',
     'Remote task ledger (durable dispatch, claim, heartbeat, completion, and requeue)',
   );
-  const dashboardAssets =
-    options.dashboardAssets === undefined
-      ? undefined
-      : resolveDashboardAssets(options.dashboardAssets, DASHBOARD_PAGE_ROUTES);
+  const routes = resolveServeRoutes(options.routes);
   const { port, hostname, development, tlsOptions, serverOptions, serverMetricsCollector } =
     resolveNetworkConfig(options);
 
-  const context = buildServerContext(serverOptions, serverMetricsCollector);
+  const conformanceTargetRunner = options.conformanceTargets ?? NO_CONFORMANCE_TARGETS;
+  const context = buildServerContext(
+    { ...serverOptions, conformanceTargetRunner },
+    serverMetricsCollector,
+  );
   const boundCleanup = (operationId: string): void => cleanupWorkflowIndex(context, operationId);
-
-  const routes: Bun.Serve.Routes<WebSocketData, string> = {};
-  if (options.dashboard != null) {
-    // Mount a supplied dashboard shell at known top-level page routes — never a blanket
-    // `/*`. Bun matches the static `routes` map before the `fetch` fallback
-    // (where the entire API is dispatched), and `fetch` never runs for a path a
-    // route already matched. A global `/*` would therefore swallow `/api/...`
-    // and return the dashboard shell instead of the API response. These
-    // specific page routes can't collide with `/api/...` or the root-stable
-    // carve-outs, so `fetch` still owns everything else.
-    for (const path of DASHBOARD_PAGE_ROUTES) {
-      routes[path] = options.dashboard;
-    }
-  }
-  if (dashboardAssets !== undefined) {
-    routes[`${dashboardAssets.prefix}/*`] = createDashboardAssetRoute(dashboardAssets);
-  }
 
   const serverHolder: { current: ReturnType<typeof Bun.serve> | null } = { current: null };
   const server = Bun.serve<WebSocketData>(

@@ -10,6 +10,7 @@ import { WorkflowTimeoutError } from '../timeouts.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
 import {
   clearPendingAtomicWorkflowCommitSideEffects,
+  stageAtomicWorkflowCommitSideEffects,
   takePendingAtomicWorkflowCommitSideEffects,
 } from './checkpoint-side-effects.ts';
 import {
@@ -134,6 +135,12 @@ export async function loadWorkflowResult(
 
 type WorkflowStateCommitOptions = {
   includePendingAtomicSideEffects?: boolean;
+  /**
+   * Further preconditions for the commit, such as the exact state bytes the caller decided on. They
+   * apply only on a storage with `conditionalBatch`. A commit that loses one restores the staged
+   * side effects it took, so the caller can re-decide and commit again.
+   */
+  extraConditions?: ConditionalBatchCondition[];
 };
 
 /**
@@ -151,6 +158,7 @@ function buildWorkflowStateCommit(
   operations: BatchOperation[];
   conditions: ConditionalBatchCondition[];
   hasPendingSideEffects: boolean;
+  restoreSideEffects: () => void;
 } {
   const pendingSideEffects = options.includePendingAtomicSideEffects
     ? takePendingAtomicWorkflowCommitSideEffects(
@@ -164,11 +172,18 @@ function buildWorkflowStateCommit(
       ? operations
       : [...operations, ...pendingSideEffects.operations];
   const storageSupportsConditionalBatch = internals.storage.capabilities().conditionalBatch;
-  const conditions = storageSupportsConditionalBatch ? (pendingSideEffects?.conditions ?? []) : [];
+  const conditions = storageSupportsConditionalBatch
+    ? [...(pendingSideEffects?.conditions ?? []), ...(options.extraConditions ?? [])]
+    : [];
   return {
     operations: operationsWithSideEffects,
     conditions,
     hasPendingSideEffects: pendingSideEffects !== undefined,
+    restoreSideEffects: () => {
+      if (pendingSideEffects !== undefined) {
+        stageAtomicWorkflowCommitSideEffects(internals, workflowId, pendingSideEffects);
+      }
+    },
   };
 }
 
@@ -222,16 +237,21 @@ export async function commitSelfWorkflowStateOperations(
 ): Promise<void> {
   const commit = buildWorkflowStateCommit(internals, state.id, operations, options);
 
-  await commitFencedEngineWrite(
-    internals,
-    state.id,
-    commit.operations,
-    commit.conditions,
-    () =>
-      new Error(
-        `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
-      ),
-  );
+  try {
+    await commitFencedEngineWrite(
+      internals,
+      state.id,
+      commit.operations,
+      commit.conditions,
+      () =>
+        new Error(
+          `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
+        ),
+    );
+  } catch (error) {
+    commit.restoreSideEffects();
+    throw error;
+  }
 
   if (commit.hasPendingSideEffects) {
     clearPendingAtomicWorkflowCommitSideEffects(internals, state.id);
@@ -260,21 +280,26 @@ export async function commitExternalTerminalWorkflowStateOperations(
   const commit = buildWorkflowStateCommit(internals, state.id, operations, options);
   const rotation = await buildExternalTerminalRotationFragment(internals, state.id);
 
-  await commitFencedEngineWrite(
-    internals,
-    null,
-    [...commit.operations, ...rotation.operations],
-    [...commit.conditions, ...rotation.conditions],
-    () =>
-      new Error(
-        // This path carries two kinds of precondition: the caller's staged
-        // side-effect conditions and, under `workflow-lease`, the folded epoch
-        // rotation. Naming only the former would send an operator debugging a
-        // claim race toward the side-effect subsystem instead of the epoch one.
-        `External terminal commit for workflow "${state.id}" lost a commit precondition ` +
-          '(staged side effects, or the ownership epoch rotation under `workflow-lease`).',
-      ),
-  );
+  try {
+    await commitFencedEngineWrite(
+      internals,
+      null,
+      [...commit.operations, ...rotation.operations],
+      [...commit.conditions, ...rotation.conditions],
+      () =>
+        new Error(
+          // This path carries two kinds of precondition: the caller's staged
+          // side-effect conditions and, under `workflow-lease`, the folded epoch
+          // rotation. Naming only the former would send an operator debugging a
+          // claim race toward the side-effect subsystem instead of the epoch one.
+          `External terminal commit for workflow "${state.id}" lost a commit precondition ` +
+            '(staged side effects, or the ownership epoch rotation under `workflow-lease`).',
+        ),
+    );
+  } catch (error) {
+    commit.restoreSideEffects();
+    throw error;
+  }
 
   if (commit.hasPendingSideEffects) {
     clearPendingAtomicWorkflowCommitSideEffects(internals, state.id);

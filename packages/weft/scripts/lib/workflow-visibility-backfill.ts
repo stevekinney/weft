@@ -11,8 +11,7 @@ import { decodeWorkflowState } from '../../src/core/engine/validation.ts';
 import {
   WORKFLOW_VISIBILITY_INDEX_VERSION,
   WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS,
-  buildWorkflowVisibilityIndexOperations,
-  decodeWorkflowVisibilityManifest,
+  buildWorkflowVisibilityIndexTransition,
 } from '../../src/core/engine/workflow-indexes.ts';
 import {
   KEYS,
@@ -23,6 +22,9 @@ import {
   type Storage,
 } from '../../src/storage/interface.ts';
 
+// Per-workflow manifest rows, written only by index layout version 1.
+const LAYOUT_VERSION_ONE_MANIFEST_PREFIX = 'wf-idx-manifest:';
+
 const VISIBILITY_INDEX_PREFIXES = [
   'wf-idx-status:',
   'wf-idx-type:',
@@ -30,7 +32,7 @@ const VISIBILITY_INDEX_PREFIXES = [
   'wf-idx-created:',
   'wf-idx-updated:',
   'wf-idx-deadline:',
-  'wf-idx-manifest:',
+  LAYOUT_VERSION_ONE_MANIFEST_PREFIX,
 ];
 
 /**
@@ -169,8 +171,18 @@ async function backfillWhileHoldingLock(
   // write that changed it. A run with no saved cursor rebuilds from empty,
   // because engines that skipped index writes while the watermark was stale may
   // have left stale or orphaned rows; a resumed run keeps its own rows.
-  const resumeCursor = await loadCursor(storage);
-  await commitUnderLock(storage, lockToken, WATERMARK_REMOVAL);
+  // A cursor saved by a layout-version-1 run sits over version-1 rows a
+  // resumed run would keep, so the presence of a version-1 manifest row
+  // discards the cursor and rebuilds from empty instead.
+  const savedCursor = await loadCursor(storage);
+  const resumeCursor =
+    savedCursor !== undefined && (await hasLayoutVersionOneRows(storage)) ? undefined : savedCursor;
+  await commitUnderLock(storage, lockToken, [
+    ...WATERMARK_REMOVAL,
+    ...(resumeCursor === savedCursor
+      ? []
+      : [{ type: 'delete' as const, key: KEYS.workflowVisibilityMetaCursor() }]),
+  ]);
   await settle(
     options.settleMilliseconds ?? WORKFLOW_VISIBILITY_BACKFILL_SETTLE_MILLISECONDS,
     logger,
@@ -265,27 +277,12 @@ async function indexWorkflow(
   const workflowId = tryDecodeStorageKeyComponent(key.slice(3));
   if (workflowId === null) return 'skipped';
 
-  const state = decodeWorkflowState(value);
-  const manifestBytes = await storage.get(KEYS.workflowVisibilityManifest(workflowId));
-  const currentManifest = decodeWorkflowVisibilityManifest(manifestBytes);
-  const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexOperations(
-    workflowId,
-    currentManifest,
-    state,
+  // Put every key the state derives: index rows are a deterministic function
+  // of state, so the rebuild comes from the state alone.
+  const operations: BatchOperation[] = buildWorkflowVisibilityIndexTransition(
+    null,
+    decodeWorkflowState(value),
   );
-  // The manifest says which rows to delete, but not that the rows it lists exist: a sweep can
-  // remove them, and a runtime write between that sweep and this scan diffs against the previous
-  // state, so it writes a full manifest while putting only the keys that changed. Put every key
-  // the state derives, so the rebuild comes from the state rather than from the manifest's claims.
-  const putKeys = new Set(
-    batchOps.flatMap((operation) => (operation.type === 'put' ? [operation.key] : [])),
-  );
-  const operations: BatchOperation[] = [
-    ...batchOps,
-    ...(nextManifestKeys ?? [])
-      .filter((indexKey) => !putKeys.has(indexKey))
-      .map((indexKey) => ({ type: 'put' as const, key: indexKey, value: new Uint8Array(0) })),
-  ];
   if (advanceCursor) {
     operations.push({
       type: 'put',
@@ -338,6 +335,14 @@ async function sweepVisibilityIndexRows(
     }
   }
   return rowsDeleted;
+}
+
+async function hasLayoutVersionOneRows(storage: Storage): Promise<boolean> {
+  const manifestRows = storage.scan(LAYOUT_VERSION_ONE_MANIFEST_PREFIX, { limit: 1 });
+  const rows = manifestRows[Symbol.asyncIterator]();
+  const first = await rows.next();
+  await rows.return?.();
+  return first.done !== true;
 }
 
 const WATERMARK_REMOVAL: BatchOperation[] = [

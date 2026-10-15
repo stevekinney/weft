@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, type BatchOperation } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { decode, encode } from '../codec.ts';
+import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 
 import {
   WORKFLOW_VISIBILITY_INDEX_VERSION,
-  buildWorkflowVisibilityIndexOperations,
+  WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS,
   buildWorkflowVisibilityIndexTransition,
-  decodeWorkflowVisibilityManifest,
   deriveWorkflowVisibilityIndexKeys,
   getWorkflowVisibilityWatermark,
-  type WorkflowVisibilityManifest,
+  workflowVisibilityUpdatedBucket,
 } from './workflow-indexes.ts';
 
 function makeState(overrides: Partial<WorkflowState> = {}): WorkflowState {
@@ -37,16 +36,40 @@ function makeState(overrides: Partial<WorkflowState> = {}): WorkflowState {
   return { ...base, ...overrides };
 }
 
+function keysOf(operations: readonly BatchOperation[], type: BatchOperation['type']): string[] {
+  return operations
+    .filter((operation) => operation.type === type)
+    .map((operation) => operation.key);
+}
+
+describe('workflowVisibilityUpdatedBucket', () => {
+  it('floors a timestamp to the start of its bucket', () => {
+    const bucketStart = 1_700_000_040_000;
+    expect(bucketStart % WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS).toBe(0);
+    expect(workflowVisibilityUpdatedBucket(bucketStart)).toBe(bucketStart);
+    expect(
+      workflowVisibilityUpdatedBucket(
+        bucketStart + WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS - 1,
+      ),
+    ).toBe(bucketStart);
+    expect(
+      workflowVisibilityUpdatedBucket(
+        bucketStart + WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS,
+      ),
+    ).toBe(bucketStart + WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS);
+  });
+});
+
 describe('deriveWorkflowVisibilityIndexKeys', () => {
-  it('emits the four mandatory dimensions in sorted order', () => {
+  it('emits the four mandatory dimensions, with updatedAt bucketed', () => {
     const state = makeState();
     const keys = deriveWorkflowVisibilityIndexKeys(state);
-    expect(keys).toEqual(
+    expect(keys.toSorted()).toEqual(
       [
         KEYS.workflowVisibilityCreated(state.createdAt, state.id),
         KEYS.workflowVisibilityStatus(state.status, state.id),
         KEYS.workflowVisibilityType(state.type, state.id),
-        KEYS.workflowVisibilityUpdated(state.updatedAt, state.id),
+        KEYS.workflowVisibilityUpdated(workflowVisibilityUpdatedBucket(state.updatedAt), state.id),
       ].toSorted(),
     );
   });
@@ -63,196 +86,78 @@ describe('deriveWorkflowVisibilityIndexKeys', () => {
       expect(key.startsWith('wf-idx-deadline:')).toBe(false);
     }
   });
-
-  it('returns keys in a stable, sorted order', () => {
-    const keys = deriveWorkflowVisibilityIndexKeys(
-      makeState({ executionDeadline: 1_700_000_999_999 }),
-    );
-    const sorted = [...keys].toSorted();
-    expect(keys).toEqual(sorted);
-  });
 });
 
-describe('buildWorkflowVisibilityIndexOperations', () => {
-  it('writes all index keys and a fresh manifest on first insert', () => {
+describe('buildWorkflowVisibilityIndexTransition', () => {
+  it('writes every derived key, and nothing else, on first insert', () => {
     const state = makeState({ executionDeadline: 1_700_000_999_999 });
-    const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexOperations(
-      state.id,
-      null,
-      state,
-    );
+    const operations = buildWorkflowVisibilityIndexTransition(null, state);
 
-    const puts = batchOps.filter((operation) => operation.type === 'put');
-    const deletes = batchOps.filter((operation) => operation.type === 'delete');
-    expect(deletes).toEqual([]);
-
-    const indexPuts = puts.filter(
-      (operation) => operation.key !== KEYS.workflowVisibilityManifest(state.id),
+    expect(keysOf(operations, 'delete')).toEqual([]);
+    expect(keysOf(operations, 'put').toSorted()).toEqual(
+      deriveWorkflowVisibilityIndexKeys(state).toSorted(),
     );
-    const expectedKeys = deriveWorkflowVisibilityIndexKeys(state);
-    expect(indexPuts.map((operation) => operation.key).toSorted()).toEqual(expectedKeys);
-
-    const manifestPut = puts.find(
-      (operation) => operation.key === KEYS.workflowVisibilityManifest(state.id),
-    );
-    expect(manifestPut).toBeDefined();
-    const decoded = decode(manifestPut!.value);
-    expect(decoded).toEqual({ version: WORKFLOW_VISIBILITY_INDEX_VERSION, keys: expectedKeys });
-    expect(nextManifestKeys).toEqual(expectedKeys);
   });
 
-  it('diffs against the current manifest on status transition', () => {
-    const previousState = makeState({ status: 'pending', updatedAt: 1_700_000_000_100 });
-    const previousManifest: WorkflowVisibilityManifest = {
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: deriveWorkflowVisibilityIndexKeys(previousState),
-    };
-    const nextState = makeState({ status: 'running', updatedAt: 1_700_000_000_200 });
+  it('moves only the status row when updatedAt stays inside its bucket (COR-1387)', () => {
+    const previousState = makeState({ status: 'running', updatedAt: 1_700_000_040_100 });
+    const nextState = makeState({ status: 'completed', updatedAt: 1_700_000_040_900 });
 
-    const { batchOps } = buildWorkflowVisibilityIndexOperations(
-      nextState.id,
-      previousManifest,
-      nextState,
-    );
+    const operations = buildWorkflowVisibilityIndexTransition(previousState, nextState);
 
-    const deletedKeys = batchOps
-      .filter((operation) => operation.type === 'delete')
-      .map((operation) => operation.key);
-    const putKeys = batchOps
-      .filter(
-        (operation): operation is { type: 'put'; key: string; value: Uint8Array } =>
-          operation.type === 'put',
-      )
-      .map((operation) => operation.key);
+    expect(keysOf(operations, 'delete')).toEqual([
+      KEYS.workflowVisibilityStatus('running', nextState.id),
+    ]);
+    expect(keysOf(operations, 'put')).toEqual([
+      KEYS.workflowVisibilityStatus('completed', nextState.id),
+    ]);
+  });
 
-    // Old status row and old updatedAt row must be deleted.
+  it('moves the updated row when updatedAt crosses into a later bucket', () => {
+    const previousUpdatedAt = 1_700_000_040_100;
+    const nextUpdatedAt = previousUpdatedAt + WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS;
+    const previousState = makeState({ status: 'pending', updatedAt: previousUpdatedAt });
+    const nextState = makeState({ status: 'running', updatedAt: nextUpdatedAt });
+
+    const operations = buildWorkflowVisibilityIndexTransition(previousState, nextState);
+    const deletedKeys = keysOf(operations, 'delete');
+    const putKeys = keysOf(operations, 'put');
+
     expect(deletedKeys).toContain(KEYS.workflowVisibilityStatus('pending', nextState.id));
-    expect(deletedKeys).toContain(KEYS.workflowVisibilityUpdated(1_700_000_000_100, nextState.id));
+    expect(deletedKeys).toContain(
+      KEYS.workflowVisibilityUpdated(
+        workflowVisibilityUpdatedBucket(previousUpdatedAt),
+        nextState.id,
+      ),
+    );
     // type and createdAt are immutable — no delete for them.
     expect(deletedKeys).not.toContain(KEYS.workflowVisibilityType(nextState.type, nextState.id));
     expect(deletedKeys).not.toContain(
       KEYS.workflowVisibilityCreated(nextState.createdAt, nextState.id),
     );
-
-    // New rows for status + updatedAt must be inserted, and the manifest rewritten.
     expect(putKeys).toContain(KEYS.workflowVisibilityStatus('running', nextState.id));
-    expect(putKeys).toContain(KEYS.workflowVisibilityUpdated(1_700_000_000_200, nextState.id));
-    expect(putKeys).toContain(KEYS.workflowVisibilityManifest(nextState.id));
-  });
-
-  it('drops every key and the manifest when nextState is null', () => {
-    const state = makeState({ executionDeadline: 1_700_000_999_999 });
-    const manifest: WorkflowVisibilityManifest = {
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: deriveWorkflowVisibilityIndexKeys(state),
-    };
-
-    const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexOperations(
-      state.id,
-      manifest,
-      null,
+    expect(putKeys).toContain(
+      KEYS.workflowVisibilityUpdated(workflowVisibilityUpdatedBucket(nextUpdatedAt), nextState.id),
     );
-
-    const deletedKeys = batchOps
-      .filter((operation) => operation.type === 'delete')
-      .map((operation) => operation.key);
-
-    for (const key of manifest.keys) {
-      expect(deletedKeys).toContain(key);
-    }
-    expect(deletedKeys).toContain(KEYS.workflowVisibilityManifest(state.id));
-    expect(batchOps.every((operation) => operation.type === 'delete')).toBe(true);
-    expect(nextManifestKeys).toBeNull();
   });
 
-  it('produces only a manifest write when keys are unchanged', () => {
+  it('emits no operations when the derived keys are unchanged', () => {
     const state = makeState();
-    const manifest: WorkflowVisibilityManifest = {
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: deriveWorkflowVisibilityIndexKeys(state),
-    };
-
-    const { batchOps } = buildWorkflowVisibilityIndexOperations(state.id, manifest, state);
-
-    expect(batchOps).toHaveLength(1);
-    expect(batchOps[0]).toMatchObject({
-      type: 'put',
-      key: KEYS.workflowVisibilityManifest(state.id),
-    });
+    expect(buildWorkflowVisibilityIndexTransition(state, { ...state })).toEqual([]);
   });
 
-  it('issues no manifest delete when there was no prior manifest and the workflow is gone', () => {
-    const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexOperations(
-      'wf-1',
-      null,
-      null,
-    );
-    expect(batchOps).toEqual([]);
-    expect(nextManifestKeys).toBeNull();
-  });
-});
-
-describe('buildWorkflowVisibilityIndexTransition', () => {
-  it('derives previous keys from previousState (no manifest read needed)', () => {
-    const previousState = makeState({ status: 'pending', updatedAt: 1_700_000_000_100 });
-    const nextState = makeState({ status: 'running', updatedAt: 1_700_000_000_200 });
-
-    const { batchOps } = buildWorkflowVisibilityIndexTransition(
-      nextState.id,
-      previousState,
-      nextState,
-    );
-
-    const deletedKeys = batchOps
-      .filter((operation) => operation.type === 'delete')
-      .map((operation) => operation.key);
-    expect(deletedKeys).toContain(KEYS.workflowVisibilityStatus('pending', nextState.id));
-    expect(deletedKeys).toContain(KEYS.workflowVisibilityUpdated(1_700_000_000_100, nextState.id));
-  });
-
-  it('drops every key when transitioning to null with a previous state', () => {
+  it('drops every key when transitioning to null', () => {
     const previousState = makeState({ executionDeadline: 1_700_000_999_999 });
-    const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexTransition(
-      previousState.id,
-      previousState,
-      null,
-    );
+    const operations = buildWorkflowVisibilityIndexTransition(previousState, null);
 
-    const deletedKeys = batchOps
-      .filter((operation) => operation.type === 'delete')
-      .map((operation) => operation.key);
-    for (const key of deriveWorkflowVisibilityIndexKeys(previousState)) {
-      expect(deletedKeys).toContain(key);
-    }
-    expect(deletedKeys).toContain(KEYS.workflowVisibilityManifest(previousState.id));
-    expect(nextManifestKeys).toBeNull();
+    expect(keysOf(operations, 'put')).toEqual([]);
+    expect(keysOf(operations, 'delete').toSorted()).toEqual(
+      deriveWorkflowVisibilityIndexKeys(previousState).toSorted(),
+    );
   });
 
   it('emits no operations when both states are null', () => {
-    const { batchOps } = buildWorkflowVisibilityIndexTransition('wf-1', null, null);
-    expect(batchOps).toEqual([]);
-  });
-});
-
-describe('decodeWorkflowVisibilityManifest', () => {
-  it('round-trips a valid manifest', () => {
-    const manifest: WorkflowVisibilityManifest = {
-      version: WORKFLOW_VISIBILITY_INDEX_VERSION,
-      keys: ['wf-idx-status:running:wf-1', 'wf-idx-type:demo:wf-1'],
-    };
-    const decoded = decodeWorkflowVisibilityManifest(encode(manifest));
-    expect(decoded).toEqual(manifest);
-  });
-
-  it('returns null for missing input', () => {
-    expect(decodeWorkflowVisibilityManifest(null)).toBeNull();
-  });
-
-  it('returns null for malformed payloads', () => {
-    expect(decodeWorkflowVisibilityManifest(encode({ version: 'one', keys: [] }))).toBeNull();
-    expect(decodeWorkflowVisibilityManifest(encode({ version: 1, keys: 'oops' }))).toBeNull();
-    expect(decodeWorkflowVisibilityManifest(encode({ version: 1, keys: [1, 2] }))).toBeNull();
-    expect(decodeWorkflowVisibilityManifest(encode(null))).toBeNull();
+    expect(buildWorkflowVisibilityIndexTransition(null, null)).toEqual([]);
   });
 });
 

@@ -79,8 +79,18 @@ export type {
   JWTPayload,
   MTLSConfig,
 } from './server/authentication.ts';
-export { AUTHORIZATION_SCOPES, isAuthorizationScope } from './server/authorization-scope.ts';
-export type { AuthorizationScope } from './server/authorization-scope.ts';
+export {
+  AUTHORIZATION_SCOPES,
+  PACKAGE_AUTHORIZATION_SCOPE_PATTERN,
+  isAuthorizationScope,
+  isPackageAuthorizationScope,
+} from './server/authorization-scope.ts';
+export type {
+  AuthorizationScope,
+  BuiltInAuthorizationScope,
+  PackageAuthorizationScope,
+} from './server/authorization-scope.ts';
+export { dashboard, type DashboardOptions } from './server/dashboard.ts';
 export * from './server/handler.ts';
 export { handleRequest } from './server/handler.ts';
 /*

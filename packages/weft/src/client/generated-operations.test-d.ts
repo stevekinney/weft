@@ -145,6 +145,14 @@ void operations['weft.workers.rejections']({ limit: 10 });
 // @ts-expect-error — a defaulted field still rejects a wrong type.
 void operations['weft.workers.rejections']({ limit: '10' });
 
+// COR-1365: a conformance report names a registered target and nothing else.
+void operations['weft.conformance.targets']({});
+void operations['weft.conformance.report']({ target: 'reference' });
+// @ts-expect-error — the target name is required.
+void operations['weft.conformance.report']({});
+// @ts-expect-error — a request cannot supply a worker command.
+void operations['weft.conformance.report']({ target: 'reference', command: ['bun'] });
+
 void operations['weft.workflows.activities.pending.list']({ workflowId: 'workflow-1' });
 void operations['weft.workflows.activities.pending.list']({ workflowId: 'workflow-1', limit: 10 });
 // @ts-expect-error — the required workflowId is still required.

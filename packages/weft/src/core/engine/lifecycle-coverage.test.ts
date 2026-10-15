@@ -1061,6 +1061,7 @@ describe('engine lifecycle coverage helpers', () => {
     const startWorkflowStrategy = mock(() => {});
     const dispatchEvent = mock(() => {});
     const internals = {
+      storage: new MemoryStorage(),
       checkpoints: new Map<string, Checkpoint>(),
       inlineStrategy: null,
       registrations: new Map(),
@@ -1118,6 +1119,7 @@ describe('engine lifecycle coverage helpers', () => {
     const adoptWorkflow = mock(() => {});
     const continueWorkflow = mock(() => {});
     const internals = {
+      storage: new MemoryStorage(),
       checkpoints: new Map<string, Checkpoint>(),
       composedWorkflowInterceptor: undefined,
       inlineStrategy: { adoptWorkflow, continueWorkflow },
@@ -1165,6 +1167,7 @@ describe('engine lifecycle coverage helpers', () => {
   it('launchWorkflowFromCheckpoint rejects inconsistent inline launch state', () => {
     let inlineStrategyReads = 0;
     const internals = {
+      storage: new MemoryStorage(),
       checkpoints: new Map<string, Checkpoint>(),
       get inlineStrategy() {
         inlineStrategyReads++;

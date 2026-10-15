@@ -14,6 +14,7 @@
  * @module server/rest-bindings
  */
 
+import type { ConformanceTargetRunner } from '../conformance/targets.ts';
 import type { MetricsCollector } from '../observability/metrics.ts';
 import type { Storage } from '../storage/interface.ts';
 import type { WorkerDeploymentCatalog } from '../worker/deployment-routing.ts';
@@ -23,6 +24,14 @@ import {
   type OperationRegistry,
   type RegistrableOperation,
 } from './operation-catalog.ts';
+import {
+  createListConformanceTargetsOperation,
+  createRunConformanceReportOperation,
+  listConformanceTargetsOperation,
+  listConformanceTargetsRestBinding,
+  runConformanceReportOperation,
+  runConformanceReportRestBinding,
+} from './operations/conformance.ts';
 import {
   createGetSystemMetricsOperation,
   createGetSystemMetricsRestBinding,
@@ -131,6 +140,8 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
     workerDeploymentPromoteRestBinding,
     workerDeploymentRollbackRestBinding,
     workerDeploymentPreviewRestBinding,
+    listConformanceTargetsRestBinding,
+    runConformanceReportRestBinding,
   ];
 }
 
@@ -155,6 +166,12 @@ export type LiveOperationRegistryOptions = {
   taskQueue?: TaskQueue;
   clock?: () => number;
   workerStartOverrideSigningSecret?: string;
+  /**
+   * Runs the operator-registered targets behind `weft.conformance.targets` and
+   * `weft.conformance.report`. `serve()` always supplies one (empty when no
+   * `conformanceTargets` are configured); discovery-only callers omit it.
+   */
+  conformanceTargetRunner?: ConformanceTargetRunner | undefined;
   /**
    * Operations declared outside this package, registered alongside Weft's own.
    *
@@ -248,6 +265,17 @@ function buildWorkerRegistrationRejectionsOperationForRegistry(
   });
 }
 
+function buildConformanceOperations(options: LiveOperationRegistryOptions) {
+  const runner = options.conformanceTargetRunner;
+  if (runner === undefined) {
+    return [listConformanceTargetsOperation, runConformanceReportOperation];
+  }
+  return [
+    createListConformanceTargetsOperation({ conformanceTargetRunner: runner }),
+    createRunConformanceReportOperation({ conformanceTargetRunner: runner }),
+  ];
+}
+
 function buildWorkerDeploymentRoutingOperations(options: LiveOperationRegistryOptions) {
   const catalog = options.workerDeploymentCatalog;
   return [
@@ -330,6 +358,7 @@ export function createLiveOperationRegistry(
     buildWorkerDiagnosticsOperationForRegistry(resolved),
     buildWorkerRegistrationRejectionsOperationForRegistry(resolved),
     ...buildWorkerDeploymentRoutingOperations(resolved),
+    ...buildConformanceOperations(resolved),
     ...(resolved.additionalOperations ?? []),
   ]);
 }

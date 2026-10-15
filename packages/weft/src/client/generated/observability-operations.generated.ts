@@ -44,6 +44,30 @@ export type ObservabilityOperationTypes = {
     };
     readonly faults: never;
   };
+  'weft.conformance.report': {
+    readonly input: { readonly target: string };
+    readonly output: {
+      readonly checks: ReadonlyArray<{
+        readonly message: string;
+        readonly name: string;
+        readonly ok: boolean;
+      }>;
+      readonly completedAt: number;
+      readonly ok: boolean;
+      readonly protocolVersion: number;
+      readonly startedAt: number;
+      readonly supportedProtocolVersions: ReadonlyArray<number>;
+      readonly target: string;
+    };
+    readonly faults: 'NotFound';
+  };
+  'weft.conformance.targets': {
+    readonly input: {};
+    readonly output: {
+      readonly targets: ReadonlyArray<{ readonly name: string; readonly timeoutMs: number }>;
+    };
+    readonly faults: never;
+  };
   'weft.realms.diagnostics': {
     readonly input: {};
     readonly output: {

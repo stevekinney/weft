@@ -193,7 +193,7 @@ function cloneInitialValue<T>(value: T): T {
   return structuredClone(value);
 }
 
-function retryDelay(attempt: number): number {
+export function retryDelay(attempt: number): number {
   const exponential = Math.min(
     ATOMIC_STATE_MAX_DELAY_MS,
     ATOMIC_STATE_BASE_DELAY_MS * 2 ** attempt,

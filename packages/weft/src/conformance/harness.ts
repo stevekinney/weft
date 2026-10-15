@@ -1,24 +1,30 @@
 /**
- * Process lifecycle and observation primitives for the `weft conformance`
- * command's checks (`conformance.ts`). Every wait here is barrier-based —
+ * Process lifecycle and observation primitives for the shared conformance
+ * check sequence (`run-conformance.ts`), which both the `weft conformance`
+ * command and the `weft.conformance.report` operation run. Every wait here is
+ * barrier-based —
  * polled against an observed condition (registry state, a ledger record, a
  * worker's own reported heartbeat/idle status), never a fixed sleep standing
  * in for "probably done by now" — so a check fails only when the condition
  * it names genuinely never becomes true within `timeoutMs`, not when a slow
  * machine merely takes longer than some guessed margin.
  *
- * @module cli/conformance-harness
+ * Imports name their defining modules rather than the package root: the
+ * server composition root imports this module (through the target runner),
+ * so a root import would close a runtime cycle back through `serve()`.
+ *
+ * @module conformance/harness
  */
 
+import { decode } from '../core/codec/api.ts';
 import {
-  decode,
   isRemoteTaskTerminalCancelled,
   isRemoteTaskTerminalResolved,
-  MemoryStorage,
-  REMOTE_WORKER_PROTOCOL_VERSION,
   taskLedgerKey,
-  type WeftServer,
-} from '../index.ts';
+} from '../core/task-ledger/task-ledger.ts';
+import type { WeftServer } from '../server/index.ts';
+import type { MemoryStorage } from '../storage/memory.ts';
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol-version.ts';
 
 export const CONFORMANCE_QUEUE = 'conformance';
 export const CONFORMANCE_ACTIVITIES = [
@@ -54,7 +60,7 @@ export async function waitForCondition(
     : new Error(message);
 }
 
-export function startWorker(command: string[], server: WeftServer): RunningWorker {
+export function startWorker(command: readonly string[], server: WeftServer): RunningWorker {
   const environment = {
     ...Bun.env,
     WEFT_WORKER_URL: `${server.url.replace('http://', 'ws://')}/v1/tasks/${CONFORMANCE_QUEUE}/stream`,
@@ -65,7 +71,7 @@ export function startWorker(command: string[], server: WeftServer): RunningWorke
   };
 
   return {
-    process: Bun.spawn(command, {
+    process: Bun.spawn([...command], {
       env: environment,
       stdout: 'ignore',
       stderr: 'ignore',
