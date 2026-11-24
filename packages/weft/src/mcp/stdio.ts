@@ -175,43 +175,47 @@ async function serveConnection(
 ): Promise<void> {
   // Registry-erase the widened `McpStdioSessionOptions.engine` (#708).
   const engine = options.engine as Engine;
-  await using feed = new McpChangeFeed(engine);
-  const transport = new StreamLineTransport(write);
-  const principal = principalFromStdioLocal(WEFT_SCOPE_VOCABULARY);
-  // Work a call starts and does not await (cancelling the workflow of a cancelled call) must
-  // finish before the session ends, or the process can exit with the workflow still running.
-  const pendingWork = new Set<Promise<unknown>>();
-  const trackPendingWork = (work: Promise<unknown>): void => {
-    pendingWork.add(work);
-    void work.finally(() => pendingWork.delete(work));
-  };
-  const connection = serveStdio(
-    createMcpServerFactory({
-      engine,
-      access: () => ({ principal, authRequired: false }),
-      lifetime: 'connection',
-      feed,
-      registrars: options.registrars ?? [],
-      trackPendingWork,
-    }),
-    { transport },
-  );
-  const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
-  let buffer = remainder;
-  buffer = await deliverLines(buffer, transport, maxFrameBytes);
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    buffer = await deliverLines(
-      buffer + decoder.decode(chunk.value, { stream: true }),
-      transport,
-      maxFrameBytes,
+  const feed = new McpChangeFeed(engine);
+  try {
+    const transport = new StreamLineTransport(write);
+    const principal = principalFromStdioLocal(WEFT_SCOPE_VOCABULARY);
+    // Work a call starts and does not await (cancelling the workflow of a cancelled call) must
+    // finish before the session ends, or the process can exit with the workflow still running.
+    const pendingWork = new Set<Promise<unknown>>();
+    const trackPendingWork = (work: Promise<unknown>): void => {
+      pendingWork.add(work);
+      void work.finally(() => pendingWork.delete(work));
+    };
+    const connection = serveStdio(
+      createMcpServerFactory({
+        engine,
+        access: () => ({ principal, authRequired: false }),
+        lifetime: 'connection',
+        feed,
+        registrars: options.registrars ?? [],
+        trackPendingWork,
+      }),
+      { transport },
     );
+    const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+    let buffer = remainder;
+    buffer = await deliverLines(buffer, transport, maxFrameBytes);
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer = await deliverLines(
+        buffer + decoder.decode(chunk.value, { stream: true }),
+        transport,
+        maxFrameBytes,
+      );
+    }
+    if (buffer.trim().length > 0) transport.receive(buffer);
+    await transport.settled();
+    await Promise.allSettled(pendingWork);
+    await connection.close();
+  } finally {
+    await feed[Symbol.asyncDispose]();
   }
-  if (buffer.trim().length > 0) transport.receive(buffer);
-  await transport.settled();
-  await Promise.allSettled(pendingWork);
-  await connection.close();
 }
 
 /** Hand every complete line to the transport and return the unterminated rest. */
