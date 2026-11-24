@@ -60,19 +60,31 @@ describe('A2A peer client review round 3', () => {
     expect(card.cardUrl).toBe(`https://peer.example${cardPath}`);
   });
 
-  test('a stream that never emits its first event fails with a timeout', async () => {
+  test('a first-event deadline aborts the stalled opening request', async () => {
+    let openingSignal: AbortSignal | undefined;
     const { client } = connect(
       {
-        intercept: (_request, method) =>
-          method === 'SendStreamingMessage'
-            ? new Response(new ReadableStream({ start() {} }), {
-                headers: { 'content-type': 'text/event-stream' },
-              })
-            : undefined,
+        intercept: (request, method) => {
+          if (method !== 'SendStreamingMessage') return undefined;
+          openingSignal = request.signal;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                request.signal.addEventListener(
+                  'abort',
+                  () => controller.error(request.signal.reason),
+                  { once: true },
+                );
+              },
+            }),
+            { headers: { 'content-type': 'text/event-stream' } },
+          );
+        },
       },
       { taskTimeoutMs: 30, attempts: 1 },
     );
     expect(await codeOf(client.send({ text: 'hi' }))).toBe('timeout');
+    expect(openingSignal?.aborted).toBe(true);
   });
 
   test('send uses the request as it was when send was called', async () => {

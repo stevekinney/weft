@@ -86,8 +86,12 @@ export class PeerTaskRun implements A2APeerTask {
   async open(request: SendMessageRequest): Promise<void> {
     if (this.context.streaming) {
       const first = await this.withRetry(async () => {
-        const opened = this.context.client.sendMessageStream(request, this.callOptions());
-        const head = await this.boundedRead(opened);
+        const opening = new AbortController();
+        const opened = this.context.client.sendMessageStream(request, {
+          ...this.context.requestOptions,
+          signal: AbortSignal.any([this.follow.signal, opening.signal]),
+        });
+        const head = await this.boundedRead(opened, opening);
         if (head.done === true) {
           throw new A2APeerError('protocol', 'The peer closed the stream without a response.');
         }
@@ -124,7 +128,10 @@ export class PeerTaskRun implements A2APeerTask {
    * The first stream event, bounded by the task timeout: the request timeout ends once headers
    * arrive, so a peer that never emits an event would otherwise hold `send()` open forever.
    */
-  private async boundedRead(opened: EventStream): Promise<IteratorResult<PeerStreamEvent, void>> {
+  private async boundedRead(
+    opened: EventStream,
+    opening: AbortController,
+  ): Promise<IteratorResult<PeerStreamEvent, void>> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
@@ -139,6 +146,7 @@ export class PeerTaskRun implements A2APeerTask {
     try {
       return await Promise.race([opened.next(), expired]);
     } catch (error) {
+      opening.abort();
       void Promise.allSettled([opened.return()]);
       throw error;
     } finally {
@@ -151,15 +159,21 @@ export class PeerTaskRun implements A2APeerTask {
    * headers arrive, so a peer that stalls mid-body would otherwise hold `send()` open forever.
    */
   private boundedSend(request: SendMessageRequest): Promise<Message | Task> {
-    return this.bounded((options) => this.context.client.sendMessage(request, options));
+    return this.bounded(
+      (options) => this.context.client.sendMessage(request, options),
+      this.follow.signal,
+    );
   }
 
   /** The opening `GetTask` of an attach, bounded the same way as {@link boundedSend}. */
   private boundedGetTask(taskId: string): Promise<Task> {
-    return this.bounded((options) => this.getTask(options, taskId));
+    return this.bounded((options) => this.getTask(options, taskId), this.follow.signal);
   }
 
-  private async bounded<T>(call: (options: RequestOptions) => Promise<T>): Promise<T> {
+  private async bounded<T>(
+    call: (options: RequestOptions) => Promise<T>,
+    followSignal?: AbortSignal,
+  ): Promise<T> {
     const bound = new AbortController();
     let expired = false;
     const timer = setTimeout(() => {
@@ -170,7 +184,8 @@ export class PeerTaskRun implements A2APeerTask {
       // Either signal ends the request, one that has already aborted included.
       return await call({
         ...this.context.requestOptions,
-        signal: AbortSignal.any([this.follow.signal, bound.signal]),
+        signal:
+          followSignal === undefined ? bound.signal : AbortSignal.any([followSignal, bound.signal]),
       });
     } catch (error) {
       if (!expired) throw error;
@@ -242,7 +257,7 @@ export class PeerTaskRun implements A2APeerTask {
     if (!this.tracker.stopped()) await this.cancel('task timeout');
     throw new A2APeerError(
       'timeout',
-      `The peer task did not stop within ${this.context.taskTimeoutMs} ms; it was canceled.`,
+      `The peer task did not stop within ${this.context.taskTimeoutMs} ms.`,
     );
   }
 
@@ -333,23 +348,33 @@ export class PeerTaskRun implements A2APeerTask {
       return this.tracker.outcome();
     }
     try {
-      await this.sendCancel(reason);
+      // Cancellation remains available after following has stopped and has its own deadline.
+      await this.bounded(async (options) => {
+        try {
+          await this.sendCancel(reason, options);
+        } catch (error) {
+          options.signal?.throwIfAborted();
+          await this.recoverFromCancelError(this.context.classify(error), options);
+        }
+      });
     } catch (error) {
-      await this.recoverFromCancelError(this.context.classify(error));
+      this.tracker.cancelLocally({ confirmed: false, error: this.context.classify(error).message });
     }
     return this.tracker.outcome();
   }
 
-  private async sendCancel(reason: string | undefined): Promise<void> {
-    const task = await this.withRetry(() =>
-      this.context.client.cancelTask(
-        {
-          tenant: '',
-          id: this.taskId,
-          metadata: reason === undefined ? undefined : { reason },
-        },
-        this.context.requestOptions,
-      ),
+  private async sendCancel(reason: string | undefined, options: RequestOptions): Promise<void> {
+    const task = await this.withRetry(
+      () =>
+        this.context.client.cancelTask(
+          {
+            tenant: '',
+            id: this.taskId,
+            metadata: reason === undefined ? undefined : { reason },
+          },
+          options,
+        ),
+      options.signal,
     );
     this.tracker.applyTask(task);
     if (this.tracker.state() === 'canceled') this.tracker.cancelLocally({ confirmed: true });
@@ -361,12 +386,15 @@ export class PeerTaskRun implements A2APeerTask {
     }
   }
 
-  private async recoverFromCancelError(error: A2APeerError): Promise<void> {
+  private async recoverFromCancelError(
+    error: A2APeerError,
+    options: RequestOptions,
+  ): Promise<void> {
     this.tracker.cancelLocally({ confirmed: false, error: error.message });
     if (error.code !== 'task-not-cancelable') return;
     // The task may have finished first; report the state it is really in.
     try {
-      this.tracker.applyTask(await this.getTask(this.context.requestOptions));
+      this.tracker.applyTask(await this.getTask(options));
       const remote = this.tracker.remoteState();
       if (isTerminalState(remote) && remote !== 'canceled') this.tracker.clearLocalCancel();
     } catch {

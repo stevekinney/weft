@@ -3,7 +3,7 @@
  * peer that answers with a message, a `CancelTask` that leaves the task running, and a failing
  * recovery lookup. A scripted peer answers the rest as the real handler would.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, jest, test } from 'bun:test';
 
 import { A2APeerError } from './peer-client-types.ts';
 import { createScriptedPeer, type ScriptedPeerOptions } from './peer-client.test-support.ts';
@@ -135,6 +135,58 @@ describe('a CancelTask the peer answers without canceling', () => {
     expect(outcome).toMatchObject({ state: 'canceled', cancelConfirmed: false });
     expect(outcome.cancelError).toContain('the peer left the task working');
   });
+});
+
+describe('a cancellation response that stalls after headers', () => {
+  test.each(['CancelTask', 'GetTask'] as const)(
+    'bounds the %s response body',
+    async (stalledMethod) => {
+      const opened = Promise.withResolvers<AbortSignal>();
+      let stalledBody: ReadableStreamDefaultController | undefined;
+      const { client } = connect(
+        {
+          intercept: async (request, method) => {
+            if (method === stalledMethod) {
+              return new Response(
+                new ReadableStream({
+                  start(controller) {
+                    stalledBody = controller;
+                    request.signal.addEventListener(
+                      'abort',
+                      () => controller.error(request.signal.reason),
+                      { once: true },
+                    );
+                    opened.resolve(request.signal);
+                  },
+                }),
+                { headers: { 'content-type': 'application/json' } },
+              );
+            }
+            if (method !== 'CancelTask') return undefined;
+            const body = (await request.clone().json()) as { id: number };
+            return Response.json({
+              jsonrpc: '2.0',
+              id: body.id,
+              error: { code: -32002, message: 'Task not cancelable' },
+            });
+          },
+        },
+        { taskTimeoutMs: 100 },
+      );
+      const task = await client.send({ text: 'hang' });
+      jest.useFakeTimers();
+      try {
+        const cancellation = task.cancel();
+        const signal = await opened.promise;
+        jest.advanceTimersByTime(100);
+        if (!signal.aborted) stalledBody?.close();
+        expect(signal.aborted).toBe(true);
+        expect(await cancellation).toMatchObject({ state: 'canceled', cancelConfirmed: false });
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
 });
 
 describe('a cancel the peer refuses as not cancelable', () => {
