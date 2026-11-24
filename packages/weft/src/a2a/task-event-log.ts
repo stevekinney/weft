@@ -48,7 +48,7 @@ export type TaskEventEntry = {
 };
 
 /** The durable binding of a continuation message to the wait it answered. */
-export type PendingContinuation = {
+type PendingContinuation = {
   readonly message: Message;
   readonly signalName: string;
   readonly sequence: number;
