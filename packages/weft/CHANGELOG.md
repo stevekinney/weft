@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1
+
+### Patch Changes
+
+- Restore Node.js 22 compatibility for the public package by disposing the MCP stdio change feed without resource-management syntax. This is the first published release of the 0.30 line.
+
 ## 0.30.0
 
 ### Minor Changes
