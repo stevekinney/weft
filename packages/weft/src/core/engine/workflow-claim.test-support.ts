@@ -11,11 +11,7 @@
  * storage, generalized to more than one directive kind.
  */
 
-import type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  Storage,
-} from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition, Storage } from "../../embedded/storage/src/index.ts";
 
 type ConditionalBatchDirective =
   | { kind: 'force-false' }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { RevisionRealmRegistry } from './revision-realm-registry.ts';
 import type { RevisionRealm } from './revision-realm.ts';
 import type { WorkerRealm, WorkerRealmActivation } from './worker-realm.ts';
@@ -17,6 +17,10 @@ function asWorkerRealm(realm: RevisionRealm): WorkerRealm {
 }
 
 const workerUrl = new URL('./__fixtures__/revision-realm-worker-entry.ts', import.meta.url);
+const unresponsiveWorkerUrl = new URL(
+  './__fixtures__/revision-realm-unresponsive-worker.ts',
+  import.meta.url,
+);
 
 function configFor(revision: 'revision-a' | 'revision-b') {
   return {
@@ -49,6 +53,25 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('RevisionRealmRegistry', () => {
+  it('forwards realm transitions of every pool to onRealmStateChanged until unsubscribed (COR-1724)', async () => {
+    const registry = new RevisionRealmRegistry();
+    const seen: Array<[string, string]> = [];
+    const unsubscribe = registry.onRealmStateChanged((change) => {
+      seen.push([change.revision, change.state]);
+    });
+    registry.ensurePool('order-workflow', 'revision-a', configFor('revision-a'));
+    const first = await registry.acquireForExecution('order-workflow', 'revision-a', 'execution-1');
+    if (!first.ok) throw new Error('unreachable');
+    expect(seen).toEqual([
+      ['revision-a', 'ready'],
+      ['revision-a', 'active'],
+    ]);
+
+    unsubscribe();
+    registry.releaseAfterExecution('order-workflow', 'revision-a', first.realm);
+    expect(seen).toHaveLength(2);
+  });
+
   describe('two revisions of one workflow execute concurrently in distinct realms', () => {
     it('acquires a distinct realm per revision, each honoring only its own artifact digest', async () => {
       const registry = new RevisionRealmRegistry();
@@ -173,6 +196,51 @@ describe('RevisionRealmRegistry', () => {
       expect(b.realm.lifecycle.state).toBe('active');
 
       registry.releaseAfterExecution('order-workflow', 'revision-b', b.realm);
+    });
+  });
+
+  describe('realm options in a revision config', () => {
+    it('hands the ready-handshake timeout to the realms of that revision', async () => {
+      const registry = new RevisionRealmRegistry();
+      registry.ensurePool('order-workflow', 'revision-a', {
+        workerUrl: unresponsiveWorkerUrl,
+        expectedWorkflowTypes: ['order-workflow'],
+        realmReadyTimeoutMs: 5,
+      });
+
+      const outcome = await registry.acquireForExecution(
+        'order-workflow',
+        'revision-a',
+        'execution-timeout',
+      );
+
+      expect(outcome).toEqual({
+        ok: false,
+        reason: 'realm-ready-handshake-failed',
+        error: 'Worker realm did not send a ready message within 5ms',
+      });
+      registry.dispose();
+    });
+
+    it('hands the protocol message size limit to the realms of that revision', async () => {
+      const registry = new RevisionRealmRegistry();
+      registry.ensurePool('order-workflow', 'revision-a', {
+        ...configFor('revision-a'),
+        maxProtocolMessageBytes: 1,
+      });
+
+      const outcome = await registry.acquireForExecution(
+        'order-workflow',
+        'revision-a',
+        'execution-limit',
+      );
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        reason: 'realm-ready-handshake-failed',
+        error: expect.stringContaining('exceeding limit 1'),
+      });
+      registry.dispose();
     });
   });
 

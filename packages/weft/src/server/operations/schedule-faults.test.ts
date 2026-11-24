@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 
 import { DynamicWorkflowSourceUnavailableError } from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
+import { ScheduleOccurrenceNotNextError } from '../../core/engine/schedule-occurrence-not-next-error.ts';
+import { ScheduleStaleRevisionError } from '../../core/engine/schedule-stale-revision-error.ts';
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const SENSITIVE_CAUSE = '/etc/secrets/token=abc123 unreadable';
@@ -60,6 +62,24 @@ describe('mapScheduleErrorToFault', () => {
       code: 'Conflict',
       message: error.message,
       data: { reason: 'not-registered', weftCode: 'WorkflowRevisionUnavailableError' },
+    });
+  });
+
+  it('maps a stale revision to StaleRevision, carrying both revisions', () => {
+    const error = new ScheduleStaleRevisionError('daily', 2, 5);
+    expect(mapScheduleErrorToFault('daily', error)).toEqual({
+      code: 'StaleRevision',
+      message: error.message,
+      data: { expectedRevision: 2, currentRevision: 5 },
+    });
+  });
+
+  it('maps an occurrence that is not next to Conflict with the occurrence-not-next reason', () => {
+    const error = new ScheduleOccurrenceNotNextError('daily', 100, 200);
+    expect(mapScheduleErrorToFault('daily', error)).toEqual({
+      code: 'Conflict',
+      message: error.message,
+      data: { reason: 'occurrence-not-next', weftCode: 'ScheduleOccurrenceNotNextError' },
     });
   });
 

@@ -1,7 +1,6 @@
+import { MemoryStorage, type Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import { resolveEngineEnvironment } from '../../runtime/environment-configuration.ts';
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import type { Storage as WeftStorage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import { WorkerPool } from '../../workers/pool.ts';
 import { optionalInlineDependencies } from '../inline-execution-strategy.context-options.ts';
@@ -37,13 +36,16 @@ import {
   buildRevisionRealmExecutionStrategyBundle,
   resolveRevisionRealmExecutionForMode,
 } from './revision-realm-execution-construction.ts';
+import { resolveRunConcurrency } from './run-concurrency.ts';
+import { resolvePayloadValidation, resolveSchemaPolicy } from './schema-policy.ts';
+import { normalizeStorageSizeReportInterval } from './storage-size-report.ts';
+import { declaredMapFields } from './used-activities.ts';
 import {
   normalizeHistoryPolicy,
   normalizePayloadSizePolicy,
   normalizeRetentionDuration,
   normalizeRetentionPolicy,
 } from './validation.ts';
-
 export type KnownWorkflowNames<TWorkflows extends object> = Extract<keyof TWorkflows, string>;
 declare const emptyWorkflowDefinitions: unique symbol;
 declare const emptyActivityDefinitions: unique symbol;
@@ -61,7 +63,6 @@ export type EngineCreateRuntimeOptions = EngineConstructorOptions & {
   startScheduler?: boolean | undefined;
   onRecoveredWorkflow?: RecoverAllOptions['onRecoveredWorkflow'] | undefined;
 };
-
 export type NormalizedWorkerExecutionConfiguration =
   | { mode: 'inline'; workerExecution: null }
   | {
@@ -75,13 +76,11 @@ export type NormalizedWorkerExecutionConfiguration =
       requireProtocolVersion: true;
       discardOnCancel: true;
     };
-
 export function definitionEntries<TDefinition extends object>(
   definitions: Record<string, TDefinition> | undefined,
 ): Array<[string, TDefinition]> {
   return Object.entries(definitions ?? {});
 }
-
 export function typedEngineView(engine: object): never {
   // Cycle-breaking workaround. The runtime instance is the same Engine; the
   // declared return type is `never` so this module does not need to import
@@ -95,9 +94,7 @@ export function typedEngineView(engine: object): never {
   // other context.
   return engine as never;
 }
-
 let didWarnOnMemoryStorageFallback = false;
-
 export function readEnvironmentVariableFromSources(
   name: string,
   sources: {
@@ -106,14 +103,13 @@ export function readEnvironmentVariableFromSources(
   },
 ): string | undefined {
   if (sources.bunEnv !== undefined) {
-    return sources.bunEnv[name];
+    return Object.hasOwn(sources.bunEnv, name) ? sources.bunEnv[name] : undefined;
   }
   if (sources.processEnv !== undefined) {
-    return sources.processEnv[name];
+    return Object.hasOwn(sources.processEnv, name) ? sources.processEnv[name] : undefined;
   }
   return undefined;
 }
-
 /**
  * Whether to warn when an `Engine` falls back to {@link MemoryStorage}. Gated
  * to development so production never logs it: the explicit `development: true`
@@ -180,9 +176,7 @@ export function copyWorkflowDefinition(
     ...(registration.description === undefined ? {} : { description: registration.description }),
     ...(registration.inputSchema === undefined ? {} : { inputSchema: registration.inputSchema }),
     ...(registration.outputSchema === undefined ? {} : { outputSchema: registration.outputSchema }),
-    ...(registration.signals === undefined ? {} : { signals: { ...registration.signals } }),
-    ...(registration.updates === undefined ? {} : { updates: { ...registration.updates } }),
-    ...(registration.queries === undefined ? {} : { queries: { ...registration.queries } }),
+    ...declaredMapFields(registration),
     ...(registration.searchAttributes === undefined
       ? {}
       : { searchAttributes: registration.searchAttributes }),
@@ -191,7 +185,7 @@ export function copyWorkflowDefinition(
   };
 }
 
-function resolveRetentionFields(
+export function resolveRetentionFields(
   options: EngineConstructorOptions | undefined,
 ): Pick<ResolvedOptions, 'retention' | 'retentionSweepIntervalMs' | 'retentionSweepBatchSize'> {
   return {
@@ -228,7 +222,7 @@ function resolveBooleanDefaults(
   };
 }
 
-function resolveNumericDefaults(
+export function resolveNumericDefaults(
   options: EngineConstructorOptions | undefined,
 ): Pick<
   ResolvedOptions,
@@ -236,6 +230,7 @@ function resolveNumericDefaults(
   | 'checkpointSizeWarningThreshold'
   | 'maxNestingDepth'
   | 'schedulerPollIntervalMs'
+  | 'storageSizeReportIntervalMs'
 > {
   return {
     checkpointHistory: defaultTo(options?.checkpointHistory, 10),
@@ -247,10 +242,15 @@ function resolveNumericDefaults(
         'options.schedulerPollIntervalMs',
         DEFAULT_POLL_INTERVAL_MS,
       ) ?? DEFAULT_POLL_INTERVAL_MS,
+    storageSizeReportIntervalMs: normalizeStorageSizeReportInterval(
+      options?.storageSizeReportIntervalMs,
+      'options.storageSizeReportIntervalMs',
+      60_000,
+    ),
   };
 }
 
-function resolveHistoryFields(
+export function resolveHistoryFields(
   options: EngineConstructorOptions | undefined,
 ): Pick<ResolvedOptions, 'historyPolicy' | 'archiveAdapter' | 'payloadSizePolicy'> {
   return {
@@ -311,15 +311,19 @@ export function resolveEngineOptions(
     getNow,
     resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
     onLog: options?.onLog ?? null,
+    workflowLogs: options?.workflowLogs ?? null,
     workerStartOverrideSigningSecret: options?.workerStartOverrideSigningSecret ?? null,
     backgroundTaskMode: resolveBackgroundTaskMode(options),
     inlineLaunchSchedulingMode: resolveInlineLaunchSchedulingMode(options),
+    schemaPolicy: resolveSchemaPolicy(options),
+    payloadValidation: resolvePayloadValidation(options),
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
     ...resolveHistoryFields(options),
     ...resolveSecondInstanceFields(options),
     ...resolveOwnershipFields(options),
+    runConcurrency: resolveRunConcurrency(options),
   };
 }
 

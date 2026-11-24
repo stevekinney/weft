@@ -11,6 +11,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../embedded/storage/src/index.ts";
 import { encode } from '../core/codec.ts';
 import {
   decodeTaskAttemptRecord,
@@ -30,8 +35,6 @@ import {
   encodeTaskResultDeliveryHistory,
   taskResultDeliveryKey,
 } from '../core/task-ledger/task-result-delivery.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import {
   manifestForActivities,
@@ -382,7 +385,7 @@ describe('COR-205 dead-letter, hostile decode, purge, and retention', () => {
 
     const result = await clearTaskDeadLetterOperation.invoke({
       input: { operationId: 'op-clear-dl' },
-      engine: engine as never,
+      host: engine as never,
     } as never);
     expect(result).toEqual({ ok: true });
     expect(await storage.get(taskLedgerKey('op-clear-dl'))).toBeNull();

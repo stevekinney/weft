@@ -3,17 +3,20 @@ import { environmentalist, secret } from '@lostgradient/environmentalist';
 import type { Source } from '@lostgradient/environmentalist/types';
 import { z } from 'zod';
 
+// `process.env` is the environment on Bun and Node alike; a browser or edge isolate has no
+// `process`, so it reads as empty.
 function rawRuntimeEnvironment(): Record<string, string | undefined> {
-  if (typeof Bun !== 'undefined') return Bun.env;
-  if (typeof process !== 'undefined') return process.env;
-  return {};
+  return typeof process === 'undefined' ? {} : process.env;
 }
 
 function selectedEnvironment(mapping: Readonly<Record<string, string>>): Record<string, string> {
   const raw = rawRuntimeEnvironment();
   return Object.fromEntries(
     Object.entries(mapping)
-      .map(([canonical, variable]) => [canonical, raw[variable]])
+      .map(([canonical, variable]) => [
+        canonical,
+        Object.hasOwn(raw, variable) ? raw[variable] : undefined,
+      ])
       .filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
 }
@@ -133,21 +136,20 @@ export function resolveServerEnvironment(): ServerEnvironment {
 
 /** Read one exact environment variable name for dynamic credential lookup. */
 export function readEnvironmentVariable(name: string): string | undefined {
+  // One reader serves both entry points, so the asynchronous `load` cannot drift from the
+  // synchronous `loadSync` that `environmentalist.sync` actually calls.
+  const readExactVariable = () => {
+    const environment = rawRuntimeEnvironment();
+    const value = Object.hasOwn(environment, name) ? environment[name] : undefined;
+    return value === undefined
+      ? undefined
+      : { values: { value }, location: `runtime environment:${name}` };
+  };
   const exactSource: Source = {
     id: 'weft-runtime-environment',
     kind: 'string',
-    load: () => {
-      const value = rawRuntimeEnvironment()[name];
-      return value === undefined
-        ? undefined
-        : { values: { value }, location: `runtime environment:${name}` };
-    },
-    loadSync: () => {
-      const value = rawRuntimeEnvironment()[name];
-      return value === undefined
-        ? undefined
-        : { values: { value }, location: `runtime environment:${name}` };
-    },
+    load: readExactVariable,
+    loadSync: readExactVariable,
   };
   return environmentalist.sync({
     name: 'weft-dynamic-secret',

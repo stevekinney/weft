@@ -9,6 +9,14 @@
 
 import { z } from 'zod';
 
+import type { OperationFault } from "../../embedded/backchannel/src/index.ts";
+import {
+  invalidParamsFault,
+  isOperationFault,
+  readRestJsonBody,
+  type AccessPolicy,
+  type RestInputContext,
+} from "../../embedded/backchannel/src/internals.ts";
 import {
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
@@ -26,11 +34,6 @@ import {
 import { WorkflowNotRegisteredError } from '../../core/engine/errors.ts';
 import { WorkflowSourceValidationError } from '../../core/source/errors.ts';
 import { validateWorkflowOrActivityName } from '../../core/types/name-grammar.ts';
-import type { AccessPolicy } from '../authorization.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import type { RestInputContext } from '../rest-binding.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
 
 /** `workflows:admin` — required by `install` and `activate` (mutating). */

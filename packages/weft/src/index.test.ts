@@ -1,36 +1,75 @@
 import { describe, expect, it } from 'bun:test';
 
+import * as storageProtocol from "./embedded/storage/src/index.ts";
+import { MemoryStorage } from "./embedded/storage/src/index.ts";
+import { rejectionOf } from "../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { workflow } from './core/types/workflow-function.ts';
-import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index.ts';
 import {
-  decodeStorageKeyComponent,
-  encodeStorageKeyComponent,
+  type WorkflowOperation,
+  type WorkflowReplay,
+  type WorkflowTimelineEntry,
   Engine,
-  formatSortableStorageTimestamp,
   IdempotencyKeyPurgedError,
   isWeftErrorLike,
-  MemoryStorage,
+  normalizeScheduleSpec,
   StartOrSignalConflictError,
-  tryDecodeStorageKeyComponent,
   WorkflowAlreadyExistsError,
   WorkflowTeardownPendingError,
 } from './index.ts';
-import { rejectionOf } from './testing/promise-outcome.test-support.ts';
+
+/** The runtime exports that moved from Weft to `@lostgradient/storage` (COR-1766). */
+const MOVED_STORAGE_VALUES = [
+  'MAX_BATCH_OPERATIONS',
+  'MAX_SCAN_LIMIT',
+  'MemoryStorage',
+  'ScopedStorage',
+  'StorageBatchOperationLimitExceededError',
+  'assertDurableStorageForRecovery',
+  'assertStorageBatchOperationCount',
+  'copyTextKeyValueRowsToStorage',
+  'decodeStorageKeyComponent',
+  'encodeStorageKeyComponent',
+  'formatSortableStorageTimestamp',
+  'matchesScanOptions',
+  'requireStorageCapability',
+  'resolvePrefixRangeEnd',
+  'scopedStorage',
+  'storageBatch',
+  'storageConditionalBatch',
+  'storageCount',
+  'storageDeletePrefix',
+  'storageDeleteRange',
+  'storageHas',
+  'storageKeys',
+  'storageValuesEqual',
+  'textValueStore',
+  'tryDecodeStorageKeyComponent',
+] as const;
 
 describe('weft', () => {
-  it('exports storage key helpers used by workspace consumers', () => {
-    const encoded = encodeStorageKeyComponent('memory:tenant/item');
-    expect(encoded).toBe('memory%3Atenant%2Fitem');
-    expect(decodeStorageKeyComponent(encoded)).toBe('memory:tenant/item');
-    expect(tryDecodeStorageKeyComponent('%GG')).toBeNull();
-    expect(formatSortableStorageTimestamp(123)).toBe('0000000000000123');
+  it('leaves the storage protocol to @lostgradient/storage, at the root and in its storage barrel', async () => {
+    const root = await import('./index.ts');
+    const storageBarrel = await import('./storage/index.ts');
+    for (const name of MOVED_STORAGE_VALUES) {
+      expect(Reflect.has(storageProtocol, name), name).toBe(true);
+      expect(Reflect.has(root, name), name).toBe(false);
+      expect(Reflect.has(storageBarrel, name), name).toBe(false);
+    }
+    expect(Reflect.has(root, 'KEYS')).toBe(true);
+    expect(Reflect.has(storageBarrel, 'KEYS')).toBe(true);
   });
-  it('exports Engine class', () => {
-    expect(Engine).toBeDefined();
+  it('exports normalizeScheduleSpec, which accepts what schedule() accepts and rejects what it rejects', () => {
+    expect(normalizeScheduleSpec('*/5 * * * *')).toEqual({
+      kind: 'cron',
+      cronExpression: '*/5 * * * *',
+    });
+    expect(normalizeScheduleSpec({ every: '1s' })).toEqual({ kind: 'interval', intervalMs: 1000 });
+    expect(() => normalizeScheduleSpec('not a cron')).toThrow();
+    expect(() => normalizeScheduleSpec({ every: 'soon' })).toThrow();
   });
 
-  it('exports MemoryStorage class', () => {
-    expect(MemoryStorage).toBeDefined();
+  it('exports Engine class', () => {
+    expect(Engine).toBeDefined();
   });
 
   it('exports timeline and replay types', () => {

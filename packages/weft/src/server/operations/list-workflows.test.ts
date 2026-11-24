@@ -4,17 +4,15 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { decode, encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { type WorkflowContext, activity, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -144,6 +142,53 @@ describe('weft.workflows.list', () => {
     expect(await response.json()).toEqual(expected);
   });
 
+  it('filters by failing step and by retrying state over REST (COR-2530)', async () => {
+    const engine = createEngine();
+    const charge = activity({
+      name: 'charge-card',
+      execute: async () => {
+        throw new Error('declined');
+      },
+    } as never);
+    engine.register(
+      workflow({ name: 'checkout' })
+        .activities({ 'charge-card': charge })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.run(charge);
+        }),
+    );
+    const failed = await engine.start('checkout', null, { id: 'checkout-1' });
+    expect(await throwingRejectionOf(failed.result())).toThrow('declined');
+    await waitForWorkflowStatus(engine, failed.id, 'failed');
+    const held = await engine.start('hold', null, { id: 'held-1' });
+    await waitForWorkflowStatus(engine, held.id, 'running');
+
+    const query = async (search: string) => {
+      const response = await handleRequest(
+        new Request(`http://localhost/v1/workflows?${search}`, { method: 'GET' }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+      const body = await response.json();
+      const items: { id: string }[] = body.items ?? [];
+      return { status: response.status, ids: items.map((item) => item.id).toSorted() };
+    };
+
+    expect(await query('failed_step=charge-card')).toEqual({ status: 200, ids: ['checkout-1'] });
+    expect(await query('failed_step=ship-order')).toEqual({ status: 200, ids: [] });
+    expect(await query('failed_step=charge-card&status=running')).toEqual({
+      status: 200,
+      ids: [],
+    });
+    expect(await query('retrying=true')).toEqual({ status: 200, ids: [] });
+    expect(await query('retrying=false')).toEqual({
+      status: 200,
+      ids: ['checkout-1', 'held-1'],
+    });
+    const refused = await query('retrying=maybe');
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('filters workflow history by originating schedule over REST', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
@@ -245,6 +290,7 @@ describe('weft.workflows.list', () => {
           },
         ],
       },
+      retryable: false,
     });
 
     const repeatedResponse = await handleRequest(
@@ -270,6 +316,7 @@ describe('weft.workflows.list', () => {
           },
         ],
       },
+      retryable: false,
     });
   });
 
@@ -321,6 +368,6 @@ describe('weft.workflows.list', () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });

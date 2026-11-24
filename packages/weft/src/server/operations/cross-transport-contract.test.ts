@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 /**
  * Cross-transport contract for the data-driven runtime operations.
  *
@@ -14,15 +15,13 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromJwtClaims } from "../../embedded/backchannel/src/index.ts";
+import { executeOperation, signJWT } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { signJWT } from '../authentication.ts';
+import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { serve, type WeftServer } from '../index.ts';
 import { openWebSocket, waitForMessage } from '../json-rpc-websocket-client.test-support.ts';
-import { executeOperation } from '../operation-catalog.ts';
-import { principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 
 /** Shape of the JSON-RPC error payload these tests assert against. */
@@ -180,14 +179,22 @@ describe('runtime operation cross-transport contract', () => {
     }
 
     // stdio — Forbidden via the same operation policy hook
-    const stdioPrincipal = principalFromJwtClaims({
-      sub: 'cross-transport-test-user',
-      scope: 'workflows:read',
-    });
+    const stdioPrincipal = principalFromJwtClaims(
+      {
+        sub: 'cross-transport-test-user',
+        scope: 'workflows:read',
+      },
+      { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+    );
     const stdioResult = await executeOperation(
       'weft.system.metrics',
       {},
-      { engine, registry: liveRegistry, principal: stdioPrincipal, transport: 'jsonRpcStdio' },
+      {
+        host: engine,
+        registry: liveRegistry,
+        principal: stdioPrincipal,
+        transport: 'jsonRpcStdio',
+      },
     );
     expect(stdioResult.ok).toBe(false);
     if (!stdioResult.ok) {

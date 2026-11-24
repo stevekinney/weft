@@ -1,18 +1,23 @@
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
-import { withTimeout } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
-import { AsyncActivityDeferral, parkDeferredAsyncActivity } from './async-activity-completion.ts';
+import {
+  AsyncActivityDeferral,
+  AsyncActivityTokenNotFoundError,
+  parkDeferredAsyncActivity,
+} from './async-activity-completion.ts';
 import {
   buildAsyncActivityResolutionWrite,
   recoverPendingAsyncActivities,
+  takePendingAsyncActivityResolution,
 } from './async-activity-records.ts';
 import { getInternals } from './internals.ts';
 
@@ -51,7 +56,7 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    expect(await withTimeout(handle.result(), 500, 'early async completion')).toEqual({
+    expect(await handle.result()).toEqual({
       approval: { decision: 'arrived-before-adoption' },
     });
 
@@ -91,9 +96,7 @@ describe('async activity completion recovery buffering', () => {
 
     await recoveredEngine.recoverAll();
     const handle = recoveredEngine.getHandle(workflowId);
-    expect(await withTimeout(handle.result(), 500, 'early async failure')).toBe(
-      'caught:arrived-before-adoption',
-    );
+    expect(await handle.result()).toBe('caught:arrived-before-adoption');
 
     recoveredEngine[Symbol.dispose]();
   });
@@ -115,6 +118,65 @@ describe('async activity completion recovery buffering', () => {
     expect(await throwingRejectionOf(recoverPendingAsyncActivities(getInternals(engine)))).toThrow(
       'legacy async-activity resolution record without run identity',
     );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('recovers a pending activity and a resolution recorded before runs carried an identity', async () => {
+    await using storage = new MemoryStorage();
+    await storage.put(
+      KEYS.asyncActivity('legacy-run', 'legacy-token'),
+      encode({
+        version: 1,
+        token: 'legacy-token',
+        workflowId: 'legacy-run',
+        activityName: 'awaitCallback',
+        operationId: 'legacy-operation',
+        step: 0,
+        attempt: 1,
+        createdAt: 1_000,
+      }),
+    );
+    await storage.put(
+      KEYS.asyncActivityResolution('legacy-resolved-run', 'legacy-resolved-token'),
+      encode({
+        version: 2,
+        kind: 'resolution',
+        token: 'legacy-resolved-token',
+        workflowId: 'legacy-resolved-run',
+        operationId: 'legacy-resolved-operation',
+        outcome: { status: 'completed', value: 'acknowledged' },
+      }),
+    );
+
+    const engine = new Engine({ storage });
+    const internals = getInternals(engine);
+    await recoverPendingAsyncActivities(internals);
+
+    expect(internals.pendingAsyncActivities.get('legacy-token')).toEqual({
+      token: 'legacy-token',
+      workflowId: 'legacy-run',
+      activityName: 'awaitCallback',
+      operationId: 'legacy-operation',
+      step: 0,
+      attempt: 1,
+      createdAt: 1_000,
+    });
+    expect(
+      takePendingAsyncActivityResolution(internals, 'legacy-resolved-run', 'legacy-resolved-token'),
+    ).toMatchObject({
+      token: 'legacy-resolved-token',
+      operationId: 'legacy-resolved-operation',
+      outcome: { status: 'completed', value: 'acknowledged' },
+    });
+
+    // Completing the identity-less pending activity buffers its resolution for the replay that
+    // re-parks on the token, as for any recovered activity, and records none for a run identity.
+    await engine.completeAsyncActivity('legacy-token', 'done');
+    expect(internals.pendingAsyncActivities.has('legacy-token')).toBe(false);
+    expect(
+      takePendingAsyncActivityResolution(internals, 'legacy-run', 'legacy-token'),
+    ).not.toHaveProperty('workflowExecutionToken');
 
     engine[Symbol.dispose]();
   });
@@ -184,6 +246,78 @@ describe('async activity completion recovery buffering', () => {
     expect(finalizeTimeline).not.toHaveBeenCalled();
     engine[Symbol.dispose]();
   });
+  it('leaves an acknowledgement for a run another engine owns to that engine', async () => {
+    await using storage = new MemoryStorage();
+    const workflowId = 'owned-elsewhere';
+    const token = 'foreign-token';
+    const write = buildAsyncActivityResolutionWrite(
+      workflowId,
+      token,
+      { status: 'completed', value: 'acknowledged' },
+      'operation-1',
+      'foreign-run',
+    );
+    if (write.type !== 'put' || !(write.value instanceof Uint8Array)) {
+      throw new Error('expected encoded resolution write');
+    }
+    await storage.put(write.key, write.value);
+    await storage.put(
+      KEYS.asyncActivity(workflowId, token),
+      encode({
+        version: 1,
+        token,
+        workflowId,
+        activityName: 'awaitCallback',
+        operationId: 'operation-1',
+        workflowExecutionToken: 'foreign-run',
+        step: 0,
+        attempt: 1,
+        createdAt: 1_000,
+      }),
+    );
+
+    // This engine holds no claim for the run, so replaying the acknowledgement into a parked
+    // activity would drive a generation it does not own, and a completion arriving here is for
+    // the engine that does own it.
+    await using engine = await Engine.create({
+      storage,
+      ownership: 'workflow-lease',
+      backgroundTasks: 'manual',
+      recover: false,
+    });
+    const internals = getInternals(engine);
+    await recoverPendingAsyncActivities(internals);
+    const emitWarning = spyOn(process, 'emitWarning').mockImplementation(() => {});
+    const feedOperationResult = mock(() => {});
+    const finalizeTimeline = mock(() => {});
+    try {
+      // The parked activity never settles; the replay it would have driven is discarded instead.
+      void parkDeferredAsyncActivity(
+        internals,
+        new AsyncActivityDeferral(token),
+        {
+          workflowId,
+          activityName: 'awaitCallback',
+          operationId: 'operation-1',
+          step: 0,
+          attempt: 1,
+        },
+        { feedOperationResult, finalizeTimeline },
+      );
+      await waitForCondition(() => emitWarning.mock.calls.length > 0, {
+        label: 'the discarded wake is reported',
+      });
+    } finally {
+      emitWarning.mockRestore();
+    }
+
+    expect(feedOperationResult).not.toHaveBeenCalled();
+    expect(finalizeTimeline).not.toHaveBeenCalled();
+    expect(await rejectionOf(engine.completeAsyncActivity(token, 'too late'))).toBeInstanceOf(
+      AsyncActivityTokenNotFoundError,
+    );
+  });
+
   it('reloads only the requested workflow when scoped to a single id', async () => {
     // ADR 0002 reclaim-driven resume calls this with a workflowId so a takeover
     // pays for one workflow instead of a store-wide sweep. An unbounded scan

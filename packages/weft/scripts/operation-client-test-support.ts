@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { createOperationClientSources } from './generate-operation-client.ts';
 
-import type { AccessPolicy } from '../src/server/authorization.ts';
-import { createCatalogSnapshot } from '../src/server/operation-catalog-snapshot.ts';
-import { defineOperation } from '../src/server/operation-registry.ts';
+import { defineOperation } from "../src/embedded/backchannel/src/index.ts";
+import type { AccessPolicy } from "../src/embedded/backchannel/src/internals.ts";
+import { createCatalogSnapshot } from '../src/server/weft-catalog-snapshot.ts';
 
 export async function generatedSourcesText(
   snapshot: ReturnType<typeof createCatalogSnapshot>,

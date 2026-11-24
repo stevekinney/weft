@@ -1,7 +1,8 @@
+import { createDeferred, waitForever } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForever } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import { TestEngine } from '../testing/test-engine.ts';
 import { decode } from './codec.ts';
 import { WorkflowTimedOutEvent } from './events.ts';
@@ -14,7 +15,7 @@ import { workflow } from './types.ts';
 // ---------------------------------------------------------------------------
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 const slowActivity = async (..._args: unknown[]) => {
@@ -91,13 +92,20 @@ describe('Execution Timeouts', () => {
     engine[Symbol.dispose]();
   });
 
-  it('rejects result promise with WorkflowTimeoutError', async () => {
+  it('rejects result promise with WorkflowTimeoutError once the in-flight activity settles', async () => {
     const engine = new TestEngine();
+    // The run's deadline commits `timed-out` at once, but its result waits for the activity it
+    // still has in flight (COR-1597), so the activity is held and released by the test.
+    const release = createDeferred();
+    const heldActivity = async (..._args: unknown[]) => {
+      await release.promise;
+      return 'done';
+    };
 
     const slowWorkflow3 = workflow({ name: 'slow' }).execute(async function* (
       ctx: WorkflowContext,
     ) {
-      yield* ctx.run(slowActivity);
+      yield* ctx.run(heldActivity);
       return 'never';
     });
     engine.register(slowWorkflow3);
@@ -107,11 +115,17 @@ describe('Execution Timeouts', () => {
     });
 
     // Catch inline to avoid unhandled rejection during advanceTime
+    let settled = false;
     const resultPromise = handle.result().catch((error: unknown) => error);
+    void resultPromise.then(() => {
+      settled = true;
+    });
 
     await engine.advanceTime('2 seconds');
     await flush();
+    expect(settled).toBe(false);
 
+    release.resolve();
     const error = await resultPromise;
     expect(error).toBeInstanceOf(WorkflowTimeoutError);
     const timeoutError = error as WorkflowTimeoutError;

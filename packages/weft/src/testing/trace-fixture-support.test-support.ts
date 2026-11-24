@@ -24,8 +24,8 @@
  * all current callers invoke it sequentially.
  */
 
+import type { MemoryStorage } from "../embedded/storage/src/index.ts";
 import type { WorkflowEvent, WorkflowState, WorkflowTimelineEntry } from '../core/types.ts';
-import type { MemoryStorage } from '../storage/memory.ts';
 
 type RandomUuid = ReturnType<Crypto['randomUUID']>;
 

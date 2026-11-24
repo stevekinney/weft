@@ -10,15 +10,15 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { type UnknownRestBinding, invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import type {
   PaginatedResult,
   ScheduleFilter,
   ScheduleStatus,
   ScheduleSummary,
 } from '../../core/types.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const VALID_SCHEDULE_STATUSES = new Set<string>(['active', 'paused', 'cancelled']);
 
@@ -27,10 +27,19 @@ function isValidScheduleStatus(value: string): value is ScheduleStatus {
 }
 
 const listSchedulesInput = z.object({
-  status: z.unknown().optional(),
-  workflowType: z.unknown().optional(),
-  limit: z.unknown().optional(),
-  offset: z.unknown().optional(),
+  status: z
+    .unknown()
+    .optional()
+    .describe('Return only schedules in this state: "active", "paused", or "cancelled".'),
+  workflowType: z
+    .unknown()
+    .optional()
+    .describe('Return only schedules that start this workflow type.'),
+  limit: z.unknown().optional().describe('Maximum number of schedules to return.'),
+  offset: z
+    .unknown()
+    .optional()
+    .describe('Number of schedules to skip before the first returned, for paging.'),
 });
 
 const listSchedulesOutput = z.unknown();
@@ -110,12 +119,12 @@ export const listSchedulesOperation = defineOperation({
   tags: ['Schedules'],
   inputSchema: listSchedulesInput,
   outputSchema: listSchedulesOutput,
-  access: { kind: 'authenticated' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['schedules:read'] } },
   producibleFaults: ['Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ListSchedulesOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ListSchedulesOutput> => {
     assertOperationEngineMethods(engine, ['listSchedules']);
     const e = engine;
 

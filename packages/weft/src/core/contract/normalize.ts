@@ -104,6 +104,7 @@ type ContractDraft = {
   updates?: Readonly<Record<string, WorkflowMessageContract>>;
   queries?: Readonly<Record<string, WorkflowMessageContract>>;
   activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  usedActivities?: Readonly<Record<string, WorkflowActivityContract>>;
   finalizer?: WorkflowActivityContract;
 };
 
@@ -165,6 +166,8 @@ export function normalizeWorkflowContract(contract: WorkflowContract): WorkflowC
 
   const activities = sortedContractRecord(contract.activities, normalizeActivityContract);
   if (activities !== undefined) draft.activities = activities;
+  const usedActivities = sortedContractRecord(contract.usedActivities, normalizeActivityContract);
+  if (usedActivities !== undefined) draft.usedActivities = usedActivities;
 
   if (contract.finalizer !== undefined) {
     draft.finalizer = normalizeActivityContract(contract.finalizer);
@@ -220,7 +223,7 @@ export function canonicalContractRecordJson(
  */
 export function appendContractRecordField(
   fields: string[],
-  label: 'signals' | 'updates' | 'queries' | 'activities',
+  label: 'signals' | 'updates' | 'queries' | 'activities' | 'usedActivities',
   record: Readonly<Record<string, WorkflowMessageContract>> | undefined,
 ): void {
   if (record === undefined || Object.keys(record).length === 0) return;
@@ -252,9 +255,10 @@ function appendTagsField(fields: string[], tags: ReadonlyArray<string> | undefin
  * returned as `WorkflowRevisionManifestParseSuccess.canonicalJson`.
  *
  * This is a *different* identity from {@link contractHash}'s payload-only
- * serialization: it includes `name`, `workflowVersion`, `description`, and
- * `tags`, so a documentation edit changes this output (and therefore
- * `revision`) without changing `contractHash`. The output is byte-identical
+ * serialization: it includes `name`, `workflowVersion`, `description`,
+ * `tags`, and `usedActivities`, so a documentation edit or a `.uses()`
+ * declaration changes this output (and therefore `revision`) without changing
+ * `contractHash`. The output is byte-identical
  * for equivalent contracts regardless of source key order, and every field
  * this project cares about changes it.
  *
@@ -291,6 +295,7 @@ export function canonicalWorkflowContractJson(contract: WorkflowContract): strin
   appendContractRecordField(fields, 'updates', contract.updates);
   appendContractRecordField(fields, 'queries', contract.queries);
   appendContractRecordField(fields, 'activities', contract.activities);
+  appendContractRecordField(fields, 'usedActivities', contract.usedActivities);
   if (contract.finalizer !== undefined) {
     fields.push(`"finalizer":${canonicalMessageContractJson(contract.finalizer)}`);
   }

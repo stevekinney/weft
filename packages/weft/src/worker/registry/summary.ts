@@ -22,10 +22,29 @@ export type WorkerSnapshot = {
   startedAt: number;
   capabilities: RemoteWorkerCapabilities;
   health: WorkerHealth;
+  /** The workflow types the accepted manifest declares, when it declares any. */
+  workflows?: readonly string[] | undefined;
+  /** When the session ended; present only for a worker that went away. */
+  disconnectedAt?: number | undefined;
   deploymentName?: string | undefined;
   buildId?: string | undefined;
   runtimeVersion?: string | undefined;
+  /** Tasks finished since the drain started; present while `draining` or `drained`. */
+  drainFinishedTasks?: number | undefined;
+  /** When the drain finished; present while `drained`. */
+  drainedAt?: number | undefined;
 };
+
+/**
+ * The name a worker advertised for itself: the string capability `name`, trimmed, or `undefined`
+ * when it advertised none or an empty one.
+ */
+export function workerNameOf(capabilities: RemoteWorkerCapabilities): string | undefined {
+  const name = capabilities['name'];
+  if (typeof name !== 'string') return undefined;
+  const trimmed = name.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
 
 /**
  * Project a single worker snapshot into a {@link WorkerSummary}.
@@ -35,6 +54,7 @@ export type WorkerSnapshot = {
  */
 export function projectWorkerSummary(snapshot: WorkerSnapshot, now: number): WorkerSummary {
   const { inFlight, concurrency } = snapshot;
+  const name = workerNameOf(snapshot.capabilities);
   return {
     id: snapshot.id,
     queue: snapshot.queue,
@@ -49,9 +69,18 @@ export function projectWorkerSummary(snapshot: WorkerSnapshot, now: number): Wor
     startedAt: snapshot.startedAt,
     capabilities: { ...snapshot.capabilities },
     health: snapshot.health,
+    ...(name !== undefined ? { name } : {}),
+    ...(snapshot.workflows !== undefined && snapshot.workflows.length > 0
+      ? { workflows: [...snapshot.workflows] }
+      : {}),
+    ...(snapshot.disconnectedAt !== undefined ? { disconnectedAt: snapshot.disconnectedAt } : {}),
     ...(snapshot.deploymentName !== undefined ? { deploymentName: snapshot.deploymentName } : {}),
     ...(snapshot.buildId !== undefined ? { buildId: snapshot.buildId } : {}),
     ...(snapshot.runtimeVersion !== undefined ? { runtimeVersion: snapshot.runtimeVersion } : {}),
+    ...(snapshot.drainFinishedTasks !== undefined
+      ? { drainFinishedTasks: snapshot.drainFinishedTasks }
+      : {}),
+    ...(snapshot.drainedAt !== undefined ? { drainedAt: snapshot.drainedAt } : {}),
   };
 }
 
@@ -169,12 +198,12 @@ export function projectDeploymentSummary(
  * Project a flat list of worker snapshots into grouped, sorted
  * {@link WorkerDeploymentSummary} entries.
  *
- * `isDrainActive` receives the deployment name and returns whether a
- * deployment-level drain marker is set for it.
+ * `isDrainActive` receives a group's deployment name and build id and returns
+ * whether a deployment-level or build-level drain marker is set for it.
  */
 export function projectDeploymentSummaries(
   snapshots: WorkerSnapshot[],
-  isDrainActive: (deploymentName: string) => boolean,
+  isDrainActive: (deploymentName: string, buildId: string | undefined) => boolean,
 ): WorkerDeploymentSummary[] {
   const groups = new Map<string, WorkerSnapshot[]>();
 
@@ -191,7 +220,8 @@ export function projectDeploymentSummaries(
   return [...groups.values()]
     .map((group) => {
       const deploymentName = group[0]?.deploymentName;
-      const drainActive = deploymentName !== undefined ? isDrainActive(deploymentName) : false;
+      const drainActive =
+        deploymentName !== undefined ? isDrainActive(deploymentName, group[0]?.buildId) : false;
       return projectDeploymentSummary(group, drainActive);
     })
     .toSorted(compareDeploymentSummaries);

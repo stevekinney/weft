@@ -10,16 +10,14 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, dispatchJsonRpc } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../core/types.ts';
 import { cancelScheduleOperation } from './operations/cancel-schedule.ts';
 import { pauseScheduleOperation } from './operations/pause-schedule.ts';
 import { resumeScheduleOperation } from './operations/resume-schedule.ts';
-import { principalFromApiKey } from './principal.ts';
 
 // JSON-RPC error codes (src/server/operation-fault.ts).
 const NOT_FOUND_CODE = -32020;
@@ -44,10 +42,10 @@ const registry = createOperationRegistry([
 ]);
 
 function call(engine: Engine, method: string, scheduleId: string) {
-  const principal = principalFromApiKey({ subject: 'svc', scopes: [] });
+  const principal = principalFromApiKey({ subject: 'svc', scopes: ['schedules:write'] });
   return dispatchJsonRpc(
     JSON.stringify({ jsonrpc: '2.0', method, params: { scheduleId }, id: 1 }),
-    { principal, engine, transport: 'jsonRpcHttp', registry },
+    { principal, host: engine, transport: 'jsonRpcHttp', registry },
   );
 }
 

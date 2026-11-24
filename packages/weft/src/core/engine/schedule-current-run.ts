@@ -10,16 +10,27 @@
  * there and the only edge back is a type import.
  */
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { ScheduleAttemptedEvent } from '../events.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
-import { applyBlockedScheduleOccurrence, drainQueuedScheduleRun } from './schedule-overlap.ts';
+import { startOccurrenceRun, type OccurrenceCommit } from './schedule-occurrence-commit.ts';
+import {
+  applyBlockedScheduleOccurrence,
+  drainQueuedScheduleRun,
+  drainQueuedScheduleRunUnderRead,
+} from './schedule-overlap.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
+import { runIsolatedScheduleStateOperation } from './schedule-state-operations.ts';
+import {
+  loadScheduleState,
+  ScheduleReadConditionLostError,
+  scheduleReadConditions,
+} from './schedule-state-read.ts';
 import type { RefreshedScheduleState, ScheduleCallbacks } from './schedules.ts';
 import { clearScheduleCurrentWorkflow } from './state-utilities.ts';
-import { loadScheduleState, writeScheduleState } from './storage-io.ts';
+import { writeScheduleState } from './storage-io.ts';
 import { isValidScheduleIdentifier } from './validation/schedule.ts';
 
 /**
@@ -68,16 +79,21 @@ export async function applyScheduleOccurrence(
   internals: EngineInternals,
   state: ScheduleState,
   callbacks: ScheduleCallbacks,
-  occurrence?: number,
+  occurrence: number | undefined,
+  manual: true | undefined,
+  commit: OccurrenceCommit,
 ): Promise<ScheduleState> {
   // WFT-136/COR-105: the one observation point every occurrence passes through,
   // dispatched before the overlap policy is consulted so a consumer sees the
   // tick itself rather than only the outcomes that launch a run. The blocked
   // policies deliberately do not emit `schedule:fired`, so without this a
-  // `skip` collision and a stopped schedule look identical from outside.
-  internals.engine.dispatchEvent(
-    new ScheduleAttemptedEvent(state.id, internals.options.getNow(), occurrence),
-  );
+  // `skip` collision and a stopped schedule look identical from outside. A tick that decides
+  // the occurrence again after losing a start to another engine (COR-1925) is the same attempt.
+  if (!commit.retry) {
+    internals.engine.dispatchEvent(
+      new ScheduleAttemptedEvent(state.id, internals.options.getNow(), occurrence),
+    );
+  }
 
   const { state: refreshedState, currentWorkflowState } =
     await callbacks.refreshScheduledWorkflowState(state);
@@ -85,14 +101,23 @@ export async function applyScheduleOccurrence(
   let hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
 
   if (!hasActiveWorkflow && stateForOccurrence.queuedRuns.length > 0) {
-    stateForOccurrence = await drainQueuedScheduleRun(stateForOccurrence, callbacks);
+    stateForOccurrence = await drainQueuedScheduleRun(stateForOccurrence, callbacks, commit);
     hasActiveWorkflow = true;
   }
 
   if (stateForOccurrence.overlap === 'allow') {
-    await callbacks.startScheduledRun(stateForOccurrence, {
+    const options = {
       ...(occurrence !== undefined && { occurrence }),
-    });
+      ...(manual === true && { manual }),
+    };
+    await startOccurrenceRun(
+      commit,
+      callbacks,
+      stateForOccurrence,
+      stateForOccurrence,
+      options,
+      true,
+    );
     return stateForOccurrence;
   }
 
@@ -102,30 +127,39 @@ export async function applyScheduleOccurrence(
     hasActiveWorkflow,
     callbacks,
     occurrence,
+    manual,
+    commit,
   );
 }
 
-export async function settleBackfillScheduleState(
-  internals: EngineInternals,
-  state: ScheduleState,
-  callbacks: Pick<
-    ScheduleCallbacks,
-    'flushQueuedInlineWorkflowStartsDirectly' | 'refreshScheduledWorkflowState'
-  >,
-): Promise<ScheduleState> {
-  if (!state.currentWorkflowId) {
-    return state;
-  }
+/**
+ * Whether the end of the current run starts the run queued first. An active schedule drains its
+ * queue. A paused one keeps the occurrences its cadence queued until it is resumed, but still starts
+ * a run a person asked for (COR-1829): nothing else would, since a paused schedule has no timer.
+ */
+function drainsQueuedRun(state: ScheduleState): boolean {
+  const [next] = state.queuedRuns;
+  if (next === undefined) return false;
+  return state.status === 'active' || (state.status === 'paused' && next.manual === true);
+}
 
+/**
+ * Waits for the scheduled run `workflowId` to finish its turn: starts the inline launches still
+ * queued, then waits for the run's own turn. The run's activity can call back into its schedule,
+ * and pause, resume, cancel, and update take the schedule's serialization, so a caller must not
+ * hold it while it waits here (COR-1482).
+ */
+export async function awaitScheduledRunTurn(
+  internals: EngineInternals,
+  workflowId: string,
+  callbacks: Pick<ScheduleCallbacks, 'flushQueuedInlineWorkflowStartsDirectly'>,
+): Promise<void> {
   await callbacks.flushQueuedInlineWorkflowStartsDirectly();
 
-  const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(state.currentWorkflowId);
+  const pendingTurn = internals.inlineStrategy?.waitForWorkflowTurn(workflowId);
   if (pendingTurn) {
     await pendingTurn;
   }
-
-  const refreshed = await callbacks.refreshScheduledWorkflowState(state);
-  return refreshed.state;
 }
 
 export async function handleScheduledWorkflowTerminal(
@@ -143,25 +177,52 @@ export async function handleScheduledWorkflowTerminal(
     return;
   }
   const scheduleId = metadata.id;
-  const state = await loadScheduleState(internals, scheduleId);
-  if (!state || state.currentWorkflowId !== workflowId) {
-    await deleteTransientScheduleRunMetadata(internals, workflowId);
-    return;
-  }
-  const now = internals.options.getNow();
-  const clearedState: ScheduleState = {
-    ...clearScheduleCurrentWorkflow(state),
-    updatedAt: now,
-  };
-  // Queue entries are accepted work. Keep draining them even if a later update
-  // changes overlap; the new policy governs only future occurrences.
-  if (clearedState.status === 'active' && clearedState.queuedRuns.length > 0) {
-    await drainQueuedScheduleRun({ ...clearedState, updatedAt: now }, callbacks, workflowId);
-    return;
-  }
-  await writeScheduleState(internals, clearedState, {
-    includeTimer: false,
-    additionalOperations: [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
+  // COR-1482: the schedule record is read and written inside the schedule's serialized write, so
+  // what this handler changes is applied to the schedule as it is now, never to a copy loaded
+  // before a pause, an update, or a cancel committed.
+  //
+  // COR-1594: that serialization is per process, so the write is conditioned on the bytes it was
+  // decided from. One that loses them read a schedule another process has since changed (a pause,
+  // an update), so the schedule is read again and the clearing is applied to it as it is now.
+  await runIsolatedScheduleStateOperation(internals, scheduleId, async () => {
+    for (;;) {
+      const loaded = await loadScheduleState(internals, scheduleId);
+      if (!loaded || loaded.state.currentWorkflowId !== workflowId) {
+        await deleteTransientScheduleRunMetadata(internals, workflowId);
+        return;
+      }
+      const { state } = loaded;
+      const now = internals.options.getNow();
+      const clearedState: ScheduleState = {
+        ...clearScheduleCurrentWorkflow(state),
+        updatedAt: now,
+      };
+      // Queue entries are accepted work. Keep draining them even if a later update
+      // changes overlap; the new policy governs only future occurrences.
+      if (drainsQueuedRun(clearedState)) {
+        // Conditioned on the bytes this was decided from: a pause, an update, or another engine's
+        // drain that landed since the read loses it, and the schedule is read again (COR-1925).
+        const drained = await drainQueuedScheduleRunUnderRead(
+          internals,
+          clearedState,
+          loaded.bytes,
+          callbacks,
+          workflowId,
+        );
+        if (drained === null) continue;
+        return;
+      }
+      try {
+        await writeScheduleState(internals, clearedState, {
+          includeTimer: false,
+          additionalOperations: [{ type: 'delete', key: KEYS.scheduleRun(workflowId) }],
+          extraConditions: scheduleReadConditions(internals, scheduleId, loaded),
+        });
+        return;
+      } catch (error) {
+        if (!(error instanceof ScheduleReadConditionLostError)) throw error;
+      }
+    }
   });
 }
 

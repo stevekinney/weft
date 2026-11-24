@@ -11,13 +11,13 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../../storage/interface.ts';
 import {
   advanceTimersByTime,
   restoreRealTimers,
   useFakeTimers,
-} from '../../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
+} from "../../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { ActivityRegistry } from '../../activity-registry.ts';
 import { decode, encode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';

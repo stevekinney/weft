@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { decode } from '../codec.ts';
 import type { TimerEntry, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';

@@ -64,8 +64,16 @@ export const MAX_AGGREGATE_DISTINCT_KEYS = 100_000;
  */
 export const aggregateOptionsObjectSchema = z
   .object({
-    groupBy: groupBySchema,
-    limit: z.number().int().min(1).max(AGGREGATE_MAX_LIMIT).optional(),
+    groupBy: groupBySchema.describe(
+      'Dimension to count workflows by: "status", "type", "failureCategory", or { attribute } for a search attribute.',
+    ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(AGGREGATE_MAX_LIMIT)
+      .optional()
+      .describe('Maximum number of groups to return, 1 to 10000; defaults to 1000.'),
   })
   .strict();
 

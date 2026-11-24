@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { workflowSource } from '../../core/source/index.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
   listCatalogSourcesOperation,
@@ -99,7 +99,7 @@ describe('weft.catalog.sources.list — REST GET /v1/catalog/sources', () => {
       { offset: 1 },
       {
         principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry,
       },
@@ -111,7 +111,7 @@ describe('weft.catalog.sources.list — REST GET /v1/catalog/sources', () => {
       { limit: 0 },
       {
         principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry,
       },

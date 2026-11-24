@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { Engine } from '../engine.ts';
 import { PayloadSizeExceededError } from '../payload-size.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { bufferSignalPayloads, type SignalCallbacks } from './signals.ts';
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 const signalPrefix = (workflowId: string): string => `sig:${workflowId}:`;

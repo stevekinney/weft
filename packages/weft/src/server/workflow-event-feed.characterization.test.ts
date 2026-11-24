@@ -14,17 +14,13 @@
  * pure internal refactor of `drainLive`.
  */
 
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 
 import { describe, expect, it } from 'bun:test';
 
+import { decodeCursor, encodeCursor } from "../embedded/backchannel/src/index.ts";
 import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
-import {
-  createWorkflowEventFeed,
-  decodeCursor,
-  encodeCursor,
-  type EventEnvelope,
-} from './workflow-event-feed.ts';
+import { createWorkflowEventFeed, type EventEnvelope } from './workflow-event-feed.ts';
 
 function makeEnvelope(overrides: Partial<EventEnvelope> & { sequence: number }): EventEnvelope {
   return {

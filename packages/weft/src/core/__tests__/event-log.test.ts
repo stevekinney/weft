@@ -4,8 +4,8 @@
 
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { readEventHead } from '../event-log-shared.ts';
 import { verifyEventLog } from '../event-log-verify.ts';
@@ -99,7 +99,7 @@ describe('EventLog.append()', () => {
     const storage = makeStorage();
     const log = makeLog(storage);
 
-    const operations: import('../../storage/interface.ts').BatchOperation[] = [];
+    const operations: import("../../embedded/storage/src/index.ts").BatchOperation[] = [];
     const { newHead } = await log.append({ type: 'batched', payload: 'yes' }, operations);
 
     // newHead reflects the in-flight state even before the batch flushes.
@@ -358,7 +358,7 @@ describe('EventLog.appendToBatch()', () => {
     const storage = makeStorage();
     const log = makeLog(storage);
 
-    const operations: import('../../storage/interface.ts').BatchOperation[] = [];
+    const operations: import("../../embedded/storage/src/index.ts").BatchOperation[] = [];
     const { newHead, timestamp } = log.appendToBatch(
       { type: 'sync:event', payload: 42 },
       operations,
@@ -398,7 +398,7 @@ describe('EventLog.appendToBatch()', () => {
     const storage = makeStorage();
     const log = makeLog(storage);
 
-    const ops: import('../../storage/interface.ts').BatchOperation[] = [];
+    const ops: import("../../embedded/storage/src/index.ts").BatchOperation[] = [];
     let head = EMPTY_EVENT_HEAD;
     head = log.appendToBatch({ type: 'a', payload: 1 }, ops, head).newHead;
     head = log.appendToBatch({ type: 'b', payload: 2 }, ops, head).newHead;
@@ -419,7 +419,7 @@ describe('EventLog atomicity', () => {
   it('includes both event and checkpoint writes in a single batch call', async () => {
     const inner = makeStorage();
 
-    const batchCalls: import('../../storage/interface.ts').BatchOperation[][] = [];
+    const batchCalls: import("../../embedded/storage/src/index.ts").BatchOperation[][] = [];
     const spy = mock((...args: Parameters<typeof inner.batch>) => {
       batchCalls.push(args[0]);
       return inner.batch(...args);
@@ -440,7 +440,7 @@ describe('EventLog atomicity', () => {
     // both the checkpoint write and the event log write, then flush once.
     const { encode: encodeValue } = await import('../codec.ts');
 
-    const operations: import('../../storage/interface.ts').BatchOperation[] = [
+    const operations: import("../../embedded/storage/src/index.ts").BatchOperation[] = [
       {
         type: 'put',
         key: KEYS.checkpoint('wf-atomic'),

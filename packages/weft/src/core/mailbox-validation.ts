@@ -214,3 +214,13 @@ export {
 export function validateCommandIdentifier(commandId: unknown): string {
   return requireIdentity(commandId, 'commandId', MAX_APPLICATION_IDENTITY_BYTES);
 }
+
+/** Validate a caller-supplied idempotency key the same way admission does. */
+export function validateIdempotencyKey(idempotencyKey: unknown): string {
+  return requireIdentity(idempotencyKey, 'idempotencyKey', MAX_APPLICATION_IDEMPOTENCY_KEY_BYTES);
+}
+
+/** Validate a listing cursor: the sequence of a receipt, so a non-negative safe integer. */
+export function validateListAfterSequence(afterSequence: unknown): number {
+  return requireNonNegativeInteger(afterSequence, 'afterSequence', Number.MAX_SAFE_INTEGER);
+}

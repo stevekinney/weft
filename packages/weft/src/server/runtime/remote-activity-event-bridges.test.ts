@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   RemoteActivityCancellationRequestedEvent,
   RemoteActivityQueuedEvent,
@@ -16,7 +17,6 @@ import {
 import { waitForParityCondition as waitFor } from '../../core/parity/real-timer-wait.test-support.ts';
 import type { RemoteTaskQueued } from '../../core/task-ledger/task-ledger.ts';
 import { encodeRemoteTaskRecord, taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import type { ServeOptions } from '../index.ts';
 import { installRemoteActivityEventBridges } from './remote-activity-event-bridges.ts';
 import { minimalServerContext } from './server-context.test-support.ts';

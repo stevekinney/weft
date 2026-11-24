@@ -33,7 +33,9 @@ export function buildScheduleBody(
   setIfDefined(body, 'overlap', options?.overlap);
   setIfDefined(body, 'backfill', options?.backfill);
   setIfDefined(body, 'jitter', options?.jitter);
+  setIfDefined(body, 'timeZone', options?.timeZone);
   setIfDefined(body, 'revisionPolicy', options?.revisionPolicy);
+  setIfDefined(body, 'metadata', options?.metadata);
   return body;
 }
 
@@ -49,6 +51,7 @@ function applyStartOptionsToBody(
   setIfDefined(body, 'tags', options?.tags);
   setIfDefined(body, 'idempotencyKey', options?.idempotencyKey);
   setIfDefined(body, 'searchAttributes', options?.searchAttributes);
+  setIfDefined(body, 'workerStartOverridePreview', options?.workerStartOverridePreview);
 }
 
 export function buildStartBody(

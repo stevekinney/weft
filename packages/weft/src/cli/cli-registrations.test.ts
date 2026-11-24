@@ -1,8 +1,8 @@
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { loadRegistrationsFromModule } from './validation.ts';
 
 const publicEntryPointUrl = import.meta.resolve('../index.ts');

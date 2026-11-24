@@ -16,9 +16,13 @@ import type {
 } from '../types.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
 import { isDecodableWorkflowId } from '../workflow-identifiers.ts';
+import { isNonNegativeInteger } from '../workflow-log-codec.ts';
 import { isWorkflowTagArray } from '../workflow-tags.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import { sanitizeDecodedParentLineage, sanitizeDecodedRestartLineage } from './decode-lineage.ts';
 import { sanitizeDecodedRevision } from './decode-revision.ts';
+import { sanitizeDecodedFailureRecord } from './failure-record.ts';
+import { sanitizeDecodedSignalWaits } from './signal-wait-state.ts';
 import {
   MAX_TIMELINE_COORDINATOR_DETAILS,
   MAX_TIMELINE_DETAIL_STRING_LENGTH,
@@ -56,6 +60,8 @@ const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
     'error',
     'errorStack',
     'failureCategory',
+    'errorCode',
+    'failedStep',
     'terminationReason',
     'versionTuple',
     'revision',
@@ -69,6 +75,7 @@ const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
     'terminalCleanupToken',
     'terminalCommittedBy',
     'executionDeadline',
+    'waitingForSignals',
     'forkedFrom',
     'restartedFrom',
     'workerBinding',
@@ -154,6 +161,7 @@ function isOmittedTimelineDetailCount(value: unknown): boolean {
 
 const TIMELINE_ENTRY_FIELD_CHECKS: readonly TimelineEntryFieldCheck[] = [
   (entry) => isTimelineStep(entry['step']),
+  (entry) => entry['stepIndex'] === undefined || isNonNegativeInteger(entry['stepIndex']),
   (entry) => typeof entry['operationType'] === 'string',
   (entry) => typeof entry['operationLabel'] === 'string',
   (entry) => typeof entry['inputSummary'] === 'string',
@@ -170,6 +178,7 @@ const TIMELINE_ENTRY_FIELD_CHECKS: readonly TimelineEntryFieldCheck[] = [
     entry['speculationOutcome'] === undefined ||
     entry['speculationOutcome'] === 'committed' ||
     entry['speculationOutcome'] === 'rolled-back',
+  (entry) => entry['taskOperationId'] === undefined || typeof entry['taskOperationId'] === 'string',
 ];
 
 export function isWorkflowTimelineEntry(value: unknown): value is WorkflowTimelineEntry {
@@ -246,54 +255,11 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   sanitizeDecodedParentLineage(state);
   sanitizeDecodedRestartLineage(state);
   sanitizeDecodedRevision(state);
+  sanitizeDecodedSignalWaits(state);
+  sanitizeDecodedFailureRecord(state);
   return decodedRecord === undefined
     ? state
     : stripUnknownWorkflowStateFields(state, decodedRecord);
-}
-
-function sanitizeDecodedParentLineage(state: WorkflowState): void {
-  // Decode-facing check (WFT-95 review) — see the `executionStateOwnerId`
-  // comment above `decodeWorkflowState`; a pre-WFT-95 parent id of `.`/`..`
-  // must survive decode instead of severing the parent lineage (and, via the
-  // `parentWorkflowId === undefined` check below, the execution token too).
-  if (state.parentWorkflowId !== undefined && !isDecodableWorkflowId(state.parentWorkflowId)) {
-    delete state.parentWorkflowId;
-  }
-  if (
-    typeof state.parentWorkflowExecutionToken !== 'string' ||
-    state.parentWorkflowExecutionToken.length === 0 ||
-    state.parentWorkflowId === undefined
-  ) {
-    delete state.parentWorkflowExecutionToken;
-  }
-}
-
-function sanitizeDecodedRestartLineage(state: WorkflowState): void {
-  const restartedFrom = state.restartedFrom;
-  if (!isRecord(restartedFrom)) {
-    delete state.restartedFrom;
-    return;
-  }
-  // Decode-facing check (WFT-95 review) — same reasoning as
-  // `sanitizeDecodedParentLineage`: a pre-WFT-95 `restartedFrom.workflowId`
-  // of `.`/`..` must remain decodable rather than dropping the whole
-  // restart-lineage record.
-  const restartWorkflowId = restartedFrom['workflowId'];
-  if (typeof restartWorkflowId !== 'string' || !isDecodableWorkflowId(restartWorkflowId)) {
-    delete state.restartedFrom;
-    return;
-  }
-  const workflowExecutionToken = restartedFrom['workflowExecutionToken'];
-  const replacedAt = restartedFrom['replacedAt'];
-  if (
-    (workflowExecutionToken !== undefined &&
-      (typeof workflowExecutionToken !== 'string' || workflowExecutionToken.length === 0)) ||
-    typeof replacedAt !== 'number' ||
-    !Number.isSafeInteger(replacedAt) ||
-    replacedAt < 0
-  ) {
-    delete state.restartedFrom;
-  }
 }
 
 function stripUnknownWorkflowStateFields(
@@ -481,7 +447,9 @@ export function resolveRetentionForStatus(
   }
 }
 
-export function isTerminalWorkflowStatus(status: WorkflowStatus): boolean {
+export function isTerminalWorkflowStatus(
+  status: WorkflowStatus,
+): status is Extract<WorkflowStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'> {
   return (
     status === 'completed' ||
     status === 'failed' ||

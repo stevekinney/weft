@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { waitUntil } from "../../../test-support/embedded/testing/src/wait-until.ts";
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { Engine } from '../engine.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
-import { WorkflowRefreshCoordinator, type WorkflowRefreshArtifact } from './workflow-refresh.ts';
+import { WorkflowRefreshError } from './workflow-refresh-failure.ts';
+import type { WorkflowRefreshArtifact } from './workflow-refresh-types.ts';
+import { WorkflowRefreshCoordinator } from './workflow-refresh.ts';
 
 const definition: RegisteredWorkflowDefinition = { type: 'checkout', version: '1.0.0', tags: [] };
 
@@ -466,6 +469,7 @@ describe('WorkflowRefreshCoordinator', () => {
     coordinator.startPolling();
     await fetched;
     await warmed;
+    // load-proof: the installed-state commit runs inside the awaited fetch and warm promises on in-memory storage, so one extra turn is surplus
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(coordinator.diagnostics('checkout')[0]?.state).toBe('installed');
     await coordinator[Symbol.asyncDispose]();
@@ -491,8 +495,182 @@ describe('WorkflowRefreshCoordinator', () => {
     });
 
     coordinator.startPolling();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitUntil(() => coordinator.diagnostics('checkout')[0]?.state === 'failed', {
+      message: 'the refresh failure to be recorded',
+    });
     expect(coordinator.diagnostics('checkout')[0]?.state).toBe('failed');
     await coordinator[Symbol.asyncDispose]();
+  });
+});
+
+/** An artifact assembled from loose parts, with the digest of whatever bytes it carries. */
+async function artifactFrom(parts: {
+  manifest: WorkflowRevisionManifest;
+  bytes?: Uint8Array;
+  identity?: { name: string; revision: string };
+  runtime?: string;
+}): Promise<WorkflowRefreshArtifact> {
+  const identity = parts.identity ?? {
+    name: parts.manifest.name,
+    revision: parts.manifest.revision,
+  };
+  const runtime = parts.runtime ?? 'bun@1.4.2';
+  const bytes =
+    parts.bytes ??
+    new TextEncoder().encode(JSON.stringify({ manifest: parts.manifest, identity, runtime }));
+  const digestBytes = await crypto.subtle.digest('SHA-256', bytes.slice().buffer);
+  const digest = `sha256:${[...new Uint8Array(digestBytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  return { manifest: parts.manifest, bytes, digest, identity, runtime };
+}
+
+/** Refresh `checkout` against a source that serves `served`, and return the failure it raised. */
+async function refreshFailure(
+  served: WorkflowRefreshArtifact,
+  options: { maxArtifactBytes?: number } = {},
+): Promise<{
+  error: WorkflowRefreshError;
+  installed: number;
+  coordinator: WorkflowRefreshCoordinator;
+}> {
+  const catalog = new WorkflowCatalog(new MemoryStorage());
+  const coordinator = new WorkflowRefreshCoordinator({
+    catalog,
+    ...options,
+    sources: new Map([
+      [
+        'checkout',
+        {
+          fetch: async () => ({ status: 200 as const, artifact: served }),
+          warm: async () => definition,
+          validateRuntime: () => {},
+        },
+      ],
+    ]),
+  });
+  const error = await rejectionOf(coordinator.refresh('checkout'));
+  expect(error).toBeInstanceOf(WorkflowRefreshError);
+  const installedRevisions = await catalog.listInstalledRevisions('checkout');
+  return {
+    error: error as WorkflowRefreshError,
+    installed: installedRevisions.length,
+    coordinator,
+  };
+}
+
+describe('WorkflowRefreshCoordinator artifact validation', () => {
+  it('rejects an artifact larger than the configured bound', async () => {
+    const served = await artifactFrom({ manifest: await manifest() });
+
+    const { error, installed } = await refreshFailure(served, { maxArtifactBytes: 10 });
+
+    expect(error.reason).toBe('integrity');
+    expect(error.message).toBe('Workflow artifact exceeds 10 bytes');
+    expect(installed).toBe(0);
+  });
+
+  it('rejects an artifact whose manifest names a different workflow than the one requested', async () => {
+    const other = await buildWorkflowRevisionManifest(
+      buildWorkflowContract({ name: 'billing', version: '1.0.0' }),
+      { revision: 'r1' },
+    );
+    const served = await artifactFrom({
+      manifest: other,
+      identity: { name: 'checkout', revision: 'r1' },
+    });
+
+    const { error, installed } = await refreshFailure(served);
+
+    expect(error.reason).toBe('identity');
+    expect(error.message).toBe(
+      'Workflow artifact manifest name does not match its requested catalog identity',
+    );
+    expect(installed).toBe(0);
+  });
+
+  it('rejects an artifact that carries no runtime proof', async () => {
+    const served = await artifactFrom({ manifest: await manifest(), runtime: '' });
+
+    const { error, installed } = await refreshFailure(served);
+
+    expect(error.reason).toBe('integrity');
+    expect(error.message).toBe('Workflow artifact manifest/runtime proof is incomplete');
+    expect(installed).toBe(0);
+  });
+
+  it('rejects bytes that are not JSON, and JSON that is not an envelope object', async () => {
+    const current = await manifest();
+    const cases: Array<[string, string]> = [
+      ['not json {', 'Workflow artifact bytes are not a complete JSON artifact'],
+      ['42', 'Workflow artifact bytes are not a complete artifact envelope'],
+      ['null', 'Workflow artifact bytes are not a complete artifact envelope'],
+    ];
+
+    for (const [text, message] of cases) {
+      const served = await artifactFrom({
+        manifest: current,
+        bytes: new TextEncoder().encode(text),
+      });
+
+      const { error, installed } = await refreshFailure(served);
+
+      expect(error.reason).toBe('integrity');
+      expect(error.message).toBe(message);
+      expect(installed).toBe(0);
+    }
+  });
+
+  it('rejects an envelope whose manifest, identity or runtime proof is not the one the artifact claims', async () => {
+    const current = await manifest('r1');
+    const different = await manifest('r2', '2.0.0');
+    const identity = { name: current.name, revision: current.revision };
+    const envelope = (fields: Record<string, unknown>) =>
+      new TextEncoder().encode(
+        JSON.stringify({ manifest: current, identity, runtime: 'bun@1.4.2', ...fields }),
+      );
+    const cases: Array<[Uint8Array, string]> = [
+      [envelope({ manifest: different }), 'Workflow artifact manifest is not bound to its bytes'],
+      [
+        envelope({ identity: { name: 'checkout', revision: 'r9' } }),
+        'Workflow artifact identity is not bound to its bytes',
+      ],
+      [
+        envelope({ runtime: 'node@24' }),
+        'Workflow artifact runtime proof is not bound to its bytes',
+      ],
+    ];
+
+    for (const [bytes, message] of cases) {
+      const served = await artifactFrom({ manifest: current, bytes });
+
+      const { error, installed } = await refreshFailure(served);
+
+      expect(error.reason).toBe('integrity');
+      expect(error.message).toBe(message);
+      expect(installed).toBe(0);
+    }
+  });
+});
+
+describe('WorkflowRefreshCoordinator limits', () => {
+  const sources = new Map();
+
+  it('refuses a non-positive or unsafe artifact bound and poll interval', () => {
+    const catalog = new WorkflowCatalog(new MemoryStorage());
+
+    for (const maxArtifactBytes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => new WorkflowRefreshCoordinator({ catalog, sources, maxArtifactBytes })).toThrow(
+        'maxArtifactBytes must be a positive safe integer',
+      );
+    }
+    for (const pollIntervalMs of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new WorkflowRefreshCoordinator({ catalog, sources, pollIntervalMs })).toThrow(
+        'pollIntervalMs must be positive',
+      );
+    }
+    for (const maxBackoffMs of [0, -5, Number.NaN]) {
+      expect(() => new WorkflowRefreshCoordinator({ catalog, sources, maxBackoffMs })).toThrow(
+        'maxBackoffMs must be positive',
+      );
+    }
   });
 });

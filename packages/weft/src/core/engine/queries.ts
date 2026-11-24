@@ -1,6 +1,8 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
+import { assertLiveWorkflowMessageDeclared } from './declared-messages.ts';
 import type { EngineInternals } from './internals.ts';
+import { validateMessageInput } from './payload-validation.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from './validation.ts';
 import { decodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
@@ -165,10 +167,16 @@ export async function query(
   if (name === 'activityProgress') {
     return internals.heartbeatDetails.get(workflowId);
   }
+  assertLiveWorkflowMessageDeclared(internals, 'query', workflowId, name);
 
   const inlineStrategy = internals.inlineStrategy;
   if (!inlineStrategy) {
     throw new Error('Workflow queries are not supported when using the worker execution strategy.');
+  }
+  // Guarded rather than always awaited, so a query with validation off is
+  // answered without the extra microtask (see `isLiveContextStale`).
+  if (internals.options.payloadValidation === 'inbound') {
+    await validateMessageInput(internals, 'query', workflowId, name, input);
   }
   // When the inline waitForSignal parking optimization evicts a run's live
   // generator (parkWorkflow with retainContext), it retains the run's Context in

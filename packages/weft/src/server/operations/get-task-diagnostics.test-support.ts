@@ -1,3 +1,6 @@
+import { principalFromApiKey, type AuthorizationScope } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { encodeTaskAttemptRecord, taskAttemptKey } from '../../core/task-ledger/task-attempt.ts';
 import {
@@ -8,15 +11,10 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
   createGetTaskDiagnosticsOperation,
@@ -229,7 +227,7 @@ export async function runDiagnostics({
 
   return executeOperation('weft.tasks.diagnostics', input, {
     principal: principalFromApiKey({ subject: 'operator', scopes }),
-    engine,
+    host: engine,
     transport: 'jsonRpcStdio',
     registry: operationRegistry,
   });

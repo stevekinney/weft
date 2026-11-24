@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { parseOptionalSequenceCursor } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { workflow, type WorkflowContext } from '../core/types.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import { serve, type WeftServer } from './index.ts';
 import { collectWebSocketDeliveredEnvelopes } from './json-rpc-websocket-client.test-support.ts';
-import { parseOptionalSequenceCursor } from './sequence-cursor.ts';
 import { createWorkflowEventFeed, type EventEnvelope } from './workflow-event-feed.ts';
 
 const multiWorkflow = workflow({ name: 'multi' }).execute(async function* (

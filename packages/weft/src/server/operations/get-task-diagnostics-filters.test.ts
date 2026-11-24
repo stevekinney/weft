@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import { principalFromJwtClaims } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import { encodeTaskAttemptRecord, taskAttemptKey } from '../../core/task-ledger/task-attempt.ts';
 import { taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromJwtClaims } from '../principal.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
   createEngine,
@@ -67,7 +68,7 @@ describe('weft.tasks.diagnostics filters', () => {
       queue: 'payments',
       terminalAt: 9_000,
       adopted: false,
-      evidence: ['Terminal task has remained unadopted for 1000ms'],
+      evidence: ['Terminal task has remained unadopted for 1 second'],
     });
   });
 
@@ -221,8 +222,11 @@ describe('weft.tasks.diagnostics filters', () => {
       'weft.tasks.diagnostics',
       {},
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'workflows:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: operationRegistry,
       },

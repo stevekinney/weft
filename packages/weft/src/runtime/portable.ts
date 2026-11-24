@@ -1,8 +1,9 @@
 /**
  * Runtime-agnostic primitives that all portable code uses instead of calling
- * `Bun.*` directly. When running under Bun the fast native paths are used;
- * otherwise standard Web APIs are preferred, with Node built-ins as a last
- * resort (lazy-imported so browser bundles never pull in `node:*`).
+ * `Bun.*` directly. Each helper uses a platform-neutral API that Bun, Node,
+ * and the browser share (Web APIs first, Node built-ins lazy-loaded through
+ * `process.getBuiltinModule` so browser bundles never pull in `node:*`); none
+ * of them inspects which runtime is hosting the process.
  *
  * @module runtime/portable
  */
@@ -10,44 +11,25 @@
 import { readEnvironmentVariable as readConfiguredEnvironmentVariable } from './environment-configuration.ts';
 
 // ---------------------------------------------------------------------------
-// Runtime detection
+// Test seam for the Node built-in loader
 // ---------------------------------------------------------------------------
 
-/** Identifies the JavaScript runtime hosting this process. */
-export type RuntimeKind = 'bun' | 'node' | 'browser' | 'edge';
-
 type PortableRuntimeTestOverrides = {
-  bun?: typeof globalThis.Bun | undefined;
   process?: typeof globalThis.process | undefined;
-  window?: typeof globalThis.window | undefined;
-  document?: typeof globalThis.document | undefined;
 };
 
 let portableRuntimeTestOverrides: PortableRuntimeTestOverrides | undefined;
 
+/**
+ * Replace the `process` global that {@link tryLoadNodeBuiltin} reads, so a test
+ * can simulate a runtime with no `process.getBuiltinModule` (a browser or edge
+ * isolate). Pass `undefined` to restore the real global.
+ * @internal
+ */
 export function setPortableRuntimeTestOverridesForTesting(
   overrides?: PortableRuntimeTestOverrides,
 ): void {
   portableRuntimeTestOverrides = overrides;
-}
-
-function getBunGlobal(): typeof globalThis.Bun | undefined {
-  if (portableRuntimeTestOverrides && 'bun' in portableRuntimeTestOverrides) {
-    return portableRuntimeTestOverrides.bun;
-  }
-  return globalThis.Bun;
-}
-
-/**
- * Whether the current runtime is Bun. Honors
- * {@link setPortableRuntimeTestOverridesForTesting}, unlike a bare
- * `typeof Bun !== 'undefined'` check, so callers that need to simulate a
- * non-Bun runtime in tests (e.g. to exercise a Node or browser fallback
- * branch) can do so without a real environment change.
- * @internal
- */
-export function isBunRuntime(): boolean {
-  return typeof getBunGlobal() !== 'undefined';
 }
 
 function getProcess(): typeof globalThis.process | undefined {
@@ -57,78 +39,6 @@ function getProcess(): typeof globalThis.process | undefined {
   return globalThis.process;
 }
 
-function isNodeRuntime(): boolean {
-  return typeof getProcess()?.versions?.node === 'string';
-}
-
-function isBrowserRuntime(): boolean {
-  const windowValue =
-    portableRuntimeTestOverrides && 'window' in portableRuntimeTestOverrides
-      ? portableRuntimeTestOverrides.window
-      : globalThis.window;
-  const documentValue =
-    portableRuntimeTestOverrides && 'document' in portableRuntimeTestOverrides
-      ? portableRuntimeTestOverrides.document
-      : globalThis.document;
-  return typeof windowValue !== 'undefined' || typeof documentValue !== 'undefined';
-}
-
-type RuntimeDetector = { readonly kind: RuntimeKind; readonly matches: () => boolean };
-
-// Precedence: bun → node → browser → edge. A Bun process running through Node
-// compatibility still reports 'bun' because `isBunRuntime` runs first.
-const RUNTIME_DETECTORS: readonly RuntimeDetector[] = [
-  { kind: 'bun', matches: isBunRuntime },
-  { kind: 'node', matches: isNodeRuntime },
-  { kind: 'browser', matches: isBrowserRuntime },
-];
-
-/**
- * Detect the current JavaScript runtime.
- * Detection precedence is bun → node → browser → edge: a Bun process running
- * through Node compatibility still reports 'bun'; the function never falls through if
- * `globalThis.Bun` is defined.
- *
- * @example
- * ```ts
- * import { detectRuntime } from '@lostgradient/weft';
- *
- * const runtime = detectRuntime();
- * // Returns 'bun' | 'node' | 'browser' | 'edge'
- * console.log(runtime); // e.g. 'bun' when running under Bun
- * ```
- */
-export function detectRuntime(): RuntimeKind {
-  for (const detector of RUNTIME_DETECTORS) {
-    if (detector.matches()) return detector.kind;
-  }
-  return 'edge';
-}
-
-/**
- * Detect the current runtime's version string, matching {@link detectRuntime}'s
- * detection precedence. A browser or edge runtime exposes no version, so an
- * empty string is a truthful answer rather than a missing field.
- *
- * @example
- * ```ts
- * import { detectRuntimeVersion } from '@lostgradient/weft';
- *
- * const version = detectRuntimeVersion();
- * console.log(typeof version); // 'string'
- * ```
- */
-export function detectRuntimeVersion(): string {
-  switch (detectRuntime()) {
-    case 'bun':
-      return getBunGlobal()?.version ?? '';
-    case 'node':
-      return getProcess()?.versions?.node ?? '';
-    default:
-      return '';
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Environment variables
 // ---------------------------------------------------------------------------
@@ -136,10 +46,10 @@ export function detectRuntimeVersion(): string {
 /**
  * Read an environment variable without assuming a runtime.
  *
- * Prefers `Bun.env` under Bun, falls back to `process.env` under Node, and
- * returns `undefined` anywhere else (browsers, edge runtimes) — where
- * neither global exists and a bare `Bun.env[...]` or `process.env[...]`
- * reference would throw a `ReferenceError`.
+ * Reads `process.env`, which Bun and Node both provide, and returns
+ * `undefined` anywhere else (browsers, edge runtimes) — where the global does
+ * not exist and a bare `process.env[...]` reference would throw a
+ * `ReferenceError`.
  * @internal
  */
 export function readEnvironmentVariable(name: string): string | undefined {
@@ -151,10 +61,14 @@ export function readEnvironmentVariable(name: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * Pause execution for the given number of milliseconds.
+ * Pause execution for the given number of milliseconds by wrapping `setTimeout`
+ * in a `Promise`.
  *
- * Uses `Bun.sleep` when available (microtask-friendly), otherwise wraps
- * `setTimeout` in a `Promise`.
+ * With a `signal`, the pause ends early (resolving, not rejecting) when the
+ * signal aborts, and its timer is cleared, so a loop that sleeps between polls
+ * leaves no pending timer behind once its owner shuts down. A signal that is
+ * already aborted resolves immediately. The caller checks the signal after the
+ * pause to decide whether to continue.
  *
  * @example
  * ```ts
@@ -169,10 +83,17 @@ export function readEnvironmentVariable(name: string): string | undefined {
  * await poll();
  * ```
  */
-export function sleep(ms: number): Promise<void> {
-  if (isBunRuntime()) return Bun.sleep(ms);
-
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +190,7 @@ export function hashString(data: string): string {
  */
 export function tryLoadNodeBuiltin(id: 'bun:sqlite'): typeof import('bun:sqlite') | undefined;
 export function tryLoadNodeBuiltin(id: 'node:crypto'): typeof import('node:crypto') | undefined;
+export function tryLoadNodeBuiltin(id: 'node:dns'): typeof import('node:dns') | undefined;
 export function tryLoadNodeBuiltin(id: 'node:fs'): typeof import('node:fs') | undefined;
 export function tryLoadNodeBuiltin(
   id: 'node:fs/promises',
@@ -288,20 +210,16 @@ export function tryLoadNodeBuiltin(id: string): unknown {
 // ---------------------------------------------------------------------------
 
 /**
- * Return the byte size of a file at the given path.
+ * Return the byte size of a file at the given path, read with `node:fs`
+ * `statSync` (loaded via `process.getBuiltinModule`, which Bun and Node 22.5+
+ * both provide).
  *
- * - Bun: `Bun.file(path).size`
- * - Node 22.5+: `node:fs` `statSync` loaded via `process.getBuiltinModule`
- * - Missing files return `0` to match Bun's behavior (important for WAL
- *   probing in the diagnostics module).
+ * Missing files return `0` (important for WAL probing in the diagnostics
+ * module).
  *
  * Not available in browser/edge runtimes — throws if called there.
  */
 export function fileSize(path: string): number {
-  if (isBunRuntime()) {
-    return Bun.file(path).size;
-  }
-
   const fs = tryLoadNodeBuiltin('node:fs');
   if (!fs) {
     throw new Error(
@@ -313,7 +231,7 @@ export function fileSize(path: string): number {
   try {
     return fs.statSync(path).size;
   } catch (error) {
-    // Match Bun.file().size behavior: return 0 for missing files.
+    // A missing file is a size of zero, not an error.
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
       return 0;
     }
@@ -322,45 +240,8 @@ export function fileSize(path: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Compression — synchronous gzip
+// Compression
 // ---------------------------------------------------------------------------
-
-function loadNodeZlib(): typeof import('node:zlib') {
-  const zlib = tryLoadNodeBuiltin('node:zlib');
-  if (!zlib) {
-    throw new Error(
-      'gzip/gunzip require Bun or Node 22.5+ (process.getBuiltinModule). ' +
-        'Not available in browser or edge runtimes — use CompressionStream directly.',
-    );
-  }
-  return zlib;
-}
-
-/**
- * Gzip-compress a byte buffer synchronously.
- *
- * - Bun: `Bun.gzipSync`
- * - Node 22.5+: `node:zlib` via `process.getBuiltinModule`
- */
-export function gzipSync(data: Uint8Array): Uint8Array {
-  if (isBunRuntime()) {
-    return new Uint8Array(Bun.gzipSync(new Uint8Array(data)));
-  }
-  return new Uint8Array(loadNodeZlib().gzipSync(data));
-}
-
-/**
- * Gunzip-decompress a byte buffer synchronously.
- *
- * - Bun: `Bun.gunzipSync`
- * - Node 22.5+: `node:zlib` via `process.getBuiltinModule`
- */
-export function gunzipSync(data: Uint8Array): Uint8Array {
-  if (isBunRuntime()) {
-    return new Uint8Array(Bun.gunzipSync(new Uint8Array(data)));
-  }
-  return new Uint8Array(loadNodeZlib().gunzipSync(data));
-}
 
 /**
  * Load `node:zlib` if available for Node-side callers (used by compression.ts

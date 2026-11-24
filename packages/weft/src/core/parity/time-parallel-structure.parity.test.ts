@@ -19,8 +19,8 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { restoreRealTimers, waitForever } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { flushPortableMicrotasks, yieldToPortableEventLoop } from '../../testing/event-loop.ts';
-import { restoreRealTimers, waitForever } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -168,6 +168,7 @@ describe('timeout race', () => {
       slowCalls++;
       // Yield one event-loop turn via MessageChannel so fast is unambiguously
       // first to settle without depending on real wall-clock time.
+      // load-proof: scripted slow branch: it waits one task so the fast branch, which resolves within microtasks, settles first; microtasks always run before the next task whatever the load
       await yieldToPortableEventLoop();
       return 'slow-result';
     };

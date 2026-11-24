@@ -19,18 +19,20 @@
  * reaching through the Node-dependent root barrel.
  */
 
-import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import type {
-  ClientStartOrSignalOptions,
-  FaultCode as FaultCodeFromRoot,
-  StartOrSignalOptions as OptionsFromRoot,
-  StartOrSignalOutcome as OutcomeFromRoot,
-  WeftErrorCode as WeftErrorCodeFromRoot,
-} from '../index.ts';
 import {
+  type FaultCode as FaultCodeFromClientBarrel,
+  type FaultCode as FaultCodeFromRoot,
+  isFaultCode as isFaultCodeFromClientBarrel,
   isFaultCode as isFaultCodeFromRoot,
+} from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { Engine } from '../core/engine.ts';
+import { type WorkflowContext, workflow } from '../core/types.ts';
+import {
+  type ClientStartOrSignalOptions,
+  type StartOrSignalOptions as OptionsFromRoot,
+  type StartOrSignalOutcome as OutcomeFromRoot,
+  type WeftErrorCode as WeftErrorCodeFromRoot,
   isWeftFault as isWeftFaultFromRoot,
   WeftError as WeftErrorFromRoot,
   WorkflowCancelledEvent as WorkflowCancelledEventFromRoot,
@@ -42,15 +44,10 @@ import {
   WorkflowTeardownEvent as WorkflowTeardownEventFromRoot,
   WorkflowTimedOutEvent as WorkflowTimedOutEventFromRoot,
 } from '../index.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import type { HttpClient } from './http-client.ts';
-import type {
-  FaultCode as FaultCodeFromClientBarrel,
-  StartOrSignalOutcome as OutcomeFromClientBarrel,
-  WeftErrorCode as WeftErrorCodeFromClientBarrel,
-} from './index.ts';
 import {
-  isFaultCode as isFaultCodeFromClientBarrel,
+  type StartOrSignalOutcome as OutcomeFromClientBarrel,
+  type WeftErrorCode as WeftErrorCodeFromClientBarrel,
   isWeftError,
   isWeftErrorCode,
   isWeftErrorLike,

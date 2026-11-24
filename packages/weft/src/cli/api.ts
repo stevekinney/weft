@@ -1,5 +1,6 @@
+import type { CatalogAccessSnapshot, CatalogOperationSnapshot } from "../embedded/backchannel/src/index.ts";
+import type { ErasedOperation } from "../embedded/backchannel/src/internals.ts";
 import { sendJsonRpcRequest } from '../client/json-rpc-request.ts';
-import type { CatalogAccessSnapshot, CatalogOperationSnapshot } from '../index.ts';
 import { createCatalogSnapshot, createLiveOperationRegistry } from '../index.ts';
 import { findNearestCandidate } from './command-suggestions.ts';
 import { loadJsonInput } from './json-input.ts';
@@ -22,7 +23,12 @@ export async function executeApi(command: ApiCommand): Promise<CommandOutput> {
   const inputResult = await readInput(command);
   if (!inputResult.ok) return inputResult.output;
 
-  const validation = validateInput(operation.name, inputResult.value);
+  // `--dry-run` sets `dryRun: true` on the input, over a `dryRun` the input itself carries.
+  const input =
+    command.dryRun && isRecord(inputResult.value)
+      ? { ...inputResult.value, dryRun: true }
+      : inputResult.value;
+  const validation = validateInput(operationResult.liveOperation, input);
   if (!validation.ok) return validation.output;
 
   return callOperation(command, operation.name, validation.value);
@@ -30,7 +36,9 @@ export async function executeApi(command: ApiCommand): Promise<CommandOutput> {
 
 function resolveInvokableOperation(
   command: ApiCommand,
-): { ok: true; operation: CatalogOperationSnapshot } | { ok: false; output: CommandOutput } {
+):
+  | { ok: true; operation: CatalogOperationSnapshot; liveOperation: ErasedOperation }
+  | { ok: false; output: CommandOutput } {
   if (command.operationName === undefined) {
     return {
       ok: false,
@@ -38,10 +46,34 @@ function resolveInvokableOperation(
     };
   }
 
+  // The catalog snapshot and the live registry describe the same operations (a test pins that),
+  // so a name found in the snapshot is found in the registry too. Resolving both here makes
+  // either lookup missing the same "unknown operation" usage error.
   const operation = operationByName.get(command.operationName);
-  if (operation === undefined)
+  const liveOperation = createLiveOperationRegistry().get(command.operationName);
+  if (operation === undefined || liveOperation === undefined)
     return { ok: false, output: usageError(formatUnknownOperation(command.operationName)) };
-  return assertInvokableOperation(operation, command.yes);
+  if (command.dryRun && !inputAcceptsDryRun(liveOperation)) {
+    return {
+      ok: false,
+      output: usageError(
+        `api: ${command.operationName} does not support --dry-run: its input has no dryRun field`,
+      ),
+    };
+  }
+  // A dry run changes nothing, so a destructive operation needs no `--yes` to be previewed.
+  const invokable = assertInvokableOperation(operation, command.yes || command.dryRun === true);
+  return invokable.ok ? { ...invokable, liveOperation } : invokable;
+}
+
+/** Whether the operation's input schema is an object with a `dryRun` field. */
+function inputAcceptsDryRun(operation: ErasedOperation): boolean {
+  const shape: unknown = Reflect.get(operation.inputSchema, 'shape');
+  return typeof shape === 'object' && shape !== null && Object.hasOwn(shape, 'dryRun');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function assertInvokableOperation(
@@ -119,7 +151,8 @@ function describeOperation(name: string, json: boolean): CommandOutput {
   };
 }
 
-function formatOperationDescription(operation: CatalogOperationSnapshot): string {
+/** Render the `--describe` view of one catalog operation, echoing the summary when it has no description. */
+export function formatOperationDescription(operation: CatalogOperationSnapshot): string {
   return [
     `Name: ${operation.name}`,
     `Summary: ${operation.summary}`,
@@ -147,12 +180,10 @@ async function readInput(
 }
 
 function validateInput(
-  operationName: string,
+  operation: ErasedOperation,
   input: unknown,
 ): { ok: true; value: Record<string, unknown> } | { ok: false; output: CommandOutput } {
-  const operation = createLiveOperationRegistry().get(operationName);
-  if (operation === undefined)
-    return { ok: false, output: usageError(formatUnknownOperation(operationName)) };
+  const operationName = operation.name;
   const parsed = operation.inputSchema.safeParse(input);
   if (!parsed.success) {
     return {

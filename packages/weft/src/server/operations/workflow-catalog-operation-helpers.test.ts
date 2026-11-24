@@ -10,8 +10,10 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import type { WorkflowCatalogActivationResult } from '../../core/catalog/index.ts';
+import { isOperationFault } from "../../embedded/backchannel/src/internals.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
+  type WorkflowCatalogActivationResult,
   WorkflowCatalogConflictError,
   WorkflowRevisionNotInstalledError,
 } from '../../core/catalog/index.ts';
@@ -23,8 +25,6 @@ import {
 } from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowNotRegisteredError } from '../../core/engine/errors.ts';
 import { WorkflowSourceValidationError } from '../../core/source/errors.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { isOperationFault } from './operation-helpers.ts';
 import {
   activationRefusalToFault,
   readWorkflowCatalogRestBody,

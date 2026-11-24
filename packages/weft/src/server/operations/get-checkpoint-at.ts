@@ -1,15 +1,18 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { CheckpointState } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getCheckpointAtInput = z.object({
-  workflowId: z.string().min(1),
-  step: z.number().int().nonnegative(),
+  workflowId: z.string().min(1).describe('Id of the workflow whose checkpoint is read.'),
+  step: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Step number of the checkpoint to read; zero or greater.'),
 });
 const getCheckpointAtOutput = z.unknown();
 
@@ -20,11 +23,15 @@ export const getCheckpointAtOperation = defineOperation({
   name: 'weft.workflows.checkpoints.get',
   mcpExposable: false,
   summary: 'Get a specific checkpoint by step number',
+  description:
+    'Read one persisted checkpoint of a workflow by step number. Read-only. Faults ' +
+    'with NotFound when the workflow or that step has no visible checkpoint.',
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getCheckpointAtInput,
   outputSchema: getCheckpointAtOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -33,7 +40,7 @@ export const getCheckpointAtOperation = defineOperation({
   // json and msgpack happens in the REST binding's `shapeSuccess`,
   // not in the operation output, so JSON-RPC clients receive a
   // clean canonical envelope.
-  invoke: async ({ input, engine }): Promise<GetCheckpointAtOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetCheckpointAtOutput> => {
     assertOperationEngineMethods(engine, ['getCheckpointAt']);
     const e = engine;
     const state = await e.getCheckpointAt(input.workflowId, input.step);

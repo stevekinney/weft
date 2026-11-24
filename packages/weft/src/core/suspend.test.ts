@@ -1,5 +1,5 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';
@@ -29,6 +29,7 @@ describe('ctx.suspendUntil', () => {
     const resultPromise = handle.result();
 
     // Let the workflow reach the yield.
+    // load-proof: signals are durable and buffered, so engine.signal succeeds whether or not the workflow has parked; the yield is a head start and result() awaits the outcome
     await sleepForTesting(10);
 
     // Deliver the resume "signal" with the payload.
@@ -54,8 +55,10 @@ describe('ctx.suspendUntil', () => {
     const handle = await engine.start('multi-suspend', null);
     const resultPromise = handle.result();
 
+    // load-proof: signals are durable and buffered, so engine.signal succeeds whether or not the workflow has parked; the yield is a head start and result() awaits the outcome
     await sleepForTesting(10);
     await engine.signal(handle.id, 'token-one', { value: 3 });
+    // load-proof: signals are durable and buffered, so engine.signal succeeds whether or not the workflow has parked; the yield is a head start and result() awaits the outcome
     await sleepForTesting(10);
     await engine.signal(handle.id, 'token-two', { value: 4 });
 

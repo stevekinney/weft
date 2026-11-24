@@ -154,7 +154,9 @@ export async function validateRealmReadyMessage(
   const missing = dependencies
     .getExpectedWorkflowTypes()
     .filter((workflowType) => {
-      const reported = parsed.manifest.workflows[workflowType];
+      const reported = Object.hasOwn(parsed.manifest.workflows, workflowType)
+        ? parsed.manifest.workflows[workflowType]
+        : undefined;
       return (
         !reported ||
         !declaredWorkflowContractsMatch(reported, buildDeclaredWorkflowContract(workflowType))

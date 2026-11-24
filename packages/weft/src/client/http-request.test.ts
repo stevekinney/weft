@@ -67,6 +67,18 @@ describe('HttpClientError', () => {
     const error = new HttpClientError(404, 'not found');
     expect(error.data).toBeUndefined();
   });
+
+  it('carries a provided retryable and remediation, and leaves both undefined otherwise', () => {
+    const error = new HttpClientError(429, 'slow down', {
+      retryable: true,
+      remediation: 'Wait, then send the same request.',
+    });
+    expect(error.retryable).toBe(true);
+    expect(error.remediation).toBe('Wait, then send the same request.');
+    const bare = new HttpClientError(404, 'not found');
+    expect(bare.retryable).toBeUndefined();
+    expect(bare.remediation).toBeUndefined();
+  });
 });
 
 describe('request() error-body parsing', () => {
@@ -129,6 +141,45 @@ describe('request() error-body parsing', () => {
     expect(error.faultCode).toBeUndefined();
     expect(error.weftCode).toBeUndefined();
     expect(error.data).toBeUndefined();
+  });
+
+  it('surfaces retryable and remediation from a REST fault body', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({
+          error: 'No workflow registered',
+          data: { resource: 'workflow' },
+          retryable: false,
+          remediation: 'Register the workflow, then start it again.',
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.retryable).toBe(false);
+    expect(error.remediation).toBe('Register the workflow, then start it again.');
+  });
+
+  it('keeps the masked EngineFailure body not retryable with no remediation', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'Internal server error', retryable: false }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Internal server error');
+    expect(error.retryable).toBe(false);
+    expect(error.remediation).toBeUndefined();
+  });
+
+  it('ignores a retryable that is not a boolean and a remediation that is not text', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'boom', retryable: 'yes', remediation: 7 }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.retryable).toBeUndefined();
+    expect(error.remediation).toBeUndefined();
   });
 
   it('surfaces a top-level weftCode sibling from a flat string body (#465)', async () => {

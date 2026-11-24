@@ -11,7 +11,6 @@
  */
 
 import type { WorkflowEvent } from '../core/types.ts';
-import { detectRuntime } from '../runtime/portable.ts';
 import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import { workflowWatchWebSocketUrl } from './event-stream-transport.ts';
 import { WorkflowEventSubscription } from './event-stream.ts';
@@ -77,7 +76,7 @@ function shouldPreferServerSentEventsFallback(
   return (
     transport === 'auto' &&
     options.webSocketFactory === undefined &&
-    detectRuntime() !== 'bun' &&
+    options.webSocketCarriesHeaders !== true &&
     Object.keys(host.headers).length > 0
   );
 }

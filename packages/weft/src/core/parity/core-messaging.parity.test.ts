@@ -1,18 +1,19 @@
+import { awakeTurns } from "../../../test-support/embedded/testing/src/wait-until.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import type { QueryDefinition, WorkflowContext } from '../types.ts';
 import { query, update, workflow } from '../types.ts';
 
 async function flushWorkflowTurn(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 async function waitForQuery<T>(
   handle: { query(definition: QueryDefinition<void, T>): Promise<T> },
   definition: QueryDefinition<void, T>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for await (const _turn of awakeTurns()) {
     const result = await handle.query(definition);
     if (result !== undefined) {
       return result;

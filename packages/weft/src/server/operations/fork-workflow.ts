@@ -1,21 +1,28 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  invalidParamsFault,
+  readRestTextBody,
+} from "../../embedded/backchannel/src/internals.ts";
 import { ForkSourceReplacedError } from '../../core/engine/errors.ts';
 import type { ForkOptions } from '../../core/types.ts';
 import { VersionMismatchError } from '../../core/versioning.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestTextBody } from '../rest-body.ts';
-import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods, workerVersionRemovedFault } from './operation-helpers.ts';
 import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
 
 // `fromStep` is intentionally `unknown` at the schema boundary. The exact
 // "Field 'fromStep' must be a non-negative safe integer" error path
 // lives in `invoke()` so REST and JSON-RPC callers share one contract.
 const forkWorkflowInput = z.object({
-  workflowId: z.string().min(1),
-  fromStep: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow to fork.'),
+  fromStep: z
+    .unknown()
+    .optional()
+    .describe(
+      'Checkpoint step to fork from, as a non-negative integer. Omit it to fork from the latest checkpoint.',
+    ),
   /**
    * Explicit opt-in (WFT-21) to fork against a DIFFERENT installed revision
    * than the source run's own pin — see `ForkOptions.revision`'s own doc
@@ -23,12 +30,41 @@ const forkWorkflowInput = z.object({
    * persists the source run's own revision, unchanged from before this
    * field existed.
    */
-  revision: z.string().min(1).optional(),
+  revision: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Installed revision to fork onto instead of the source run's own revision. Omit it to keep the source revision; an unresolvable or version-incompatible revision faults with Conflict.",
+    ),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      'When true, answer what the fork would keep and run again, and whether the revision would change, and write nothing.',
+    ),
 });
 
-const forkWorkflowOutput = z.object({
-  id: z.string(),
+const forkStepSchema = z.object({
+  index: z.number(),
+  operationType: z.string(),
+  label: z.string(),
+  status: z.enum(['running', 'completed', 'failed', 'cancelled', 'timed-out']),
 });
+
+/** What `dryRun: true` answers (COR-2536): what the fork would keep and run again; nothing was written. */
+const forkPreviewSchema = z.object({
+  dryRun: z.literal(true),
+  workflowId: z.string(),
+  forkPoint: z.number(),
+  keptSteps: z.array(forkStepSchema),
+  rerunSteps: z.array(forkStepSchema),
+  revisionWouldChange: z.boolean(),
+  sourceRevision: z.string().exactOptional(),
+  forkRevision: z.string().exactOptional(),
+});
+
+const forkWorkflowOutput = z.union([z.object({ id: z.string() }), forkPreviewSchema]);
 
 export type ForkWorkflowInput = z.infer<typeof forkWorkflowInput>;
 export type ForkWorkflowOutput = z.infer<typeof forkWorkflowOutput>;
@@ -79,10 +115,12 @@ function validateForkInput(input: ForkWorkflowInput): ForkOptions | undefined {
  *      (Codex review, item 6 — the source run was replaced by a concurrent
  *      `start-new` while this fork was still resolving or committing, a
  *      legitimate retryable race, not an engine failure)
- *   4. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
- *   5. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
- *   6. 'not found'                                  → NotFound, resource: 'workflow'
- *   7. otherwise                                    → EngineFailure
+ *   4. `WorkerDeploymentVersionRemovedError`        → Conflict (409), `reason: "version-removed"`
+ *      (the source run's worker binding names a removed deployment build)
+ *   5. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
+ *   6. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
+ *   7. 'not found'                                  → NotFound, resource: 'workflow'
+ *   8. otherwise                                    → EngineFailure
  */
 export function resolveForkAccess(error: unknown): never {
   const revisionFault = mapRevisionUnavailableToFault(error);
@@ -126,6 +164,9 @@ export function resolveForkAccess(error: unknown): never {
     throw fault;
   }
 
+  const removedFault = workerVersionRemovedFault(error);
+  if (removedFault !== undefined) throw removedFault;
+
   const message = error instanceof Error ? error.message : String(error);
 
   if (message.includes('fromStep') || message.includes('Checkpoint not found at step')) {
@@ -160,21 +201,33 @@ export const forkWorkflowOperation = defineOperation({
   name: 'weft.workflows.fork',
   mcpExposable: false,
   summary: 'Fork a workflow from a checkpoint',
+  description:
+    'Start a new workflow from a checkpoint of an existing one, leaving the source ' +
+    'untouched, and return the new workflow `id`. Forks from `fromStep` or the latest ' +
+    'checkpoint, optionally onto a different installed `revision`. With `dryRun: true` it ' +
+    'writes nothing and instead answers the steps the fork would keep, the steps it would ' +
+    'run again, and whether the revision would change. Faults with ' +
+    'NotFound for a missing workflow or checkpoint, InvalidParams for a bad step, and ' +
+    'Conflict for an unavailable or version-incompatible revision.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: forkWorkflowInput,
   outputSchema: forkWorkflowOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:write'] } },
+  discoverable: true,
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ForkWorkflowOutput> => {
-    assertOperationEngineMethods(engine, ['fork']);
-    const typedEngine = engine;
+  invoke: async ({ input, host: engine }): Promise<ForkWorkflowOutput> => {
     const options = validateForkInput(input);
 
     try {
-      const handle = await typedEngine.fork(input.workflowId, options);
+      if (input.dryRun === true) {
+        assertOperationEngineMethods(engine, ['previewFork']);
+        return await engine.previewFork(input.workflowId, options);
+      }
+      assertOperationEngineMethods(engine, ['fork']);
+      const handle = await engine.fork(input.workflowId, options);
       return { id: handle.id };
     } catch (error) {
       return resolveForkAccess(error);
@@ -191,6 +244,7 @@ export const forkWorkflowRestBinding: UnknownRestBinding = {
     workflowId: { kind: 'path', pathParam: 'id' },
     fromStep: { kind: 'body-field', bodyField: 'fromStep' },
     revision: { kind: 'body-field', bodyField: 'revision' },
+    dryRun: { kind: 'body-field', bodyField: 'dryRun' },
   },
   extractInput: async (request, pathParams, context) => {
     const rawBody = await readRestTextBody(request, context);
@@ -217,7 +271,10 @@ export const forkWorkflowRestBinding: UnknownRestBinding = {
       workflowId: pathParams['id'] ?? '',
       fromStep: record['fromStep'],
       revision: record['revision'],
+      dryRun: record['dryRun'],
     };
   },
+  // One status for both answers, because the published spec lists one: a dry run answers 201 too,
+  // and a caller tells the two apart by `dryRun: true`.
   success: { kind: 'json', status: 201 },
 };

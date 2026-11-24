@@ -1,22 +1,26 @@
+import type { OperationFault } from "../../embedded/backchannel/src/index.ts";
+import { invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import { DynamicWorkflowSourceUnavailableError } from '../../core/engine/dynamic-source-errors.ts';
+import { ScheduleOccurrenceNotNextError } from '../../core/engine/schedule-occurrence-not-next-error.ts';
+import { ScheduleStaleRevisionError } from '../../core/engine/schedule-stale-revision-error.ts';
 import {
   isValidScheduleOverlapPolicy,
   isValidScheduleRevisionPolicy,
+  normalizeScheduleMetadata,
   normalizeScheduleUpdateOptions,
 } from '../../core/engine/validation/schedule.ts';
+import { isValidTimeZone } from '../../core/schedule.ts';
 import type { ScheduleSpec, ScheduleUpdateOptions } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 import { mapRevisionUnavailableToFault } from './revision-unavailable-fault.ts';
-
-export { isOperationFault } from './operation-helpers.ts';
 
 export type ScheduleMutableOptionsInput = {
   description?: unknown;
   overlap?: unknown;
   backfill?: unknown;
   jitter?: unknown;
+  timeZone?: unknown;
   revisionPolicy?: unknown;
+  metadata?: unknown;
 };
 
 /** Validate the mutable schedule options shared by create and update. */
@@ -24,9 +28,11 @@ export function validateScheduleMutableOptions(
   input: ScheduleMutableOptionsInput,
 ): ScheduleUpdateOptions {
   const description = validateScheduleDescription(input.description);
+  const metadata = validateScheduleMetadata(input.metadata);
   const overlap = validateScheduleOverlap(input.overlap);
   const backfill = validateScheduleBackfill(input.backfill);
   const jitter = validateScheduleJitter(input.jitter);
+  const timeZone = validateScheduleTimeZone(input.timeZone);
   const revisionPolicy = validateScheduleRevisionPolicy(input.revisionPolicy);
 
   return {
@@ -34,8 +40,28 @@ export function validateScheduleMutableOptions(
     ...(overlap !== undefined ? { overlap } : {}),
     ...(backfill !== undefined ? { backfill } : {}),
     ...(jitter !== undefined ? { jitter } : {}),
+    ...(timeZone !== undefined ? { timeZone } : {}),
     ...(revisionPolicy !== undefined ? { revisionPolicy } : {}),
+    ...(metadata !== undefined ? { metadata } : {}),
   };
+}
+
+function validateScheduleMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return normalizeScheduleMetadata(value);
+  } catch {
+    throw invalidParamsFault('Field "metadata" must be a plain JSON object');
+  }
+}
+
+/** The workflow type an update moves a schedule to: a non-empty string, or `undefined` when omitted. */
+export function validateScheduleWorkflowType(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw invalidParamsFault('Field "workflowType" must be a non-empty string');
+  }
+  return value;
 }
 
 function validateScheduleDescription(value: unknown): string | undefined {
@@ -58,6 +84,16 @@ function validateScheduleRevisionPolicy(value: unknown): ScheduleUpdateOptions['
   if (value === undefined) return undefined;
   if (!isValidScheduleRevisionPolicy(value)) {
     throw invalidParamsFault('Field "revisionPolicy" must be one of active-at-fire, pinned');
+  }
+  return value;
+}
+
+function validateScheduleTimeZone(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isValidTimeZone(value)) {
+    throw invalidParamsFault(
+      'Field "timeZone" must be an IANA time zone name such as "America/Los_Angeles", or "UTC"',
+    );
   }
   return value;
 }
@@ -97,7 +133,11 @@ function formatJitterValidationMessage(message: string): string {
 
 function isScheduleConflictMessage(normalizedMessage: string): boolean {
   return (
-    normalizedMessage.includes('already exists') || normalizedMessage.includes('cannot be resumed')
+    normalizedMessage.includes('already exists') ||
+    normalizedMessage.includes('cannot be resumed') ||
+    normalizedMessage.includes('cannot be run') ||
+    normalizedMessage.includes('has no next occurrence to skip') ||
+    normalizedMessage.includes('occurrences, the most it keeps')
   );
 }
 
@@ -105,6 +145,7 @@ function isScheduleInvalidParamsMessage(message: string, normalizedMessage: stri
   return (
     message.includes('Missing required field') ||
     normalizedMessage.includes('must be') ||
+    normalizedMessage.includes('applies only to a cron schedule') ||
     normalizedMessage.includes('no workflow registered') ||
     normalizedMessage.includes('cron') ||
     normalizedMessage.includes('interval')
@@ -130,6 +171,22 @@ function mapDynamicSourceUnavailableToFault(error: unknown): OperationFault | un
 }
 
 export function mapScheduleErrorToFault(scheduleId: string, error: unknown): OperationFault {
+  if (error instanceof ScheduleStaleRevisionError) {
+    return {
+      code: 'StaleRevision',
+      message: error.message,
+      data: { expectedRevision: error.expectedRevision, currentRevision: error.currentRevision },
+    };
+  }
+  if (error instanceof ScheduleOccurrenceNotNextError) {
+    // `weftCode` is how a REST client tells this refusal from a paused or cancelled schedule: REST
+    // never discloses `Conflict.data.reason` (see `REST_FAULT_DATA_EXTRACTORS`).
+    return {
+      code: 'Conflict',
+      message: error.message,
+      data: { reason: 'occurrence-not-next', weftCode: error.code },
+    };
+  }
   const revisionFault = mapRevisionUnavailableToFault(error);
   if (revisionFault !== undefined) {
     return revisionFault;

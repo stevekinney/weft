@@ -1,8 +1,7 @@
+import { waitForever } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.test-support.ts';
 
-import type { Storage as WeftStorage } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { type Storage as WeftStorage, MemoryStorage } from "../embedded/storage/src/index.ts";
 import { flush } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
 import { CleanupWarningEvent } from './events.ts';
@@ -159,7 +158,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
 
     // Pre-seed a coordinated update in storage so the workflow picks it up
     const { encode } = await import('./codec.ts');
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     const workflowId = 'wf-cleanup-test';
     const pendingUpdate = {
       updateId: 'cleanup-upd-1',

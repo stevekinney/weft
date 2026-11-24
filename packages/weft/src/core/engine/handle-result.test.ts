@@ -1,13 +1,13 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   createDeferred,
   flushMicrotasks,
   waitForCondition,
-} from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
@@ -18,6 +18,7 @@ import {
   createWorkflowResultWaiter,
   getWorkflowResultPromise,
   pollPendingCrossEngineResultWaiters,
+  workflowNotFoundInStorageError,
 } from './handle-result.ts';
 import { getInternals } from './internals.ts';
 import { encodeEpoch, encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -166,7 +167,7 @@ describe('workflow result resolution', () => {
     const internals = getInternals(engine);
     const currentWaiter = createWorkflowResultWaiter(internals, 'wf-replacement');
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-    const replacementWaiter = { promise, resolve, reject };
+    const replacementWaiter = { promise, resolve, reject, boundToRun: false };
 
     await bootstrapWorkflowResultResolver(internals, 'wf-replacement', replacementWaiter);
     currentWaiter.resolve('resolved through replacement');
@@ -179,7 +180,7 @@ describe('workflow result resolution', () => {
     const internals = getInternals(engine);
     const currentWaiter = createWorkflowResultWaiter(internals, 'wf-replacement-rejected');
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-    const replacementWaiter = { promise, resolve, reject };
+    const replacementWaiter = { promise, resolve, reject, boundToRun: false };
 
     await bootstrapWorkflowResultResolver(internals, 'wf-replacement-rejected', replacementWaiter);
     const replacementRejection = throwingRejectionOf(replacementWaiter.promise);
@@ -448,6 +449,35 @@ describe('pollPendingCrossEngineResultWaiters (backgroundTasks: "manual" drain)'
     // One unreadable workflow must not stop the pass; both entries are visited
     // and the call resolves rather than rejecting.
     expect(await pollPendingCrossEngineResultWaiters(internals)).toBeUndefined();
+  });
+});
+
+describe('pollPendingCrossEngineResultWaiters when settling a waiter throws', () => {
+  it('keeps draining the remaining waiters', async () => {
+    using storage = new MemoryStorage();
+    await using engine = await Engine.create({
+      storage,
+      workflows: {},
+      ownership: 'workflow-lease',
+      backgroundTasks: 'manual',
+      workflowClaimTtl: 200,
+      workflowClaimRenewInterval: 20,
+      recover: false,
+    });
+    const internals = getInternals(engine);
+
+    // Neither workflow has a record, so each waiter is rejected as not found. The first waiter's
+    // rejection throws, as a settlement callback of a caller's own could.
+    const poisonedWaiter = createWorkflowResultWaiter(internals, 'drain-poisoned-1');
+    poisonedWaiter.reject = () => {
+      throw new Error('settlement failed');
+    };
+    const healthyWaiter = createWorkflowResultWaiter(internals, 'drain-healthy-2');
+
+    expect(await pollPendingCrossEngineResultWaiters(internals)).toBeUndefined();
+    expect(await rejectionOf(healthyWaiter.promise)).toEqual(
+      workflowNotFoundInStorageError('drain-healthy-2'),
+    );
   });
 });
 

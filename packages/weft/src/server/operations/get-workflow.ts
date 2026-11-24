@@ -11,13 +11,12 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowState } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getWorkflowInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow whose state is read.'),
 });
 
 /**
@@ -47,14 +46,15 @@ export const getWorkflowOperation = defineOperation({
   tags: ['Workflows'],
   inputSchema: getWorkflowInput,
   outputSchema: getWorkflowOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   // GET has no body to reject, so REST silently tolerates extra top-
   // level keys. Top-level strip applies to the path-param + query-string
   // derived input.
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<WorkflowState> => {
+  invoke: async ({ input, host: engine }): Promise<WorkflowState> => {
     // The catalog stores `engine: unknown` so the pipeline is transport-
     // neutral; per `operation-catalog.ts`'s JSDoc the concrete adapter
     // (here: REST via serve()) is responsible for passing an `Engine`.

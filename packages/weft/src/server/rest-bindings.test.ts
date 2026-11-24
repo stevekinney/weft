@@ -16,7 +16,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { isValidOperationName } from './operation-registry.ts';
+import { isValidOperationName } from "../embedded/backchannel/src/index.ts";
 import { REST_BINDINGS, createLiveOperationRegistry } from './rest-bindings.ts';
 
 describe('REST_BINDINGS', () => {
@@ -70,5 +70,7 @@ describe('createLiveOperationRegistry', () => {
     const registry = createLiveOperationRegistry({ workerStartOverrideSigningSecret: 'secret' });
 
     expect(registry.get('weft.workflows.start')).toBeDefined();
+    expect(registry.get('weft.workflows.startorsignal')).toBeDefined();
+    expect(createLiveOperationRegistry().get('weft.workflows.startorsignal')).toBeDefined();
   });
 });

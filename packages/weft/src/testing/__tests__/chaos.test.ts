@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { classifyErrorAsFailureCategory } from '../../core/failure-categories.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types/workflow-function.ts';
@@ -16,7 +17,6 @@ import {
   ChaosTransientError,
   withChaos,
 } from '../chaos.ts';
-import { throwingRejectionOf } from '../promise-outcome.test-support.ts';
 import type { RunNResult } from '../test-engine.ts';
 import { TestEngine } from '../test-engine.ts';
 

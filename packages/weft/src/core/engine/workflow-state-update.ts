@@ -4,14 +4,15 @@
  *
  * @module core/engine/workflow-state-update
  */
+import type { BatchOperation, ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
 import { sleep } from '../../runtime/portable.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { retryDelay } from '../atomic-state.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState, WorkflowStatus } from '../types.ts';
 import { buildTerminalWorkflowIndexOperations } from './attributes-tags.ts';
 import type { EngineInternals } from './internals.ts';
+import { withoutSignalWaits } from './signal-wait-state.ts';
 import {
   commitExternalTerminalWorkflowStateOperations,
   commitSelfWorkflowStateOperations,
@@ -46,6 +47,15 @@ export type WorkflowStateUpdateOptions = {
   buildAdditionalOperations?: (previousState: WorkflowState, updatedAt: number) => BatchOperation[];
   /** Checked with the decoded state after the last read before the commit; `true` skips the write. */
   skipCommitIf?: (state: WorkflowState) => boolean;
+  /**
+   * Retry a write storage refused in process, as a failure write (`failWorkflow`). Read only for the
+   * `'self'` category; a refused write that fails every attempt throws `CheckpointCommitFailedError`.
+   */
+  retryRefusedWrite?: 'failure';
+  /** Additional durable conditions owned by the transition's caller. */
+  extraConditions?: readonly ConditionalBatchCondition[];
+  /** Refuse a terminal retry if the persisted run token no longer matches the captured run. */
+  expectedWorkflowExecutionToken?: string | null;
 };
 
 export type WorkflowStateUpdateResult = {
@@ -54,6 +64,14 @@ export type WorkflowStateUpdateResult = {
   /** Durable identity of this commit; see {@link TerminalFence}. */
   fence: TerminalFence;
 };
+
+type TerminalWorkflowState = WorkflowState & {
+  readonly status: Extract<WorkflowStatus, 'completed' | 'failed' | 'cancelled' | 'timed-out'>;
+};
+
+export type WorkflowStateUpdateRefusal =
+  | { readonly kind: 'refused'; readonly state: TerminalWorkflowState; readonly reason: 'terminal' }
+  | { readonly kind: 'refused'; readonly state: WorkflowState; readonly reason: 'replaced' };
 
 /**
  * Whether this update must not be written: the record now belongs to another run than the one the
@@ -67,8 +85,30 @@ function updateIsRefused(
   if (decided !== undefined && state.workflowExecutionToken !== decided.workflowExecutionToken) {
     return true;
   }
+  if (
+    options.expectedWorkflowExecutionToken !== undefined &&
+    state.workflowExecutionToken !==
+      (options.expectedWorkflowExecutionToken === null
+        ? undefined
+        : options.expectedWorkflowExecutionToken)
+  ) {
+    return true;
+  }
   if (options.allowedStatuses && !options.allowedStatuses.includes(state.status)) return true;
   return options.skipCommitIf?.(state) === true;
+}
+
+function refusalFor(
+  state: WorkflowState,
+  decided: StateUpdateDecision | undefined,
+): WorkflowStateUpdateRefusal {
+  if (decided !== undefined && state.workflowExecutionToken !== decided.workflowExecutionToken) {
+    return { kind: 'refused', state, reason: 'replaced' };
+  }
+  if (isTerminalWorkflowStatus(state.status)) {
+    return { kind: 'refused', state: { ...state, status: state.status }, reason: 'terminal' };
+  }
+  return { kind: 'refused', state, reason: 'replaced' };
 }
 
 /**
@@ -91,11 +131,16 @@ async function settleLostDecision(
   error: unknown,
   options: WorkflowStateUpdateOptions,
   decided: StateUpdateDecision,
-): Promise<'retry' | 'refused'> {
+): Promise<'retry' | WorkflowStateUpdateRefusal> {
   const current = await internals.storage.get(KEYS.workflow(workflowId));
-  if (current === null) return 'refused';
+  if (current === null) {
+    return { kind: 'refused', state: decodeWorkflowState(loadedBytes), reason: 'replaced' };
+  }
   if (bytesEqual(current, loadedBytes)) throw error;
-  if (updateIsRefused(decodeWorkflowState(current), options, decided)) return 'refused';
+  const currentState = decodeWorkflowState(current);
+  if (updateIsRefused(currentState, options, decided)) {
+    return refusalFor(currentState, decided);
+  }
   if (attempt + 1 >= FENCED_RETRY_BUDGET) throw error;
   await sleep(retryDelay(attempt));
   return 'retry';
@@ -123,7 +168,7 @@ export async function updateWorkflowState(
   updates: Partial<WorkflowState>,
   category: WorkflowStateTransitionCategory,
   options: WorkflowStateUpdateOptions = {},
-): Promise<WorkflowStateUpdateResult | null> {
+): Promise<WorkflowStateUpdateResult | WorkflowStateUpdateRefusal | null> {
   return await runSerializedWorkflowStateWrite(internals, workflowId, () =>
     attemptWorkflowStateUpdate(internals, workflowId, updates, category, options, undefined, 0),
   );
@@ -137,7 +182,7 @@ async function attemptWorkflowStateUpdate(
   options: WorkflowStateUpdateOptions,
   decided: StateUpdateDecision | undefined,
   attempt: number,
-): Promise<WorkflowStateUpdateResult | null> {
+): Promise<WorkflowStateUpdateResult | WorkflowStateUpdateRefusal | null> {
   const bytes = await internals.storage.get(KEYS.workflow(workflowId));
   if (!bytes) {
     return null;
@@ -145,15 +190,17 @@ async function attemptWorkflowStateUpdate(
 
   const state = decodeWorkflowState(bytes);
   if (updateIsRefused(state, options, decided)) {
-    return null;
+    return refusalFor(state, decided);
   }
 
   const updatedAt = internals.options.getNow();
-  const updated = {
+  // Callers move the run out of `running` (fail, cancel, time out), and a run
+  // that is not running waits for no signal.
+  const updated = withoutSignalWaits({
     ...state,
     ...updates,
     updatedAt,
-  };
+  });
   const additionalOperations = additionalOperationsFor(options, state, updatedAt);
 
   // `updateWorkflowState` applies an engine-generator-owned workflow STATUS
@@ -181,7 +228,13 @@ async function attemptWorkflowStateUpdate(
       ],
       {
         includePendingAtomicSideEffects: isTerminalWorkflowStatus(updated.status),
-        extraConditions: decisionConditions(workflowId, bytes, fence),
+        extraConditions: [
+          ...decisionConditions(workflowId, bytes, fence),
+          ...(options.extraConditions ?? []),
+        ],
+        ...(options.retryRefusedWrite === undefined
+          ? {}
+          : { retryRefusedWrite: options.retryRefusedWrite }),
       },
     );
   } catch (error) {
@@ -195,7 +248,7 @@ async function attemptWorkflowStateUpdate(
       options,
       keep,
     );
-    if (next === 'refused') return null;
+    if (next !== 'retry') return next;
     return attemptWorkflowStateUpdate(
       internals,
       workflowId,

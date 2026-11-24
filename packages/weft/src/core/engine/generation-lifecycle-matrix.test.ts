@@ -24,13 +24,14 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   createDeferred,
+  drainMicrotasks,
   waitForCondition,
   yieldToEventLoop,
-} from '../../testing/fake-timers.test-support.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec/api.ts';
 import {
   activity,
@@ -365,7 +366,7 @@ async function observe(scene: Scene, act: () => Promise<string>): Promise<Observ
   scene.writes.length = 0;
   try {
     const outcome = await act();
-    await yieldToEventLoop();
+    await drainMicrotasks();
     return {
       outcome,
       warnings: warning.warnings.filter((warned) => warned.workflowId === scene.id).length,

@@ -39,6 +39,16 @@ function throwingSchema(): DefinitionSchema {
 }
 
 describe('buildWorkflowContract', () => {
+  it('rejects an activity declared in both activities and uses', () => {
+    expect(() =>
+      buildWorkflowContract({
+        name: 'checkout',
+        activities: { charge: { name: 'charge' } },
+        uses: { charge: { name: 'charge' } },
+      }),
+    ).toThrow('Workflow "checkout" declares activity "charge" in both activities and uses');
+  });
+
   it('builds name and workflowVersion, defaulting workflowVersion when omitted', () => {
     const contract = buildWorkflowContract({ name: 'checkout' });
     expect(contract.name).toBe('checkout');

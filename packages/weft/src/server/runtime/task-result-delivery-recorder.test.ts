@@ -1,5 +1,11 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import { TaskResultDeliveryEvent } from '../../core/events.ts';
 import { taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
@@ -7,11 +13,8 @@ import {
   decodeTaskResultDeliveryHistory,
   taskResultDeliveryKey,
 } from '../../core/task-ledger/task-result-delivery.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import type { ServeOptions } from '../index.ts';
 import { leasedFixture, putLedgerRecord } from '../operations/get-task-detail.test-support.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { minimalServerContext } from './server-context.test-support.ts';
 import { recordTaskResultDelivery } from './task-result-delivery-recorder.ts';
 import { handleTaskResultRequest } from './task-result-submission.ts';

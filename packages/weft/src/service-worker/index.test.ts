@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
-import { principalFromApiKey } from '../server/principal.ts';
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import type { EventEnvelope, WorkflowEventFeed } from '../server/workflow-event-feed.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import {
   buildDelegatedRequest,
   createFetchHandler,
@@ -322,6 +322,25 @@ describe('createLifecycleHandlers', () => {
     expect(event.waitUntil).toHaveBeenCalledTimes(1);
   });
 
+  it('activate claims the open clients when the scope has them', async () => {
+    const claim = mock(async () => {});
+    const scope = globalThis as { clients?: unknown };
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'clients');
+    Object.defineProperty(globalThis, 'clients', { configurable: true, value: { claim } });
+    try {
+      const handlers = createLifecycleHandlers();
+      const event = createMockExtendableEvent();
+
+      handlers.activate(event);
+      await event.waitUntil.mock.calls[0]![0];
+
+      expect(claim).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) delete scope.clients;
+      else Object.defineProperty(globalThis, 'clients', previous);
+    }
+  });
+
   it('install passes a promise to waitUntil', () => {
     const handlers = createLifecycleHandlers();
     const event = createMockExtendableEvent();
@@ -340,5 +359,95 @@ describe('createLifecycleHandlers', () => {
 
     const argument = event.waitUntil.mock.calls[0]![0];
     expect(argument).toBeInstanceOf(Promise);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createFetchHandler: local trust by default (COR-1466)
+// ---------------------------------------------------------------------------
+
+describe('createFetchHandler authorization', () => {
+  async function respond(
+    handlerOptions: Parameters<typeof createFetchHandler>[0]['handlerOptions'],
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; body: unknown }> {
+    const { Engine } = await import('../core/engine.ts');
+    const { workflow } = await import('../core/types/workflow-function.ts');
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'local-trust' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    const handler = createFetchHandler({
+      engine,
+      ...(handlerOptions === undefined ? {} : { handlerOptions }),
+    });
+    const respondWith = mock((_response: Response | Promise<Response>) => {});
+    const event = {
+      request: new Request(`https://example.com/weft${path}`, {
+        method,
+        ...(body === undefined
+          ? {}
+          : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+      }),
+      respondWith,
+    };
+    handler(event);
+    // Read the response before the engine is disposed at the end of this scope.
+    const response = await respondWith.mock.calls[0]![0];
+    return { status: response.status, body: await response.json() };
+  }
+
+  it('runs as the local user when no authContext is given: workflows list and start without a 401', async () => {
+    const listed = await respond(undefined, 'GET', '/v1/workflows');
+    expect(listed.status).toBe(200);
+    const started = await respond(undefined, 'POST', '/v1/workflows', { type: 'local-trust' });
+    expect(started).toMatchObject({ status: 201 });
+    const principal = await respond(undefined, 'GET', '/v1/principal');
+    expect(principal.body).toMatchObject({ method: 'unauthenticated-local' });
+  });
+
+  it('applies the default to handlerOptions that name no authContext', async () => {
+    const listed = await respond({}, 'GET', '/v1/workflows');
+    expect(listed.status).toBe(200);
+  });
+
+  it('lets an explicit authContext replace the default', async () => {
+    const refused = await respond(
+      {
+        authContext: {
+          method: 'api-key',
+          principal: principalFromApiKey({ subject: 'narrow', scopes: ['system:read'] }),
+        },
+      },
+      'GET',
+      '/v1/workflows',
+    );
+    expect(refused.status).toBe(403);
+  });
+
+  it('opts out of local trust with a public authContext: the caller is anonymous', async () => {
+    const refused = await respond({ authContext: { method: 'public' } }, 'GET', '/v1/workflows');
+    expect(refused.status).toBe(401);
+    const principal = await respond({ authContext: { method: 'public' } }, 'GET', '/v1/principal');
+    expect(principal.body).toMatchObject({ method: 'unauthenticated' });
+  });
+
+  it('never answers a navigation, and does not throw for one', () => {
+    const handler = createFetchHandler({ engine: { storage: new MemoryStorage() } as any });
+    const respondWith = mock(() => {});
+    const navigation = {
+      mode: 'navigate',
+      url: 'https://example.com/weft/v1/principal',
+      clone() {
+        throw new TypeError('a navigation request cannot be cloned into a new Request');
+      },
+    };
+
+    expect(() => handler({ request: navigation as unknown as Request, respondWith })).not.toThrow();
+    expect(respondWith).not.toHaveBeenCalled();
   });
 });

@@ -4,10 +4,10 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
 import {
   getRealmDiagnosticsOperation,
   getRealmDiagnosticsRestBinding,
@@ -79,7 +79,7 @@ describe('weft.realms.diagnostics — REST GET /v1/realms/diagnostics', () => {
     expect(
       await throwingRejectionOf(
         getRealmDiagnosticsOperation.invoke({
-          engine: {},
+          host: {},
           principal: { method: 'unauthenticated' },
           transport: 'jsonRpcStdio',
           input: {},

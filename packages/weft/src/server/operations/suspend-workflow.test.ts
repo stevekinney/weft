@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { WorkflowSuspendNotSupportedError } from '../../core/engine/errors.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 import { suspendWorkflowOperation, suspendWorkflowRestBinding } from './suspend-workflow.ts';
 
@@ -95,7 +94,7 @@ describe('weft.workflows.suspend', () => {
         restBindings: bindings,
       });
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.suspend = originalSuspend;
       await engine[Symbol.asyncDispose]();

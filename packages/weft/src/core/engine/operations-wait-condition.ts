@@ -220,13 +220,12 @@ async function runConditionWaitStep(
   // Lost-wakeup guard (the wait-signal second-consume analog): a poke between the
   // pre-registration eval and registering the waiter would otherwise be a no-op,
   // leaving us awaiting a promise nothing resolves. Re-check after registering
-  // (and re-check abort) before parking.
-  const outcome = abortSignal.aborted
-    ? { done: true as const, value: undefined, aborted: true }
-    : { ...evaluateConditionOutcome(internals, predicate, deadline), aborted: false };
+  // before parking. Nothing awaits between the abort check at the top of this step
+  // and here, so the signal cannot have aborted in between.
+  const outcome = evaluateConditionOutcome(internals, predicate, deadline);
   if (outcome.done) {
     releaseConditionWaiter(internals, workflowId, resolve);
-    return outcome.aborted ? { status: 'stop' } : { status: 'complete', value: outcome.value };
+    return { status: 'complete', value: outcome.value };
   }
 
   await promise;

@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  invalidParamsFault,
+  isOperationFault,
+  readRestJsonBody,
+  type AccessPolicy,
+  type UnknownRestBinding,
+} from "../../embedded/backchannel/src/internals.ts";
 import { AsyncActivityTokenNotFoundError, type Engine } from '../../core/engine.ts';
 import {
   DEFAULT_PENDING_ASYNC_ACTIVITY_LIMIT,
@@ -10,16 +18,8 @@ import {
 } from '../../core/engine/async-activity-records.ts';
 import { PayloadSizeExceededError } from '../../core/payload-size.ts';
 import type { PendingAsyncActivityPage } from '../../core/types.ts';
-import type { AccessPolicy } from '../authorization.ts';
-import { raiseFault } from '../operation-catalog.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import {
-  assertOperationEngineMethods,
-  invalidParamsFault,
-  isOperationFault,
-} from './operation-helpers.ts';
+import { raiseFault } from '../operation-catalog/raise-fault.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 /**
  * Async ("out-of-band") activity completion, exposed across every transport.
@@ -147,7 +147,7 @@ export const listPendingAsyncActivitiesOperation = defineOperation({
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ListPendingAsyncActivitiesOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ListPendingAsyncActivitiesOutput> => {
     assertOperationEngineMethods(engine, ['listPendingAsyncActivities', 'get']);
     const liveEngine = engine;
     if (
@@ -231,7 +231,7 @@ export const completeAsyncActivityOperation = defineOperation({
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<AsyncActivityOutput> => {
+  invoke: async ({ input, host: engine }): Promise<AsyncActivityOutput> => {
     // `engine` is erased to the catalog engine type so adapters can share the
     // registry; in a live server it is always the concrete Engine. Cast matches
     // every other operation in this directory.
@@ -268,7 +268,7 @@ export const failAsyncActivityOperation = defineOperation({
   producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<AsyncActivityOutput> => {
+  invoke: async ({ input, host: engine }): Promise<AsyncActivityOutput> => {
     // See completeAsyncActivityOperation: erased catalog engine, concrete at runtime.
     assertOperationEngineMethods(engine, ['failAsyncActivity']);
     const liveEngine = engine;

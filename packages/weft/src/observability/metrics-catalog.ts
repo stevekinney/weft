@@ -92,6 +92,36 @@ export const METRICS = {
     unit: 'tasks',
     type: 'gauge',
   },
+  fleetSseConnections: {
+    name: 'weft.connection.fleet_sse',
+    description: 'Number of active fleet Server-Sent Event subscribers',
+    unit: 'connections',
+    type: 'gauge',
+  },
+  fleetWebSocketConnections: {
+    name: 'weft.connection.fleet_websocket',
+    description: 'Number of active fleet WebSocket subscribers',
+    unit: 'connections',
+    type: 'gauge',
+  },
+  workflowSseConnections: {
+    name: 'weft.connection.workflow_sse',
+    description: 'Number of active workflow Server-Sent Event subscribers',
+    unit: 'connections',
+    type: 'gauge',
+  },
+  workflowWebSocketConnections: {
+    name: 'weft.connection.workflow_websocket',
+    description: 'Number of active workflow WebSocket subscribers',
+    unit: 'connections',
+    type: 'gauge',
+  },
+  workerConnections: {
+    name: 'weft.connection.workers',
+    description: 'Number of registered worker WebSocket connections',
+    unit: 'connections',
+    type: 'gauge',
+  },
   taskQueueLatency: {
     name: 'weft.task.queue_latency',
     description: 'Time tasks spend queued before dispatch in milliseconds',
@@ -112,7 +142,8 @@ export const METRICS = {
   },
   taskRequeues: {
     name: 'weft.task.requeues',
-    description: 'Total visibility-timeout or disconnect task requeues',
+    description:
+      'Total task requeues: visibility-timeout, disconnect, and operator retries of a dead-lettered task',
     unit: 'requeues',
     type: 'counter',
   },

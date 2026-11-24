@@ -1,4 +1,5 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { WorkerDeploymentVersionRemovedError } from '../../worker/deployment-version-removed-error.ts';
 import { encode } from '../codec.ts';
 import { computeSemanticHash } from '../effect-log/index.ts';
 import { searchAttributeName } from '../search-attributes.ts';
@@ -13,7 +14,6 @@ import type {
   BulkOperationPrincipal,
   BulkOperationScopeSummary,
   ListFilter,
-  WorkflowState,
   WorkflowStatus,
 } from '../types.ts';
 import {
@@ -22,14 +22,13 @@ import {
 } from '../types/bulk.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import {
-  BulkDeleteRequiresTerminalWorkflowsError,
-  BulkOperationConfirmationError,
-  EngineDisposedError,
-} from './errors.ts';
+  snapshotMatchingWorkflowSnapshots,
+  type BulkWorkflowSnapshot,
+  type ScannedRuns,
+} from './bulk-scanned-runs.ts';
+import { BulkOperationConfirmationError, EngineDisposedError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
-import { streamWorkflowStateBatches } from './listing.ts';
 import { trackPurgeWrite } from './purge-write-tracking.ts';
-import { isTerminalWorkflowStatus } from './validation.ts';
 
 export const BULK_OPERATION_SAMPLE_LIMIT = 20;
 export const DEFAULT_BULK_OPERATION_CONCURRENCY = 1;
@@ -72,15 +71,10 @@ export async function runBulkWorkflowPool<TItem, TResult>(
   return results;
 }
 
-export type BulkWorkflowSnapshot = {
-  id: string;
-  type: string;
-  status: WorkflowStatus;
-  updatedAt: number;
-};
-
 export type BulkOperationPreparation = {
   workflowIds: string[];
+  /** The run each id held in the scan the token names; see `bulkRunMoved`. */
+  runs: ScannedRuns;
   confirmationToken: string;
   preview: BulkOperationDryRunResult;
   scope: BulkOperationScopeSummary;
@@ -151,6 +145,7 @@ export function buildBulkOperationPreparation(
 
   return {
     workflowIds: snapshots.map((snapshot) => snapshot.id),
+    runs: new Map(snapshots.map((snapshot) => [snapshot.id, snapshot.workflowExecutionToken])),
     confirmationToken,
     scope,
     preview: {
@@ -190,40 +185,50 @@ function summarizeBulkFilter(filter: ListFilter): BulkOperationFilterSummary {
   if (filter.status !== undefined) {
     summary.status = Array.isArray(filter.status) ? uniqueSorted(filter.status) : filter.status;
   }
-  if (filter.type !== undefined) {
-    summary.type = filter.type;
-  }
-  if (filter.scheduleId !== undefined) {
-    summary.scheduleId = filter.scheduleId;
-  }
+  copyDefinedFields(summary, filter, ['type', 'scheduleId']);
   const normalizedTags = normalizeWorkflowTags(filter.tags);
   if (normalizedTags !== undefined) {
     summary.tags = normalizedTags;
   }
   if (filter.attributes !== undefined) {
-    summary.attributes = filter.attributes
-      .map((attribute) => ({
-        key: searchAttributeName(attribute.key),
-        ...(attribute.value === undefined
-          ? {}
-          : { value: Array.isArray(attribute.value) ? [...attribute.value] : attribute.value }),
-        ...(attribute.gt === undefined ? {} : { gt: attribute.gt }),
-        ...(attribute.lt === undefined ? {} : { lt: attribute.lt }),
-        ...(attribute.gte === undefined ? {} : { gte: attribute.gte }),
-        ...(attribute.lte === undefined ? {} : { lte: attribute.lte }),
-      }))
-      .toSorted((left, right) =>
-        computeSemanticHash(left).localeCompare(computeSemanticHash(right)),
-      );
+    summary.attributes = summarizeAttributeFilters(filter.attributes);
   }
-  if (filter.limit !== undefined) {
-    summary.limit = filter.limit;
-  }
-  if (filter.offset !== undefined) {
-    summary.offset = filter.offset;
-  }
+  // Every condition that chose the runs is kept, so the preview and the audit record say what
+  // the operation acted on, never a wider filter than it matched.
+  copyDefinedFields(summary, filter, ['failedStep', 'retrying', 'limit', 'offset']);
 
   return summary;
+}
+
+/** The fields of a bulk filter copied as they are: each one set, in the order named, so the summary
+ * keeps one key order for its digest. */
+function copyDefinedFields(
+  summary: BulkOperationFilterSummary,
+  filter: ListFilter,
+  keys: readonly ('type' | 'scheduleId' | 'failedStep' | 'retrying' | 'limit' | 'offset')[],
+): void {
+  for (const key of keys) {
+    const value = filter[key];
+    if (value !== undefined) Object.assign(summary, { [key]: value });
+  }
+}
+
+/** The attribute conditions of a bulk filter, each copied and in a stable order. */
+function summarizeAttributeFilters(
+  attributes: NonNullable<ListFilter['attributes']>,
+): NonNullable<BulkOperationFilterSummary['attributes']> {
+  return attributes
+    .map((attribute) => ({
+      key: searchAttributeName(attribute.key),
+      ...(attribute.value === undefined
+        ? {}
+        : { value: Array.isArray(attribute.value) ? [...attribute.value] : attribute.value }),
+      ...(attribute.gt === undefined ? {} : { gt: attribute.gt }),
+      ...(attribute.lt === undefined ? {} : { lt: attribute.lt }),
+      ...(attribute.gte === undefined ? {} : { gte: attribute.gte }),
+      ...(attribute.lte === undefined ? {} : { lte: attribute.lte }),
+    }))
+    .toSorted((left, right) => computeSemanticHash(left).localeCompare(computeSemanticHash(right)));
 }
 
 function resolveBulkOperationRequestId(
@@ -261,6 +266,8 @@ function deriveBulkConfirmationToken(
     workflows: snapshots.map((snapshot) => ({
       id: snapshot.id,
       status: snapshot.status,
+      // `null` for a run stored before the token existed, so the hash never reads `undefined`.
+      run: snapshot.workflowExecutionToken ?? null,
     })),
   })}`;
 }
@@ -299,11 +306,27 @@ export async function withBulkAuditEvent<TResult extends object>(
   return { ...result, auditEvent };
 }
 
+/**
+ * Persist the audit event of a bulk operation that is about to fail part-way: `affectedCount` is
+ * what did commit, and the failure is recorded on the event (`failedCount`, and up to the sample
+ * limit of the errors), so the record of what the operation changed is not lost with the throw.
+ */
+export function persistFailedBulkAuditEvent(
+  internals: EngineInternals,
+  preparation: BulkOperationPreparation,
+  options: BulkOperationCommitOptions,
+  affectedCount: number,
+  errors: readonly BulkOperationError[],
+): Promise<BulkOperationAuditEvent> {
+  return persistBulkOperationAuditEvent(internals, preparation, options, affectedCount, errors);
+}
+
 async function persistBulkOperationAuditEvent(
   internals: EngineInternals,
   preparation: BulkOperationPreparation,
   options: BulkOperationCommitOptions,
   affectedCount: number,
+  errors: readonly BulkOperationError[] = [],
 ): Promise<BulkOperationAuditEvent> {
   const timestamp = internals.options.getNow();
   const explicitRequestId = options.requestId?.trim();
@@ -322,11 +345,18 @@ async function persistBulkOperationAuditEvent(
     affectedCount,
     sampleWorkflowIds: preparation.scope.sampleWorkflowIds,
     confirmationToken: preparation.confirmationToken,
+    ...(errors.length === 0
+      ? {}
+      : {
+          failedCount: errors.length,
+          errors: errors.slice(0, BULK_OPERATION_SAMPLE_LIMIT),
+        }),
   };
 
   // A disposed engine issues no new writes: the bulk operation's own writes
-  // already landed, and skipping the record matches a bulk operation that fails
-  // part-way. One already issued is tracked so async disposal lets it land.
+  // already landed, and the record is skipped (a purge that failed part-way adds this
+  // refusal to the failures it throws). One already issued is tracked so async
+  // disposal lets it land.
   if (internals.disposed) throw new EngineDisposedError();
   await trackPurgeWrite(
     internals,
@@ -383,29 +413,8 @@ export function toBulkOperationError(
   return {
     id: workflowId,
     error: error instanceof Error ? error.message : String(error),
-  };
-}
-
-export async function snapshotMatchingWorkflowSnapshots(
-  internals: EngineInternals,
-  filter?: ListFilter,
-): Promise<BulkWorkflowSnapshot[]> {
-  const snapshots: BulkWorkflowSnapshot[] = [];
-
-  // Snapshot ids before mutating workflow state entries so storage scans
-  // cannot skip or re-visit workflows when backends reorder after writes.
-  for await (const batch of streamWorkflowStateBatches(internals, filter))
-    for (const state of batch) snapshots.push(workflowStateToBulkSnapshot(state));
-
-  return snapshots;
-}
-
-export function workflowStateToBulkSnapshot(state: WorkflowState): BulkWorkflowSnapshot {
-  return {
-    id: state.id,
-    type: state.type,
-    status: state.status,
-    updatedAt: state.updatedAt,
+    // A run whose deployment build has been removed is told apart from every other failure.
+    ...(error instanceof WorkerDeploymentVersionRemovedError ? { reason: 'version-removed' } : {}),
   };
 }
 
@@ -438,20 +447,4 @@ function isBulkTokenPrimitive(value: unknown): boolean {
     typeof value === 'number' ||
     typeof value === 'boolean'
   );
-}
-
-export async function collectTerminalWorkflowSnapshots(
-  internals: EngineInternals,
-  filter: ListFilter,
-): Promise<BulkWorkflowSnapshot[]> {
-  const snapshots: BulkWorkflowSnapshot[] = [];
-  for await (const batch of streamWorkflowStateBatches(internals, filter)) {
-    for (const state of batch) {
-      if (!isTerminalWorkflowStatus(state.status)) {
-        throw new BulkDeleteRequiresTerminalWorkflowsError();
-      }
-      snapshots.push(workflowStateToBulkSnapshot(state));
-    }
-  }
-  return snapshots;
 }

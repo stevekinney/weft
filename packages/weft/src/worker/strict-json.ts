@@ -57,8 +57,8 @@ function validateNonObject(value: unknown, path: string): RemoteWorkerJsonValue 
   if (value === undefined) fail(path, 'undefined is not valid worker JSON');
   if (typeof value === 'bigint') fail(path, 'BigInt is not valid worker JSON');
   if (typeof value === 'function') fail(path, 'function is not valid worker JSON');
-  if (typeof value === 'symbol') fail(path, 'symbol is not valid worker JSON');
-  return fail(path, `${typeof value} is not valid worker JSON`);
+  // `validateScalarOrObject` sends every object here as an object, so only a symbol remains.
+  return fail(path, 'symbol is not valid worker JSON');
 }
 
 function validateScalarOrObject(value: unknown, path: string): ScalarValidation {

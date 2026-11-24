@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { z } from 'zod';
 
+import { anonymousPrincipal, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { storageCapabilitiesOperation } from './storage-capabilities.ts';
 import { storageGetOutput, storagePutInput } from './storage-schemas.ts';
@@ -41,7 +41,7 @@ describe('storage REST operations', () => {
 
       const result = await storageGetOperation.invoke({
         input: { key: 'bytes' },
-        engine,
+        host: engine,
         principal: principalFromApiKey({ subject: 'admin', scopes: ['storage:admin'] }),
         transport: 'http-rest',
       });
@@ -70,7 +70,7 @@ describe('storage REST operations', () => {
       await rejectionOf(
         storageGetOperation.invoke({
           input: { key: 'workflow-key' },
-          engine,
+          host: engine,
           principal: anonymousPrincipal(),
           transport: 'http-rest',
         }),
@@ -81,7 +81,7 @@ describe('storage REST operations', () => {
       await rejectionOf(
         storageGetOperation.invoke({
           input: { key: 'workflow-key' },
-          engine,
+          host: engine,
           principal: principalFromApiKey({ subject: 'unscoped', scopes: ['storage:read'] }),
           transport: 'http-rest',
         }),
@@ -91,7 +91,7 @@ describe('storage REST operations', () => {
     expect(
       await storageGetOperation.invoke({
         input: { key: 'workflow-key' },
-        engine,
+        host: engine,
         principal: principalFromApiKey({ subject: 'admin', scopes: ['storage:admin'] }),
         transport: 'http-rest',
       }),

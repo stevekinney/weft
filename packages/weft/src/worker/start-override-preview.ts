@@ -1,10 +1,10 @@
-import { hashString } from '../runtime/portable.ts';
 import {
   storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
   type Storage,
-} from '../storage/interface.ts';
+} from "../embedded/storage/src/index.ts";
+import { hashString } from '../runtime/portable.ts';
 import type { WorkflowWorkerBinding } from './versioning-policy.ts';
 
 export type WorkerStartOverridePreview = Readonly<{

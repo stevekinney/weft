@@ -32,30 +32,26 @@ type DrainCounters = {
   unknown: number;
 };
 
-/** Count a disposition this drain committed; `true` when it closed the delivery. */
+/** The counter each disposition a drain can commit is reported under. */
+const COUNTER_BY_STATE: Partial<Record<ApplicationDeliveryReceipt['state'], keyof DrainCounters>> =
+  {
+    acknowledged: 'acknowledged',
+    rejected: 'rejected',
+    'retry-scheduled': 'retryScheduled',
+    'dead-lettered': 'deadLettered',
+    cancelled: 'cancelled',
+    'unknown-outcome': 'unknown',
+  };
+
+/**
+ * Count a disposition this drain committed; `true` when it closed the delivery. A drain only
+ * commits a settlement, which is terminal or a scheduled retry, so every receipt it folds in
+ * names a counter; a state with no counter is not a disposition and counts for nothing.
+ */
 function count(counters: DrainCounters, receipt: ApplicationDeliveryReceipt): boolean {
-  switch (receipt.state) {
-    case 'acknowledged':
-      counters.acknowledged += 1;
-      return true;
-    case 'rejected':
-      counters.rejected += 1;
-      return true;
-    case 'retry-scheduled':
-      counters.retryScheduled += 1;
-      return false;
-    case 'dead-lettered':
-      counters.deadLettered += 1;
-      return true;
-    case 'cancelled':
-      counters.cancelled += 1;
-      return true;
-    case 'unknown-outcome':
-      counters.unknown += 1;
-      return true;
-    default:
-      return false;
-  }
+  const counter = COUNTER_BY_STATE[receipt.state];
+  if (counter !== undefined) counters[counter] += 1;
+  return counter !== undefined && receipt.state !== 'retry-scheduled';
 }
 
 /**

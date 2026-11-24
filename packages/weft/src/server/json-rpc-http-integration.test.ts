@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 /**
  * End-to-end integration — `serve()` routes POST `/jsonrpc` into the
  * JSON-RPC HTTP adapter against the live operation registry.
@@ -12,13 +12,14 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext, WorkflowState } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../storage/keys.ts';
 import { serve, type WeftServer } from './index.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
@@ -68,10 +69,8 @@ async function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns()) {
     const state = await engine.get(workflowId);
     if (state?.status === status) return;
     await sleepForTesting(5);
@@ -324,7 +323,7 @@ describe('serve() — POST /jsonrpc', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: ['valid-key'] },
+      auth: { apiKeys: ['valid-key'], defaultApiKeyScopes: ['workflows:read'] },
     });
 
     const response = await fetch(`${server.url}/jsonrpc`, {
@@ -356,7 +355,7 @@ describe('serve() — POST /jsonrpc', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: ['valid-key'] },
+      auth: { apiKeys: ['valid-key'], defaultApiKeyScopes: ['workflows:read'] },
     });
 
     // Fire a burst of invalid requests to confirm the serve() loop
@@ -387,7 +386,7 @@ describe('serve() — POST /jsonrpc', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: ['valid-key'] },
+      auth: { apiKeys: ['valid-key'], defaultApiKeyScopes: ['workflows:read'] },
     });
 
     const response = await fetch(`${server.url}/jsonrpc`, {

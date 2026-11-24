@@ -8,9 +8,9 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import { decode } from '../codec.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';

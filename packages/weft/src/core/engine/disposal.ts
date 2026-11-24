@@ -6,7 +6,9 @@ import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
 import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
 import type { EngineInternals } from './internals.ts';
+import { clearRunSlots } from './run-concurrency.ts';
 import { rejectAllSleepTimerAcknowledgements } from './sleep-timer-acknowledgements.ts';
+import { releaseAllPendingTerminalSettlements } from './terminal-settlement-pending.ts';
 
 function settleSleepResolverReadyWaitersForTesting(internals: EngineInternals): void {
   for (const waiters of internals.sleepResolverReadyWaitersForTesting?.values() ?? []) {
@@ -44,6 +46,12 @@ function disposeWorkflowRefreshCoordinator(internals: EngineInternals): void {
   internals.workflowRefreshCoordinator?.dispose();
 }
 
+function disposeStorageSizeReportInterval(internals: EngineInternals): void {
+  if (internals.storageSizeReportInterval === null) return;
+  clearInterval(internals.storageSizeReportInterval);
+  internals.storageSizeReportInterval = null;
+}
+
 /**
  * Reject pending result waiters before clearing so external `handle.result()`
  * callers observe a deterministic rejection instead of a promise that never
@@ -56,6 +64,10 @@ function disposeWorkflowRefreshCoordinator(internals: EngineInternals): void {
  * {@link clearPendingResultPollTimers}.
  */
 function rejectPendingResultResolvers(internals: EngineInternals): void {
+  // A terminated run's result is held for its in-flight activity. Its terminal state is already
+  // committed, so it rejects with that terminal error, not with `EngineDisposedError`, which
+  // Operative reads as a crash and so leaves the session `running` (COR-1597).
+  releaseAllPendingTerminalSettlements(internals);
   for (const waiter of internals.resultResolvers.values()) {
     waiter.reject(new EngineDisposedError());
   }
@@ -151,6 +163,7 @@ export function disposeEngine(
   internals.remoteActivityBroker = null;
   internals.inlineStrategy = null;
   disposeEngineCleanupInterval(internals);
+  disposeStorageSizeReportInterval(internals);
   if (internals.retentionSweepInterval !== null) {
     clearInterval(internals.retentionSweepInterval ?? undefined);
     internals.retentionSweepInterval = null;
@@ -177,6 +190,7 @@ export function disposeEngine(
   internals.pendingWebhooks.clear();
   disposeSourceResolutionState(internals, dispatchEvent);
   clearPendingResultPollTimers(internals);
+  internals.streamChunkAnnouncer[Symbol.dispose]();
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();
   settleSleepResolverReadyWaitersForTesting(internals);
@@ -205,6 +219,7 @@ export function disposeEngine(
   internals.activityRegistriesByWorkflow.clear();
   internals.workflowDefinitionsByName.clear();
   internals.workflowTypeByWorkflowId.clear();
+  clearRunSlots(internals);
   internals.broadcastChannel?.close();
   internals.broadcastChannel = null;
 }

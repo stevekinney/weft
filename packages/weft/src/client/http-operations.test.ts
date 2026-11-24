@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 
-import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
+import type { CatalogFetch, ClientRestOperationBinding } from "../embedded/backchannel/src/client/index.ts";
+import { rejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { httpClientCatalogTransport, httpClientOperationTransport } from './http-operations.ts';
 import { HttpClientError } from './http-request.ts';
-import type { ClientRestOperationBinding } from './operation-client-runtime.ts';
 
 const binding: ClientRestOperationBinding = {
   method: 'POST',
@@ -100,6 +100,94 @@ describe('generated REST operation transport', () => {
     if (!(caught instanceof HttpClientError)) throw new Error('unreachable');
     expect(caught.status).toBe(400);
     expect(caught.message).toContain('requires a string, number, or boolean "filter" field');
+  });
+
+  it('sends a REST call through its own fetch and signal, not the global one', async () => {
+    const globalFetch = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    const controller = new AbortController();
+    const seen: Array<{ url: string; signal: AbortSignal | null | undefined }> = [];
+    const callFetch: CatalogFetch = async (input, init) => {
+      seen.push({
+        url: input instanceof Request ? input.url : input.toString(),
+        signal: init?.signal,
+      });
+      return new Response(null, { status: 204 });
+    };
+    const transport = httpClientOperationTransport(
+      'https://weft.example',
+      {},
+      { 'weft.test.metadata': binding },
+    );
+
+    await transport(
+      'weft.test.metadata',
+      { id: 'item', filter: 'waiting', value: 1 },
+      { signal: controller.signal, fetch: callFetch },
+    );
+
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(seen).toEqual([
+      { url: 'https://weft.example/v1/things/item?filter=waiting', signal: controller.signal },
+    ]);
+  });
+
+  it('sends a JSON-RPC call through its own fetch and signal, not the global one', async () => {
+    const globalFetch = spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null));
+    const controller = new AbortController();
+    const seen: Array<{ url: string; signal: AbortSignal | null | undefined }> = [];
+    const callFetch: CatalogFetch = async (input, init) => {
+      seen.push({
+        url: input instanceof Request ? input.url : input.toString(),
+        signal: init?.signal,
+      });
+      return Response.json({ jsonrpc: '2.0', id: 'weft.test.catalog', result: { ok: true } });
+    };
+
+    const result = await httpClientCatalogTransport('https://weft.example/v1', {})(
+      'weft.test.catalog',
+      {},
+      { signal: controller.signal, fetch: callFetch },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(seen).toEqual([{ url: 'https://weft.example/v1/jsonrpc', signal: controller.signal }]);
+  });
+
+  it('surfaces retryable and remediation from a JSON-RPC fault envelope', async () => {
+    const callFetch: CatalogFetch = async () =>
+      Response.json({
+        jsonrpc: '2.0',
+        id: 'weft.test.catalog',
+        error: {
+          code: -32027,
+          message: 'slow down',
+          data: {
+            retryAfterSeconds: 2,
+            weftCode: 'RateLimited',
+            httpStatus: 429,
+            retryable: true,
+            remediation: 'Wait two seconds, then send the same request.',
+          },
+        },
+      });
+
+    expect(
+      await rejectionOf(
+        httpClientCatalogTransport('https://weft.example', {})(
+          'weft.test.catalog',
+          {},
+          {
+            fetch: callFetch,
+          },
+        ),
+      ),
+    ).toMatchObject({
+      status: 429,
+      faultCode: 'RateLimited',
+      retryable: true,
+      remediation: 'Wait two seconds, then send the same request.',
+    });
   });
 
   it('rejects malformed catalog responses as HttpClientError', async () => {

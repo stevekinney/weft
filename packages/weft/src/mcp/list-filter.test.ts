@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { parseMcpListFilter } from './list-filter.ts';
+import { parseMcpListFilter, parseMcpListFilterFromSearchParams } from './list-filter.ts';
 
 describe('MCP list filter parsing', () => {
   it('accepts valid workflow status arrays', () => {
@@ -22,6 +22,13 @@ describe('MCP list filter parsing', () => {
     expect(parseMcpListFilter({ status: ['running', 1] })).toEqual({
       ok: false,
       message: 'List filter status array contains an invalid workflow status',
+    });
+  });
+
+  it('rejects a type that is not a string', () => {
+    expect(parseMcpListFilter({ type: 7 })).toEqual({
+      ok: false,
+      message: 'List filter type must be a string',
     });
   });
 
@@ -54,6 +61,24 @@ describe('MCP list filter parsing', () => {
     expect(parseMcpListFilter({ offset: -1 })).toEqual({
       ok: false,
       message: 'List filter offset must be a non-negative integer',
+    });
+  });
+
+  it('carries failedStep and retrying, as every other transport does (COR-2530)', () => {
+    expect(parseMcpListFilter({ failedStep: 'charge', retrying: false })).toEqual({
+      ok: true,
+      filter: { failedStep: 'charge', retrying: false },
+    });
+    expect(
+      parseMcpListFilterFromSearchParams(new URLSearchParams('failed_step=charge&retrying=true')),
+    ).toEqual({ ok: true, filter: { failedStep: 'charge', retrying: true } });
+    expect(parseMcpListFilter({ failedStep: '' })).toEqual({
+      ok: false,
+      message: 'List filter failedStep must be a non-empty string',
+    });
+    expect(parseMcpListFilter({ retrying: 'yes' })).toEqual({
+      ok: false,
+      message: 'List filter retrying must be true or false',
     });
   });
 });

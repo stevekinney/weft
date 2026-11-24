@@ -12,8 +12,8 @@
  * error for the earlier-listed field surfaces first. The all-bad test passes
  * every validatable field with an invalid value and asserts the first error wins.
  *
- * The operation has `access: { kind: 'authenticated' }`, so all requests are
- * issued with an api-key principal to pass the authentication gate.
+ * The operation requires `schedules:read`, so all requests are
+ * issued with an api-key principal that holds it.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -52,6 +52,7 @@ describe('list-schedules — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Query parameter "status" must be one of active, paused, cancelled',
+      retryable: false,
     });
   });
 
@@ -66,6 +67,7 @@ describe('list-schedules — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Query parameter "limit" must be a positive integer',
+      retryable: false,
     });
   });
 
@@ -80,6 +82,7 @@ describe('list-schedules — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Query parameter "offset" must be a non-negative integer',
+      retryable: false,
     });
   });
 
@@ -94,6 +97,7 @@ describe('list-schedules — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Query parameter "status" must be one of active, paused, cancelled',
+      retryable: false,
     });
   });
 });

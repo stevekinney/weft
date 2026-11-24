@@ -22,8 +22,8 @@
  */
 import { describe, expect, it, jest } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { restoreRealTimers, useFakeTimers } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { activity, workflow, type WorkflowContext } from '../types.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { Engine } from './index.ts';

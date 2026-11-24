@@ -1,19 +1,22 @@
-import type { BatchOperation } from '../../storage/interface.ts';
 import {
-  KEYS,
+  type BatchOperation,
   encodeStorageKeyComponent,
   requireStorageCapability,
   storageConditionalBatch,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
-import { SignalReceivedEvent } from '../events.ts';
+import { SignalDeliveredEvent, SignalReceivedEvent } from '../events.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { encodePayloadWithinLimit } from '../payload-size.ts';
 import { validateSignalId } from '../signal-id.ts';
 import type { SignalDeliveryOptions, WorkflowState } from '../types.ts';
 import { commitAnonymousSignalOperations } from './anonymous-signal-sequence.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { assertWorkflowMessageDeclared } from './declared-messages.ts';
+import type { SideEffectHold } from './held-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
+import { validateSignalsForWorkflow } from './payload-validation.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 import { confirmWakeOwnership, wakeNeedsOwnershipCheck } from './wake-ownership-guard.ts';
 
@@ -22,7 +25,11 @@ type TrackedWaiterKeys = string | Set<string>;
 export type SignalCallbacks = {
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null | undefined>;
   dispatchEvent: (event: Event) => boolean;
-  broadcast: (message: { type: 'signal:received'; workflowId: string; signalName: string }) => void;
+  broadcast: (message: {
+    type: 'signal:received' | 'signal:waiting';
+    workflowId: string;
+    signalName: string;
+  }) => void;
   getComposedInterceptor: () => ComposedWorkflowInterceptor | null | undefined;
   resumeParkedInlineWorkflow: (workflowId: string) => Promise<void>;
 };
@@ -192,6 +199,8 @@ export async function bufferSignalPayloads(
   if (targetState && isTerminalWorkflowStatus(targetState.status)) {
     return;
   }
+  if (targetState) assertSignalsDeclared(internals, workflowId, targetState, deliveries);
+  await validateSignalsForWorkflow(internals, targetState, deliveries);
 
   const signalId = getSingleSignalId(deliveries, defaultOptions);
   validateSignalIdsBeforeKeyConstruction(deliveries, defaultOptions, signalId);
@@ -241,6 +250,19 @@ export async function bufferSignalPayloads(
     () => markTerminalCleanupTracked(internals, workflowId),
   );
   await deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
+}
+
+/** Reject the batch before anything is buffered when any signal name is undeclared. */
+function assertSignalsDeclared(
+  internals: EngineInternals,
+  workflowId: string,
+  targetState: WorkflowState,
+  deliveries: readonly BufferedSignalDelivery[],
+): void {
+  const identity = { type: targetState.type, revision: targetState.revision };
+  for (const delivery of deliveries) {
+    assertWorkflowMessageDeclared(internals, 'signal', workflowId, identity, delivery.signalName);
+  }
 }
 
 function createExplicitSignalOperations(
@@ -355,7 +377,7 @@ async function deliverBufferedSignals(
   deliveries: BufferedSignalDelivery[],
   callbacks: SignalCallbacks,
 ): Promise<void> {
-  let shouldResumeParkedWorkflow = false;
+  let parkedSignalName: string | undefined;
 
   for (const { signalName, payload, options } of deliveries) {
     if (options?.emitPublicEvent !== false) {
@@ -366,39 +388,48 @@ async function deliverBufferedSignals(
     const waiterKey = `${workflowId}:${signalName}`;
     const waiter = internals.signalWaiters.get(waiterKey);
     if (waiter) {
-      // Guard the `await` itself, not just its result. An async call
-      // suspends at its first `await` even when the callee returns
-      // synchronously, so awaiting unconditionally would defer this waiter's
-      // resolution by a microtask under `ownership: 'none'`/`'lease'`, where
-      // the check is a no-op anyway. Those modes must stay byte-identical —
-      // mirrors `async-activity-completion.ts`'s own registry-gated await.
-      // A generation abandoned after a lost checkpoint race also discards here,
-      // in every ownership mode; for a healthy `'none'`/`'lease'` run the guard
-      // stays false and nothing is awaited.
-      if (
-        wakeNeedsOwnershipCheck(internals, workflowId) &&
-        (await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard'
-      ) {
-        continue;
-      }
-      // Invoke ONLY the waiter this call removed. Replay or a fresh park can
-      // replace it while the ownership read above is in flight; `release`
-      // correctly leaves the replacement alone, but calling the captured
-      // resolver anyway would advance the superseded generator.
-      if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) {
-        waiter();
-      }
+      await deliverBufferedSignalToWaiter(internals, workflowId, waiterKey, waiter);
       continue;
     }
 
-    if (internals.parkedInlineWorkflows.has(workflowId)) {
-      shouldResumeParkedWorkflow = true;
+    if (isMatchingParkedSignal(internals, workflowId, signalName)) {
+      parkedSignalName = signalName;
     }
   }
 
-  if (shouldResumeParkedWorkflow) {
-    void callbacks.resumeParkedInlineWorkflow(workflowId);
+  if (parkedSignalName !== undefined) {
+    void callbacks
+      .resumeParkedInlineWorkflow(workflowId)
+      .then(() => callbacks.dispatchEvent(new SignalDeliveredEvent(workflowId, parkedSignalName)));
   }
+}
+
+async function deliverBufferedSignalToWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  waiterKey: string,
+  waiter: () => void,
+): Promise<void> {
+  if (
+    wakeNeedsOwnershipCheck(internals, workflowId) &&
+    (await confirmWakeOwnership(internals, workflowId, 'signal')) === 'discard'
+  ) {
+    return;
+  }
+  if (releaseSignalWaiter(internals, workflowId, waiterKey, waiter)) waiter();
+}
+
+function isMatchingParkedSignal(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+): boolean {
+  const pending = internals.pendingTimelineEntries?.get(workflowId);
+  return (
+    internals.parkedInlineWorkflows.has(workflowId) &&
+    pending?.entry.operationType === 'wait-signal' &&
+    pending.entry.operationLabel === signalName
+  );
 }
 
 export async function hasBufferedSignal(
@@ -421,28 +452,40 @@ export async function consumeSignal(
   return { found: true, payload: decode(record.value) };
 }
 
+/**
+ * Consume the first buffered `signalName` record by staging its delete into the workflow's next
+ * commit, or, given `hold`, by handing the delete to the coordinator that commits it with the
+ * result it produced (see `held-side-effects.ts`).
+ */
 export async function consumeSignalWithAtomicWorkflowCommit(
   internals: EngineInternals,
   workflowId: string,
   signalName: string,
   canConsume?: () => boolean,
   workflowExecutionToken?: string,
+  hold?: SideEffectHold,
 ): Promise<ConsumedSignalResult> {
   const record = await findBufferedSignalRecord(internals, workflowId, signalName);
   if (record === null) return { found: false };
   if (canConsume !== undefined && !canConsume()) return { found: false };
 
-  stageAtomicWorkflowCommitSideEffects(
-    internals,
-    workflowId,
-    {
-      conditions: [{ key: record.key, expectedValue: new Uint8Array(record.value) }],
-      operations: [{ type: 'delete', key: record.key }],
-    },
-    workflowExecutionToken,
-    true,
-  );
-  return { found: true, payload: decode(record.value) };
+  const payload = decode(record.value);
+  const sideEffects = {
+    conditions: [{ key: record.key, expectedValue: new Uint8Array(record.value) }],
+    operations: [{ type: 'delete' as const, key: record.key }],
+  };
+  if (hold === undefined) {
+    stageAtomicWorkflowCommitSideEffects(
+      internals,
+      workflowId,
+      sideEffects,
+      workflowExecutionToken,
+      true,
+    );
+  } else {
+    hold(sideEffects, workflowExecutionToken);
+  }
+  return { found: true, payload };
 }
 
 /**

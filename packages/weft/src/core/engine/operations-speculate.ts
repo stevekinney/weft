@@ -2,8 +2,8 @@ import type { ContextOperationRequest } from '../context.ts';
 import type { WorkflowTimelineOperationDetail } from '../types.ts';
 import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
-import { assertSupportedSignalBranches } from './operations-coordination.ts';
 import type { OperationWithCallerStack } from './operations-router.ts';
+import { assertSupportedSignalBranches } from './signal-branch-guard.ts';
 import { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import {
   operationTimelineDetail,

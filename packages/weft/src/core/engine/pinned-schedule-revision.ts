@@ -19,8 +19,8 @@
  * @module core/engine/pinned-schedule-revision
  */
 
-import type { ConditionalBatchCondition } from '../../storage/interface.ts';
-import type { ScheduleRevisionPolicy } from '../types.ts';
+import type { ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import type { ScheduleRevisionPolicy, ScheduleState } from '../types.ts';
 import { releaseInFlightStart, reserveInFlightStart } from './catalog-removal.ts';
 import {
   resolveExecutableRegistration,
@@ -184,4 +184,44 @@ export async function buildPinnedRevisionWriteOptions(
     onExtraConditionsLost: () =>
       new WorkflowRevisionUnavailableError(type, pinnedRevision, 'not-installed'),
   };
+}
+
+/**
+ * The revision policy and pin an update leaves a schedule with. Omitting `revisionPolicy` preserves
+ * the schedule's current policy AND its captured pin unchanged. Passing `'pinned'` (even when
+ * already pinned) always RE-resolves and re-captures against the revision active RIGHT NOW; it is
+ * never a no-op. Passing `'active-at-fire'` clears any previously captured pin. A pin names one
+ * workflow's revision, so a schedule that is moved to another workflow type re-captures its pin
+ * against that type, whether or not the caller restated the policy.
+ */
+export async function updatedRevisionFields(
+  internals: EngineInternals,
+  state: ScheduleState,
+  workflowType: string,
+  requested: ScheduleRevisionPolicy | undefined,
+): Promise<{
+  revisionFields: Pick<ScheduleState, 'revisionPolicy' | 'pinnedRevision'>;
+  pinnedRevision: string | undefined;
+}> {
+  const movesWorkflow = workflowType !== state.workflowType;
+  const revisionPolicy =
+    requested ?? (movesWorkflow && state.revisionPolicy === 'pinned' ? 'pinned' : undefined);
+  if (revisionPolicy === undefined) {
+    return {
+      revisionFields: {
+        revisionPolicy: state.revisionPolicy,
+        ...(state.pinnedRevision !== undefined && { pinnedRevision: state.pinnedRevision }),
+      },
+      pinnedRevision: undefined,
+    };
+  }
+  if (revisionPolicy === 'active-at-fire') {
+    return { revisionFields: { revisionPolicy: 'active-at-fire' }, pinnedRevision: undefined };
+  }
+  const pinnedRevision = await resolveScheduleRevisionForPin(
+    internals.engine as unknown as Engine,
+    internals,
+    workflowType,
+  );
+  return { revisionFields: { revisionPolicy: 'pinned', pinnedRevision }, pinnedRevision };
 }

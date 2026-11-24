@@ -21,9 +21,9 @@
  * @module server/operations/task-attempt-identity-filter
  */
 
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import { decodeTaskAttemptRecord, taskAttemptKey } from '../../core/task-ledger/task-attempt.ts';
 import type { RemoteTaskRecord } from '../../core/task-ledger/task-ledger.ts';
-import type { Storage } from '../../storage/interface.ts';
 import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
 import type { GetTaskDiagnosticsInput } from './get-task-diagnostics.ts';

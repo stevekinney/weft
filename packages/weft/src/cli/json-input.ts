@@ -10,8 +10,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The failure inline parsing can produce: only unparseable JSON, never a missing file. */
+export type InlineJsonInputFailure = Extract<JsonInputFailure, { readonly kind: 'invalid-json' }>;
+
 /** Parse one inline JSON source without applying a command-specific error format. */
-export function parseJsonInput(source: string): JsonInputResult {
+export function parseJsonInput(
+  source: string,
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly error: InlineJsonInputFailure } {
   try {
     return { ok: true, value: JSON.parse(source) as unknown };
   } catch (error) {

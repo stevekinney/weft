@@ -11,8 +11,10 @@
  */
 
 import { Engine } from '../core/engine.ts';
+import { WorkflowNotFoundError } from '../core/engine/errors.ts';
 import { compileStepWorkflow } from '../core/step-context.ts';
 import {
+  activity,
   workflow,
   type ActivityDefinition,
   type StepWorkflowContext,
@@ -153,10 +155,11 @@ function registerSagaWithCompensation(engine: Engine): void {
           { definition: stepOne, input: 'a' },
           { definition: stepTwo, input: 'b' },
         ]);
-        return 'no-error';
       } catch {
-        return `compensated:${compensated.join(',')}`;
+        // `step-two` always fails, so the saga always rejects once it has compensated `step-one`;
+        // the workflow's result names what was compensated.
       }
+      return `compensated:${compensated.join(',')}`;
     }),
   );
 }
@@ -213,6 +216,28 @@ function registerRecoveryAfterCrash(engine: Engine): void {
   );
 }
 
+/**
+ * A run that fails after one named step with a Weft error: the failure record (`errorCode`,
+ * `failedStep`) is stored in the failure write. The error's stack is fixed so the fixture does not
+ * hold the path of the machine that generated it.
+ */
+function registerFailedRun(engine: Engine): void {
+  const reserveStock = activity({
+    name: 'reserve-stock',
+    execute: async () => 'reserved',
+  });
+  engine.register(
+    workflow({ name: 'failed-run', version: '1' })
+      .activities({ 'reserve-stock': reserveStock })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.run(reserveStock);
+        const failure = new WorkflowNotFoundError('order-7');
+        failure.stack = `${failure.name}: ${failure.message}`;
+        throw failure;
+      }),
+  );
+}
+
 /** Dispatcher record mapping top-level scenario keys to their registrar. */
 export const scenarioRegistrars: Record<string, ScenarioHandlerRegistrar> = {
   'simple-sequential': registerSimpleSequential,
@@ -225,6 +250,7 @@ export const scenarioRegistrars: Record<string, ScenarioHandlerRegistrar> = {
   'pipe-three-stages': registerPipeThreeStages,
   'fork-from-checkpoint': registerForkFromCheckpoint,
   'recovery-after-crash': registerRecoveryAfterCrash,
+  'failed-run': registerFailedRun,
 };
 
 /**

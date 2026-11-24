@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -60,6 +60,68 @@ async function readWorkflowState(
 }
 
 describe('attribute and tag helpers', () => {
+  it('reports a refused update when its captured workflow disappears during commit', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'state-update-disappears';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { status: 'running' })),
+    );
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    const originalGet = storage.get.bind(storage);
+    let failedCommit = false;
+    let workflowReads = 0;
+    storage.conditionalBatch = async (...arguments_) => {
+      if (!failedCommit) {
+        failedCommit = true;
+        throw new Error('simulated conditional race');
+      }
+      return originalConditionalBatch(...arguments_);
+    };
+    storage.get = async (key) => {
+      if (key === KEYS.workflow(workflowId) && workflowReads++ > 0) return null;
+      return originalGet(key);
+    };
+
+    const result = await updateWorkflowState(
+      createInternals(storage),
+      workflowId,
+      { status: 'cancelled' },
+      'external-terminal',
+      { allowedStatuses: ['running'] },
+    );
+
+    expect(result).toMatchObject({ kind: 'refused', reason: 'replaced' });
+  });
+
+  it('refuses a terminal update when the expected run has no execution token', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'state-update-missing-token';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(
+        createWorkflowState(workflowId, {
+          status: 'running',
+          workflowExecutionToken: 'replacement-token',
+        }),
+      ),
+    );
+
+    const result = await updateWorkflowState(
+      createInternals(storage),
+      workflowId,
+      { status: 'cancelled' },
+      'external-terminal',
+      { allowedStatuses: ['running'], expectedWorkflowExecutionToken: null },
+    );
+
+    expect(result).toMatchObject({ kind: 'refused', reason: 'replaced' });
+    expect(await readWorkflowState(storage, workflowId)).toMatchObject({
+      status: 'running',
+      workflowExecutionToken: 'replacement-token',
+    });
+  });
+
   it('loads persisted attributes when cleaning indexes without an explicit attribute map', async () => {
     const storage = new MemoryStorage();
     const internals = createInternals(storage);

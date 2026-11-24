@@ -89,7 +89,7 @@ export type OwnerSideSignalPollTarget = {
    * ADR — that check is this poll's sibling module, not this poll's
    * responsibility.
    */
-  wakeWorkflow(workflowId: string): Promise<void>;
+  wakeWorkflow(workflowId: string, signalName?: string): Promise<void>;
 };
 
 /** One parked signal wait's outcome within a single poll pass. */
@@ -141,7 +141,7 @@ export async function runOwnerSideSignalPoll(
       continue;
     }
     try {
-      await target.wakeWorkflow(workflowId);
+      await target.wakeWorkflow(workflowId, signalName);
       outcomes.push({ workflowId, signalName, status: 'woken' });
     } catch (error) {
       outcomes.push({ workflowId, signalName, status: 'wake-failed', error });

@@ -1,9 +1,9 @@
 /**
  * COR-152 "Broker Boundary and Configuration" — the end-to-end fixture the
  * issue requires: a real engine, a real `serve()` server, and a real
- * `RemoteWorker`, proving success, failure, retry, cancellation, server
- * restart, engine recovery, header propagation, and execution-token
- * propagation through `ctx.run()`.
+ * `RemoteWorker`, proving success, failure, retry, cancellation, header
+ * propagation, and execution-token propagation through `ctx.run()`. Server
+ * restart and engine recovery are in `remote-activity-integration.slow.test.ts`.
  *
  * **Contains no test-only dispatcher replacement.** Every engine here is
  * constructed with the production `activityExecution: { mode: 'remote' }`
@@ -15,28 +15,15 @@
  */
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../core/engine.ts';
 import type { WorkflowInterceptor } from '../core/interceptor.ts';
-import type { RemoteTaskRecord } from '../core/task-ledger/task-ledger.ts';
-import {
-  decodeRemoteTaskRecord,
-  encodeRemoteTaskRecord,
-  taskLedgerKey,
-} from '../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { activity, workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { waitForCondition } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { RemoteWorker } from '../worker/index.ts';
 import { serve, type WeftServer } from './index.ts';
-
-async function readOnlyTaskLedgerRecord(engine: Engine): Promise<RemoteTaskRecord | null> {
-  for await (const [, value] of engine.storage.scan('task-ledger:')) {
-    return decodeRemoteTaskRecord(value);
-  }
-  return null;
-}
+import { readOnlyTaskLedgerRecord } from './remote-activity-integration.test-support.ts';
 
 describe('remote activity end-to-end integration (COR-152)', () => {
   let engine: Engine | undefined;
@@ -77,7 +64,6 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     });
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('success-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });
@@ -147,7 +133,6 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     });
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('failure-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });
@@ -205,7 +190,6 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     });
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('retry-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });
@@ -264,7 +248,6 @@ describe('remote activity end-to-end integration (COR-152)', () => {
     });
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('e2e-cancel-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });
@@ -291,7 +274,7 @@ describe('remote activity end-to-end integration (COR-152)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'leased';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to be leased' },
+      { intervalMs: 10, label: 'task to be leased' },
     );
 
     await engine.cancel(handle.id);
@@ -302,123 +285,8 @@ describe('remote activity end-to-end integration (COR-152)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state !== 'leased';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'the durable attempt to leave "leased"' },
+      { intervalMs: 10, label: 'the durable attempt to leave "leased"' },
     );
     expect(localSlowActivity).toHaveBeenCalledTimes(0);
-  });
-
-  it('preserves and completes a remote task across a server restart and engine recovery', async () => {
-    await using storage = new MemoryStorage();
-
-    const localChargeCard = mock(async (_input: { orderId: string }): Promise<never> => {
-      throw new Error('local execution must never run in remote mode');
-    });
-    const chargeCard = activity({
-      name: 'chargeCard',
-      execute: localChargeCard,
-    });
-    const restartWorkflow = workflow({ name: 'e2e-restart-workflow' })
-      .activities({ chargeCard })
-      .execute(async function* (context: WorkflowContext) {
-        return yield* context.run(chargeCard, { orderId: 'ord-e2e-1' });
-      });
-
-    engine = new Engine({ storage, activityExecution: { mode: 'remote' } });
-    engine.register(restartWorkflow);
-    server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
-
-    const handle = await engine.start('e2e-restart-workflow', null, { id: 'e2e-restart-1' });
-
-    let queuedOperationId: string | undefined;
-    await waitForCondition(
-      async () => {
-        const record = await readOnlyTaskLedgerRecord(engine!);
-        if (record === null || record.state !== 'queued') return false;
-        queuedOperationId = record.operationId;
-        return true;
-      },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
-    );
-    if (queuedOperationId === undefined) throw new Error('expected a queued operationId');
-
-    // Simulate a process crash: no graceful drain, no cancellation — the
-    // engine and server just disappear.
-    await server.stop();
-    server = undefined;
-    engine[Symbol.dispose]();
-    engine = undefined;
-
-    // The recovered workflow's `ctx.run()` replay re-derives the same
-    // deterministic token and finds the ledger record already `queued` —
-    // `EngineOwnedRemoteActivityBroker.enqueue` short-circuits on that
-    // (correctly: no duplicate write), so it never fires a fresh
-    // `RemoteActivityQueuedEvent` for a new server to react to immediately.
-    // The NEW server's own startup recovery scan (`runTaskLedgerRecovery`)
-    // DOES unconditionally schedule a redispatch for a `queued` record it
-    // finds — via `scheduleDelayedDispatch(delay = max(0, availableAt -
-    // now))` — but a record whose `availableAt` is already in the past
-    // schedules that redispatch with `delay = 0`, which can fire before a
-    // real WebSocket worker has finished connecting and registering. Once
-    // that redispatch attempt finds no registered worker, it falls back to
-    // the long-poll queue (`enqueueTaskForLongPoll`) — and a task tracked
-    // there is permanently ineligible for `reconcileOrphanedRecords`'
-    // periodic WebSocket-redispatch path (`redispatchAvailableQueuedRecord`
-    // skips any operationId `taskQueue.isTracked`), so no amount of polling
-    // ever recovers it once that happens. Confirmed empirically: an
-    // unmodified `availableAt` traps the task in roughly 3 of 8 trials.
-    //
-    // The fix is not a race to win but an explicit, generous barrier: push
-    // `availableAt` into the future before the new server ever starts, so
-    // its startup scan schedules the redispatch attempt two seconds out
-    // — long past when the worker's registration (confirmed below via an
-    // explicit `waitForCondition`) will have completed, even under heavy
-    // load. This is the SAME "delayed retry" field `requeueExpiredAttempt`
-    // already uses for backoff — not a new mechanism, and not a timeout
-    // being widened to paper over a hang.
-    const queuedKey = taskLedgerKey(queuedOperationId);
-    const queuedRaw = await storage.get(queuedKey);
-    const queuedRecord = decodeRemoteTaskRecord(queuedRaw);
-    if (queuedRecord === null || queuedRecord.state !== 'queued') {
-      throw new Error('expected the recovered task to still be durably queued');
-    }
-    await storage.put(
-      queuedKey,
-      encodeRemoteTaskRecord({ ...queuedRecord, availableAt: Date.now() + 2_000 }),
-    );
-
-    // Recovery: a fresh engine over the SAME durable storage, replaying the
-    // in-flight workflow.
-    const recoveredEngine = new Engine({ storage, activityExecution: { mode: 'remote' } });
-    recoveredEngine.register(restartWorkflow);
-    await recoveredEngine.recoverAll();
-    engine = recoveredEngine;
-
-    server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
-    remoteWorker = new RemoteWorker({
-      serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/default/stream`,
-      workerId: 'recovery-worker',
-      deploymentName: 'test-deployment',
-      buildId: 'test-build',
-      workflows: {
-        'e2e-restart-workflow': {
-          name: 'e2e-restart-workflow',
-          activities: { chargeCard: async () => 'charged-after-recovery' },
-        },
-      },
-      concurrency: 1,
-    });
-    await remoteWorker.connect();
-    // Confirm registration BEFORE relying on the 2s `availableAt` headroom
-    // above — this is the explicit barrier the delay exists to make room
-    // for, not a hope that it finishes in time.
-    await waitForCondition(() => server?.registry.getWorker('recovery-worker') !== undefined, {
-      timeoutMs: 5_000,
-      intervalMs: 25,
-      label: 'recovered remote worker to register',
-    });
-
-    const recoveredHandle = engine.getHandle(handle.id);
-    expect(await recoveredHandle.result()).toBe('charged-after-recovery');
-    expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
 });

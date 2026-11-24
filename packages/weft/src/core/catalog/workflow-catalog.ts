@@ -11,9 +11,9 @@
  * Two activation entry points exist, matching WFT-9/WFT-10's distinct
  * producers:
  *
- * - {@link WorkflowCatalog.activateRegistered} — unconditional, used
- *   exclusively by `engine.register()`'s drain path
- *   (`core/engine/catalog-readiness.ts`). Never consults
+ * - {@link WorkflowCatalog.activateRegistered} — unconditional, used by
+ *   `engine.register()`'s drain path (`core/engine/catalog-readiness.ts`) and
+ *   `activateRegisteredSourceRevision` (`core/engine/source-activation.ts`). Never consults
  *   `checkWorkflowCompatibility`; always wins via a bounded 5-attempt CAS
  *   retry loop, since registering a different version of an
  *   already-registered workflow must never hard-fail construction or
@@ -35,11 +35,11 @@
  */
 
 import {
-  KEYS,
   requireStorageCapability,
   storageConditionalBatch,
   type Storage,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { compareCodepoint } from '../compare-codepoint.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
@@ -81,9 +81,11 @@ export class WorkflowCatalog {
   readonly #storage: Storage;
   readonly #entries: Map<string, Map<string, WorkflowCatalogEntry>>;
   readonly #active: Map<string, WorkflowCatalogActivePointer>;
-
-  constructor(storage: Storage, seed?: RestoredWorkflowCatalogState) {
+  /** Stamps `installedAt` and `activatedAt`: the engine's `getNow` (default `Date.now`). */
+  readonly #getNow: () => number;
+  constructor(storage: Storage, seed?: RestoredWorkflowCatalogState, getNow = Date.now) {
     this.#storage = storage;
+    this.#getNow = getNow;
     this.#entries = seed?.entries ?? new Map();
     this.#active = seed?.active ?? new Map();
   }
@@ -244,9 +246,8 @@ export class WorkflowCatalog {
       if (await revalidateCachedCatalogInstall(this.#storage, manifest)) {
         return cached;
       }
-      // Durably absent: a peer removed this exact entry since it was
-      // cached. Evict the stale cache entry and fall through to the
-      // ordinary not-cached path below.
+      // Durably absent: a peer removed this exact entry since it was cached. Evict the stale
+      // cache entry and fall through to the ordinary not-cached path below.
       this.#entries.get(manifest.name)?.delete(manifest.revision);
     }
 
@@ -258,7 +259,7 @@ export class WorkflowCatalog {
       return this.#adoptDurableEntry(manifest, durable, definition);
     }
 
-    const installedAt = Date.now();
+    const installedAt = this.#getNow();
     const applied = await writeCatalogEntry(this.#storage, manifest, installedAt, fence);
     if (!applied) {
       // Lost the CAS race: another writer installed this key, its
@@ -313,8 +314,9 @@ export class WorkflowCatalog {
 
   /**
    * Unconditionally activate `manifest` for `name`, installing it first if
-   * needed. Used exclusively by `engine.register()`'s drain path — never
-   * consults `checkWorkflowCompatibility`. Reactivating the currently active
+   * needed. Used by `engine.register()`'s drain path and by
+   * `activateRegisteredSourceRevision` for a host-supplied source revision —
+   * never consults `checkWorkflowCompatibility`. Reactivating the currently active
    * revision is a no-op (generation unchanged); activating a different
    * revision bumps the generation by exactly 1. Retries the CAS write up to
    * {@link MAX_ACTIVATE_REGISTERED_ATTEMPTS} times under contention, throwing
@@ -375,7 +377,7 @@ export class WorkflowCatalog {
       const nextPointer: WorkflowCatalogActivePointer = {
         revision: manifest.revision,
         generation: nextGeneration,
-        activatedAt: Date.now(),
+        activatedAt: this.#getNow(),
       };
 
       const applied = await storageConditionalBatch(
@@ -463,7 +465,7 @@ export class WorkflowCatalog {
     const nextPointer: WorkflowCatalogActivePointer = {
       revision: candidateManifest.revision,
       generation: nextGeneration,
-      activatedAt: Date.now(),
+      activatedAt: this.#getNow(),
     };
 
     const applied = await storageConditionalBatch(

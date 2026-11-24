@@ -5,13 +5,15 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { ActivityRegistry } from './activity-registry.ts';
 import { buildWorkflowContract } from './contract/build.ts';
 import { buildWorkflowRevisionManifest } from './contract/manifest.ts';
 import { Engine } from './engine.ts';
+import { copyWorkflowDefinition } from './engine/construction.ts';
 import { getWorkflowCatalog } from './engine/index.ts';
+import { buildRegistrationEntry } from './engine/registration.ts';
 import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import {
   buildRegistrySnapshot,
@@ -21,6 +23,7 @@ import {
   RegistryManifestLimitError,
   RegistrySchemaConversionError,
 } from './registry-snapshot.ts';
+import { buildWorkflowManifestFromDefinition } from './registry-workflow-manifest.ts';
 import type { WorkflowDefinition } from './types.ts';
 import { activity, query, signal, update, workflow } from './types.ts';
 
@@ -542,6 +545,25 @@ describe('buildRegistrySnapshot', () => {
     expect(manifest?.name).toBe('checkout');
   });
 
+  it('buildWorkflowManifestFromDefinition rejects a used activity that is also registered as a scoped activity', async () => {
+    const greet = activity({ name: 'greet', execute: async () => 'hello' });
+    const definition = workflow({ name: 'welcome' })
+      .uses({ greet })
+      .execute(async function* () {});
+    const registered = copyWorkflowDefinition(
+      'welcome',
+      buildRegistrationEntry('welcome', definition),
+    );
+    const activities = new ActivityRegistry();
+    activities.register('greet', greet.execute);
+
+    expect(
+      await throwingRejectionOf(
+        buildWorkflowManifestFromDefinition(registered, activities.listDefinitions()),
+      ),
+    ).toThrow('Workflow "welcome" declares activity "greet" in both activities and uses');
+  });
+
   it('buildWorkflowManifestForType returns undefined for an unregistered workflow type (WFT-6)', async () => {
     engine = createEngine();
     const manifest = await buildWorkflowManifestForType(engine, 'never-registered');
@@ -587,22 +609,24 @@ describe('buildRegistrySnapshot', () => {
     expect(serialized.activities['__proto__']).toBeDefined();
   });
 
-  it('omits activity tags from the snapshot (tags do not surface in codegen function types)', async () => {
-    // Documented contract: activity entries do not include `tags`. The codegen
-    // CLI (the primary consumer) emits activities as TypeScript function types,
-    // which have no place for tags. If the contract changes, this test will
-    // start failing and the type/comment can be updated together.
+  it('reports activity tags and idempotency as snapshot metadata', async () => {
+    // Tags and idempotency are catalog/operational metadata: they appear in the
+    // snapshot, never in a workflow's hashed contract.
     engine = createEngine();
     engine.register(
       activity({
         name: 'tagged',
         execute: async () => undefined,
         tags: ['observability', 'critical'],
+        idempotent: true,
       }),
     );
 
     const snapshot = await buildRegistrySnapshot(engine);
-    expect(snapshot.activities['tagged']).not.toHaveProperty('tags');
+    expect(snapshot.activities['tagged']).toMatchObject({
+      tags: ['observability', 'critical'],
+      idempotent: true,
+    });
   });
 
   it('folds a workflow-scoped activity schema into that workflow manifest’s contractHash and revision (WFT-6)', async () => {

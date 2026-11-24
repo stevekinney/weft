@@ -53,11 +53,11 @@ export interface StandardSchemaValidationContext {
  * operation identifier, and the list of issues with RFC 6901 JSON Pointer
  * paths so transport code can translate it into the right fault shape.
  *
- * **Reserved for boundary integration.** Nothing in the engine calls
- * {@link validateStandardSchema} yet; the runtime validator is exported here
- * so transport-operation modules and worker dispatch paths can wire it in
- * during a follow-up. Definition helpers carry schemas as inert metadata
- * today.
+ * The engine throws it when `payloadValidation: 'inbound'` rejects a start
+ * input, signal payload, update input, or query input against its declared
+ * schema; `operation` names that boundary, and the server answers it as
+ * `InvalidParams`. Without that option, definition schemas are metadata the
+ * engine never runs.
  *
  * @example
  * ```ts
@@ -103,10 +103,9 @@ export class StandardSchemaValidationError extends WeftError<'StandardSchemaVali
  * Pointers. Throws a {@link TypeError} when the schema only carries a JSON
  * Schema converter (no runtime validator).
  *
- * **Reserved for boundary integration.** This helper is exported for use by
- * transport-operation modules and worker-side activity dispatch paths during
- * boundary validation work. Nothing in the engine calls it today; the
- * definition helpers' schemas are inert metadata until that wiring lands.
+ * The engine runs it at each inbound boundary when `payloadValidation` is
+ * `'inbound'`. It is exported for validating a payload against a definition
+ * schema anywhere else.
  *
  * @example
  * ```ts

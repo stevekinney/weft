@@ -13,8 +13,9 @@
  * | `revision`     | Which contract-metadata identity (name, version, docs) is this? | Deterministic or author-set   |
  *
  * `contractHash` deliberately excludes `name`, `workflowVersion`,
- * `description`, and `tags` — those identify *which* workflow and *how it is
- * documented*, not *what callers may send and expect back*. `revision` is the
+ * `description`, `tags`, and `usedActivities` — those identify *which*
+ * workflow, *how it is documented*, and *which engine-provided activities it
+ * calls*, not *what callers may send and expect back*. `revision` is the
  * broader identity: it changes on a documentation edit even when the payload
  * contract does not, which is what lets a caller detect "the same contract,
  * redeployed" versus "a genuinely different definition was loaded."
@@ -128,8 +129,17 @@ export type WorkflowContract = Readonly<{
   updates?: Readonly<Record<string, WorkflowMessageContract>>;
   /** Query contracts keyed by canonical query name. */
   queries?: Readonly<Record<string, WorkflowMessageContract>>;
-  /** Activity contracts keyed by canonical activity name. */
+  /** Activity contracts keyed by canonical activity name, for the workflow's `.activities({...})`. */
   activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  /**
+   * Engine-provided activities the workflow declares with `.uses({...})`,
+   * keyed by name. Excluded from `contractHash()`; included in `revision`:
+   * which activities a workflow calls is part of its identity, but declaring
+   * one changes nothing a caller sends or receives, so adopting `.uses()` on a
+   * deployed workflow is a compatible redeploy. Never shares a key with
+   * `activities`.
+   */
+  usedActivities?: Readonly<Record<string, WorkflowActivityContract>>;
   /** Contract of the workflow's definition-level finalizer activity, when declared. */
   finalizer?: WorkflowActivityContract;
 }>;
@@ -223,6 +233,8 @@ export interface WorkflowContractSource {
   readonly updates?: Readonly<Record<string, WorkflowContractMessageSource>>;
   readonly queries?: Readonly<Record<string, WorkflowContractMessageSource>>;
   readonly activities?: Readonly<Record<string, WorkflowContractActivitySource>>;
+  /** Engine-provided activities the workflow declares with `.uses({...})`; becomes `WorkflowContract.usedActivities`. */
+  readonly uses?: Readonly<Record<string, WorkflowContractActivitySource>>;
   readonly finalizer?: WorkflowContractActivitySource;
 }
 

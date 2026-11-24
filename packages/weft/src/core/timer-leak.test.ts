@@ -1,5 +1,5 @@
+import { waitForever } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.test-support.ts';
 
 import { flush, storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';

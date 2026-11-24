@@ -8,11 +8,12 @@
  * @module service-worker/scheduler
  */
 
+import type { Storage } from "../embedded/storage/src/index.ts";
 import { decode } from '../core/codec.ts';
 import { buildTimerBatchOperations } from '../core/scheduler.ts';
 import type { TimerEntry } from '../core/types.ts';
-import type { Storage } from '../storage/interface.ts';
-import { KEYS, resolvePrefixRangeEnd } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
+import { resolveNonEmptyPrefixRangeEnd } from '../storage/non-empty-prefix-range-end.ts';
 
 // ---------------------------------------------------------------------------
 // Periodic sync type (not in default lib but used at runtime in browsers)
@@ -36,7 +37,7 @@ interface RegistrationWithPeriodicSync extends ServiceWorkerRegistration {
  * @example
  * ```ts
  * import { ServiceWorkerScheduler, type ServiceWorkerSchedulerOptions } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  *
@@ -77,7 +78,7 @@ const DEFAULT_PERIODIC_SYNC_MIN_INTERVAL = 60_000;
  * @example
  * ```ts
  * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  *
@@ -140,14 +141,14 @@ export class ServiceWorkerScheduler implements Disposable {
     const expired: Array<{ key: string; entry: TimerEntry }> = [];
 
     for await (const [key, value] of this.#storage.scan('wf-deadline:', {
-      lt: resolvePrefixRangeEnd(KEYS.deadline(currentTime, '')),
+      lt: resolveNonEmptyPrefixRangeEnd(KEYS.deadline(currentTime, '')),
     })) {
       const entry = decode(value) as TimerEntry;
       expired.push({ key, entry });
     }
 
     for await (const [key, value] of this.#storage.scan('wf-delayed:', {
-      lt: resolvePrefixRangeEnd(KEYS.delayedStart(currentTime, '')),
+      lt: resolveNonEmptyPrefixRangeEnd(KEYS.delayedStart(currentTime, '')),
     })) {
       const entry = decode(value) as TimerEntry;
       expired.push({ key, entry });

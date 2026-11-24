@@ -27,6 +27,7 @@ import {
   RevisionRealmPool,
   type RevisionRealmAcquireOutcome,
   type RevisionRealmPoolOptions,
+  type RevisionRealmStateChange,
   type RevisionRealmTransport,
 } from './revision-realm-pool.ts';
 import type { RevisionRealm } from './revision-realm.ts';
@@ -57,6 +58,19 @@ export const DEFAULT_REVISION_REALM_CONCURRENCY = 4;
  */
 export class RevisionRealmRegistry {
   readonly #pools = new Map<string, Map<string, RevisionRealmPool>>();
+  readonly #stateListeners = new Set<(change: RevisionRealmStateChange) => void>();
+
+  /**
+   * Subscribe to every lifecycle transition of every realm in every pool this
+   * registry owns, including pools created after the call. Returns an
+   * unsubscribe function.
+   */
+  onRealmStateChanged(listener: (change: RevisionRealmStateChange) => void): () => void {
+    this.#stateListeners.add(listener);
+    return () => {
+      this.#stateListeners.delete(listener);
+    };
+  }
 
   /**
    * Ensure a pool exists for `(name, revision)`, creating it (with no realms
@@ -80,6 +94,9 @@ export class RevisionRealmRegistry {
   #buildPoolOptions(revision: string, config: RevisionRealmConfig): RevisionRealmPoolOptions {
     return {
       workflowRevision: revision,
+      onRealmStateChanged: (change) => {
+        for (const listener of this.#stateListeners) listener(change);
+      },
       workerUrl: config.workerUrl,
       expectedWorkflowTypes: config.expectedWorkflowTypes,
       concurrency: config.concurrency ?? DEFAULT_REVISION_REALM_CONCURRENCY,

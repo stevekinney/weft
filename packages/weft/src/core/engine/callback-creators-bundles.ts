@@ -1,6 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { UpdateCompletedEvent } from '../events.ts';
 import type { HumanReviewOptions } from '../review/index.ts';
+import type { UpdateHistoryContext } from '../update-history.ts';
 import {
   broadcast as broadcastFromInternals,
   dispatchPendingUpdateReceived as dispatchPendingUpdateReceivedFromBroadcast,
@@ -133,6 +134,8 @@ export function createCoordinationOperationCallbacks<
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
     executeSubOperation: (workflowId, operation, signal, speculativeState) =>
       executeSubOperationForEngine(engine, workflowId, operation, signal, speculativeState),
+    persistCheckpoint: (workflowId, operation, report) =>
+      persistCheckpointForDataOperation(engine, workflowId, operation, report),
     getActivityOperationCallbacks: () => createActivityOperationCallbacks(engine),
   };
 }
@@ -280,8 +283,8 @@ export function createUpdateCallbacks<TWorkflows extends object, TActivities ext
       broadcastFromInternals(getInternals(engine), message, createBroadcastCallbacks(engine)),
     completeOperation: (id, value, operationId, workflowExecutionToken) =>
       completeOperationForEngine(engine, id, value, operationId, workflowExecutionToken),
-    guardTerminalWorkflow: (id) =>
-      guardTerminalWorkflow(getInternals(engine), id, createGuardCallbacks(engine)),
+    guardTerminalWorkflow: (id, updateName) =>
+      guardTerminalWorkflow(getInternals(engine), id, createGuardCallbacks(engine), updateName),
     guardTerminalWorkflowAfterCoordinatedRequest: (id, updateId) =>
       guardTerminalWorkflowAfterCoordinatedRequest(
         getInternals(engine),
@@ -289,8 +292,8 @@ export function createUpdateCallbacks<TWorkflows extends object, TActivities ext
         updateId,
         createGuardCallbacks(engine),
       ),
-    persistCoordinatedUpdateResponse: (id, updateName, updateId, idempotencyKey, value) =>
-      persistCoordinatedUpdateResponse(engine, id, updateName, updateId, idempotencyKey, value),
+    persistCoordinatedUpdateResponse: (id, history, updateId, idempotencyKey, value) =>
+      persistCoordinatedUpdateResponse(engine, id, history, updateId, idempotencyKey, value),
     deliverCoordinatedUpdateToWaiterIfAvailable: (id, updateRequest, dispatchReceivedEvent) =>
       deliverCoordinatedUpdateToWaiterIfAvailable(
         getInternals(engine),
@@ -309,11 +312,11 @@ export function createUpdateCallbacks<TWorkflows extends object, TActivities ext
       ),
     createCoordinatedUpdateResponder: (id, updateName, updateRequest) =>
       createCoordinatedUpdateResponder(getInternals(engine), id, updateName, updateRequest, {
-        persistCoordinatedUpdateResponse: (workflowId, name, updateId, idempotencyKey, value) =>
+        persistCoordinatedUpdateResponse: (workflowId, history, updateId, idempotencyKey, value) =>
           persistCoordinatedUpdateResponse(
             engine,
             workflowId,
-            name,
+            history,
             updateId,
             idempotencyKey,
             value,
@@ -334,7 +337,7 @@ async function persistCoordinatedUpdateResponse<
 >(
   engine: Engine<TWorkflows, TActivities>,
   workflowId: string,
-  updateName: string,
+  history: UpdateHistoryContext,
   updateId: string,
   idempotencyKey: string | undefined,
   value: unknown,
@@ -346,6 +349,7 @@ async function persistCoordinatedUpdateResponse<
     value,
     undefined,
     idempotencyKey,
+    history,
   );
   try {
     // The coordinated update response is engine-generated (the update handler ran
@@ -359,7 +363,7 @@ async function persistCoordinatedUpdateResponse<
       () =>
         new Error(`Coordinated update response for workflow "${workflowId}" lost its CAS race.`),
     );
-    engine.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, updateName, value));
+    engine.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, history.name, value));
     broadcastFromInternals(
       internals,
       { type: 'update:completed', workflowId, updateId },

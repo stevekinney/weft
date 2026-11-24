@@ -53,6 +53,10 @@ export type WorkflowOperationTupleResult<
   -readonly [TIndex in keyof TOperations]: WorkflowOperationResult<TOperations[TIndex]>;
 };
 
+export type WorkflowOperationSettledResult<T> =
+  | { status: 'fulfilled'; value: T }
+  | { status: 'rejected'; reason: { name: string; message: string } };
+
 /**
  * Discriminated winner returned by {@link WorkflowContext.raceKeyed}. Checking
  * `key` narrows `value` to the result type of that named workflow operation.
@@ -189,7 +193,7 @@ export interface WorkflowContext<
    * `workflowType`. Replay-safe in both inline and worker execution modes: log
    * calls in the already-committed replay window are suppressed so a recovered
    * run does not re-emit logs. See {@link WorkflowLogger} for the full contract
-   * (method set, the after-last-step caveat, and parallel-branch semantics).
+   * (method set, the crash-window caveat, and parallel-branch semantics).
    *
    * Optional on the interface so existing structural `WorkflowContext`
    * implementors (test stubs and the like) are not source-broken — the same
@@ -310,6 +314,14 @@ export interface WorkflowContext<
   all<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,
   ): WorkflowOperation<WorkflowOperationTupleResult<TOperations>>;
+  /** Runs operations concurrently and returns indexed fulfilled or rejected outcomes. */
+  allSettled<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): WorkflowOperation<{
+    [TIndex in keyof TOperations]: WorkflowOperationSettledResult<
+      WorkflowOperationResult<TOperations[TIndex]>
+    >;
+  }>;
   race<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,
   ): WorkflowOperation<WorkflowOperationTupleResult<TOperations>[number]>;

@@ -1,10 +1,10 @@
-import type { BatchOperation } from '../../storage/interface.ts';
 import {
-  KEYS,
+  type BatchOperation,
   encodeStorageKeyComponent,
   requireStorageCapability,
   storageConditionalBatch,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { encodePayloadWithinLimit } from '../payload-size.ts';
 import type { EngineInternals } from './internals.ts';
@@ -94,14 +94,13 @@ async function runWithAnonymousSignalSequenceLock(
   const current = new Promise<void>((resolve) => {
     releaseCurrentLock = resolve;
   });
-  const lockChain = previous.then(
-    () => current,
-    () => current,
-  );
+  // Nothing in the chain can reject: `current` settles only by being released, so `previous`, which
+  // is that same chain's earlier link or an already-resolved promise, never rejects either.
+  const lockChain = previous.then(() => current);
   storageLocks.set(workflowId, lockChain);
 
   try {
-    await previous.catch(() => {});
+    await previous;
     await operation();
   } finally {
     releaseCurrentLock();

@@ -1,4 +1,5 @@
-import { KEYS, storageHas } from '../../../storage/interface.ts';
+import { storageHas } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { EventLog } from '../../event-log.ts';
 import type { ComposedWorkflowInterceptor } from '../../interceptor.ts';
 import { coerceStartWorkflowTags } from '../../start-workflow-validation.ts';
@@ -8,7 +9,7 @@ import type {
 } from '../../types.ts';
 import { normalizeWorkflowTags } from '../../workflow-tags.ts';
 import type { ExecutableRegistration } from '../dynamic-source-execution.ts';
-import type { QueuedInlineWorkflowExecutionStart } from '../engine-internal-types.ts';
+import type { QueuedInlineWorkflowStartRequest } from '../engine-internal-types.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowStartHeaders as loadWorkflowStartHeadersFromStorage } from '../storage-io.ts';
@@ -107,7 +108,7 @@ export type LifecycleCallbacks = {
   processPendingUpdatesAfterReplay: (workflowId: string) => void;
   processPendingUpdatesAfterInlineAdvance: (workflowId: string) => Promise<void>;
   processPendingUpdatesForHandlers: (workflowId: string) => Promise<void>;
-  queueInlineWorkflowExecutionStart: (start: QueuedInlineWorkflowExecutionStart) => void;
+  queueInlineWorkflowExecutionStart: (start: QueuedInlineWorkflowStartRequest) => void;
   isInlineWorkflowLocallyOwned: (workflowId: string, workflowStatus: string) => boolean;
   hasLocalCheckpointOwnership: (workflowId: string, workflowStatus: string) => boolean;
   handleCleanupError: (source: string, error: unknown, workflowId?: string) => void;
@@ -246,7 +247,7 @@ export async function enforceHistoryPolicyBeforeReplayById(
   }
   const head =
     internals.eventLogHeads.get(workflowId) ??
-    (await new EventLog(internals.storage, workflowId).loadHead());
+    (await new EventLog(internals.storage, workflowId, internals.options.getNow).loadHead());
   return enforceHistoryPolicyBeforeReplay(internals, workflowId, head, callbacks);
 }
 

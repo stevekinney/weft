@@ -1,11 +1,9 @@
+import { replaceScheduleInput as replaceScheduleInputFromInternals } from './schedule-input.ts';
 /* oxlint-disable max-lines -- Engine's public overload signatures (~191 lines: register/start/signal/update/query, the five bulk dry-run-vs-commit methods, schedule, and static create) plus member JSDoc (~130 lines) ARE the published declaration surface, gated byte-for-byte by verify:jsdoc:declarations and the scoped Engine class-block .d.ts oracle; the irreducible declaration floor alone (>=531 lines, counted with skipBlankLines:false skipComments:false) exceeds the 500 ceiling before any method body is counted. The aggressive class split was attempted (task 3765ffa6, documentation/engine-split-log/PR-33.md): a class-expression mixin regresses the emitted .d.ts (Engine extends a synthetic any-typed Engine_base intersection; schedule methods leave the Engine block), and a verbatim class move only relocates this suppression because max-lines is repo-wide; rejected. All extractable bodies live in ~90 sibling modules under src/core/engine/. */
+import { requireStorageCapability, type Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import { AlertManager } from '../../alerting/alert-manager.ts';
 import type { AlertStateSnapshot } from '../../alerting/types.ts';
-import {
-  KEYS,
-  requireStorageCapability,
-  type Storage as WeftStorage,
-} from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import {
   ActivityRegistry,
   type ActivityMetadata,
@@ -18,7 +16,11 @@ import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
 import type { TypedEventTarget, WeftEventMap } from '../events.ts';
-import { RemoteActivityQueuedEvent } from '../events.ts';
+import {
+  RealmStateChangedEvent,
+  RemoteActivityQueuedEvent,
+  SignalDeliveredEvent,
+} from '../events.ts';
 import {
   WorkflowRevisionActivatedEvent,
   WorkflowRevisionDrainingEvent,
@@ -43,12 +45,19 @@ import {
   type BulkSignalAllDryRunOptions,
   type BulkSignalResult,
   type BulkTagResult,
+  type CancelWorkflowDryRunResult,
+  type CancelWorkflowResult,
   type CheckpointState,
   type CheckpointSummary,
+  type CompareOptions,
   type CoordinatedUpdateResult,
   type DefaultActivityTypes,
   type DefaultWorkflowRegistry,
+  type EnginePatch,
+  type EngineReconfigureResult,
+  type ForkComparison,
   type ForkOptions,
+  type ForkPreview,
   type InferActivityEntries,
   type InferActivityEntry,
   type InferWorkflowEntries,
@@ -65,14 +74,20 @@ import {
   type QueryDefinition,
   type RegisteredWorkflowDefinition,
   type RetentionOverview,
+  type RetryFailedWorkflowResult,
   type ReviewListEntry,
   type ReviewListFilter,
+  type RunConcurrencySnapshot,
   type ScheduleDefinition,
   type ScheduleFilter,
+  type ScheduleMissedFire,
   type ScheduleOptions,
+  type ScheduleSkipOptions,
   type ScheduleSpec,
   type ScheduleSummary,
   type ScheduleTransitionOptions,
+  type ScheduleTriggerResult,
+  type ScheduleUnskipOptions,
   type ScheduleUpdateOptions,
   type SearchAttributeValue,
   type SignalDefinition,
@@ -100,6 +115,7 @@ import type { TimerEntry } from '../types/checkpoint.ts';
 import { PREPARED_WORKFLOW_ABANDONED_REASON } from '../types/history-policy.ts';
 import type { WorkflowAlreadyRegistered } from '../types/workflow-builder.ts';
 import { UpdateCoordinator } from '../updates.ts';
+import type { WorkflowLogsResult } from '../workflow-log-codec.ts';
 import {
   aggregate as aggregateWorkflows,
   type AggregateOptions,
@@ -114,10 +130,11 @@ import {
   recoverPendingAsyncActivities,
 } from './async-activity-records.ts';
 import { broadcast as broadcastFromInternals, type BroadcastCallbacks } from './broadcast.ts';
+import { purge as purgeWorkflows } from './bulk-operations-purge-commit.ts';
+import { purgeWorkflowById } from './bulk-operations-purge.ts';
 import {
   cancelAll as cancelAllWorkflows,
   deleteAll as deleteAllWorkflows,
-  purge as purgeWorkflows,
   retryFailedAll as retryFailedAllWorkflows,
   signalAll as signalAllWorkflows,
   tagAll as tagAllWorkflows,
@@ -125,6 +142,7 @@ import {
 } from './bulk-operations.ts';
 import { createTimeOperationCallbacks as createTimeOperationCallbacksForEngine } from './callback-creators-bundles.ts';
 import { createPendingUpdateCallbacks as createPendingUpdateCallbacksForEngine } from './callback-creators-core.ts';
+import { createScheduleCallbacks as createScheduleCallbacksForEngine } from './callback-creators-schedule.ts';
 import {
   createBroadcastCallbacks as createBroadcastCallbacksForEngine,
   createInlineParkingCallbacks as createInlineParkingCallbacksForEngine,
@@ -144,6 +162,7 @@ import {
   replayTo as replayWorkflowToCheckpoint,
 } from './checkpoint-reads.ts';
 import { pollChildOutcomes } from './child-outcome-poll.ts';
+import { compareFork as compareForkFromInternals } from './compare-fork.ts';
 import {
   copyWorkflowDefinition,
   createActivityWorkerDispatcher,
@@ -181,6 +200,7 @@ import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
   createSecondInstanceDetectorResolver,
+  createStorageSizeReportTick,
   drainQueuedInlineWorkflowStartsForEngine,
   flushQueuedInlineWorkflowStartsForEngine,
   isActivityDefinition,
@@ -198,9 +218,11 @@ import {
   EngineDisposedError,
   StartOrSignalConflictError,
 } from './errors.ts';
+import { isLaunchedUnderClaim } from './execution-attempts.ts';
 import { assertLeaseHeldForEngineWork, commitFencedEngineWrite } from './fenced-write.ts';
 import { recordFinalizerState } from './finalizer-state.ts';
 import { getFinalizerStatus as getFinalizerStatusFromInternals } from './finalizer-status.ts';
+import { forwardWorkflowEventToHandle } from './handle-event-forwarding.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -212,19 +234,25 @@ import {
   type PreparedWorkflowHandle,
   type WorkflowClaimHandle,
 } from './handles.ts';
-import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
 import {
   handleStrategyMessage as handleStrategyMessageFromInternals,
   resumeParkedInlineWorkflow as resumeParkedInlineWorkflowFromInternals,
   type InlineParkingCallbacks,
 } from './inline-parking.ts';
-import { getInternals, initializeInternals, type EngineInternals } from './internals.ts';
+import {
+  getInternals,
+  initializeInternals,
+  peekInternals,
+  type EngineInternals,
+} from './internals.ts';
 import { ENGINE_LEASE_LOST_WARNING_NAME, handleDeposition } from './lease-deposition.ts';
+import { dispatchLeaseHealthIfChanged, readEngineLeaseHealth } from './lease-health-events.ts';
 import type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 import { createLeaseManager } from './lease-manager.ts';
 import {
   abandonPreparedWorkflow as abandonPreparedWorkflowFromLifecycle,
   fork as forkFromLifecycle,
+  getRunByIdempotencyKey as getRunByIdempotencyKeyFromLifecycle,
   launchPreparedWorkflow as launchPreparedWorkflowFromLifecycle,
   prepareWorkflow as prepareWorkflowFromLifecycle,
   recoverAll as recoverAllFromLifecycle,
@@ -237,6 +265,7 @@ import {
   type StartOrSignalCallbacks,
   type StartOrSignalResult,
 } from './lifecycle.ts';
+import { previewFork as previewForkFromLifecycle } from './lifecycle/fork-preview.ts';
 import {
   addTags as addWorkflowTags,
   getAttributes as getWorkflowAttributes,
@@ -244,6 +273,10 @@ import {
   removeTags as removeWorkflowTags,
   setAttributes as setWorkflowAttributes,
 } from './listing.ts';
+import {
+  defersToQueuedInlineWorkflowStart,
+  hasQueuedInlineWorkflowStart,
+} from './local-execution.ts';
 import { getOffloadFromInternals } from './operations-data.ts';
 import { getStreamChunksFromInternals } from './operations-stream.ts';
 import {
@@ -262,12 +295,13 @@ import { processPendingUpdatesForHandlers as processPendingUpdatesForHandlersFro
 import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { settleInFlightPurgeWrites } from './purge-write-tracking.ts';
 import { query as queryWorkflow } from './queries.ts';
+import { reconfigureEngine } from './reconfigure.ts';
 import {
   register as registerWorkflow,
   resolveWorkflowTypeTarget as resolveWorkflowTypeTargetFromRegistration,
   type RegistrationCallbacks,
 } from './registration.ts';
-import { readHandleResultCommitter } from './result-committer.ts';
+import { readHandleResultCommitter, readHandleResultReplaced } from './result-committer.ts';
 import {
   ensureRetentionSweepInterval,
   getRetentionOverview as getRetentionOverviewSnapshot,
@@ -276,23 +310,33 @@ import {
   runRetentionSweep,
   setNextRetentionSweepAt,
 } from './retention.ts';
+import { reactivateOneFailedWorkflow } from './retry-failed-workflow.ts';
 import {
   getReview as getReviewFromInternals,
   listReviews as listReviewsFromInternals,
   submitReview as submitReviewFromInternals,
 } from './reviews.ts';
+import { runConcurrencySnapshot } from './run-concurrency.ts';
+import {
+  skipNextScheduleOccurrence as skipNextScheduleOccurrenceFromInternals,
+  triggerSchedule as triggerScheduleFromInternals,
+  unskipScheduleOccurrence as unskipScheduleOccurrenceFromInternals,
+} from './schedule-controls.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
+import { listScheduleMissedFires as listScheduleMissedFiresFromInternals } from './schedule-missed-fires.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
+import { loadScheduleState } from './schedule-state-read.ts';
+import { recoverOrphanedScheduleTimers } from './schedule-timer-recovery.ts';
 import {
   cancelSchedule as cancelScheduleFromInternals,
   listSchedules as listSchedulesFromInternals,
   pauseSchedule as pauseScheduleFromInternals,
-  recoverOrphanedScheduleTimers,
   resumeSchedule as resumeScheduleFromInternals,
   schedule as scheduleFromInternals,
   toScheduleSummary,
   updateSchedule as updateScheduleFromInternals,
 } from './schedules.ts';
+import { assertActivitySchemas } from './schema-policy.ts';
 import {
   createSecondInstanceDetectionTick,
   createSecondInstanceDetector,
@@ -308,16 +352,17 @@ import {
   type ResolveWorkflowSourceOptions,
 } from './source-resolution.ts';
 import { createWorkflowSourceRuntimeState } from './source-runtime-state.ts';
-import {
-  loadScheduleState,
-  loadWorkflowState,
-  runSerializedWorkflowStateWrite,
-} from './storage-io.ts';
+import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
 import {
   feedOperationResult,
   getComposedWorkflowInterceptor,
   swallowPromiseRejection,
 } from './strategy-helpers.ts';
+import { StreamChunkAnnouncer } from './stream-chunk-announcer.ts';
+import {
+  isEventFromSupersededGeneration,
+  isSupersededBySameIdRun,
+} from './superseded-generation.ts';
 import {
   cancelWorkflow as cancelWorkflowFromTermination,
   cleanupWaiters as cleanupWaitersFromTermination,
@@ -327,14 +372,17 @@ import {
   timeoutWorkflow as timeoutWorkflowFromTermination,
   type TerminationCallbacks,
 } from './termination.ts';
+import { previewCancelWorkflow } from './termination/cancel-preview.ts';
 import {
   deliverCoordinatedUpdateToWaiterIfAvailable as deliverCoordinatedUpdateToWaiterIfAvailableFromInternals,
   getUpdateResult as getUpdateResultFromInternals,
+  listUpdateHistory as listUpdateHistoryFromInternals,
   submitCoordinatedUpdate as submitCoordinatedUpdateFromInternals,
   update as updateFromInternals,
   type UpdateCallbacks,
 } from './updates.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
+import { snapshotScheduleMetadata } from './validation/schedule-options.ts';
 import { coerceScheduleId } from './validation/schedule.ts';
 import { confirmWakeOwnership } from './wake-ownership-guard.ts';
 import type {
@@ -349,6 +397,7 @@ import {
   type WorkflowFeedRecord,
   type WorkflowFeedSelector,
 } from './workflow-feed.ts';
+import { flushWorkflowLogs, getWorkflowLogs } from './workflow-logs.ts';
 
 export type { WorkflowRevisionReferenceCounts } from '../catalog/index.ts';
 export type {
@@ -372,6 +421,7 @@ export {
   WeftWorkflowCheckpointConflictWarning,
   WORKFLOW_CHECKPOINT_CONFLICT_WARNING_NAME,
 } from './checkpoint-conflict-error.ts';
+export { UndeclaredWorkflowMessageError, type WorkflowMessageKind } from './declared-messages.ts';
 export {
   DynamicWorkflowSourceUnavailableError,
   WorkflowSourceNotRegisteredError,
@@ -424,11 +474,19 @@ export {
 export type { EngineLeaseHealth, LeaseLostReason } from './lease-health.ts';
 export type { RecoverAllOptions, RecoveredWorkflowInfo } from './lifecycle.ts';
 export {
+  DEFAULT_WORKFLOW_CLAIM_RENEW_INTERVAL_MS,
+  DEFAULT_WORKFLOW_CLAIM_TTL_MS,
+} from './ownership-options.ts';
+export {
   EagerRecoveryRevisionRefusedError,
   WorkflowRevisionUnavailableError,
 } from './revision-errors.ts';
 export { getRevisionRealmDiagnostics } from './revision-realm-diagnostics.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
+export { ScheduleOccurrenceNotNextError } from './schedule-occurrence-not-next-error.ts';
+export { ScheduleReservedKeyError } from './schedule-reserved-key-error.ts';
+export { ScheduleStaleRevisionError } from './schedule-stale-revision-error.ts';
+export { DefinitionSchemaRequiredError } from './schema-policy.ts';
 export type { ResolveWorkflowSourceOptions } from './source-resolution.ts';
 export type { WorkflowClaimHolderStatus } from './workflow-claim-registry.ts';
 export type {
@@ -534,6 +592,7 @@ function scheduleDefinitionFromInternals(
     ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
     ...(definition.backfill !== undefined && { backfill: definition.backfill }),
     ...(definition.jitter !== undefined && { jitter: definition.jitter }),
+    ...(definition.timeZone !== undefined && { timeZone: definition.timeZone }),
     ...(definition.revisionPolicy !== undefined && { revisionPolicy: definition.revisionPolicy }),
   });
 }
@@ -573,7 +632,7 @@ function scheduleDefinitionFromInternals(
  * @example With a SQLite backend
  * ```ts
  * import { Engine } from '@lostgradient/weft';
- * import { BunSQLiteStorage } from '@lostgradient/weft';
+ * import { BunSQLiteStorage } from '@lostgradient/storage-bun-sqlite';
  * await using storage = new BunSQLiteStorage('./weft.db');
  * await using engine = new Engine({ storage });
  * await engine.recoverAll();
@@ -796,12 +855,13 @@ export class Engine<
     getInternals(this).parkedWorkflowReadyWaitersForTesting = new Map();
     getInternals(this).sleepTimerAcknowledgementWaiters = new Map();
     getInternals(this).durableInlineOperations = new Map();
+    getInternals(this).resumesAwaitingAdoption = new Map();
     getInternals(this).sleepTimersFiredWithoutResolver = new Map();
     getInternals(this).sleepTimerTokensFiredWithoutResolver = new Map();
     getInternals(this).interceptors = resolveEngineInterceptors(options);
     getInternals(this).composedWorkflowInterceptor = undefined;
     getInternals(this).composedActivityInterceptor = undefined;
-    getInternals(this).updateCoordinator = new UpdateCoordinator(storage);
+    getInternals(this).updateCoordinator = new UpdateCoordinator(storage, getNow);
     getInternals(this).activityRegistry = new ActivityRegistry();
     getInternals(this).activityRegistriesByWorkflow = new Map();
     getInternals(this).workflowDefinitionsByName = new Map();
@@ -865,10 +925,18 @@ export class Engine<
       this.addEventListener(WorkflowRevisionActivatedEvent.type, (event) => {
         revisionRealmRegistry.markActive(event.workflowType, event.revision);
       });
+      revisionRealmRegistry.onRealmStateChanged((change) => {
+        this.dispatchEvent(
+          new RealmStateChangedEvent(
+            change.realmId,
+            change.revision,
+            change.state,
+            change.restartCount,
+          ),
+        );
+      });
     }
     getInternals(this).queuedInlineWorkflowStarts = [];
-    getInternals(this).queuedInlineWorkflowStartIds = new Set();
-    getInternals(this).queuedOrLaunchingInlineWorkflowStartIds = new Set();
     getInternals(this).queuedInlineWorkflowStartFlushScheduled = false;
     const weakEngine = new WeakRef(this);
     // COR-74: 'manual' scheduling never constructs this channel — a queued
@@ -906,6 +974,11 @@ export class Engine<
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();
     getInternals(this).pendingResultPollTimers = new Set();
+    getInternals(this).streamChunkAnnouncer = new StreamChunkAnnouncer(
+      (event) => this.dispatchEvent(event),
+      (workflowId, workflowExecutionToken) =>
+        isSupersededBySameIdRun(getInternals(this), workflowId, workflowExecutionToken),
+    );
     getInternals(this).pendingTimelineEntries = new Map();
     getInternals(this).pendingAtomicWorkflowCommitSideEffects = new Map();
     getInternals(this).pendingOperationAtomicWorkflowCommitSideEffects = new Map();
@@ -914,6 +987,7 @@ export class Engine<
       disposed: false,
       cleanupInterval: null,
       secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
       testToken: consumeNextEngineLeakWarningTokenForTesting(),
     };
     const cleanupInterval =
@@ -923,6 +997,17 @@ export class Engine<
     cleanupIntervalDisposalTracker.cleanupInterval = cleanupInterval;
     getInternals(this).cleanupInterval = cleanupInterval;
     getInternals(this).cleanupIntervalDisposalTracker = cleanupIntervalDisposalTracker;
+    const storageSizeReportInterval =
+      resolvedOptions.backgroundTaskMode === 'automatic' &&
+      resolvedOptions.storageSizeReportIntervalMs > 0 &&
+      typeof storage.sizeBytes === 'function'
+        ? setInterval(
+            createStorageSizeReportTick(weakEngine, cleanupIntervalDisposalTracker),
+            resolvedOptions.storageSizeReportIntervalMs,
+          )
+        : null;
+    cleanupIntervalDisposalTracker.storageSizeReportInterval = storageSizeReportInterval;
+    getInternals(this).storageSizeReportInterval = storageSizeReportInterval;
     engineCleanupIntervalFinalizer.register(
       this,
       cleanupIntervalDisposalTracker,
@@ -931,6 +1016,8 @@ export class Engine<
     getInternals(this).retentionSweepInterval = null;
     getInternals(this).retentionSweepInFlight = null;
     getInternals(this).inFlightPurgeWrites = new Set();
+    getInternals(this).inFlightOperations = new Map();
+    getInternals(this).pendingTerminalSettlements = new Set();
     getInternals(this).nextRetentionSweepAt = null;
     getInternals(this).secondInstanceDetectionInterval = null;
     getInternals(this).secondInstanceDetector = null;
@@ -1024,6 +1111,30 @@ export class Engine<
   }
 
   /**
+   * Dispatch an event to the engine's listeners, then forward it to the cached
+   * {@link WorkflowHandle} of the workflow it names, so `handle.addEventListener`
+   * and `for await (const event of handle)` observe the same workflow-scoped
+   * events (`signal:waiting`, `signal:received`, `activity:*`, and the rest) that
+   * engine listeners and the fleet feed see, in dispatch order. Terminal and
+   * `workflow:suspended` events are forwarded by termination itself; events
+   * without a `workflowId` stay on the engine.
+   *
+   * An event its emitter tagged with a run's execution token is dropped
+   * before any of that when a `start-new` replacement has since taken over
+   * the id (COR-1608): neither engine listeners, the replacement's handle,
+   * nor the server watch channel built on engine listeners observe a
+   * superseded generation's late events. A dropped event reports `true`, as
+   * an uncancelled dispatch does.
+   */
+  override dispatchEvent(event: Event): boolean {
+    const internals = peekInternals(this);
+    if (internals && isEventFromSupersededGeneration(internals, event)) return true;
+    const result = super.dispatchEvent(event);
+    if (internals) forwardWorkflowEventToHandle(internals, event);
+    return result;
+  }
+
+  /**
    * Start the best-effort second-instance liveness detector when enabled. The
    * engine owns the interval so disposal clears it through the same path as the
    * other engine intervals (no leak warning). A `WeakRef` keeps the interval from
@@ -1075,6 +1186,7 @@ export class Engine<
           // A successor stole the lease out from under an otherwise-idle engine.
           // Step 2 halts: set the deposed flag, warn, and tear down so the engine
           // stops promptly instead of lingering until its next fenced write fails.
+          // `handleDeposition` also announces the status change.
           handleDeposition(internals);
           return;
         }
@@ -1089,6 +1201,12 @@ export class Engine<
             'per store — keep infrastructure-level single-instance enforcement in place.',
           ENGINE_LEASE_LOST_WARNING_NAME,
         );
+        dispatchLeaseHealthIfChanged(internals);
+      },
+      // A renewal that settles can move the status without a loss callback: a lease that
+      // expired between ticks reads `contested` until the next renewal succeeds.
+      onRenewalSettled: () => {
+        dispatchLeaseHealthIfChanged(internals);
       },
     });
     // Assign the manager BEFORE awaiting acquire(), so a concurrent disposal that
@@ -1128,6 +1246,7 @@ export class Engine<
         if (internals.leaseManager === manager) internals.leaseManager = null;
         throw new EngineDisposedError();
       }
+      dispatchLeaseHealthIfChanged(internals);
       manager.startRenewal();
     })();
     internals.inFlightLeaseAcquire = acquisition;
@@ -1209,6 +1328,26 @@ export class Engine<
         // driving the workflow it sits idle while this engine's renewal keeps
         // the claim alive, shielding it from any engine that would resume it.
         onWorkflowClaimReclaimed: async (workflowId: string) => {
+          // An inline start of the workflow whose launch is queued or in flight under this claim
+          // is this engine's own drive in the making, listed by a reclaim scan that took its
+          // exclude set before the start folded its claim. Its flush drives the run under this
+          // claim, so leave the run to it (COR-1618); waiting for the flush would wait on the host
+          // under `'manual'` launch scheduling. A start enqueued under an earlier claim is stale,
+          // and its flush discards it, so the replay below is the drive.
+          if (defersToQueuedInlineWorkflowStart(internals, workflowId)) return;
+          // A drive that began under the claim just taken is this reclaim's to leave alone: the
+          // eviction and replay below restart a run driven under an EARLIER claim (this engine
+          // lost it, then took it back), and a launch under this very claim began after that.
+          // `recoverAll()` landing between the takeover and this call, or between a reclaim
+          // listing and its attempt, is one. Evicting or replaying it would drive the generation
+          // a second time (COR-1618). Whether a drive is live is read from the strategy and the
+          // attempt it created, never asserted by a launch path (`isLaunchedUnderClaim`).
+          // This epoch governs eviction only. The replay below reads the epoch again, after the
+          // awaits, because a claim lost and taken back during them is the one it must check against.
+          const claimEpoch = internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
+          if (claimEpoch !== null && isLaunchedUnderClaim(internals, workflowId, claimEpoch)) {
+            return;
+          }
           // Same-engine reclaim (this engine held the claim, was deposed, and
           // later reclaimed it): deposition drops only the registry's claim
           // entry, so this engine's OLD in-memory context/generator/abort
@@ -1240,18 +1379,28 @@ export class Engine<
           // deterministic token and wait forever for a delivery the completion
           // caller was already told had succeeded.
           await recoverPendingAsyncActivities(internals, workflowId);
+          const gate = internals.reclaimReplayGateForTesting;
+          if (gate !== undefined) await gate(workflowId);
           // Disposal can land while the reload above was in flight — recheck
           // rather than replay against a torn-down host. `markDisposing()` on
           // the reclaim target (see `ownership-bootstrap.ts`) closes the
           // takeover-CAS side of this race; this closes the drive side for a
           // takeover that had already landed before disposal was signaled.
           if (internals.disposed) return;
+          // The awaits above may have spanned a claim this engine lost and took back, so the
+          // replay is checked against the claim held now, not the one held on entry.
+          const replayEpoch = internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
           await resumeFromLifecycle(
             internals,
             workflowId,
             this.#createLifecycleCallbacks(),
             internals.onRecoveredWorkflowHook,
-            { forceReplayFromStorage: true },
+            {
+              forceReplayFromStorage: true,
+              // A drive may have begun under that claim during the same awaits; the replay
+              // re-checks as it registers.
+              ...(replayEpoch !== null && { skipIfLaunchedUnderClaimEpoch: replayEpoch }),
+            },
           );
         },
         // Owner-side signal polling (ADR 0002): without this, a signal
@@ -1479,6 +1628,9 @@ export class Engine<
           workflowId,
           this.#createInlineParkingCallbacks(),
         ),
+      dispatchSignalDelivered: (workflowId, signalName) => {
+        this.dispatchEvent(new SignalDeliveredEvent(workflowId, signalName));
+      },
       // Waking a signal waiter advances the workflow's generator, so it is a
       // claim-requiring wake path. `runOnce()` continues into signal polling
       // even after a failed renewal has dropped this engine's claim entry, so
@@ -1769,6 +1921,7 @@ export class Engine<
     getInternals(this).composedActivityInterceptor = undefined;
   }
   #registerActivityDefinition(definition: AnyActivityDefinition): void {
+    assertActivitySchemas(getInternals(this).options.schemaPolicy, definition);
     getInternals(this).activityRegistry.register(definition.name, definition);
   }
 
@@ -1799,6 +1952,14 @@ export class Engine<
   }
   getActivityDefinition(name: string): ActivityMetadata | undefined {
     return getInternals(this).activityRegistry.getDefinition(name);
+  }
+  /**
+   * The function registered under `name` in the engine's global activity registry, or `undefined`
+   * when none is. A host that runs activities it did not register itself (a document workflow host
+   * bridging to the engine's activities) calls it; it reads the registry only and runs nothing.
+   */
+  getActivityFunction(name: string): RegisteredActivityFunction | undefined {
+    return getInternals(this).activityRegistry.resolve(name);
   }
   listActivityDefinitions(): ActivityMetadata[] {
     return getInternals(this).activityRegistry.listDefinitions();
@@ -1961,15 +2122,15 @@ export class Engine<
           this.#createLifecycleCallbacks(),
         ),
       abandon: () =>
-        abandonPreparedWorkflowFromLifecycle(getInternals(this), context, (workflowId) =>
-          terminateWorkflowFromTermination(
+        abandonPreparedWorkflowFromLifecycle(getInternals(this), context, async (workflowId) => {
+          await terminateWorkflowFromTermination(
             getInternals(this),
             workflowId,
             'cancelled',
             this.#createTerminationCallbacks(),
             PREPARED_WORKFLOW_ABANDONED_REASON,
-          ),
-        ),
+          );
+        }),
     };
   }
   /**
@@ -2132,13 +2293,57 @@ export class Engine<
   async flushInlineLaunches(): Promise<void> {
     await flushQueuedInlineWorkflowStartsForEngine(this);
   }
-  async purge(filter?: ListFilter): Promise<PurgeResult> {
-    return purgeWorkflows(getInternals(this), filter, (workflowId) =>
-      cleanupWaitersFromTermination(
-        getInternals(this),
-        workflowId,
-        this.#createTerminationCallbacks(),
-      ),
+  /**
+   * The `runConcurrency` cap, the ids of the counted runs this engine is executing, and the ids of
+   * the counted starts whose first turn waits for one of them to end, oldest first. `null` when the
+   * engine was built without `runConcurrency`.
+   */
+  runConcurrency(): RunConcurrencySnapshot | null {
+    return runConcurrencySnapshot(getInternals(this));
+  }
+  /**
+   * Permanently delete the terminal workflows that match `filter` (every terminal workflow when
+   * it is omitted) and report how many were removed. Called with no `options` it deletes at once.
+   *
+   * With `options` it follows the confirmation-token protocol of the other bulk operations:
+   * `{ dryRun: true }` returns the bulk dry-run result (`matched`, `scope`, a sample of ids, a
+   * `confirmationToken`) and writes nothing, and `{ confirmationToken }` deletes exactly the runs
+   * that preview named, throwing `BulkOperationConfirmationError` when the filter no longer
+   * produces the token.
+   */
+  async purge(
+    filter: ListFilter | undefined,
+    options: BulkOperationDryRunOptions,
+  ): Promise<BulkOperationDryRunResult>;
+  /** Commit a confirmed preview, or purge matching terminal workflows immediately when no options are supplied. */
+  async purge(filter?: ListFilter, options?: BulkOperationCommitOptions): Promise<PurgeResult>;
+  async purge(
+    filter?: ListFilter,
+    options?: BulkOperationDryRunOptions | BulkOperationCommitOptions,
+  ): Promise<PurgeResult | BulkOperationDryRunResult> {
+    return purgeWorkflows(
+      getInternals(this),
+      filter,
+      (workflowId) =>
+        cleanupWaitersFromTermination(
+          getInternals(this),
+          workflowId,
+          this.#createTerminationCallbacks(),
+        ),
+      options,
+    );
+  }
+  /**
+   * Purge one terminal workflow by its exact id: everything `purge()` deletes for a run, for a
+   * caller that means one run and no other. `purge({ idPrefix })` also matches every workflow
+   * whose id begins with the prefix, and refuses an id outside its `[A-Za-z0-9_-]` alphabet; this
+   * reads the id as given and reaches nothing else. Resolves `true` when the workflow was deleted,
+   * and `false` when nothing is stored under the id, the workflow is not terminal, it still owes
+   * its finalizer, or it moved before the delete committed. Safe to repeat.
+   */
+  async purgeById(workflowId: string): Promise<boolean> {
+    return purgeWorkflowById(getInternals(this), workflowId, (id) =>
+      cleanupWaitersFromTermination(getInternals(this), id, this.#createTerminationCallbacks()),
     );
   }
   async cancelAll(
@@ -2178,6 +2383,37 @@ export class Engine<
       options,
       this.#createLifecycleCallbacks(),
     );
+  }
+  /**
+   * Resume one failed run in place, from its checkpoint, on the revision it is pinned to: the
+   * operation that failed runs again, and every operation the checkpoint already holds is replayed
+   * from it, never run again. The run keeps its id. Answers `not-failed` for a run in any other
+   * status (a second retry of a run already running again included), `no-checkpoint` for a failed
+   * run with nothing to resume from, and `not-found` for an unknown id; none of them changes
+   * anything. Unlike {@link Engine.retryFailedAll}, it never starts a run again from its input.
+   * Throws `WorkflowRevisionUnavailableError` when the run's pinned revision is not registered in
+   * this process, and leaves the run failed.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * async function retry(engine: Engine, workflowId: string): Promise<boolean> {
+   *   const outcome = await engine.retryFailed(workflowId);
+   *   return outcome.status === 'retried';
+   * }
+   * void retry;
+   * ```
+   */
+  async retryFailed(workflowId: string): Promise<RetryFailedWorkflowResult> {
+    // Reactivation is engine-owned work, as `resume` is: the lease first, then the catalog.
+    assertLeaseHeldForEngineWork(getInternals(this));
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
+    const outcome = await reactivateOneFailedWorkflow(getInternals(this), workflowId);
+    if (outcome.status === 'retried') await this.resume(workflowId);
+    return outcome;
   }
   async signalAll(
     filter: ListFilter,
@@ -2312,6 +2548,8 @@ export class Engine<
   ): Promise<ScheduleHandle> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    // Copy the metadata before the first await: the caller may change the object meanwhile.
+    const snapshottedOptions = snapshotScheduleMetadata(options);
     if (!isWorkflowCatalogReady(this as unknown as Engine)) {
       await ensureWorkflowCatalogReady(this as unknown as Engine);
     }
@@ -2323,12 +2561,12 @@ export class Engine<
         'A cron string or schedule spec must be provided when scheduling by workflow type.',
       );
     }
-    return scheduleFromInternals(internals, typeOrDefinition, input, spec, options);
+    return scheduleFromInternals(internals, typeOrDefinition, input, spec, snapshottedOptions);
   }
   async getSchedule(scheduleId: string): Promise<ScheduleSummary | null> {
     const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-    const state = await loadScheduleState(getInternals(this), normalizedScheduleId);
-    return state ? toScheduleSummary(state) : null;
+    const loaded = await loadScheduleState(getInternals(this), normalizedScheduleId);
+    return loaded ? toScheduleSummary(loaded.state) : null;
   }
   async listSchedules(filter?: ScheduleFilter): Promise<PaginatedResult<ScheduleSummary>> {
     return listSchedulesFromInternals(getInternals(this), filter);
@@ -2340,6 +2578,18 @@ export class Engine<
       await ensureWorkflowCatalogReady(this as unknown as Engine);
     }
     return pauseScheduleFromInternals(internals, scheduleId, options);
+  }
+  /** Atomically replace future input and status, retaining historic runs; paused unless explicitly activated. */
+  async replaceScheduleInput(
+    scheduleId: string,
+    input: unknown,
+    options: ScheduleTransitionOptions & { expectedRevision: number; status?: 'active' | 'paused' },
+  ): Promise<void> {
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine))
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    return replaceScheduleInputFromInternals(internals, scheduleId, input, options);
   }
   async resumeSchedule(scheduleId: string, options?: ScheduleTransitionOptions): Promise<void> {
     const internals = getInternals(this);
@@ -2364,10 +2614,139 @@ export class Engine<
   ): Promise<void> {
     const internals = getInternals(this);
     assertLeaseHeldForEngineWork(internals);
+    // Copy the metadata before the first await: the caller may change the object meanwhile.
+    const snapshottedOptions = snapshotScheduleMetadata(options);
     if (!isWorkflowCatalogReady(this as unknown as Engine)) {
       await ensureWorkflowCatalogReady(this as unknown as Engine);
     }
-    return updateScheduleFromInternals(internals, scheduleId, newSpec, options);
+    return updateScheduleFromInternals(internals, scheduleId, newSpec, snapshottedOptions);
+  }
+  /**
+   * Skip one upcoming run of a schedule (COR-1829, COR-2018): the next, or any after it. Without
+   * `options.occurrence` it is the next occurrence that would start a run (not always
+   * {@link ScheduleSummary.nextFireAt}, which in a time zone can be the end of a daylight-saving gap
+   * that fires nothing); an occurrence that is due but has not started a run (a jittered fire, one
+   * inside the poll window, the next of a backfill catching up) is the next run, and one a late
+   * tick will count as missed is not. The occurrence joins {@link ScheduleSummary.skippedOccurrences}
+   * until the schedule moves past it, and the runs around it fire as usual. The skip is bookkeeping,
+   * as a fire is: `revision`, `nextFireAt` and the timer stay as they are, so a tick in flight
+   * honors it. `options.expectedRevision` guards it as it does a pause, and skipping an occurrence
+   * already skipped changes nothing. A paused schedule's runs can be skipped too, counted from the
+   * first after now (a pause keeps the skips, for when it is resumed); a cancelled schedule has no
+   * run to skip and rejects.
+   *
+   * A fire is not a revision, so `expectedRevision` cannot tell a person that the run they were
+   * looking at has started since. `options.occurrence` names the run to skip (milliseconds since
+   * the epoch, as {@link ScheduleSummary.nextFireAt} is): it is compared inside the guarded write,
+   * and a call naming anything other than an upcoming run (one a fire has passed, a time the cadence
+   * does not start a run at) rejects with {@link ScheduleOccurrenceNotNextError} and writes nothing.
+   * The revision is compared first. A schedule keeps at most
+   * {@link SCHEDULE_SKIPPED_OCCURRENCE_LIMIT} skipped occurrences, and one more rejects.
+   *
+   * @example
+   * ```ts
+   * import { Engine, workflow } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
+   * await engine.schedule('report', null, '0 9 * * *', { id: 'daily-report' });
+   * await engine.skipNextScheduleOccurrence('daily-report');
+   * engine[Symbol.dispose]();
+   * ```
+   */
+  async skipNextScheduleOccurrence(
+    scheduleId: string,
+    options?: ScheduleSkipOptions,
+  ): Promise<void> {
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
+    return skipNextScheduleOccurrenceFromInternals(internals, scheduleId, options);
+  }
+  /**
+   * Take back the skip of one upcoming run (COR-2018): `options.occurrence`, one of
+   * {@link ScheduleSummary.skippedOccurrences}, starts a run after all. Like a skip it is
+   * bookkeeping that leaves `revision`, `nextFireAt` and the timer as they are, and
+   * `options.expectedRevision` guards it. An upcoming occurrence that is not skipped changes
+   * nothing; one that has already passed cannot be taken back and rejects with
+   * {@link ScheduleOccurrenceNotNextError}, as does a cancelled schedule's.
+   *
+   * @example
+   * ```ts
+   * import { Engine, workflow } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
+   * await engine.schedule('report', null, '0 9 * * *', { id: 'daily-report' });
+   * const occurrence = (await engine.getSchedule('daily-report'))?.nextFireAt ?? 0;
+   * await engine.skipNextScheduleOccurrence('daily-report', { occurrence });
+   * await engine.unskipScheduleOccurrence('daily-report', { occurrence });
+   * engine[Symbol.dispose]();
+   * ```
+   */
+  async unskipScheduleOccurrence(
+    scheduleId: string,
+    options: ScheduleUnskipOptions,
+  ): Promise<void> {
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
+    return unskipScheduleOccurrenceFromInternals(internals, scheduleId, options);
+  }
+  /**
+   * Start one run of a schedule now (COR-1829), under its overlap policy: it starts, is queued behind
+   * the running one, or is skipped, and the result says which. The run is not an occurrence of the
+   * cadence, so `nextFireAt`, `lastFireAt` and `revision` stay as they are, and the run's schedule
+   * metadata (`WorkflowServicesResolverScheduleInfo`) is `manual: true` with no `occurrence`. A paused
+   * schedule can be run; a cancelled one rejects.
+   *
+   * @example
+   * ```ts
+   * import { Engine, workflow } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
+   * await engine.schedule('report', null, '0 9 * * *', { id: 'daily-report' });
+   * const result = await engine.triggerSchedule('daily-report');
+   * console.log(result.outcome); // 'started'
+   * engine[Symbol.dispose]();
+   * ```
+   */
+  async triggerSchedule(scheduleId: string): Promise<ScheduleTriggerResult> {
+    const internals = getInternals(this);
+    assertLeaseHeldForEngineWork(internals);
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
+    return triggerScheduleFromInternals(
+      internals,
+      scheduleId,
+      createScheduleCallbacksForEngine(this),
+    );
+  }
+  /**
+   * The occurrences a schedule missed, newest first (COR-1829): at most `options.limit` of the
+   * {@link SCHEDULE_MISSED_FIRE_LIMIT} most recent. Resolves `null` when the schedule does not exist.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const rows = await engine.listScheduleMissedFires('daily-report', { limit: 10 });
+   * console.log(rows); // null: no such schedule
+   * engine[Symbol.dispose]();
+   * ```
+   */
+  async listScheduleMissedFires(
+    scheduleId: string,
+    options?: { limit?: number },
+  ): Promise<ScheduleMissedFire[] | null> {
+    return listScheduleMissedFiresFromInternals(getInternals(this), scheduleId, options?.limit);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
     return getWorkflowResultPromiseFromInternals(getInternals(this), workflowId);
@@ -2625,6 +3004,35 @@ export class Engine<
     );
   }
   /**
+   * What {@link Engine.fork} would do with the same arguments, without doing it: the checkpoint
+   * step it would start from, the steps it would keep and the steps it would run again, and
+   * whether it would run on another revision. Nothing is written. A fork that would be refused is
+   * refused here with the same error.
+   */
+  async previewFork(sourceWorkflowId: string, options?: ForkOptions): Promise<ForkPreview> {
+    if (!isWorkflowCatalogReady(this as unknown as Engine)) {
+      await ensureWorkflowCatalogReady(this as unknown as Engine);
+    }
+    return previewForkFromLifecycle(
+      getInternals(this),
+      sourceWorkflowId,
+      options,
+      this.#createLifecycleCallbacks(),
+    );
+  }
+  /**
+   * A fork and its source aligned step by step: for each durable step, the operation, label,
+   * status, input and output on each side, with a step before the fork point marked `shared` and
+   * carrying the source's entry on both sides. Pages by step (100 a page by default) with
+   * `nextCursor`. Payload fields are redacted as `getTimeline` redacts them.
+   *
+   * Throws `CompareRequiresForkError` for a run that is not a fork, and the not-found error of
+   * `get` when the fork or its source is gone.
+   */
+  async compare(forkWorkflowId: string, options?: CompareOptions): Promise<ForkComparison> {
+    return compareForkFromInternals(getInternals(this), forkWorkflowId, options);
+  }
+  /**
    * Re-drive a workflow from its persisted checkpoint and return a live handle.
    * Accepts a workflow left `'running'` (e.g. recovered after a process restart)
    * or one explicitly `'suspended'` via {@link Engine.suspend} — a suspended
@@ -2796,12 +3204,21 @@ export class Engine<
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     });
   }
-  async cancel(workflowId: string): Promise<void> {
-    await cancelWorkflowFromTermination(
+  async cancel(workflowId: string): Promise<CancelWorkflowResult> {
+    return await cancelWorkflowFromTermination(
       getInternals(this),
       workflowId,
       this.#createTerminationCallbacks(),
     );
+  }
+  /**
+   * What {@link Engine.cancel} would do for a workflow, without doing it: the run's current status
+   * and whether a cancel would take effect (it is `pending`, `running` or `suspended`). Nothing is
+   * written, no cancel handler runs and the run is not disturbed. Throws, as a cancel does, when
+   * no workflow has the id.
+   */
+  async previewCancel(workflowId: string): Promise<CancelWorkflowDryRunResult> {
+    return await previewCancelWorkflow(getInternals(this), workflowId);
   }
   /**
    * Suspend a running workflow without terminating it. The workflow transitions
@@ -2840,6 +3257,18 @@ export class Engine<
     }
     return state;
   }
+  /**
+   * Read-only lookup by idempotency key: the state of the run that a {@link Engine.start} with
+   * `options.idempotencyKey` created, or `null` when no start with that key has committed. It
+   * answers a caller that cannot tell whether its start committed (a crash between the commit and
+   * the caller's own receipt) without validating or starting anything, so it still answers when
+   * the workflow's definition has since changed. The mapping is permanent: a terminal run is still
+   * returned. Throws {@link IdempotencyKeyPurgedError} when the key was used but its run has been
+   * purged, and `StartWorkflowValidationError` for a key a start would refuse.
+   */
+  async getByIdempotencyKey(idempotencyKey: string): Promise<WorkflowState | null> {
+    return getRunByIdempotencyKeyFromLifecycle(getInternals(this), idempotencyKey);
+  }
   /** Return the schedule occurrence that launched a workflow, when applicable. */
   async getScheduleProvenance(workflowId: string): Promise<WorkflowScheduleProvenance | null> {
     const bytes = await getInternals(this).storage.get(KEYS.scheduleRunLink(workflowId));
@@ -2849,6 +3278,7 @@ export class Engine<
     return {
       scheduleId: metadata.id,
       ...(metadata.occurrence === undefined ? {} : { occurrence: metadata.occurrence }),
+      ...(metadata.manual === true ? { manual: true as const } : {}),
     };
   }
   /** Return durable post-terminal finalizer progress or outcome, when applicable. */
@@ -2868,32 +3298,7 @@ export class Engine<
    * inventing successor details.
    */
   getLeaseHealth(): EngineLeaseHealth {
-    const internals = getInternals(this);
-    if (internals.options.ownershipMode === 'none') {
-      return { mode: 'none', status: 'disabled', holdsLease: false };
-    }
-    if (internals.deposed) {
-      const lastKnownLease = internals.leaseManager?.health();
-      if (lastKnownLease !== undefined && lastKnownLease.status !== 'no-lease') {
-        return {
-          mode: 'lease',
-          ...lastKnownLease,
-          status: 'contested',
-          holdsLease: false,
-          lossReason: 'deposed',
-        };
-      }
-      return {
-        mode: 'lease',
-        status: 'contested',
-        holdsLease: false,
-        lossReason: 'deposed',
-      };
-    }
-    return {
-      mode: 'lease',
-      ...(internals.leaseManager?.health() ?? { status: 'no-lease', holdsLease: false }),
-    };
+    return readEngineLeaseHealth(getInternals(this));
   }
   /**
    * Cross-process read of whether `workflowId`'s `ownership: 'workflow-lease'`
@@ -2921,7 +3326,10 @@ export class Engine<
    * fail, cancel, timeout) records the committing engine's ID, and the handle keeps
    * that ID when its `result()` settles. It is exact for every terminal outcome,
    * belongs to the run the handle awaited (a later `start-new` run under the same
-   * workflow id never changes it), and reads no storage. `false` while the result is
+   * workflow id never changes it), and reads no storage. A run whose id a `start-new`
+   * replacement reused before this engine read its outcome rejects its `result()` and reports
+   * `true`: the replacement purged the outcome, and only another engine can have ended the run.
+   * `false` while the result is
    * unsettled or was never requested, when no committer was recorded (a result
    * settled without a terminal commit, or a record written before the engine
    * recorded one), and under every other ownership mode.
@@ -2929,6 +3337,9 @@ export class Engine<
   lostWorkflowClaim(handle: WorkflowClaimHandle): boolean {
     const engineId = getInternals(this).workflowClaimRegistry?.engineId;
     if (engineId === undefined) return false;
+    // The run was replaced before this engine read its outcome, which only another engine can have
+    // terminated; the replacement's committer says nothing about it.
+    if (readHandleResultReplaced(handle)) return true;
     const committedBy = readHandleResultCommitter(handle);
     return committedBy !== undefined && committedBy !== engineId;
   }
@@ -2964,6 +3375,18 @@ export class Engine<
   }
   async getEvents(workflowId: string): Promise<WorkflowEvent[]> {
     return getWorkflowEvents(getInternals(this), workflowId);
+  }
+  /**
+   * The `ctx.log` lines a run logged that its log store still keeps, oldest first, with the
+   * count of lines the per-run cap evicted (COR-1811). `step` narrows the read to the lines logged
+   * before that durable step. Reads the store handed in as `EngineOptions.workflowLogs`, after
+   * flushing its buffered tail; an engine created without one answers `{ lines: [], dropped: 0 }`.
+   */
+  async getLogs(
+    workflowId: string,
+    options?: { step?: number | undefined },
+  ): Promise<WorkflowLogsResult> {
+    return getWorkflowLogs(getInternals(this), workflowId, options);
   }
   async *replayWorkflowFeed(
     workflowId: string,
@@ -3034,6 +3457,16 @@ export class Engine<
   }
   async getUpdateResult(updateId: string): Promise<import('../updates.ts').UpdateResponse | null> {
     return getUpdateResultFromInternals(getInternals(this), updateId);
+  }
+  /**
+   * List the updates a workflow has received through the durable request path, newest first,
+   * kept until the workflow is purged. See `UpdateHistoryEntry`.
+   */
+  async listUpdateHistory(
+    workflowId: string,
+    options?: { limit?: number; cursor?: string },
+  ): Promise<import('../update-history.ts').UpdateHistoryPage> {
+    return listUpdateHistoryFromInternals(getInternals(this), workflowId, options);
   }
   async submitCoordinatedUpdate(
     workflowId: string,
@@ -3170,6 +3603,10 @@ export class Engine<
         // before any awaited release.
         const { registry: workflowClaimRegistry } = this.#detachWorkflowClaimOwnership();
         disposeEngine(getInternals(this), (event) => this.dispatchEvent(event));
+        // A scheduler tick already scanning storage outlives the synchronous teardown above, so
+        // wait for it here: the caller closes its storage once this promise resolves, and a scan
+        // still reading then fails on a closed pool (COR-1908).
+        await getInternals(this).scheduler.stop();
         await getInternals(this).workflowRefreshCoordinator?.[Symbol.asyncDispose]();
         // A lease acquire may still be parked (waiting for handoff) when disposal
         // runs. disposeEngine() set `disposed` and stopped the manager, so the
@@ -3185,6 +3622,7 @@ export class Engine<
         // already issued so none lands after this promise or the lease handoff
         // below. Its pending reads are abandoned instead: storage calls cannot
         // be cancelled, and every purge write checks for disposal first.
+        await flushWorkflowLogs(getInternals(this));
         await settleInFlightPurgeWrites(getInternals(this));
         // Clean deploy handoff: release the ownership lease as the LAST durable
         // action, AFTER queued starts have drained and all write paths are down, so
@@ -3207,9 +3645,11 @@ export class Engine<
       return leaseReleased;
     }
     this[Symbol.dispose]();
+    await getInternals(this).scheduler.stop();
     await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
     // An engine already disposed synchronously may still have purge writes in
     // flight; settle them here too (see the first-disposal branch above).
+    await flushWorkflowLogs(getInternals(this));
     await settleInFlightPurgeWrites(getInternals(this));
     return (await this.#synchronousDisposeResult) ?? true;
   }
@@ -3225,6 +3665,41 @@ export class Engine<
   }
   get scheduler(): Scheduler {
     return getInternals(this).scheduler;
+  }
+
+  /**
+   * Change the options in {@link EnginePatch} on this running engine, validating them exactly as
+   * the constructor does and applying them all or none.
+   *
+   * A patch that fails validation is returned as `{ outcome: 'rejected' }`, never thrown, and
+   * leaves every option and timer as it was. `schedulerPollIntervalMs` re-arms a running poll
+   * timer, so the next poll lands one new interval from now; `retentionSweepInterval` clears an
+   * armed retention-sweep timer and arms it again at the new interval. The other keys are read
+   * where they are used, so they take effect on the next operation that reads them. A `retention`
+   * patch arms the sweep when retention becomes configured and clears it when none is configured
+   * any more, and leaves a running sweep timer alone. A patch with none of those keys touches no
+   * timer.
+   *
+   * @throws {EngineDisposedError} After the engine is disposed, like every other engine method.
+   *   Nothing is applied and no timer is armed.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const result = engine.reconfigure({
+   *   payloadSize: { maxBytes: 1_048_576 },
+   *   schedulerPollIntervalMs: 250,
+   * });
+   * if (result.outcome === 'rejected') {
+   *   console.error(result.message);
+   * }
+   * engine[Symbol.dispose]();
+   * ```
+   */
+  reconfigure(patch: EnginePatch): EngineReconfigureResult {
+    return reconfigureEngine(getInternals(this), patch, () => this.#ensureRetentionSweepInterval());
   }
 
   /**
@@ -3290,12 +3765,8 @@ export class Engine<
  *
  * @example Retain an engine with a concrete workflow registry behind a host-facing type
  * ```ts
- * import {
- *   Engine,
- *   MemoryStorage,
- *   workflow,
- *   type RegistryAgnosticEngine,
- * } from '@lostgradient/weft';
+ * import { Engine, workflow, type RegistryAgnosticEngine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const greeting = workflow({ name: 'greeting' }).execute(async function* () {
  *   return 'hello';

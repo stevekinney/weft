@@ -1,8 +1,8 @@
+import type { CatalogClient } from "../embedded/backchannel/src/client/index.ts";
 import type { WeftClient as WeftClientFromCliBarrel } from '../cli/index.ts';
 import type {
   CatalogOperationTypes,
   CatalogOperations,
-  CatalogWeftClient,
   ClientOperations,
   WeftClient as WeftClientFromRoot,
 } from '../index.ts';
@@ -21,10 +21,7 @@ void cliKeepsInterface;
 const namesFactoryReturn: Equals<CatalogOperations, ReturnType<typeof createWeftClient>> = true;
 void namesFactoryReturn;
 
-const namesCatalogClient: Equals<
-  CatalogOperations,
-  CatalogWeftClient<CatalogOperationTypes>
-> = true;
+const namesCatalogClient: Equals<CatalogOperations, CatalogClient<CatalogOperationTypes>> = true;
 void namesCatalogClient;
 
 const distinctFromInterface: Equals<CatalogOperations, WeftClientFromInterface> = false;

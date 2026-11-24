@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
+import { rejectionOf } from "../../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import {

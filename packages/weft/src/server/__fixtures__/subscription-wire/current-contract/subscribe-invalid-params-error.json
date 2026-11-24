@@ -4,6 +4,6 @@
   "error": {
     "code": -32602,
     "message": "params.workflowId must be a non-empty string",
-    "data": { "weftCode": "InvalidParams", "httpStatus": 400 }
+    "data": { "weftCode": "InvalidParams", "httpStatus": 400, "retryable": false }
   }
 }

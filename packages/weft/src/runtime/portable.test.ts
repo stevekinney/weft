@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  detectRuntime,
-  detectRuntimeVersion,
   fileSize,
-  gunzipSync,
-  gzipSync,
   hashBytes,
   hashString,
   setPortableRuntimeTestOverridesForTesting,
@@ -26,102 +22,38 @@ async function withRuntimeOverrides(
 }
 
 describe('portable runtime helpers', () => {
-  describe('detectRuntime', () => {
-    it('returns bun when running under Bun', () => {
-      expect(detectRuntime()).toBe('bun');
-    });
-
-    it('returns node when Bun is unavailable but process.versions.node is present', async () => {
-      await withRuntimeOverrides({ bun: undefined }, async () => {
-        expect(detectRuntime()).toBe('node');
-      });
-    });
-
-    it('returns browser when Bun is unavailable and window is present', async () => {
-      await withRuntimeOverrides(
-        {
-          bun: undefined,
-          process: undefined,
-          window: {} as typeof globalThis.window,
-        },
-        async () => {
-          expect(detectRuntime()).toBe('browser');
-        },
-      );
-    });
-
-    it('returns edge when Bun, Node, and browser globals are unavailable', async () => {
-      await withRuntimeOverrides(
-        {
-          bun: undefined,
-          process: undefined,
-          window: undefined,
-          document: undefined,
-        },
-        async () => {
-          expect(detectRuntime()).toBe('edge');
-        },
-      );
-    });
-  });
-
-  describe('detectRuntimeVersion', () => {
-    it('returns Bun.version under Bun', () => {
-      expect(detectRuntimeVersion()).toBe(Bun.version);
-    });
-
-    it('returns process.versions.node when Bun is unavailable but Node is present', async () => {
-      await withRuntimeOverrides(
-        { bun: undefined, process: { versions: { node: '20.11.0' } } as typeof globalThis.process },
-        async () => {
-          expect(detectRuntimeVersion()).toBe('20.11.0');
-        },
-      );
-    });
-
-    it('returns an empty string under a browser runtime', async () => {
-      await withRuntimeOverrides(
-        {
-          bun: undefined,
-          process: undefined,
-          window: {} as typeof globalThis.window,
-        },
-        async () => {
-          expect(detectRuntimeVersion()).toBe('');
-        },
-      );
-    });
-
-    it('returns an empty string under an edge runtime', async () => {
-      await withRuntimeOverrides(
-        {
-          bun: undefined,
-          process: undefined,
-          window: undefined,
-          document: undefined,
-        },
-        async () => {
-          expect(detectRuntimeVersion()).toBe('');
-        },
-      );
-    });
-  });
-
   describe('sleep', () => {
     it('resolves no earlier than the requested duration', async () => {
       const start = performance.now();
+      // load-proof: the test asserts only a lower bound on the elapsed time, which load can only lengthen
       await sleep(50);
       const elapsed = performance.now() - start;
       expect(elapsed).toBeGreaterThanOrEqual(40);
     });
+  });
 
-    it('falls back to setTimeout when Bun is unavailable', async () => {
-      await withRuntimeOverrides({ bun: undefined }, async () => {
-        const start = performance.now();
-        await sleep(10);
-        const elapsed = performance.now() - start;
-        expect(elapsed).toBeGreaterThanOrEqual(5);
-      });
+  describe('sleep with a signal', () => {
+    it('resolves immediately for a signal that is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      // load-proof: a pre-aborted signal resolves without arming a timer, so no duration is involved
+      await sleep(60_000, controller.signal);
+    });
+
+    it('ends early when the signal aborts, and leaves no pending timer', async () => {
+      const controller = new AbortController();
+      const pending = sleep(60_000, controller.signal);
+      controller.abort();
+      // load-proof: abort resolves the pause directly; the 60s timer is cleared, never awaited
+      await pending;
+    });
+
+    it('still waits for the timer when the signal never aborts', async () => {
+      const controller = new AbortController();
+      const start = performance.now();
+      // load-proof: the test asserts only a lower bound on the elapsed time, which load can only lengthen
+      await sleep(30, controller.signal);
+      expect(performance.now() - start).toBeGreaterThanOrEqual(20);
     });
   });
 
@@ -196,13 +128,12 @@ describe('portable runtime helpers', () => {
       expect(size).toBeGreaterThan(0);
     });
 
-    it('returns 0 for a non-existent file under Bun', () => {
-      // Bun.file().size returns 0 for missing files rather than throwing.
+    it('returns 0 for a non-existent file', () => {
       const size = fileSize('/tmp/__does_not_exist_weft_test__');
       expect(size).toBe(0);
     });
 
-    it('uses node:fs via process.getBuiltinModule when Bun is unavailable', async () => {
+    it('uses node:fs via process.getBuiltinModule', async () => {
       const statSync = (path: string) => ({ size: path.length });
       const processStub = {
         versions: { node: '22.5.0' },
@@ -214,7 +145,7 @@ describe('portable runtime helpers', () => {
         },
       } as unknown as typeof globalThis.process;
 
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+      await withRuntimeOverrides({ process: processStub }, async () => {
         expect(fileSize('/tmp/example')).toBe(12);
       });
     });
@@ -227,14 +158,14 @@ describe('portable runtime helpers', () => {
         },
       } as unknown as typeof globalThis.process;
 
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+      await withRuntimeOverrides({ process: processStub }, async () => {
         expect(() => fileSize('/tmp/example')).toThrow(
           'fileSize() requires Bun or Node 22.5+ (process.getBuiltinModule). Not available in browser or edge runtimes.',
         );
       });
     });
 
-    it('returns 0 for ENOENT on the Node fallback path', async () => {
+    it('returns 0 for ENOENT from node:fs', async () => {
       const processStub = {
         versions: { node: '22.5.0' },
         getBuiltinModule(id: string) {
@@ -251,71 +182,8 @@ describe('portable runtime helpers', () => {
         },
       } as unknown as typeof globalThis.process;
 
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+      await withRuntimeOverrides({ process: processStub }, async () => {
         expect(fileSize('/tmp/missing')).toBe(0);
-      });
-    });
-  });
-
-  describe('gzipSync / gunzipSync', () => {
-    it('round-trips data correctly', () => {
-      const original = new TextEncoder().encode('hello, compressed world!');
-      const compressed = gzipSync(original);
-      const decompressed = gunzipSync(compressed);
-      expect(decompressed).toEqual(original);
-    });
-
-    it('produces output smaller than input for compressible data', () => {
-      const data = new TextEncoder().encode('a'.repeat(1000));
-      const compressed = gzipSync(data);
-      expect(compressed.length).toBeLessThan(data.length);
-    });
-
-    it('handles empty input', () => {
-      const empty = new Uint8Array(0);
-      const compressed = gzipSync(empty);
-      const decompressed = gunzipSync(compressed);
-      expect(decompressed).toEqual(empty);
-    });
-
-    it('uses node:zlib via process.getBuiltinModule when Bun is unavailable', async () => {
-      const processStub = {
-        versions: { node: '22.5.0' },
-        getBuiltinModule(id: string) {
-          if (id === 'node:zlib') {
-            return {
-              gzipSync(data: Uint8Array) {
-                return new Uint8Array([99, ...data]);
-              },
-              gunzipSync(data: Uint8Array) {
-                return data.slice(1);
-              },
-            };
-          }
-          return undefined;
-        },
-      } as unknown as typeof globalThis.process;
-
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
-        const original = new Uint8Array([1, 2, 3]);
-        const compressed = gzipSync(original);
-        expect(compressed).toEqual(new Uint8Array([99, 1, 2, 3]));
-        expect(gunzipSync(compressed)).toEqual(original);
-      });
-    });
-
-    it('throws when gzip helpers are unavailable outside Bun and Node built-ins', async () => {
-      const processStub = {
-        versions: { node: '22.5.0' },
-        getBuiltinModule() {
-          return undefined;
-        },
-      } as unknown as typeof globalThis.process;
-
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
-        expect(() => gzipSync(new Uint8Array([1, 2, 3]))).toThrow(
-          'gzip/gunzip require Bun or Node 22.5+ (process.getBuiltinModule). Not available in browser or edge runtimes — use CompressionStream directly.',
-        );
       });
     });
 
@@ -324,14 +192,14 @@ describe('portable runtime helpers', () => {
         versions: { node: '22.5.0' },
       } as typeof globalThis.process;
 
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+      await withRuntimeOverrides({ process: processStub }, async () => {
         expect(() => fileSize('/tmp/example')).toThrow(
           'fileSize() requires Bun or Node 22.5+ (process.getBuiltinModule). Not available in browser or edge runtimes.',
         );
       });
     });
 
-    it('rethrows non-ENOENT file system errors on the Node fallback path', async () => {
+    it('rethrows non-ENOENT file system errors from node:fs', async () => {
       const processStub = {
         versions: { node: '22.5.0' },
         getBuiltinModule(id: string) {
@@ -348,7 +216,7 @@ describe('portable runtime helpers', () => {
         },
       } as typeof globalThis.process;
 
-      await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+      await withRuntimeOverrides({ process: processStub }, async () => {
         expect(() => fileSize('/tmp/example')).toThrow('permission denied');
       });
     });

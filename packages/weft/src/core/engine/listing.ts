@@ -1,4 +1,4 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { normalizeFailureCategory } from '../failure-categories.ts';
 import { isFailureCategory, normalizeListFilter } from '../list-filter-validation.ts';
@@ -9,6 +9,7 @@ import type {
   ListOptions,
   PaginatedResult,
   SearchAttributeValue,
+  WorkflowRetrying,
   WorkflowState,
   WorkflowSummary,
 } from '../types.ts';
@@ -22,11 +23,12 @@ import {
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
+import { matchesListFilterAndRecords, readRetryingRecord } from './list-filter-match.ts';
 import {
   readSearchAttributesForFilter,
   readSearchAttributesForStates,
 } from './search-attribute-records.ts';
-import { matchesListFilter, paginateWorkflowSummaries } from './state-utilities.ts';
+import { paginateWorkflowSummaries } from './state-utilities.ts';
 import { decodeWorkflowState, normalizeBulkFilterNumber } from './validation.ts';
 import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
 import {
@@ -103,13 +105,14 @@ async function collectSummariesFromConstrainedIds(
       if (!stateBytes) continue;
       const state = decodeWorkflowState(stateBytes);
       if (
-        !matchesListFilter(
+        !(await matchesListFilterAndRecords(
+          internals,
           state,
           normalizedFilter,
           constrainedIds,
           normalizedTagFilters,
           searchAttributesByWorkflowId.get(state.id) ?? null,
-        )
+        ))
       ) {
         continue;
       }
@@ -141,14 +144,29 @@ async function collectSummariesFromFullScan(
       state.id,
       normalizedFilter,
     );
-    if (!matchesListFilter(state, normalizedFilter, null, normalizedTagFilters, searchAttributes)) {
+    if (
+      !(await matchesListFilterAndRecords(
+        internals,
+        state,
+        normalizedFilter,
+        null,
+        normalizedTagFilters,
+        searchAttributes,
+      ))
+    ) {
       continue;
     }
 
     const attributeBytes = shouldReadFailureCategoryAttribute(state, options)
       ? await internals.storage.get(KEYS.attribute(state.id))
       : null;
-    items.push(summaryFromState(state, failureCategoryFromAttributeBytes(attributeBytes)));
+    items.push(
+      summaryFromState(
+        state,
+        failureCategoryFromAttributeBytes(attributeBytes),
+        await readRetryingRecord(internals, state),
+      ),
+    );
   }
   return items;
 }
@@ -165,8 +183,10 @@ async function summariesFromStates(
   options: ListOptions | undefined,
 ): Promise<WorkflowSummary[]> {
   const attributeBytesByWorkflowId = new Map<string, Uint8Array | null>();
+  const retryingByWorkflowId = new Map<string, WorkflowRetrying | undefined>();
   await Promise.all(
     states.map(async (state) => {
+      retryingByWorkflowId.set(state.id, await readRetryingRecord(internals, state));
       if (!shouldReadFailureCategoryAttribute(state, options)) return;
       attributeBytesByWorkflowId.set(
         state.id,
@@ -179,6 +199,7 @@ async function summariesFromStates(
     summaryFromState(
       state,
       failureCategoryFromAttributeBytes(attributeBytesByWorkflowId.get(state.id) ?? null),
+      retryingByWorkflowId.get(state.id),
     ),
   );
 }
@@ -214,6 +235,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function summaryFromState(
   state: WorkflowState,
   attributeFailureCategory?: FailureCategory,
+  retrying?: WorkflowRetrying,
 ): WorkflowSummary {
   const failureCategory = state.failureCategory ?? attributeFailureCategory;
   return {
@@ -227,6 +249,8 @@ function summaryFromState(
     updatedAt: state.updatedAt,
     ...(state.executionDeadline !== undefined && { executionDeadline: state.executionDeadline }),
     ...(failureCategory !== undefined && failureCategory !== null && { failureCategory }),
+    ...(state.failedStep !== undefined && { failedStep: state.failedStep }),
+    ...(retrying !== undefined && { retrying }),
   };
 }
 
@@ -380,7 +404,7 @@ export async function setAttributes(
     if (registration?.searchAttributes) {
       const schema = registration.searchAttributes;
       for (const [key, value] of Object.entries(attributes)) {
-        if (!(key in schema)) {
+        if (!Object.hasOwn(schema, key)) {
           throw new Error(
             `Unknown search attribute "${key}". Registered attributes: ${Object.keys(schema).join(', ')}`,
           );

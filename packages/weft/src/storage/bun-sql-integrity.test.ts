@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import type { BatchOperation } from './interface.ts';
+import type { BatchOperation } from "../embedded/storage/src/index.ts";
 
+import { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
 import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
-} from '../testing/storage-backends.test-support.ts';
+} from "../embedded/storage/src/testing/index.ts";
 import {
   ARCHITECTURE_BENCHMARK_WORKLOAD,
   benchmarkWorkload,
@@ -16,7 +17,6 @@ import {
   selectSQLiteBenchmarkWorkload,
   TARGET_WRITES_PER_SECOND,
 } from './bun-sql-workload.test-support.ts';
-import { BunSQLiteStorage } from './bun-sql.ts';
 
 const integrityWorkload = selectSQLiteBenchmarkWorkload(false);
 
@@ -87,7 +87,7 @@ describe('BunSQLiteStorage integrity', () => {
     expect(last).toEqual(value);
 
     storage[Symbol.dispose]();
-  }, 15_000);
+  });
 
   it('stores individual puts as single-operation batches and reads back the first and last keys', async () => {
     const storage = createStorage();
@@ -131,74 +131,70 @@ describe('BunSQLiteStorage integrity', () => {
     storage[Symbol.dispose]();
   });
 
-  it(
-    'applies mixed put and delete batches and reads back stored and deleted keys',
-    async () => {
-      const storage = createStorage();
-      const value = generateCheckpointValue();
-      const totalOperations = benchmarkWorkload.mixedOperationTotal;
-      const batchSize = benchmarkWorkload.mixedOperationBatchSize;
-      const batches = totalOperations / batchSize;
+  it('applies mixed put and delete batches and reads back stored and deleted keys', async () => {
+    const storage = createStorage();
+    const value = generateCheckpointValue();
+    const totalOperations = benchmarkWorkload.mixedOperationTotal;
+    const batchSize = benchmarkWorkload.mixedOperationBatchSize;
+    const batches = totalOperations / batchSize;
 
-      // Seed data to delete
-      const seedOperations: BatchOperation[] = Array.from(
-        { length: totalOperations / 5 },
-        (_, index) => ({
-          type: 'put' as const,
-          key: `seed:${String(index).padStart(10, '0')}`,
-          value,
-        }),
-      );
-      await storage.batch(seedOperations);
-
-      // Pre-generate mixed operations: 80% puts, 20% deletes
-      const allBatches: BatchOperation[][] = Array.from({ length: batches }, (_b, batchIndex) =>
-        Array.from({ length: batchSize }, (_i, itemIndex) => {
-          const globalIndex = batchIndex * batchSize + itemIndex;
-          if (globalIndex % 5 === 0 && globalIndex / 5 < totalOperations / 5) {
-            return {
-              type: 'delete' as const,
-              key: `seed:${String(globalIndex / 5).padStart(10, '0')}`,
-            };
-          }
-          return {
-            type: 'put' as const,
-            key: `mixed:${String(globalIndex).padStart(10, '0')}`,
-            value,
-          };
-        }),
-      );
-
-      const start = performance.now();
-
-      for (const batch of allBatches) {
-        await storage.batch(batch);
-      }
-
-      const elapsed = performance.now() - start;
-      const operationsPerSecond = Math.round((totalOperations / elapsed) * 1000);
-
-      console.log(
-        [
-          `\n  SQLite mixed batch benchmark:`,
-          `    Total operations: ${totalOperations.toLocaleString()} (80% put, 20% delete)`,
-          `    Value size:       ${value.byteLength} bytes`,
-          `    Batch size:       ${batchSize.toLocaleString()}`,
-          `    Elapsed:          ${elapsed.toFixed(1)}ms`,
-          `    Operations/sec:   ${operationsPerSecond.toLocaleString()}\n`,
-        ].join('\n'),
-      );
-
-      const seedCount = totalOperations / 5;
-      expect(await storage.get('seed:0000000000')).toBeNull();
-      expect(await storage.get(`seed:${String(seedCount - 1).padStart(10, '0')}`)).toBeNull();
-      expect(await storage.get('mixed:0000000001')).toEqual(value);
-      expect(await storage.get(`mixed:${String(totalOperations - 1).padStart(10, '0')}`)).toEqual(
+    // Seed data to delete
+    const seedOperations: BatchOperation[] = Array.from(
+      { length: totalOperations / 5 },
+      (_, index) => ({
+        type: 'put' as const,
+        key: `seed:${String(index).padStart(10, '0')}`,
         value,
-      );
+      }),
+    );
+    await storage.batch(seedOperations);
 
-      storage[Symbol.dispose]();
-    },
-    { timeout: 15_000 },
-  );
+    // Pre-generate mixed operations: 80% puts, 20% deletes
+    const allBatches: BatchOperation[][] = Array.from({ length: batches }, (_b, batchIndex) =>
+      Array.from({ length: batchSize }, (_i, itemIndex) => {
+        const globalIndex = batchIndex * batchSize + itemIndex;
+        if (globalIndex % 5 === 0 && globalIndex / 5 < totalOperations / 5) {
+          return {
+            type: 'delete' as const,
+            key: `seed:${String(globalIndex / 5).padStart(10, '0')}`,
+          };
+        }
+        return {
+          type: 'put' as const,
+          key: `mixed:${String(globalIndex).padStart(10, '0')}`,
+          value,
+        };
+      }),
+    );
+
+    const start = performance.now();
+
+    for (const batch of allBatches) {
+      await storage.batch(batch);
+    }
+
+    const elapsed = performance.now() - start;
+    const operationsPerSecond = Math.round((totalOperations / elapsed) * 1000);
+
+    console.log(
+      [
+        `\n  SQLite mixed batch benchmark:`,
+        `    Total operations: ${totalOperations.toLocaleString()} (80% put, 20% delete)`,
+        `    Value size:       ${value.byteLength} bytes`,
+        `    Batch size:       ${batchSize.toLocaleString()}`,
+        `    Elapsed:          ${elapsed.toFixed(1)}ms`,
+        `    Operations/sec:   ${operationsPerSecond.toLocaleString()}\n`,
+      ].join('\n'),
+    );
+
+    const seedCount = totalOperations / 5;
+    expect(await storage.get('seed:0000000000')).toBeNull();
+    expect(await storage.get(`seed:${String(seedCount - 1).padStart(10, '0')}`)).toBeNull();
+    expect(await storage.get('mixed:0000000001')).toEqual(value);
+    expect(await storage.get(`mixed:${String(totalOperations - 1).padStart(10, '0')}`)).toEqual(
+      value,
+    );
+
+    storage[Symbol.dispose]();
+  });
 });

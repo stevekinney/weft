@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import {
   removeWorkflowTagsOperation,
   removeWorkflowTagsRestBinding,
@@ -70,7 +69,10 @@ describe('weft.workflows.tags.remove', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Field "tags" must not contain empty tags' });
+    expect(await response.json()).toEqual({
+      error: 'Field "tags" must not contain empty tags',
+      retryable: false,
+    });
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {
@@ -94,6 +96,7 @@ describe('weft.workflows.tags.remove', () => {
       expect(await response.json()).toEqual({
         error: 'workflow not found',
         data: { resource: 'workflow', identifier: 'missing' },
+        retryable: false,
       });
     } finally {
       engine.removeTags = originalRemoveTags;
@@ -118,7 +121,7 @@ describe('weft.workflows.tags.remove', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.removeTags = originalRemoveTags;
     }

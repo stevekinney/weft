@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { TestEngine } from '../../testing/test-engine.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { WorkflowConcurrencyLimitExceededError } from './errors.ts';

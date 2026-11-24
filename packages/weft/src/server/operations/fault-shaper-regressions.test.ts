@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
-import { shapeOperationFaultAsJson, type OperationFault } from '../operation-fault.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { type OperationFault } from "../../embedded/backchannel/src/index.ts";
+import { invalidParamsFault, shapeOperationFaultAsJson } from "../../embedded/backchannel/src/internals.ts";
+import { fleetEventsSseRestBinding } from './fleet-events-sse.ts';
+import { shapeRestFault } from './operation-helpers.ts';
+import { workflowEventsSseRestBinding } from './workflow-events-sse.ts';
 
 const operationsDirectory = new URL('.', import.meta.url);
 
@@ -10,13 +13,14 @@ async function expectJsonErrorResponse(
   expectedStatus: number,
   expectedMessage: string,
   expectedData?: Readonly<Record<string, unknown>>,
+  expectedRetryable = false,
 ): Promise<void> {
   expect(response.status).toBe(expectedStatus);
   expect(response.headers.get('Content-Type')).toBe('application/json');
   expect(await response.json()).toEqual(
     expectedData === undefined
-      ? { error: expectedMessage }
-      : { error: expectedMessage, data: expectedData },
+      ? { error: expectedMessage, retryable: expectedRetryable }
+      : { error: expectedMessage, data: expectedData, retryable: expectedRetryable },
   );
 }
 
@@ -37,6 +41,38 @@ async function operationSourceFiles(): Promise<string[]> {
 }
 
 describe('REST fault shaper regressions', () => {
+  it.each([
+    ['fleet', fleetEventsSseRestBinding],
+    ['workflow', workflowEventsSseRestBinding],
+  ] as const)(
+    'checks the host error-code vocabulary for %s event stream refusals',
+    async (_kind, binding) => {
+      const { shapeFault } = binding;
+      if (shapeFault === undefined) throw new Error('Expected an event stream fault shaper');
+
+      const refused = (weftCode: string): OperationFault => ({
+        code: 'NotFound',
+        message: 'Workflow not found',
+        data: { resource: 'workflow', weftCode },
+      });
+      const recognized = shapeFault(refused('WorkflowNotFoundError'));
+      expect(recognized.status).toBe(404);
+      expect(await recognized.json()).toEqual({
+        error: 'Workflow not found',
+        weftCode: 'WorkflowNotFoundError',
+        data: { resource: 'workflow' },
+        retryable: false,
+      });
+
+      await expectJsonErrorResponse(
+        shapeFault(refused('UnrecognizedHostError')),
+        404,
+        'Workflow not found',
+        { resource: 'workflow' },
+      );
+    },
+  );
+
   it('masks canonical EngineFailure responses while preserving mapped client faults', async () => {
     const engineFailureFault: OperationFault = {
       code: 'EngineFailure',
@@ -79,6 +115,7 @@ describe('REST fault shaper regressions', () => {
       error: 'Workflow "wf-1" not found',
       weftCode: 'WorkflowNotFoundError',
       data: { resource: 'workflow', identifier: 'wf-1' },
+      retryable: false,
     });
 
     const invalidParamsResponse = shapeRestFault(invalidParamsWithCode);
@@ -86,6 +123,7 @@ describe('REST fault shaper regressions', () => {
     expect(await invalidParamsResponse.json()).toEqual({
       error: 'No workflow registered with name "x"',
       weftCode: 'WorkflowNotRegisteredError',
+      retryable: false,
     });
   });
 
@@ -102,7 +140,7 @@ describe('REST fault shaper regressions', () => {
       status: 418,
     });
     expect(response.status).toBe(500);
-    expect(await response.text()).toBe('{"error":"Internal server error"}');
+    expect(await response.text()).toBe('{"error":"Internal server error","retryable":false}');
   });
 
   it('projects only the audited per-code data allowlist over REST (#720)', async () => {
@@ -136,7 +174,11 @@ describe('REST fault shaper regressions', () => {
       },
       { code: 'Unprocessable', message: 'Unprocessable', data: { reason: 'engine detail' } },
       { code: 'PayloadTooLarge', message: 'Too large', data: { maxBytes: 1024 } },
-      { code: 'Timeout', message: 'Timed out', data: { operationName: 'weft.workflows.update' } },
+      {
+        code: 'Timeout',
+        message: 'Timed out',
+        data: { operationName: 'weft.workflows.update', updateId: 'update-1' },
+      },
       { code: 'NotImplemented', message: 'Not implemented', data: {} },
       {
         code: 'UnsupportedTransport',
@@ -158,12 +200,13 @@ describe('REST fault shaper regressions', () => {
 
     const bodies = await Promise.all(faults.map(async (fault) => shapeRestFault(fault).json()));
     expect(bodies).toEqual([
-      { error: 'Unauthorized' },
-      { error: 'Forbidden' },
+      { error: 'Unauthorized', retryable: false },
+      { error: 'Forbidden', retryable: false },
       {
         error: 'Workflow not found',
         weftCode: 'WorkflowNotFoundError',
         data: { resource: 'workflow', identifier: 'workflow-1' },
+        retryable: false,
       },
       {
         error: 'Recovery conflict',
@@ -172,23 +215,30 @@ describe('REST fault shaper regressions', () => {
           missingWorkflowCount: 2,
           samplesTruncated: true,
         },
+        retryable: false,
       },
-      { error: 'Unprocessable' },
-      { error: 'Too large', data: { maxBytes: 1024 } },
-      { error: 'Timed out', data: { operationName: 'weft.workflows.update' } },
-      { error: 'Not implemented' },
+      { error: 'Unprocessable', retryable: false },
+      { error: 'Too large', data: { maxBytes: 1024 }, retryable: false },
+      {
+        error: 'Timed out',
+        data: { operationName: 'weft.workflows.update', updateId: 'update-1' },
+        retryable: true,
+      },
+      { error: 'Not implemented', retryable: false },
       {
         error: 'Unsupported transport',
         data: { transport: 'http-rest', supported: ['jsonRpcHttp'] },
+        retryable: false,
       },
-      { error: 'Subscription overflow', data: { droppedCount: 3 } },
+      { error: 'Subscription overflow', data: { droppedCount: 3 }, retryable: false },
       {
         error: 'Invalid parameters',
         data: {
           issues: [{ path: ['operation'], message: 'Invalid option', code: 'invalid_value' }],
         },
+        retryable: false,
       },
-      { error: 'Unknown method', data: { method: 'weft.unknown' } },
+      { error: 'Unknown method', data: { method: 'weft.unknown' }, retryable: false },
     ]);
   });
 
@@ -211,6 +261,7 @@ describe('REST fault shaper regressions', () => {
         compatibilityReasons: ['contract-hash-mismatch', 'workflow-version-incompatible'],
         currentGeneration: 3,
       },
+      retryable: false,
     });
     // `reason` itself stays withheld from REST, matching every other
     // Conflict-producing operation in this codebase — see this file's own
@@ -295,11 +346,11 @@ describe('REST fault shaper regressions', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps invalid-params fault construction in operation helpers', async () => {
+  it('keeps invalid-params fault construction in the shared fault helpers', async () => {
     const source = await Bun.file(new URL('bulk-filter-body.ts', operationsDirectory)).text();
 
     expect(source).toMatch(
-      /import\s+\{[^}]*\binvalidParamsFault\b[^}]*\}\s+from\s+['"]\.\/operation-helpers\.ts['"]/u,
+      /import\s+\{[^}]*\binvalidParamsFault\b[^}]*\}\s+from\s+['"]@lostgradient\/backchannel\/internals['"]/u,
     );
     expect(source).not.toContain('function invalidParamsFault');
     expect(source).not.toContain('export function invalidParamsFault');

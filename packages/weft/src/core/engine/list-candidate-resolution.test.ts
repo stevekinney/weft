@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'bun:test';
 
+import { type ScanOptions, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   runWorkflowVisibilityBackfill,
   runWorkflowVisibilityDrop,
 } from '../../../scripts/lib/workflow-visibility-backfill.ts';
-import { KEYS, type ScanOptions } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { buildIndexOperations } from '../search-attributes.ts';
 import type { WorkflowState } from '../types.ts';
+import { activity } from '../types.ts';
 import { workflow } from '../types/workflow-function.ts';
 import { getInternals } from './internals.ts';
+import { resolveListCandidateIds } from './list-candidate-resolution.ts';
 import { assertWorkflowListScanWithinCap, streamWorkflowStateBatches } from './listing.ts';
 import {
   MAX_LIST_SCAN_ROWS,
@@ -402,6 +405,77 @@ describe('resolveListCandidateIds', () => {
       expect(result.items.map((item) => item.id)).toEqual(['application-1']);
       expect(storage.countScans('wf:')).toBe(0);
       expect(storage.countScans('idx:failureCategory:s:application:')).toBe(1);
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('resolves retrying: true to an indexed candidate source and never scans every run', async () => {
+    const storage = new ScanCountingStorage();
+    const engine = new Engine({ storage, getNow: () => 1_000_000 });
+    try {
+      const flaky = activity({
+        name: 'flaky',
+        retry: { maxAttempts: 3, initialBackoff: '2s', backoffMultiplier: 1, maxBackoff: '2s' },
+        execute: async () => {
+          throw new Error('always-fails');
+        },
+      } as never);
+      engine.register(
+        workflow({ name: 'retrying-run' })
+          .activities({ flaky })
+          .execute(async function* (ctx) {
+            return yield* ctx.run(flaky);
+          }),
+      );
+      engine.register(
+        workflow({ name: 'idle-run' }).execute(async function* (ctx) {
+          yield* ctx.waitForSignal('finish');
+        }),
+      );
+      await engine.start('retrying-run', null, { id: 'retrying-1' });
+      await engine.start('idle-run', null, { id: 'idle-1' });
+      await waitForCondition(
+        async () => (await storage.get(KEYS.activityRetrying('retrying-1'))) !== null,
+        {
+          label: 'retry decision committed',
+        },
+      );
+      storage.resetObservations();
+
+      const internals = getInternals(engine);
+      const candidates = await resolveListCandidateIds(internals, { retrying: true }, undefined);
+      expect(candidates).toEqual(new Set(['retrying-1']));
+
+      const result = await engine.list({ retrying: true });
+      expect(result.items.map((item) => item.id)).toEqual(['retrying-1']);
+      expect(storage.countScans('wf:')).toBe(0);
+      expect(storage.countScans(KEYS.activityRetryingPrefix())).toBe(2);
+
+      // `false` is a negation no index narrows; the loaded state decides.
+      expect(await resolveListCandidateIds(internals, { retrying: false }, undefined)).toBeNull();
+
+      // No visibility index is built yet, so the retrying source is the only index in play: it
+      // does not wait on the visibility watermark, and `failedStep` falls back to the scan.
+      expect(
+        await resolveListCandidateIds(internals, { failedStep: 'flaky' }, undefined),
+      ).toBeNull();
+      storage.resetObservations();
+      const prefixed = await engine.list({ retrying: true, idPrefix: 'retrying-' });
+      expect(prefixed.items.map((item) => item.id)).toEqual(['retrying-1']);
+      expect(storage.countScans('wf:')).toBe(0);
+      expect(storage.countScans(KEYS.activityRetryingPrefix())).toBe(1);
+
+      // With the visibility index live, `failedStep` narrows to the failed-status index.
+      await runWorkflowVisibilityBackfill(storage, {
+        settleMilliseconds: 0,
+        onWatermarkWritten: () => {
+          internals.workflowVisibilityWatermark = undefined;
+        },
+      });
+      expect(await resolveListCandidateIds(internals, { failedStep: 'flaky' }, undefined)).toEqual(
+        new Set(),
+      );
     } finally {
       engine[Symbol.dispose]();
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
+import { anonymousPrincipal, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
 import { workflowEventsSubscriptionOperation } from './workflow-events-subscription.ts';
 
 describe('weft.workflows.events authorization', () => {
@@ -11,7 +11,7 @@ describe('weft.workflows.events authorization', () => {
     return {
       input,
       principal,
-      engine: {},
+      host: {},
       transport: 'jsonRpcWebSocket' as const,
     };
   }

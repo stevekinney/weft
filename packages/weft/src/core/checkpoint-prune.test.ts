@@ -1,18 +1,22 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import { BunSQLiteStorage } from '../storage/bun-sql.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { KEYS, MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MAX_BATCH_OPERATIONS,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { serializeCheckpoint } from './checkpoint.ts';
 import { Engine } from './engine.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION, type Checkpoint, workflow } from './types.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 /** Build serialized checkpoint bytes with a given `workflowExecutionToken`. */

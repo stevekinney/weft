@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { principalFromApiKey } from '../principal.ts';
 import {
   assertOperationEngineMethods,
   assertOperationWorkflowMethods,
@@ -57,7 +57,7 @@ describe('operation engine capability boundaries', () => {
         await throwingRejectionOf(
           storageConditionalBatchOperation.invoke({
             input: { conditions: [], operations: [] },
-            engine: {
+            host: {
               storage: {
                 capabilities: () => ({
                   persistence: 'ephemeral',
@@ -104,7 +104,7 @@ describe('operation engine capability boundaries', () => {
       await throwingRejectionOf(
         storageConditionalBatchOperation.invoke({
           input: { conditions: [], operations: [] },
-          engine: { storage },
+          host: { storage },
           principal,
           transport: 'http-rest',
         }),
@@ -130,7 +130,7 @@ describe('operation engine capability boundaries', () => {
       expect(
         await storageGetOperation.invoke({
           input: { key: 'workflow-key' },
-          engine: { storage },
+          host: { storage },
           principal,
           transport: 'http-rest',
         }),

@@ -1,4 +1,5 @@
-import { KEYS, storageHas } from '../../storage/interface.ts';
+import { storageHas } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { assertScopedBulkWorkflowFilter } from '../bulk-workflow-filter.ts';
 import type {
   BulkCancelResult,
@@ -15,17 +16,14 @@ import type {
   BulkSignalResult,
   BulkTagResult,
   ListFilter,
-  PurgeResult,
-  WorkflowState,
   WorkflowStatus,
 } from '../types.ts';
 import { bulkMutateWorkflowTags } from './attributes-tags.ts';
-import { purgeInternal, purgeWorkflow, type CleanupWaiters } from './bulk-operations-purge.ts';
+import { purgeWorkflow, type CleanupWaiters } from './bulk-operations-purge.ts';
 import { runBulkFailedWorkflowRetry } from './bulk-operations-retry.ts';
 import {
   buildActionableBulkWorkflowFilter,
   buildBulkOperationPreparation,
-  collectTerminalWorkflowSnapshots,
   normalizeBulkOperationOptions,
   prepareBulkOperation,
   resolveBulkOperationConcurrency,
@@ -35,13 +33,16 @@ import {
   validateBulkConfirmation,
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
-import { BulkDeleteRequiresTerminalWorkflowsError } from './errors.ts';
+import {
+  bulkRunReplaced,
+  collectTerminalWorkflowSnapshots,
+  loadTerminalWorkflowStatesForBatch,
+} from './bulk-scanned-runs.ts';
 import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import type { LifecycleCallbacks } from './lifecycle.ts';
 import { BULK_OPERATION_BATCH_SIZE } from './listing.ts';
 import { loadWorkflowState } from './storage-io.ts';
-import { isTerminalWorkflowStatus } from './validation.ts';
 
 export { purgeInternal, TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations-purge.ts';
 
@@ -51,19 +52,6 @@ export { purgeInternal, TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations-purg
 // reaches a suspended run (it buffers the signal durably and replays it on
 // resume, exactly like a parked running run).
 const ACTIVE_WORKFLOW_STATUSES: WorkflowStatus[] = ['pending', 'running', 'suspended'];
-
-export async function purge(
-  internals: EngineInternals,
-  filter: ListFilter | undefined,
-  cleanupWaiters: CleanupWaiters,
-): Promise<PurgeResult> {
-  return purgeInternal(
-    internals,
-    filter,
-    { expiredOnly: false, now: internals.options.getNow() },
-    cleanupWaiters,
-  );
-}
 
 async function runBulkCancellation(
   internals: EngineInternals,
@@ -97,6 +85,14 @@ async function runBulkCancellation(
     workflowIdsToCancel,
     bulkConcurrency,
     async (workflowId) => {
+      // `engine.cancel` takes only an id, so this read narrows the window rather than closing it:
+      // a replacement that landed after the scan is not cancelled.
+      if (await bulkRunReplaced(internals, preparation.runs, workflowId)) {
+        return {
+          status: 'failed' as const,
+          error: { id: workflowId, error: 'Workflow was replaced after the preview' },
+        };
+      }
       await internals.engine.cancel(workflowId);
       const refreshedState = await loadWorkflowState(internals, workflowId);
       if (refreshedState?.status === 'cancelled') {
@@ -247,6 +243,11 @@ export async function signalAll(
     bulkConcurrency,
     async (workflowId) => {
       try {
+        // `engine.signal` takes only an id, so this read narrows the window rather than closing
+        // it: a replacement that landed after the scan is not signalled.
+        if (await bulkRunReplaced(internals, preparation.runs, workflowId)) {
+          return { status: 'failed' as const };
+        }
         await internals.engine.signal(workflowId, name, payload);
         return { status: 'signalled' as const };
       } catch {
@@ -314,9 +315,12 @@ async function runBulkDeletion(
       batchStart,
       batchStart + BULK_OPERATION_BATCH_SIZE,
     );
+    // The delete below is fenced on the bytes this read returns, so a replacement the read left
+    // out cannot slip in after it.
     const workflowStatesToDelete = await loadTerminalWorkflowStatesForBatch(
       internals,
       batchWorkflowIds,
+      preparation.runs,
     );
 
     // A workflow that still owes an engine-driven finalizer (#446) must not be
@@ -393,22 +397,6 @@ export async function deleteAll(
   options: BulkOperationOptions = {},
 ): Promise<BulkDeleteResult | BulkOperationDryRunResult> {
   return runBulkDeletion(internals, filter, cleanupWaiters, options);
-}
-
-async function loadTerminalWorkflowStatesForBatch(
-  internals: EngineInternals,
-  workflowIds: readonly string[],
-): Promise<WorkflowState[]> {
-  const workflowStates: WorkflowState[] = [];
-  for (const workflowId of workflowIds) {
-    const refreshedState = await loadWorkflowState(internals, workflowId);
-    if (refreshedState === null) continue;
-    if (!isTerminalWorkflowStatus(refreshedState.status)) {
-      throw new BulkDeleteRequiresTerminalWorkflowsError();
-    }
-    workflowStates.push(refreshedState);
-  }
-  return workflowStates;
 }
 
 export async function tagAll(
@@ -492,6 +480,7 @@ async function mutateTagsWithBulkControls(
     tags,
     mode,
     preparation.workflowIds,
+    preparation.runs,
   );
   if (!shouldPersistBulkAudit(options)) return result;
   return withBulkAuditEvent(internals, preparation, options, result, result.modified);

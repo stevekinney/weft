@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import {
+  type OperationFault,
+  defineOperation,
+  principalFromJwtClaims,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { principalFromJwtClaims } from '../principal.ts';
 import { replayWorkflowOperation, replayWorkflowRestBinding } from './replay-workflow.ts';
 
 async function firstStep() {
@@ -73,7 +75,10 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
@@ -99,7 +104,10 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
@@ -122,13 +130,19 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid step: not-a-number' });
+    expect(await response.json()).toEqual({
+      error: 'Invalid step: not-a-number',
+      retryable: false,
+    });
   });
 
   it('returns 404 when the replay step does not exist', async () => {
@@ -143,7 +157,10 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
@@ -152,6 +169,7 @@ describe('weft.workflows.replay REST shaping', () => {
     expect(await response.json()).toEqual({
       error: `Replay not found at step 99 for workflow ${workflowId}`,
       data: { resource: 'replay', identifier: `${workflowId}@99` },
+      retryable: false,
     });
   });
 
@@ -179,13 +197,16 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
@@ -212,12 +233,15 @@ describe('weft.workflows.replay REST shaping', () => {
         restBindings: [replayWorkflowRestBinding],
         authContext: {
           method: 'jwt',
-          principal: principalFromJwtClaims({ sub: 'reader', scope: 'workflows:read' }),
+          principal: principalFromJwtClaims(
+            { sub: 'reader', scope: 'workflows:read' },
+            { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+          ),
         },
       },
     );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: 'replay conflict' });
+    expect(await response.json()).toEqual({ error: 'replay conflict', retryable: false });
   });
 });

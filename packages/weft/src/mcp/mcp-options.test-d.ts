@@ -1,10 +1,10 @@
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import {
-  createMcpSessionManager,
+  createMcpEndpoint,
   handleMcpHttpRequest,
-  McpSessionManager,
+  McpEndpoint,
   type McpHttpRequestOptions,
   type McpStdioSessionOptions,
 } from './index.ts';
@@ -14,8 +14,8 @@ const greet = workflow({ name: 'greet' }).execute(async function* (_ctx, input: 
 });
 
 // Regression guard for #708 (sibling of `ServeOptions.engine`):
-// `McpSessionManager`, `createMcpSessionManager`, `McpHttpRequestOptions`,
-// and `McpStdioSessionOptions` must all accept BOTH `new Engine({ storage })`
+// `McpEndpoint`, `createMcpEndpoint`, and `McpStdioSessionOptions` must all
+// accept BOTH `new Engine({ storage })`
 // (the default, empty registry) and `Engine.create({ workflows })` (a
 // concretely narrowed, non-empty registry) without a call-site cast.
 async function verifyMcpSurfacesAcceptBothEngineConstructionPatterns(): Promise<void> {
@@ -25,26 +25,22 @@ async function verifyMcpSurfacesAcceptBothEngineConstructionPatterns(): Promise<
     workflows: { greet },
   });
 
-  const defaultManager = new McpSessionManager(defaultEngine);
-  const concreteManager = new McpSessionManager(concreteEngine);
-  void defaultManager;
-  void concreteManager;
+  const defaultEndpoint = new McpEndpoint(defaultEngine);
+  const concreteEndpoint = new McpEndpoint(concreteEngine);
+  void defaultEndpoint;
+  void concreteEndpoint;
 
-  const defaultCreatedManager = createMcpSessionManager(defaultEngine);
-  const concreteCreatedManager = createMcpSessionManager(concreteEngine);
-  void defaultCreatedManager;
-  void concreteCreatedManager;
+  const defaultCreatedEndpoint = createMcpEndpoint(defaultEngine);
+  const concreteCreatedEndpoint = createMcpEndpoint(concreteEngine);
 
   const defaultHttpOptions: McpHttpRequestOptions = {
     request: new Request('http://localhost/mcp'),
-    engine: defaultEngine,
-    sessionManager: defaultCreatedManager,
+    endpoint: defaultCreatedEndpoint,
     authRequired: false,
   };
   const concreteHttpOptions: McpHttpRequestOptions = {
     request: new Request('http://localhost/mcp'),
-    engine: concreteEngine,
-    sessionManager: concreteCreatedManager,
+    endpoint: concreteCreatedEndpoint,
     authRequired: false,
   };
   void handleMcpHttpRequest(defaultHttpOptions);

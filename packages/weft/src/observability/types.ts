@@ -49,7 +49,8 @@ export type InterceptionContext =
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, createObservabilityInterceptors, type ObservabilityOptions } from '@lostgradient/weft';
+ * import { Engine, createObservabilityInterceptors, type ObservabilityOptions } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });

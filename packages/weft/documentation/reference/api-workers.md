@@ -10,20 +10,20 @@ For a guided walkthrough, see the [Remote Workers guide](../guides/remote-worker
 
 A bounded pool of Bun Web Workers with acquire/release semantics. Implements both `Disposable` (immediate termination) and `AsyncDisposable` (graceful shutdown -- waits for in-flight workers to be released before terminating).
 
-```ts partial
-class WorkerPool implements Disposable, AsyncDisposable {
-  constructor(options: WorkerPoolOptions);
+```ts
+import { WorkerPool, type WorkerPoolOptions } from '@lostgradient/weft';
 
-  async acquire(): Promise<Worker>;
-  release(worker: Worker): void;
+// The documented surface; assigning the real class checks it still matches.
+type WorkerPoolSurface = Disposable &
+  AsyncDisposable & {
+    acquire(): Promise<Worker>;
+    release(worker: Worker): void;
+    readonly availableCount: number;
+    readonly totalCount: number;
+    readonly pendingCount: number;
+  };
 
-  get availableCount(): number;
-  get totalCount(): number;
-  get pendingCount(): number;
-
-  [Symbol.dispose](): void;
-  async [Symbol.asyncDispose](): Promise<void>;
-}
+const WorkerPoolClass: new (options: WorkerPoolOptions) => WorkerPoolSurface = WorkerPool;
 ```
 
 | Method / Property         | Returns           | Description                                                                                 |
@@ -46,8 +46,10 @@ class WorkerPool implements Disposable, AsyncDisposable {
 
 **Example:**
 
-```ts partial
+```ts
 import { WorkerPool } from '@lostgradient/weft';
+
+declare const data: unknown;
 
 await using pool = new WorkerPool({
   concurrency: 4,
@@ -65,34 +67,58 @@ pool.release(worker);
 
 Execute an activity function with error handling and abort support. Returns a structured result indicating success or failure.
 
-```ts partial
-async function executeActivity(
+```ts
+import {
+  executeActivity,
+  type ActivityExecutionRequest,
+  type ActivityExecutionResult,
+} from '@lostgradient/weft';
+
+const execute: (
   request: ActivityExecutionRequest,
   activityFunction: (...arguments_: unknown[]) => unknown,
   signal?: AbortSignal,
-): Promise<ActivityExecutionResult>;
+) => Promise<ActivityExecutionResult> = executeActivity;
+
+const result = await execute(
+  { operationId: 'op-1', activityName: 'greet', input: 'World', attempt: 1 },
+  async (input) => `Hello, ${String(input)}!`,
+);
+console.log(result.status); // 'completed'
 ```
 
 ### `ActivityExecutionRequest`
 
 ```ts
-interface ActivityExecutionRequest {
-  operationId: string;
-  activityName: string;
-  input: unknown;
-  attempt: number;
-}
+import type { ActivityExecutionRequest } from '@lostgradient/weft';
+
+const request: ActivityExecutionRequest = {
+  operationId: 'op-1',
+  activityName: 'greet',
+  input: { name: 'World' },
+  attempt: 1,
+  workflowExecutionToken: 'run-token', // optional: the dispatching run's token
+  activityAttemptToken: 'attempt-token', // optional: this dispatch's attempt token
+};
 ```
 
 ### `ActivityExecutionResult`
 
 ```ts
-interface ActivityExecutionResult {
-  operationId: string;
-  status: 'completed' | 'failed';
-  value?: unknown;
-  error?: string;
-}
+import type { ActivityExecutionResult } from '@lostgradient/weft';
+
+const completed: ActivityExecutionResult = {
+  operationId: 'op-1',
+  status: 'completed',
+  value: 'Hello, World!',
+};
+
+const failed: ActivityExecutionResult = {
+  operationId: 'op-1',
+  status: 'failed',
+  error: 'Activity "greet" aborted before execution',
+  errorName: 'AbortError', // error constructor name, used by retry classification
+};
 ```
 
 If `signal` is already aborted when called, returns a failed result immediately without invoking the function.
@@ -103,20 +129,20 @@ If `signal` is already aborted when called, returns a failed result immediately 
 
 WebSocket-based remote worker client. Connects to the Weft server, sends a v8 registration, waits for `registerAck`, and then processes tasks dispatched by the server. Implements `Disposable`.
 
-```ts partial
-class RemoteWorker implements Disposable {
-  constructor(options: RemoteWorkerOptions);
+```ts
+import { RemoteWorker, type RemoteWorkerOptions } from '@lostgradient/weft';
 
-  async connect(): Promise<void>;
-  async disconnect(): Promise<{ unacknowledgedResults: number }>;
+// The documented surface; assigning the real class checks it still matches.
+type RemoteWorkerSurface = Disposable & {
+  connect(): Promise<void>;
+  disconnect(): Promise<{ unacknowledgedResults: number }>;
+  readonly inFlight: number;
+  readonly connected: boolean;
+  readonly shuttingDown: boolean;
+  readonly unacknowledgedResultCount: number;
+};
 
-  get inFlight(): number;
-  get connected(): boolean;
-  get shuttingDown(): boolean;
-  get unacknowledgedResultCount(): number;
-
-  [Symbol.dispose](): void;
-}
+const RemoteWorkerClass: new (options: RemoteWorkerOptions) => RemoteWorkerSurface = RemoteWorker;
 ```
 
 | Method / Property           | Returns                                      | Description                                                                                                                                                            |
@@ -131,22 +157,23 @@ class RemoteWorker implements Disposable {
 
 ### `RemoteWorkerOptions`
 
-| Field                 | Type                                                                                                                                  | Default                  | Description                                                                                                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serverUrl`           | `string`                                                                                                                              | --                       | WebSocket URL of the Weft server                                                                                                                                                                                                                                                                    |
-| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()`    | Unique worker identifier                                                                                                                                                                                                                                                                            |
-| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)               | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter                                                     |
-| `concurrency`         | `number`                                                                                                                              | `10`                     | Maximum concurrent tasks                                                                                                                                                                                                                                                                            |
-| `queue`               | `string`                                                                                                                              | `'default'`              | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                                                                          |
-| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`                 | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                                                                                 |
-| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                     | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                                                                                 |
-| `deploymentName`      | `string`                                                                                                                              | (required)               | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                                                                           |
-| `buildId`             | `string`                                                                                                                              | (required)               | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                                                                                  |
-| `artifactDigest`      | `string`                                                                                                                              | derived                  | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names. Ignored when `manifest` is supplied                                                                                                 |
-| `manifest`            | `WorkerManifest`                                                                                                                      | derived                  | A complete, real manifest—typically from [`buildWorkerManifestFromRegistry`](#buildworkermanifestfromregistryengine-options)—advertised verbatim instead of the `declared-shape:` placeholder. `manifest.workflows` must declare exactly the workflow types in `workflows`, checked at construction |
-| `runtimeVersion`      | `string`                                                                                                                              | `detectRuntimeVersion()` | Runtime or SDK version reported during registration                                                                                                                                                                                                                                                 |
-| `startedAt`           | `number`                                                                                                                              | `Date.now()`             | Worker process start time in epoch milliseconds                                                                                                                                                                                                                                                     |
-| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                     | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                                                                      |
+| Field                 | Type                                                                                                                                  | Default               | Description                                                                                                                                                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverUrl`           | `string`                                                                                                                              | --                    | WebSocket URL of the Weft server                                                                                                                                                                                                                                                                    |
+| `workerId`            | `string`                                                                                                                              | `crypto.randomUUID()` | Unique worker identifier                                                                                                                                                                                                                                                                            |
+| `workflows`           | `Record<string, { name: string; activities: Record<string, (input: unknown, context?: RemoteActivityContext) => Promise<unknown>> }>` | (required)            | Maps each workflow type to its activity implementations; the SDK advertises each as `${workflowType}.${activityName}` and validates the key matches `workflow.name`. Activities may accept an optional `RemoteActivityContext` second parameter                                                     |
+| `concurrency`         | `number`                                                                                                                              | `10`                  | Maximum concurrent tasks                                                                                                                                                                                                                                                                            |
+| `queue`               | `string`                                                                                                                              | `'default'`           | Task queue to subscribe to. Conflicts with a `serverUrl` that already encodes a different queue throw at construction time                                                                                                                                                                          |
+| `disconnectTimeoutMs` | `number`                                                                                                                              | `30_000`              | Time to wait for in-flight tasks before force-closing on disconnect                                                                                                                                                                                                                                 |
+| `interceptors`        | `ActivityInterceptor[]`                                                                                                               | `[]`                  | Activity interceptors applied to all tasks processed by this worker                                                                                                                                                                                                                                 |
+| `deploymentName`      | `string`                                                                                                                              | (required)            | Logical service this worker instance belongs to, included in its manifest                                                                                                                                                                                                                           |
+| `buildId`             | `string`                                                                                                                              | (required)            | Operator-visible release this worker instance is running, included in its manifest                                                                                                                                                                                                                  |
+| `artifactDigest`      | `string`                                                                                                                              | derived               | Trusted digest of the executable artifact. When omitted, a placeholder tagged `declared-shape:<hash>` is derived from the declared workflow and activity names. Ignored when `manifest` is supplied                                                                                                 |
+| `manifest`            | `WorkerManifest`                                                                                                                      | derived               | A complete, real manifest—typically from [`buildWorkerManifestFromRegistry`](#buildworkermanifestfromregistryengine-options)—advertised verbatim instead of the `declared-shape:` placeholder. `manifest.workflows` must declare exactly the workflow types in `workflows`, checked at construction |
+| `runtimeName`         | `string`                                                                                                                              | `'unknown'`           | Runtime name reported in the manifest, such as `'bun'` or `'node'`. The worker does not inspect its host, so the caller declares it. Ignored when `manifest` is supplied                                                                                                                            |
+| `runtimeVersion`      | `string`                                                                                                                              | `'unknown'`           | Runtime or SDK version reported during registration                                                                                                                                                                                                                                                 |
+| `startedAt`           | `number`                                                                                                                              | `Date.now()`          | Worker process start time in epoch milliseconds                                                                                                                                                                                                                                                     |
+| `capabilities`        | `Record<string, JSON value>`                                                                                                          | `{}`                  | JSON metadata such as region, hardware class, or feature flags                                                                                                                                                                                                                                      |
 
 The worker sends heartbeats every 10 seconds after registration is acknowledged and handles server-initiated `shutdown` messages gracefully. `connect()` rejects if the server sends `registerError` or if the socket closes before acknowledgement.
 
@@ -186,19 +213,18 @@ await worker.disconnect();
 
 Manages periodic heartbeat signals for keeping visibility timeouts alive.
 
-```ts partial
-class HeartbeatManager {
-  constructor(
-    sendHeartbeat: (details?: unknown) => void,
-    intervalMs?: number, // default: 10_000
-  );
+```ts
+import { HeartbeatManager } from '@lostgradient/weft';
 
-  start(): void;
-  stop(): void;
-  beat(details?: unknown): void;
+const heartbeat = new HeartbeatManager(
+  (details?: unknown) => console.log('heartbeat', details),
+  10_000, // intervalMs, default: 10_000
+);
 
-  get isRunning(): boolean;
-}
+heartbeat.start();
+heartbeat.beat({ progress: 0.5 });
+console.log(heartbeat.isRunning); // true
+heartbeat.stop();
 ```
 
 | Method           | Description                                                  |
@@ -211,13 +237,15 @@ class HeartbeatManager {
 
 The optional second parameter every worker-executed activity function receives, on both `RemoteWorker` and `LongPollWorker`. Shared by both worker classes so an activity function does not need to know which transport dispatched it.
 
-```ts partial
-type RemoteActivityContext = {
-  signal: AbortSignal;
-  workflowExecutionToken?: string;
-  activityAttemptToken?: string;
-  heartbeat: (details?: unknown) => void;
-  lastHeartbeatDetails?: unknown;
+```ts
+import type { RemoteActivityContext } from '@lostgradient/weft';
+
+const context: RemoteActivityContext = {
+  signal: new AbortController().signal,
+  workflowExecutionToken: 'run-token',
+  activityAttemptToken: 'attempt-token',
+  heartbeat: (details?: unknown) => console.log(details),
+  lastHeartbeatDetails: { done: 3 },
 };
 ```
 
@@ -233,19 +261,20 @@ type RemoteActivityContext = {
 
 HTTP long-poll fallback for environments without WebSocket support. Registers the same canonical worker manifest as the WebSocket transport, receives a server-issued session token, then polls `/api/v1/worker-sessions/:sessionId/tasks` and reports durable results through `/api/v1/worker-sessions/:sessionId/results` with `Weft-Worker-Session-Token` on every continuation request. Implements `Disposable`.
 
-```ts partial
-class LongPollWorker implements Disposable {
-  constructor(options: LongPollWorkerOptions);
+```ts
+import { LongPollWorker, type LongPollWorkerOptions } from '@lostgradient/weft';
 
+// The documented surface; assigning the real class checks it still matches.
+type LongPollWorkerSurface = Disposable & {
   start(): void;
-  async stop(): Promise<{ unacknowledgedResults: number }>;
+  stop(): Promise<{ unacknowledgedResults: number }>;
+  readonly inFlight: number;
+  readonly running: boolean;
+  readonly unacknowledgedResultCount: number;
+};
 
-  get inFlight(): number;
-  get running(): boolean;
-  get unacknowledgedResultCount(): number;
-
-  [Symbol.dispose](): void;
-}
+const LongPollWorkerClass: new (options: LongPollWorkerOptions) => LongPollWorkerSurface =
+  LongPollWorker;
 ```
 
 | Method / Property           | Returns                                      | Description                                                                                                                                                                                                                                       |
@@ -303,11 +332,24 @@ await worker.stop();
 
 Server-side worker tracking and least-loaded routing. The server uses this to track connected workers, assign tasks, and detect expired visibility timeouts.
 
-```ts partial
-class WorkerRegistry {
-  constructor(options?: WorkerRegistryOptions);
+```ts
+import {
+  WorkerRegistry,
+  type InFlightTask,
+  type RoutingOptions,
+  type WorkerInfo,
+} from '@lostgradient/weft';
 
-  register(info: Omit<WorkerInfo, 'connectedAt' | 'lastHeartbeat' | 'inFlight'>): void;
+type WorkerRegistryOptions = ConstructorParameters<typeof WorkerRegistry>[0];
+type WorkerRegistrationInfo = Parameters<WorkerRegistry['register']>[0];
+type WorkerDrainOptions = Parameters<WorkerRegistry['markWorkerDraining']>[1];
+type WorkerDrainMutationResult = ReturnType<WorkerRegistry['markDeploymentDraining']>;
+type WorkerSummary = ReturnType<WorkerRegistry['getWorkerSummaries']>[number];
+type WorkerDeploymentSummary = ReturnType<WorkerRegistry['getDeploymentSummaries']>[number];
+
+// The documented surface; assigning the real class checks it still matches.
+type WorkerRegistrySurface = {
+  register(info: WorkerRegistrationInfo): void;
   unregister(workerId: string): WorkerInfo | undefined;
   heartbeat(workerId: string): void;
 
@@ -325,24 +367,37 @@ class WorkerRegistry {
   ): WorkerDrainMutationResult;
   clearDeploymentDrain(deploymentName: string): WorkerDrainMutationResult;
 
-  assignTask(workerId: string, operationId: string, visibilityTimeout: number): void;
+  assignTask(
+    workerId: string,
+    operationId: string,
+    visibilityTimeout: number,
+    fairShareKey: string | undefined,
+    attemptToken: string,
+    workflowRevision?: string,
+  ): void;
   checkExpiredTasks(now: number): InFlightTask[];
   extendVisibility(operationId: string, extension: number): number | undefined;
   isAssignedToWorker(operationId: string, workerId: string): boolean;
+  isAssignedToAttempt(operationId: string, workerId: string, attemptToken: string): boolean;
 
   getAll(): WorkerInfo[];
   getWorkerSummaries(now: number): WorkerSummary[];
   getDeploymentSummaries(now: number): WorkerDeploymentSummary[];
-  get size(): number;
-}
+  readonly size: number;
+};
+
+const WorkerRegistryClass: new (options?: WorkerRegistryOptions) => WorkerRegistrySurface =
+  WorkerRegistry;
 ```
 
 ### `WorkerRegistryOptions`
 
-```ts partial
-interface WorkerRegistryOptions {
-  policy?: RoutingPolicy;
-}
+```ts
+import { WorkerRegistry, type RoutingPolicy } from '@lostgradient/weft';
+
+const policy: RoutingPolicy = 'least-loaded';
+const registry = new WorkerRegistry({ policy });
+console.log(registry.policy); // 'least-loaded'
 ```
 
 | Field    | Type            | Default          | Description                    |
@@ -352,31 +407,44 @@ interface WorkerRegistryOptions {
 ### `WorkerInfo`
 
 ```ts
-interface WorkerInfo {
-  id: string;
-  queue: string;
-  activities: string[];
-  concurrency: number;
-  inFlight: number;
-  connectedAt: number;
-  lastHeartbeat: number;
-  startedAt: number;
-  capabilities: Record<string, unknown>;
-  deploymentName?: string;
-  buildId?: string;
-  runtimeVersion?: string;
-  gitSha?: string;
-}
+import type { WorkerInfo, WorkerManifest } from '@lostgradient/weft';
+
+declare const manifest: WorkerManifest;
+
+const worker: WorkerInfo = {
+  id: 'worker-1',
+  queue: 'default',
+  transport: 'websocket', // or 'long-poll'
+  activities: ['checkout.charge'],
+  concurrency: 10,
+  inFlight: 2,
+  connectedAt: 1_760_000_000_000, // epoch ms
+  lastHeartbeat: 1_760_000_050_000, // epoch ms
+  startedAt: 1_759_999_990_000, // epoch ms
+  sessionGeneration: 1,
+  capabilities: { region: 'us-east-1' },
+  deploymentName: 'billing',
+  buildId: '2026.08.18-3',
+  runtimeVersion: '1.3.14',
+  manifest, // the accepted canonical worker manifest
+  acceptedManifestDigest: 'sha256:deadbeef',
+  drainReason: 'maintenance', // set while the worker is drained
+  drainStartedAt: 1_760_000_060_000, // epoch ms
+};
 ```
 
 ### `RoutingOptions`
 
 ```ts
-interface RoutingOptions {
-  sticky?: string; // preferred worker ID for cache locality
-  queue?: string;
-  fairShareKey?: string; // key used for fair-share routing policy
-}
+import type { RoutingOptions } from '@lostgradient/weft';
+
+const routing: RoutingOptions = {
+  sticky: 'worker-1', // preferred worker ID for cache locality
+  queue: 'default',
+  fairShareKey: 'tenant-42', // key used for fair-share routing policy
+  excludeWorkerIds: new Set(['worker-2']), // e.g. workers inside the reconnect grace window
+  workflowId: 'order-123',
+};
 ```
 
 `findWorker()` applies the configured `RoutingPolicy` (least-loaded by default; supports `'round-robin'` and `'fair-share'`). It filters workers that can handle the activity and have capacity. For `'least-loaded'`, it returns the worker with the lowest `inFlight` count. If `sticky` is set and that worker has capacity, it is preferred.
@@ -388,10 +456,14 @@ Draining workers are excluded from `findWorker()` so no new tasks are assigned t
 ### `WorkerDrainOptions`
 
 ```ts
-interface WorkerDrainOptions {
-  reason?: string;
-  updatedAt?: number;
-}
+import type { WorkerRegistry } from '@lostgradient/weft';
+
+type WorkerDrainOptions = NonNullable<Parameters<WorkerRegistry['markWorkerDraining']>[1]>;
+
+const drain: WorkerDrainOptions = {
+  reason: 'maintenance',
+  updatedAt: Date.now(), // drain start time in epoch ms
+};
 ```
 
 `updatedAt` records the drain start time in epoch milliseconds. When omitted, the registry uses `Date.now()`.
@@ -399,16 +471,18 @@ interface WorkerDrainOptions {
 ### `InFlightTask`
 
 ```ts
-interface InFlightTask {
-  operationId: string;
-  workerId: string;
-  deadline: number; // absolute timestamp
-  visibilityTimeout: number;
-  fairShareKey?: string;
-  attemptToken: string;
-  /** The dispatching workflow run's persisted revision (WFT-20), when the `TaskDispatch` carried one. */
-  workflowRevision?: string;
-}
+import type { InFlightTask } from '@lostgradient/weft';
+
+const task: InFlightTask = {
+  operationId: 'op-1',
+  workerId: 'worker-1',
+  deadline: 1_760_000_030_000, // absolute timestamp
+  visibilityTimeout: 30_000, // original timeout duration in ms
+  fairShareKey: 'tenant-42',
+  attemptToken: 'attempt-token',
+  // The dispatching workflow run's persisted revision (WFT-20), when the `TaskDispatch` carried one.
+  workflowRevision: 'rev-88',
+};
 ```
 
 `checkExpiredTasks(now)` returns tasks whose visibility deadline has passed, suitable for reassignment.
@@ -580,41 +654,47 @@ Returns every connected worker with its queue assignment, advertised activities,
 The server snapshots `Date.now()` exactly once per request, so every `heartbeatAgeMs` in the response is consistent.
 
 ```ts
-type WorkerHealth = 'active' | 'draining' | 'drained';
+import type { ClientOperationTypes } from '@lostgradient/weft';
 
-type ListWorkersResponse = {
-  items: Array<{
-    id: string;
-    queue: string;
-    activities: string[];
-    concurrency: number;
-    inFlight: number;
-    availableCapacity: number; // max(0, concurrency - inFlight)
-    connectedAt: number; // epoch ms
-    lastHeartbeatAt: number; // epoch ms
-    heartbeatAgeMs: number; // now - lastHeartbeatAt at snapshot time
-    startedAt: number; // epoch ms
-    capabilities: Record<string, unknown>;
-    health: WorkerHealth;
-    deploymentName?: string;
-    buildId?: string;
-    runtimeVersion?: string;
-    gitSha?: string;
-  }>;
-  deployments: Array<{
-    deploymentName: string | null;
-    buildId: string | null;
-    runtimeVersion: string | null;
-    gitSha: string | null;
-    health: WorkerHealth;
-    workers: number;
-    activeWorkers: number;
-    drainingWorkers: number;
-    drainedWorkers: number;
-    inFlight: number;
-    oldestStartedAt: number | null;
-  }>;
-  routingPolicy: 'least-loaded' | 'round-robin' | 'fair-share';
+type ListWorkersResponse = ClientOperationTypes['weft.workers.list']['output'];
+
+const response: ListWorkersResponse = {
+  items: [
+    {
+      id: 'worker-1',
+      queue: 'default',
+      transport: 'websocket', // or 'long-poll'
+      activities: ['checkout.charge'],
+      concurrency: 10,
+      inFlight: 2,
+      availableCapacity: 8, // max(0, concurrency - inFlight)
+      connectedAt: 1_760_000_000_000, // epoch ms
+      lastHeartbeatAt: 1_760_000_050_000, // epoch ms
+      heartbeatAgeMs: 4_000, // now - lastHeartbeatAt at snapshot time
+      startedAt: 1_759_999_990_000, // epoch ms
+      capabilities: { region: 'us-east-1' },
+      health: 'active', // 'active' | 'draining' | 'drained'
+      deploymentName: 'billing',
+      buildId: '2026.08.18-3',
+      runtimeVersion: '1.3.14',
+    },
+  ],
+  deployments: [
+    {
+      deploymentName: 'billing',
+      buildId: '2026.08.18-3',
+      runtimeVersion: '1.3.14',
+      transports: ['websocket'],
+      health: 'active',
+      workers: 1,
+      activeWorkers: 1,
+      drainingWorkers: 0,
+      drainedWorkers: 0,
+      inFlight: 2,
+      oldestStartedAt: 1_759_999_990_000,
+    },
+  ],
+  routingPolicy: 'least-loaded', // or 'round-robin' | 'fair-share'
 };
 ```
 
@@ -636,13 +716,17 @@ Marks a connected worker as draining. Requires `system:admin`. The optional JSON
 
 Response:
 
-```ts partial
-type WorkerDrainResponse = {
-  target: 'worker';
-  workerId: string;
-  affectedWorkers: 1;
-  inFlight: number;
-  health: WorkerHealth;
+```ts
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type WorkerDrainResponse = ClientOperationTypes['weft.workers.drain']['output'];
+
+const response: WorkerDrainResponse = {
+  target: 'worker',
+  workerId: 'worker-1',
+  affectedWorkers: 1,
+  inFlight: 2,
+  health: 'draining', // 'active' | 'draining' | 'drained'
 };
 ```
 
@@ -656,25 +740,42 @@ The JSON-RPC operation name is `weft.workers.resume`.
 
 ### `POST /api/v1/worker-deployments/:deploymentName/drain`
 
-Marks every current and future worker that reports `deploymentName` as draining. Requires `system:admin`. The optional JSON request body may include a non-empty `reason`.
+Marks every current and future worker that reports `deploymentName` as draining. Requires `system:admin`. The optional JSON request body may include a non-empty `reason`, and a non-empty `buildId` that narrows the drain to that one build of the deployment: only workers reporting that exact `(deploymentName, buildId)` pair stop receiving new tasks, and the deployment's other builds stay routable. A build the deployment catalog has not accepted, or has removed, is answered `404`, and nothing is marked.
 
 Response:
 
-```ts partial
-type DeploymentDrainResponse = {
-  target: 'deployment';
-  deploymentName: string;
-  affectedWorkers: number;
-  inFlight: number;
-  health: WorkerHealth;
+```ts
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type DeploymentDrainResponse = ClientOperationTypes['weft.worker.deployments.drain']['output'];
+
+const response: DeploymentDrainResponse = {
+  target: 'deployment',
+  deploymentName: 'billing',
+  buildId: '2026.08.18-3', // present when the request named a build
+  affectedWorkers: 3,
+  inFlight: 0,
+  health: 'drained', // 'active' | 'draining' | 'drained'
 };
 ```
+
+A build drain is also written to the deployment catalog as the build's `draining` state (whatever executions reference it), so it survives a restart and `weft.worker.deployments.diagnostics` reports the build as `draining`; a worker that registers on a draining or removed build joins drained.
+
+Which drains survive a server restart:
+
+| Drain                             | Survives a restart | Why                                                                                           |
+| --------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
+| A build (`buildId` given)         | Yes                | The catalog records the build as `draining`, and a worker that registers on it joins drained. |
+| A whole deployment (no `buildId`) | No                 | Only the registry's in-memory marker holds it.                                                |
+| One worker (`weft.workers.drain`) | No                 | Only the registry's in-memory marker holds it.                                                |
+
+Draining the current or ramping build of a routing pointer has a side effect: the build's catalog state is no longer `ready`, so new starts of workflows that carry a worker versioning policy find no routed build and are refused (`no-routed-deployment`) until the build is resumed or routing moves to another build. The console warns before draining such a build.
 
 The JSON-RPC operation name is `weft.worker.deployments.drain`.
 
 ### `DELETE /api/v1/worker-deployments/:deploymentName/drain`
 
-Clears the deployment-level drain marker. Requires `system:admin`. Any worker-specific drain markers remain in effect.
+Clears the deployment-level drain marker. Requires `system:admin`. Any worker-specific drain markers remain in effect. Pass `?buildId=<id>` to clear one build's marker instead; a deployment-wide marker or a worker-specific marker that still applies keeps its workers drained, and clearing a build with no marker succeeds and changes nothing. Resuming a build also returns its catalog state to `ready`. A build the catalog has removed faults with `NotFound` and stays drained.
 
 The JSON-RPC operation name is `weft.worker.deployments.resume`.
 
@@ -684,39 +785,47 @@ Bounded instance and deployment-version diagnostics for one connected worker (WF
 
 The response splits into two structurally distinct parts, mirroring the manifest's own split between "which process" and "which build":
 
-```ts partial
-type WorkerDiagnosticsResponse = {
+```ts
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type WorkerDiagnosticsResponse = ClientOperationTypes['weft.workers.diagnostics']['output'];
+
+const response: WorkerDiagnosticsResponse = {
   worker: {
     instance: {
-      workerId: string;
-      queue: string;
-      health: WorkerHealth;
-      connectedAt: number; // epoch ms
-      startedAt: number; // epoch ms
-      lastHeartbeatAt: number; // epoch ms
-      heartbeatAgeMs: number;
-    };
+      workerId: 'worker-1',
+      queue: 'default',
+      transport: 'websocket', // or 'long-poll'
+      health: 'active', // 'active' | 'draining' | 'drained'
+      inFlight: 2,
+      sessionGeneration: 1,
+      connectedAt: 1_760_000_000_000, // epoch ms
+      startedAt: 1_759_999_990_000, // epoch ms
+      lastHeartbeatAt: 1_760_000_050_000, // epoch ms
+      heartbeatAgeMs: 4_000,
+    },
     deploymentVersion: {
-      deploymentName: string;
-      buildId: string;
-      artifactDigest: string;
-      runtimeName: string;
-      runtimeVersion: string;
-      sdkVersion: string;
-      manifestVersion: number;
-      protocolVersion: number;
-      manifestDigest: string;
-      workflows: Record<
-        string,
-        {
-          workflowVersion: string;
-          workflowRevision: string;
-          contractHash: string;
-          activities: Record<string, { contractHash: string; implementationRevision: string }>;
-        }
-      >;
-    };
-  } | null;
+      deploymentName: 'billing',
+      buildId: '2026.08.18-3',
+      artifactDigest: 'sha256:41d0e2',
+      runtimeName: 'bun',
+      runtimeVersion: '1.3.14',
+      sdkVersion: '0.18.0',
+      manifestVersion: 1,
+      protocolVersion: 8,
+      manifestDigest: 'sha256:deadbeef',
+      // Keyed by workflow type: workflowVersion, workflowRevision, contractHash,
+      // and each activity's { contractHash, implementationRevision }.
+      workflows: {
+        checkout: {
+          workflowVersion: '2.1.0',
+          workflowRevision: 'rev-88',
+          contractHash: 'sha256:9ab3',
+          activities: { charge: { contractHash: 'sha256:2b1f', implementationRevision: 'rev-41' } },
+        },
+      },
+    },
+  }, // `null` when the worker is not connected
 };
 ```
 
@@ -729,22 +838,27 @@ The JSON-RPC operation name is `weft.workers.diagnostics`.
 Bounded, most-recent-first log of declined `register` attempts (WFT-29). Requires `system:read`. Accepts an optional `limit` query parameter (default `20`, max `100`).
 
 ```ts
-type RegistrationRejectionCode =
-  | 'invalid_registration'
-  | 'unsupported_protocol_version'
-  | 'deployment_conflict'
-  | 'registration_rejected';
+import type { ClientOperationTypes } from '@lostgradient/weft';
 
-type ListWorkerRegistrationRejectionsResponse = {
-  items: Array<{
-    code: RegistrationRejectionCode;
-    workerId?: string; // absent when the frame failed to parse before a workerId could be read
-    rejectedAt: number; // epoch ms
-    queue?: string;
-    deploymentName?: string;
-    buildId?: string;
-  }>;
-  limit: number;
+type ListWorkerRegistrationRejectionsResponse =
+  ClientOperationTypes['weft.workers.rejections']['output'];
+type RegistrationRejectionCode = ListWorkerRegistrationRejectionsResponse['items'][number]['code'];
+
+const code: RegistrationRejectionCode = 'deployment_conflict';
+// Also 'invalid_registration', 'unsupported_protocol_version', or 'registration_rejected'.
+
+const response: ListWorkerRegistrationRejectionsResponse = {
+  items: [
+    {
+      code,
+      workerId: 'worker-1', // absent when the frame failed to parse before a workerId could be read
+      rejectedAt: 1_760_000_000_000, // epoch ms
+      queue: 'default',
+      deploymentName: 'billing',
+      buildId: '2026.08.18-3',
+    },
+  ],
+  limit: 20,
 };
 ```
 
@@ -757,18 +871,23 @@ The JSON-RPC operation name is `weft.workers.rejections`.
 Remote-worker protocol conformance reports (COR-1365). `GET` lists the conformance targets registered with `serve({ conformanceTargets: createConformanceTargets({ ... }) })` and requires `system:read`. `POST` runs the `weft conformance` check sequence against one target in a private sandbox server and requires `system:admin`. A request names a target only. It can never supply a worker command.
 
 ```ts
-type ListConformanceTargetsResponse = {
-  targets: Array<{ name: string; timeoutMs: number }>; // commands are never returned
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type ListConformanceTargetsResponse = ClientOperationTypes['weft.conformance.targets']['output'];
+type RunConformanceReportResponse = ClientOperationTypes['weft.conformance.report']['output'];
+
+const targets: ListConformanceTargetsResponse = {
+  targets: [{ name: 'typescript-worker', timeoutMs: 10_000 }], // commands are never returned
 };
 
-type RunConformanceReportResponse = {
-  target: string;
-  startedAt: number; // epoch ms
-  completedAt: number; // epoch ms
-  ok: boolean;
-  protocolVersion: number;
-  supportedProtocolVersions: number[];
-  checks: Array<{ name: string; ok: boolean; message: string }>;
+const report: RunConformanceReportResponse = {
+  target: 'typescript-worker',
+  startedAt: 1_760_000_000_000, // epoch ms
+  completedAt: 1_760_000_004_000, // epoch ms
+  ok: true,
+  protocolVersion: 8,
+  supportedProtocolVersions: [8],
+  checks: [{ name: 'register', ok: true, message: 'registerAck received' }],
 };
 ```
 
@@ -783,25 +902,29 @@ Bounded task-attempt diagnostics (COR-198): stuck queued tasks, stale in-flight 
 Every filter is optional and independently bounded; supplying several combines them with AND:
 
 ```ts
-type GetTaskDiagnosticsInput = {
-  operationId?: string;
-  workflowId?: string;
-  queue?: string;
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type GetTaskDiagnosticsInput = ClientOperationTypes['weft.tasks.diagnostics']['input'];
+
+const input: GetTaskDiagnosticsInput = {
+  operationId: 'op-1',
+  workflowId: 'order-123',
+  queue: 'default',
   // Execution-identity filters, sourced from each matching task's current
   // TaskAttemptRecord.executionIdentity—see "Attempt history and
   // provenance" in the remote task recovery guide for what that identity
   // is and how it differs from the ledger's routing requirement.
-  deploymentName?: string;
-  buildId?: string;
-  artifactDigest?: string;
-  workerId?: string;
-  workflowRevision?: string;
-  staleQueuedAfterMs?: number; // default 60000
-  staleHeartbeatAfterMs?: number; // default 60000
-  retryStormMinimumAttempts?: number; // default 3
-  includeExpectedDelayed?: boolean; // default false
-  unadoptedAfterMs?: number; // default 60000
-  limit?: number; // default 50, max 200
+  deploymentName: 'billing',
+  buildId: 'b47',
+  artifactDigest: 'sha256:41d0e2',
+  workerId: 'worker-1',
+  workflowRevision: 'rev-88',
+  staleQueuedAfterMs: 60_000, // default 60000
+  staleHeartbeatAfterMs: 60_000, // default 60000
+  retryStormMinimumAttempts: 3, // default 3
+  includeExpectedDelayed: false, // default false
+  unadoptedAfterMs: 60_000, // default 60000
+  limit: 50, // default 50, max 200
 };
 ```
 
@@ -826,6 +949,28 @@ A dead-lettered attempt's retained result value, not only its digest (COR-1366).
 
 The JSON-RPC operation name is `weft.tasks.deadletters.get`.
 
+### `POST /api/v1/tasks/detail/:operationId/dead-letter/retry`
+
+Queues a dead-lettered task again (COR-1973). The task keeps its `operationId`, becomes `queued` with a new attempt number, and `requeueCount` goes up by one; the next worker to claim it runs it as that attempt. Nothing is deleted. The dead attempt's attempt record (disposition `deadLettered`, with its reason and time) and the task's delivery history stay readable through `GET /api/v1/tasks/detail/:operationId`. What the retry replaces is the retained result on the ledger record, so `GET /api/v1/tasks/detail/:operationId/dead-letter` answers `NotFound` afterwards, and so does clearing it. A result or heartbeat that still carries the dead attempt's token is refused. The operation counts toward the `weft.task.requeues` and `weft.task.retries` metrics. Requires `system:admin`, the scope that reads and clears a dead letter.
+
+The body is optional. `attemptTokenDigest` is the digest of the dead-lettered attempt the caller read (`attemptTokenDigest` from the dead-letter read); the retry is refused when the dead letter is no longer that attempt. Any other body key is rejected.
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:7233/api/v1/tasks/detail/invoice-42/dead-letter/retry' \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{ "attemptTokenDigest": "<digest from the dead-letter read>" }'
+```
+
+The response is `{ operationId, state: 'queued', attempt, requeueCount }`. Faults:
+
+- `NotFound`: no task has that `operationId`, or it was cleared.
+- `Conflict`: the task is not dead-lettered (queued, leased, completing, cancelling, or terminal); the supplied `attemptTokenDigest` is not the dead-lettered attempt; the workflow that owns the task has finished or been deleted; or the task kept changing while the retry ran. A refused retry changes nothing. REST does not disclose which of these it was beyond the message; the JSON-RPC fault carries the reason (`not-dead-lettered`, `dead-letter-changed`, `workflow-finished`, `concurrent-change`).
+
+Two retries sent together queue the task once: one succeeds and the other is refused. The retry does not check `retryPolicy.maxAttempts`, so a task that dead-lettered on its last allowed attempt can still be retried, and the next automatic requeue may then end it as `retryExhausted`. The activity runs again, so any side effects the dead attempt already performed repeat unless the activity is idempotent. The operation is not exposed to MCP.
+
+The JSON-RPC operation name is `weft.tasks.deadletters.retry`.
+
 ### `GET /api/v1/task-queues`
 
 Returns per-queue health. The queue set is the union of three sources:
@@ -837,31 +982,77 @@ Returns per-queue health. The queue set is the union of three sources:
 `inFlight` is summed across the workers currently assigned to that queue. `connectedWorkers` counts workers whose `queue` matches.
 
 ```ts
-type ListTaskQueuesResponse = {
-  items: Array<{
-    queue: string;
-    backlog: number; // pending tasks
-    oldestEnqueuedAt: number | null; // epoch ms, null if backlog == 0
-    oldestQueuedAgeMs: number | null;
-    waitingPollers: number;
-    schedulingPolicy: 'priority' | 'fifo' | 'lifo';
-    inFlight: number;
-    connectedWorkers: number;
-  }>;
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type ListTaskQueuesResponse = ClientOperationTypes['weft.task.queues.list']['output'];
+
+const response: ListTaskQueuesResponse = {
+  items: [
+    {
+      queue: 'default',
+      backlog: 3, // pending tasks
+      oldestEnqueuedAt: 1_760_000_000_000, // epoch ms, null if backlog == 0
+      oldestQueuedAgeMs: 12_000,
+      waitingPollers: 0,
+      schedulingPolicy: 'fifo', // 'priority' | 'fifo' | 'lifo'
+      inFlight: 2,
+      connectedWorkers: 1,
+    },
+  ],
 };
 ```
 
 Queues are sorted by `queue` ascending.
 
+## Worker start override
+
+A terminal workflow whose worker-versioning policy is `auto-upgrade` keeps the build it last ran on when it is restarted with `onTerminalConflict: "start-new"`. To restart it on the build routing now selects, an operator first asks for a preview and then spends the resulting token on the restart.
+
+`POST /v1/worker-start-overrides/preview` (JSON-RPC `weft.worker.startoverrides.preview`, `system:admin`) takes `{ workflowId, ttlMs? }` and returns `{ preview }`: a server-signed, single-use token scoped to that workflow, the binding it replaces, and the build routing selects now, valid for `ttlMs` (default 60 seconds, at most 5 minutes). It needs the server to be configured with a `workerStartOverrideSigningSecret`.
+
+Pass the whole `preview` object as `workerStartOverridePreview` to `weft.workflows.startorsignal` (with `id`, `signalId`, and `onTerminalConflict: "start-new"`), or to `weft.workflows.start`. The token is consumed with the replacement, atomically, so it works once.
+
+These operations answer with typed faults a client can branch on:
+
+| Fault                   | When                                                                                                                                                                                                                                                                                                                                                                               | Data                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `NotFound`              | The preview names a workflow that does not exist.                                                                                                                                                                                                                                                                                                                                  | `resource: "workflow"`, `identifier`           |
+| `Conflict`              | The preview cannot be issued: the workflow is not terminal (`workflow-not-terminal`), has no durable binding (`no-worker-binding`), is not `auto-upgrade` (`policy-not-auto-upgrade`), no ready routed build provides its revision (`no-routed-deployment`), or the candidate build does not satisfy the policy (`upgrade-<reason>`, for example `upgrade-incompatible-contract`). | `reason` (JSON-RPC)                            |
+| `UnsupportedCapability` | The server has no signing secret.                                                                                                                                                                                                                                                                                                                                                  | `capability: "workerStartOverrideSigning"`     |
+| `Conflict`              | A start carries a token that cannot authorize it: expired, already used, for another workflow, stale against the accepted binding, forged, or unverifiable.                                                                                                                                                                                                                        | `reason: "override-token-rejected"` (JSON-RPC) |
+| `InvalidParams`         | The token is not shaped like a preview.                                                                                                                                                                                                                                                                                                                                            | `issues: []`                                   |
+
 ## Revision-aware deployment routing
 
-`WorkerDeploymentCatalog` stores immutable `(deploymentName, buildId)` versions and a conditional routing pointer in the configured storage backend. A version records its artifact and manifest digests, accepted manifest, lifecycle state, first-seen time, and execution references. Re-registering a build with different digests is rejected. Routing pointers carry a monotonically increasing generation, a current build, an optional ramping build, and an integer `rampBasisPoints` value from `0` through `10_000`; stale expected generations are rejected.
+`WorkerDeploymentCatalog` stores immutable `(deploymentName, buildId)` versions and a conditional routing pointer in the configured storage backend. A version records its artifact and manifest digests, accepted manifest, lifecycle state, first-seen time, and execution references, which are computed when the version is read and never stored. Re-registering a build with different digests is rejected. Routing pointers carry a monotonically increasing generation, a current build, an optional ramping build, an integer `rampBasisPoints` value from `0` through `10_000`, and an optional `previousBuildId`; stale expected generations are rejected. `previousBuildId` is the build that was current before the latest change of `currentBuildId`, the target a rollback returns to. `setRouting` derives it inside its conditional write, from the record it replaces: a write that changes the current build records the replaced one, and a write that keeps the current build (a ramp, or clearing one) carries it over unchanged. A caller cannot supply it, and a pointer written before the field existed has none until its current build next changes.
 
 `selectWorkerDeployment` resolves a task to one exact build before applying worker policy. A pinned `buildId`, `artifactDigest`, `workflowRevision`, or activity contract never falls forward to another build. Unpinned traffic chooses the ramping build when the deterministic `worker-rollout-v1` bucket for `(deploymentName, workflowId, generation)` is below `rampBasisPoints`, otherwise it chooses the current build. Candidate workers are then filtered for the requested workflow/activity, capacity, and drain state, and ties are ordered by worker ID.
 
-Deployment versions remain reachable while their execution-reference count is non-zero. Calling `markDraining` with references present leaves the version ready; after references are released it may transition to draining. Diagnostic failures distinguish revision incompatibility from unavailable capacity so an unavailable build does not hide runnable work on another version. The catalog is durable, but connected worker sessions and in-flight leases remain live registry state and must be recovered through the normal task-ledger recovery path.
+A version's execution references are the durable work bound to its build: every run that is not terminal (`running`, `pending`, or `suspended`) whose current worker binding names the build, under any worker-versioning policy, and every task-ledger entry that is not terminal whose execution requirement names the build. A dead-lettered ledger entry is not terminal, so it keeps the build until `weft.tasks.diagnostics.deadletters.clear` resolves it. Schedules and revision realms do not pin a build and do not count. The count comes from one scan of the run records and one of the task ledger each time versions are listed or a build is removed, so it falls to zero as the work finishes, and `GET /v1/worker-deployments/diagnostics` reports it as `executionReferences`.
 
-The operational surface is scoped to `system:admin` for mutations and `system:read` for diagnostics. Use `POST /v1/worker-deployments/preview` to validate both target builds before changing state, then `POST /v1/worker-deployments/routing` to advance the conditional generation. `POST /v1/worker-deployments/promote` moves a validated build to current traffic; `POST /v1/worker-deployments/rollback` does the same for a previously registered build. `GET /v1/worker-deployments/diagnostics` returns bounded version records and the selected routing pointer. The equivalent JSON-RPC operation names are `weft.worker.deployments.preview`, `weft.worker.deployments.setrouting`, `weft.worker.deployments.promote`, `weft.worker.deployments.rollback`, and `weft.worker.deployments.diagnostics`.
+A build is removed in two steps. First drain it (`weft.worker.deployments.drain` with a `buildId`, or `catalog.setVersionState(deploymentName, buildId, "draining")`): a draining build can no longer be chosen by a start or an upgrade, including an auto-upgrade policy whose `compatibility.buildId` names it. Then remove it. Removal is irreversible, and it refuses a build that is not draining, that the routing pointer names, or that has any execution reference.
+
+Removal is optimistic concurrency, not a lock. Two small records sit beside the version record and the routing pointer. The binding stamp is 64 shards per build, at `worker-deployment-binding:<deployment>:<build>:<k>` where `<k>` is two lowercase hex digits, `00` to `3f`; each shard holds sixteen random bytes. Every commit binding durable work to the build writes a fresh value to exactly one shard, blind, in the same batch as the work: a run's worker binding (a fresh start, a `start-new` restart, a child start, a fork, an automatic upgrade, `bindWorkflowWorkerAtStart`, and the retry of a failed run) and a task-ledger entry whose requirement names the build. The shard is the 32-bit FNV-1a hash of the binding's own key (the run id, or the ledger entry's operation id) over its UTF-8 bytes, modulo 64, so concurrent bindings land on different shards. That matters on Postgres and Neon, which run every conditional batch at `SERIALIZABLE`: bindings that all wrote one row would abort each other and fail after five retries, with no removal involved. An absent shard means no binding has used it. The removal tombstone, at `worker-deployment-removed:<deployment>:<build>`, is one opaque byte written once, in the same batch as the version record's `removed` state, and never deleted. Deployment names and build ids are URI-encoded in these keys as in a version record's key. Neither record is ever decoded: the shards are compared, the tombstone is tested for presence. **The shard count, 64, is persisted format** and cannot change without reading the old shards too. All four prefixes are reserved. Only the shard count, 64, is persisted format. The hash that picks a binding's shard is not, because `remove` conditions on every shard: a binding on any shard is caught, so the choice can change without reading old data.
+
+`remove` reads the version (it must be `draining`), then the routing pointer, then all 64 stamp shards, and only then scans the run records and the non-terminal ledger entries. If anything references the build it refuses with `version-referenced`. Otherwise it writes `removed` and the tombstone in one batch conditioned on the exact bytes of the version record, the routing pointer and every stamp shard it read, an absent shard being conditioned as absent. A binding that commits after its shard was read changes that shard, so the write fails and the removal reads again: a build that is now `removed` answers as removed, one no longer draining or now routed answers that, and anything else rescans. Three attempts in all; after the third the answer is `Conflict` `version-busy`, which is retryable. A binding that commits after the removal meets the tombstone, whose absence every binding commit requires, and fails with `version-removed` without binding anything. Two removals race harmlessly (the second loses on the version bytes and answers removed), nothing is held between steps, and a crash at any point leaves nothing to reconcile. A restart, a fork and the retry of a failed run also read the version record first, which fails fast and covers a build removed before tombstones existed.
+
+Diagnostic failures distinguish revision incompatibility from unavailable capacity so an unavailable build does not hide runnable work on another version. The catalog is durable, but connected worker sessions and in-flight leases remain live registry state and must be recovered through the normal task-ledger recovery path.
+
+The operational surface is scoped to `system:admin` for mutations and `system:read` for diagnostics. Use `POST /v1/worker-deployments/preview` to validate both target builds before changing state; it returns `currentGeneration`, the pointer's generation as it stands (`0` before the first change), to pass as `expectedGeneration`. Then `POST /v1/worker-deployments/routing` advances the conditional generation. `POST /v1/worker-deployments/promote` moves a validated build to current traffic; `POST /v1/worker-deployments/rollback` does the same for a previously registered build; both accept the same optional `expectedGeneration`, and without it they apply against the generation current at the time of the call. `POST /v1/worker-deployments/remove` marks a build removed. `GET /v1/worker-deployments/diagnostics` returns bounded version records and the selected routing pointer. The equivalent JSON-RPC operation names are `weft.worker.deployments.preview`, `weft.worker.deployments.setrouting`, `weft.worker.deployments.promote`, `weft.worker.deployments.rollback`, `weft.worker.deployments.remove`, and `weft.worker.deployments.diagnostics`.
+
+These operations answer with typed faults a client can branch on, not message text:
+
+| Fault           | When                                                                                                                                                                               | Data                                                                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Conflict`      | The routing pointer is no longer at `expectedGeneration`, or it or a target build changed between the read and the write.                                                          | `reason: "stale-generation"` and `currentGeneration` (JSON-RPC; REST discloses `currentGeneration`). Retry with that generation.                                                                |
+| `Conflict`      | A target build exists but is not `ready` (for example, draining).                                                                                                                  | `reason: "version-not-ready"` (JSON-RPC).                                                                                                                                                       |
+| `Conflict`      | `remove` names a build that is not `draining`.                                                                                                                                     | `reason: "version-not-draining"` (JSON-RPC). The build is left as it was; drain it first.                                                                                                       |
+| `Conflict`      | `remove` names a build that durable work is still bound to (see the reference rules above).                                                                                        | `reason: "version-referenced"` (JSON-RPC). The build is left as it was.                                                                                                                         |
+| `Conflict`      | Work would be bound to a build that has been removed: a start, a restart (`onTerminalConflict: "start-new"`), a fork, a child start, an automatic upgrade, or a task-ledger entry. | `reason: "version-removed"` (JSON-RPC). Nothing is created. The retry of a failed run reports it per run in the bulk result's `errors` (`reason: "version-removed"`) and leaves the run failed. |
+| `Conflict`      | `remove` kept losing to bindings that landed on the build during its scans.                                                                                                        | `reason: "version-busy"` (JSON-RPC). The build is left as it was; retry.                                                                                                                        |
+| `Conflict`      | `remove` names the current or ramping build of the routing pointer.                                                                                                                | `reason: "version-routed"` (JSON-RPC). The build is left as it was; route new traffic to another build first.                                                                                   |
+| `NotFound`      | A named build does not exist or has been removed.                                                                                                                                  | `resource: "workerDeploymentVersion"`, `identifier: "<deployment>/<build>"`.                                                                                                                    |
+| `InvalidParams` | The ramping build equals the current build.                                                                                                                                        | `issues: []`.                                                                                                                                                                                   |
 
 ```bash
 curl -sS -X POST http://127.0.0.1:7233/v1/worker-deployments/preview \
@@ -870,4 +1061,4 @@ curl -sS -X POST http://127.0.0.1:7233/v1/worker-deployments/preview \
   -d '{"deploymentName":"billing","currentBuildId":"build-a","rampingBuildId":"build-b","rampBasisPoints":1000}'
 ```
 
-Preview and mutation reject unknown or removed versions, malformed persisted identities, stale routing generations, and invalid ramp values before writing. Exact execution requirements never fall forward; an unavailable build reports a version-specific failure, allowing another revision partition to run without head-of-line blocking. Rollback affects only new unpinned selection—existing task and schedule bindings retain their pinned build. Drain and removal are conditional on execution references, so a concurrent lease cannot be lost. Terminal task records are retention data and do not keep a deployment reachable; reachability comes from active pinned runs and schedules, pending requirements, attempts, realms, and recovery preload authorities. Routing metrics use deployment/build identity only in bounded diagnostics and do not create unbounded workflow-label series. Discovery exposes the same generated operation catalog and client types as the REST and JSON-RPC surfaces.
+Preview and mutation reject unknown or removed versions, malformed persisted identities, stale routing generations, and invalid ramp values before writing. Exact execution requirements never fall forward; an unavailable build reports a version-specific failure, allowing another revision partition to run without head-of-line blocking. Rollback affects only new unpinned selection—existing task and schedule bindings retain their pinned build. Drain and removal are conditional on execution references, so a concurrent lease cannot be lost. Terminal task records are retention data and do not keep a build referenced; only the execution references described above do: runs that are not terminal and are bound to the build, and task-ledger entries that are not terminal and require it. Routing metrics use deployment/build identity only in bounded diagnostics and do not create unbounded workflow-label series. Discovery exposes the same generated operation catalog and client types as the REST and JSON-RPC surfaces.

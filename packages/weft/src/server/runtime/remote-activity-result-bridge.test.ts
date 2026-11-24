@@ -12,12 +12,12 @@
  */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { Engine } from '../../core/engine.ts';
 import type { RemoteTaskRecord } from '../../core/task-ledger/task-ledger.ts';
 import { decodeRemoteTaskRecord } from '../../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { activity, workflow } from '../../core/types.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { bridgeRemoteActivityResult } from './remote-activity-result-bridge.ts';
 
 async function readOnlyTaskLedgerRecord(engine: Engine): Promise<RemoteTaskRecord | null> {
@@ -59,7 +59,7 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
         const stored = await readOnlyTaskLedgerRecord(engine!);
         return stored !== null && stored.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
     const record = await readOnlyTaskLedgerRecord(engine);
     const operationId = record!.operationId;
@@ -75,7 +75,12 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
     using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     expect(
-      await bridgeRemoteActivityResult(engine, operationId, { status: 'completed', value: 42 }),
+      await bridgeRemoteActivityResult(
+        engine,
+        operationId,
+        { status: 'completed', value: 42 },
+        record!.workflowExecutionToken,
+      ),
     ).toBeUndefined();
 
     expect(completeSpy).toHaveBeenCalledWith(operationId, 42);
@@ -111,7 +116,7 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
         const stored = await readOnlyTaskLedgerRecord(engine!);
         return stored !== null && stored.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
     const record = await readOnlyTaskLedgerRecord(engine);
     const operationId = record!.operationId;
@@ -122,10 +127,15 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
     using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     expect(
-      await bridgeRemoteActivityResult(engine, operationId, {
-        status: 'failed',
-        error: 'card declined',
-      }),
+      await bridgeRemoteActivityResult(
+        engine,
+        operationId,
+        {
+          status: 'failed',
+          error: 'card declined',
+        },
+        record!.workflowExecutionToken,
+      ),
     ).toBeUndefined();
 
     expect(failSpy).toHaveBeenCalledTimes(1);
@@ -135,5 +145,39 @@ describe('bridgeRemoteActivityResult — lost race between the pending check and
       ),
       expect.any(Error),
     );
+  });
+
+  it('does not bridge a completion carrying a stale workflow execution token', async () => {
+    engine = new Engine({ activityExecution: { mode: 'remote' } });
+    const activityDefinition = activity({
+      name: 'staleTokenActivity',
+      execute: async (): Promise<never> => {
+        throw new Error('local execution must never run in remote mode');
+      },
+    });
+    engine.register(
+      workflow({ name: 'stale-token-workflow' })
+        .activities({ staleTokenActivity: activityDefinition })
+        .execute(async function* (context: WorkflowContext) {
+          return yield* context.run('staleTokenActivity', null);
+        }),
+    );
+    await engine.start('stale-token-workflow', null, { id: 'stale-token-run' });
+    await waitForCondition(
+      async () => {
+        const record = await readOnlyTaskLedgerRecord(engine!);
+        return record?.state === 'queued';
+      },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
+    );
+    const record = await readOnlyTaskLedgerRecord(engine);
+    using completeSpy = spyOn(engine, 'completeAsyncActivity');
+    await bridgeRemoteActivityResult(
+      engine,
+      record!.operationId,
+      { status: 'completed', value: 'stale' },
+      'old-execution-token',
+    );
+    expect(completeSpy).not.toHaveBeenCalled();
   });
 });

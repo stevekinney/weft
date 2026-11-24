@@ -27,15 +27,15 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type {
   ConformanceTargetReport,
   ConformanceTargetRunner,
   ConformanceTargetSummary,
 } from '../../conformance/targets.ts';
 import { raiseFault } from '../operation-catalog/raise-fault.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const conformanceTargetSummarySchema = z
   .object({
@@ -70,7 +70,12 @@ const listConformanceTargetsOutput = z.object({
 });
 
 const runConformanceReportInput = z.object({
-  target: z.string().min(1),
+  target: z
+    .string()
+    .min(1)
+    .describe(
+      'Name of the operator-registered conformance target to run, as listed by weft.conformance.targets.',
+    ),
 });
 
 export type ListConformanceTargetsOutput = z.infer<typeof listConformanceTargetsOutput>;
@@ -183,7 +188,7 @@ export const listConformanceTargetsRestBinding: UnknownRestBinding = {
   inputSources: {},
   extractInput: async () => ({}),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };
 
 /**
@@ -199,5 +204,5 @@ export const runConformanceReportRestBinding: UnknownRestBinding = {
   inputSources: { target: { kind: 'path', pathParam: 'target' } },
   extractInput: async (_request, pathParams) => ({ target: pathParams['target'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };

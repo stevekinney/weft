@@ -8,10 +8,13 @@
  * suite's actual assertions local.
  */
 
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
 import { decodeRemoteTaskRecord } from '../../core/task-ledger/task-ledger.ts';
 import { MetricsCollector } from '../../observability/metrics.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { DeadlineTracker } from '../deadline-tracker.ts';
 import { TaskQueue } from '../task-queue.ts';
@@ -50,11 +53,19 @@ export function minimalServerContext(
     supportedAuthenticationSchemes: new Set() as never,
     corsPolicy: null,
     metricsCollector: new MetricsCollector(),
-    eventFeedBackend: null as never,
+    connectionCounts: {
+      fleetSse: 0,
+      fleetWebSocket: 0,
+      workflowSse: 0,
+      workflowWebSocket: 0,
+      workers: 0,
+    },
+    refreshConnectionMetrics() {},
+    watchEventFeed: null as never,
     workflowEventFeed: null as never,
     fleetEventFeed: null as never,
     activeJsonRpcSessions: new Set(),
-    mcpSessionManager: null as never,
+    mcpEndpoint: null as never,
     authenticatorPromise: null,
     rateLimiter: null,
     visibilityPollMs: 5000,

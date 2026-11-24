@@ -5,7 +5,7 @@ import { Engine, serve, workflow } from '../index.ts';
 import type { WorkflowCommand } from './types.ts';
 import { executeWorkflow } from './workflow-commands.ts';
 
-function createJsonRpcFixtureServer(resultFor: (method: string) => unknown) {
+function createJsonRpcFixtureServer(resultFor: (method: string, params?: unknown) => unknown) {
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -18,7 +18,7 @@ function createJsonRpcFixtureServer(resultFor: (method: string) => unknown) {
       return Response.json({
         jsonrpc: '2.0',
         id,
-        result: resultFor(method),
+        result: resultFor(method, 'params' in body ? body.params : undefined),
       });
     },
   });
@@ -83,6 +83,32 @@ describe('weft workflow start/get/events', () => {
     }
   });
 
+  it('sends --failed-step and --retrying to the list operation (COR-2530)', async () => {
+    const received: unknown[] = [];
+    const server = createJsonRpcFixtureServer((method, params) => {
+      if (method === 'weft.workflows.list') received.push(params);
+      return { items: [] };
+    });
+    try {
+      await executeWorkflow({
+        ...base,
+        action: 'ls',
+        server: server.url,
+        failedStep: 'charge-card',
+        retrying: true,
+      } satisfies WorkflowCommand);
+      await executeWorkflow({
+        ...base,
+        action: 'ls',
+        server: server.url,
+      } satisfies WorkflowCommand);
+
+      expect(received).toEqual([{ failedStep: 'charge-card', retrying: true }, {}]);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('formats human-readable event lines and non-record events', async () => {
     const server = createJsonRpcFixtureServer((method) =>
       method === 'weft.workflows.events.list'
@@ -100,6 +126,59 @@ describe('weft workflow start/get/events', () => {
       expect(result.stdout).toContain('null');
       expect(result.stdout).toContain('started');
       expect(result.stdout).toContain('event');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('reads events from an items collection and reports none for any other shape', async () => {
+    let shape: unknown = { items: [{ type: 'started', timestamp: 0 }] };
+    const server = createJsonRpcFixtureServer((method) =>
+      method === 'weft.workflows.events.list' ? shape : {},
+    );
+    const command = {
+      ...base,
+      action: 'events',
+      server: server.url,
+      workflowId: 'wf-events-items',
+    } satisfies WorkflowCommand;
+    try {
+      const fromItems = await executeWorkflow(command);
+      expect(fromItems.exitCode).toBe(0);
+      expect(fromItems.stdout).toContain('started');
+
+      shape = 'not a collection';
+      expect(await executeWorkflow(command)).toEqual({
+        stdout: 'No events found.',
+        exitCode: 0,
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('names the started workflow from the requested id or from nothing when the server omits it', async () => {
+    const server = createJsonRpcFixtureServer(() => ({}));
+    try {
+      const withRequestedId = await executeWorkflow({
+        ...base,
+        action: 'start',
+        server: server.url,
+        workflowType: 'echo',
+        input: 'null',
+        id: 'requested-id',
+      } satisfies WorkflowCommand);
+      expect(withRequestedId).toEqual({ stdout: 'Started workflow requested-id', exitCode: 0 });
+
+      const quietWithoutId = await executeWorkflow({
+        ...base,
+        action: 'start',
+        server: server.url,
+        workflowType: 'echo',
+        input: 'null',
+        quiet: true,
+      } satisfies WorkflowCommand);
+      expect(quietWithoutId).toEqual({ stdout: '', exitCode: 0 });
     } finally {
       await server.stop();
     }

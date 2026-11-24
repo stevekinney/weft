@@ -37,7 +37,7 @@
  * @module core/engine/termination/finalizer
  */
 
-import { KEYS } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/keys.ts';
 import { decode } from '../../codec.ts';
 import { WorkflowTeardownEvent } from '../../events.ts';
 import type { WorkflowState } from '../../types.ts';

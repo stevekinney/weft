@@ -10,7 +10,7 @@ import {
 
 function createWaiter(): WorkflowResultWaiter {
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-  return { promise, resolve, reject };
+  return { promise, resolve, reject, boundToRun: false };
 }
 
 function handleSettledWith(waiter: WorkflowResultWaiter) {

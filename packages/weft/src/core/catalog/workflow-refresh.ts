@@ -1,72 +1,24 @@
 import { parseWorkflowRevisionManifest } from '../contract/manifest-parse.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import type { RegisteredWorkflowDefinition } from '../types/workflow-registry.ts';
-import type {
-  WorkflowCatalogActivationMode,
-  WorkflowCatalogActivationResult,
-  WorkflowCatalogActivePointer,
-} from './types.ts';
 import { WorkflowCatalog } from './workflow-catalog.ts';
+import {
+  failureReason,
+  hostFailure,
+  stoppedError,
+  WorkflowRefreshError,
+} from './workflow-refresh-failure.ts';
+import type {
+  WorkflowRefreshArtifact,
+  WorkflowRefreshCoordinatorOptions,
+  WorkflowRefreshDiagnostics,
+  WorkflowRefreshOptions,
+  WorkflowRefreshResponse,
+  WorkflowRefreshResult,
+  WorkflowRefreshSource,
+  WorkflowRefreshStatus,
+} from './workflow-refresh-types.ts';
 
-export type WorkflowRefreshArtifact = Readonly<{
-  manifest: WorkflowRevisionManifest;
-  bytes: Uint8Array;
-  digest: string;
-  identity: Readonly<{ name: string; revision: string }>;
-  runtime: string;
-}>;
-
-export type WorkflowRefreshResponse = Readonly<{
-  status: 200 | 304;
-  etag?: string;
-  artifact?: WorkflowRefreshArtifact;
-}>;
-
-export type WorkflowRefreshDiagnostics = Readonly<{
-  name: string;
-  state: 'idle' | 'checking' | 'not-modified' | 'warming' | 'activated' | 'installed' | 'failed';
-  etag?: string | undefined;
-  revision?: string | undefined;
-  digest?: string | undefined;
-  generation?: number | undefined;
-  checkedAt?: number | undefined;
-  error?: string | undefined;
-}>;
-
-export type WorkflowRefreshOptions = Readonly<{
-  activate?: WorkflowCatalogActivationMode;
-  expectedGeneration?: number;
-  signal?: AbortSignal;
-}>;
-
-export type WorkflowRefreshSource = Readonly<{
-  fetch: (request: {
-    etag?: string | undefined;
-    signal?: AbortSignal | undefined;
-  }) => Promise<WorkflowRefreshResponse>;
-  warm: (
-    artifact: WorkflowRefreshArtifact,
-    signal: AbortSignal,
-  ) => Promise<RegisteredWorkflowDefinition>;
-  validateRuntime: (runtime: string, signal: AbortSignal) => void | Promise<void>;
-}>;
-
-export type WorkflowRefreshCoordinatorOptions = Readonly<{
-  catalog: WorkflowCatalog;
-  sources: ReadonlyMap<string, WorkflowRefreshSource>;
-  maxArtifactBytes?: number;
-  pollIntervalMs?: number;
-  maxBackoffMs?: number;
-  now?: () => number;
-}>;
-
-export type WorkflowRefreshResult = Readonly<{
-  status: 'not-modified' | 'installed' | 'activated';
-  etag?: string | undefined;
-  manifest?: WorkflowRevisionManifest | undefined;
-  pointer?: WorkflowCatalogActivePointer | undefined;
-  activation?: WorkflowCatalogActivationResult | undefined;
-}>;
 type RefreshResult = WorkflowRefreshResult;
 
 const DEFAULT_MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
@@ -93,6 +45,8 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
   readonly #signalIds = new WeakMap<AbortSignal, number>();
   readonly #abortControllers = new Set<AbortController>();
   #timer: ReturnType<typeof setTimeout> | undefined;
+  #polling = false;
+  #nextPollAt: number | undefined;
   #stopped = false;
   #backoffMs: number;
   #nextSignalId = 0;
@@ -104,17 +58,12 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.#maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
     this.#now = options.now ?? Date.now;
-    if (!Number.isSafeInteger(this.#maxArtifactBytes) || this.#maxArtifactBytes <= 0) {
-      throw new RangeError('maxArtifactBytes must be a positive safe integer');
-    }
-    if (!Number.isFinite(this.#pollIntervalMs) || this.#pollIntervalMs <= 0) {
-      throw new RangeError('pollIntervalMs must be positive');
-    }
+    assertRefreshLimits(this.#maxArtifactBytes, this.#pollIntervalMs, this.#maxBackoffMs);
     this.#backoffMs = this.#pollIntervalMs;
   }
 
   async refresh(name: string, options?: WorkflowRefreshOptions): Promise<RefreshResult> {
-    if (this.#stopped) throw new Error('Workflow refresh coordinator is stopped');
+    if (this.#stopped) throw stoppedError();
     const signalKey =
       options?.signal === undefined ? '' : this.#signalId(options.signal).toString();
     const key = `${name}\u0000${options?.activate ?? 'never'}\u0000${options?.expectedGeneration ?? ''}\u0000${signalKey}`;
@@ -126,7 +75,7 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
   }
 
   registerSource(name: string, source: WorkflowRefreshSource): void {
-    if (this.#stopped) throw new Error('Workflow refresh coordinator is stopped');
+    if (this.#stopped) throw stoppedError();
     this.#sources.set(name, source);
   }
 
@@ -160,9 +109,32 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
     return [...this.#diagnostics.values()];
   }
 
+  /**
+   * Every registered source (a never-checked one reads `idle`), sorted by name,
+   * plus the polling policy and next check while polling runs. `diagnostics()`
+   * keeps listing only sources that have been checked.
+   */
+  status(): WorkflowRefreshStatus {
+    const sources = [...this.#sources.keys()]
+      .toSorted()
+      .map((name) => this.#diagnostics.get(name) ?? { name, state: 'idle' as const });
+    return {
+      sources,
+      polling: this.#polling
+        ? {
+            intervalMilliseconds: this.#pollIntervalMs,
+            maxBackoffMilliseconds: this.#maxBackoffMs,
+            backoffMilliseconds: this.#backoffMs,
+            nextCheckAt: this.#nextPollAt,
+          }
+        : undefined,
+    };
+  }
+
   /** Start opt-in polling. Polling failures back off and never activate stale data. */
   startPolling(): void {
-    if (this.#stopped || this.#timer !== undefined) return;
+    if (this.#stopped || this.#polling) return;
+    this.#polling = true;
     this.#schedulePoll(this.#pollIntervalMs);
   }
 
@@ -179,6 +151,8 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
   stopPolling(): void {
     if (this.#timer !== undefined) clearTimeout(this.#timer);
     this.#timer = undefined;
+    this.#polling = false;
+    this.#nextPollAt = undefined;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
@@ -192,8 +166,11 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
   async #refresh(name: string, options?: WorkflowRefreshOptions): Promise<RefreshResult> {
     const source = this.#sources.get(name);
     if (source === undefined)
-      throw new Error(`No workflow refresh source registered for "${name}"`);
-    this.#record(name, { state: 'checking' });
+      throw new WorkflowRefreshError(
+        'not-registered',
+        `No workflow refresh source registered for "${name}"`,
+      );
+    this.#record(name, { state: 'checking', error: undefined, reason: undefined });
     const controller = new AbortController();
     this.#abortControllers.add(controller);
     try {
@@ -201,11 +178,25 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
       const response = await this.#fetch(name, source, signal);
       if (response.status === 304) return this.#notModified(name);
       const artifact = await this.#prepare(name, source, response, signal);
-      const activation = await this.#install(name, source, artifact, options, signal);
+      this.#record(name, { state: 'warming' });
+      const activation = await this.#install(
+        name,
+        source,
+        artifact,
+        response.etag ?? artifact.digest,
+        options,
+        signal,
+      );
       const result = this.#result(name, artifact.manifest, activation);
       this.#record(name, {
         state: result.status,
-        ...(activation?.applied === true ? { generation: activation.pointer.generation } : {}),
+        ...(activation?.applied === true
+          ? {
+              generation: activation.pointer.generation,
+              activatedRevision: artifact.manifest.revision,
+              activatedDigest: artifact.digest,
+            }
+          : {}),
         checkedAt: this.#now(),
       });
       this.#backoffMs = this.#pollIntervalMs;
@@ -215,6 +206,7 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
         state: 'failed',
         checkedAt: this.#now(),
         error: error instanceof Error ? error.message : String(error),
+        reason: failureReason(error, options?.signal, this.#stopped),
       });
       this.#backoffMs = Math.min(
         this.#maxBackoffMs,
@@ -231,16 +223,23 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
     source: WorkflowRefreshSource,
     signal: AbortSignal,
   ): Promise<WorkflowRefreshResponse> {
-    return source.fetch({
-      ...(this.#etags.has(name) ? { etag: this.#etags.get(name) } : {}),
-      signal,
-    });
+    try {
+      return await source.fetch({
+        ...(this.#etags.has(name) ? { etag: this.#etags.get(name) } : {}),
+        signal,
+      });
+    } catch (error) {
+      throw hostFailure('source', error, signal);
+    }
   }
 
   #notModified(name: string): RefreshResult {
     this.#assertActive();
     if (!this.#etags.has(name) || !this.#lastValidatedArtifact.has(name)) {
-      throw new Error('304 Not Modified requires a prior validated ETag and artifact');
+      throw new WorkflowRefreshError(
+        'source',
+        '304 Not Modified requires a prior validated ETag and artifact',
+      );
     }
     this.#record(name, { state: 'not-modified', checkedAt: this.#now() });
     this.#backoffMs = this.#pollIntervalMs;
@@ -255,37 +254,62 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
     signal: AbortSignal,
   ): Promise<WorkflowRefreshArtifact> {
     const artifact = response.artifact;
-    if (artifact === undefined) throw new Error('Refresh response status 200 omitted artifact');
+    if (artifact === undefined)
+      throw new WorkflowRefreshError('source', 'Refresh response status 200 omitted artifact');
     const digest = await digestBytes(artifact.bytes);
     this.#assertActive();
     this.#validateArtifact(name, artifact, digest);
     validateArtifactBinding(artifact);
     const parsed = await parseWorkflowRevisionManifest(artifact.manifest);
-    if (!parsed.ok) throw new Error(`Workflow artifact manifest is invalid: ${parsed.reason}`);
-    await source.validateRuntime(artifact.runtime, signal);
+    if (!parsed.ok)
+      throw new WorkflowRefreshError(
+        'contract',
+        `Workflow artifact manifest is invalid: ${parsed.reason}`,
+      );
+    try {
+      await source.validateRuntime(artifact.runtime, signal);
+    } catch (error) {
+      throw hostFailure('runtime', error, signal);
+    }
     this.#assertActive();
-    this.#artifacts.set(digest, artifact);
-    this.#lastValidatedArtifact.set(name, artifact);
-    this.#etags.set(name, response.etag ?? digest);
-    this.#record(name, {
-      state: 'warming',
-      etag: response.etag ?? digest,
-      revision: artifact.manifest.revision,
-      digest,
-    });
     return artifact;
+  }
+
+  /**
+   * Record `artifact` as the candidate. Called only once the catalog has
+   * installed it, so the revision, digest, contract hash, last validated
+   * artifact, and ETag always describe one installed artifact, and a check that
+   * fails before this point leaves the previous installed candidate whole.
+   */
+  #commitCandidate(name: string, artifact: WorkflowRefreshArtifact, etag: string): void {
+    this.#artifacts.set(artifact.digest, artifact);
+    this.#lastValidatedArtifact.set(name, artifact);
+    this.#etags.set(name, etag);
+    this.#record(name, {
+      etag,
+      revision: artifact.manifest.revision,
+      digest: artifact.digest,
+      contractHash: artifact.manifest.contractHash,
+    });
   }
 
   async #install(
     name: string,
     source: WorkflowRefreshSource,
     artifact: WorkflowRefreshArtifact,
+    etag: string,
     options: WorkflowRefreshOptions | undefined,
     signal: AbortSignal,
   ) {
-    const definition = await source.warm(artifact, signal);
+    let definition: RegisteredWorkflowDefinition;
+    try {
+      definition = await source.warm(artifact, signal);
+    } catch (error) {
+      throw hostFailure('warming', error, signal);
+    }
     this.#assertActive();
     await this.#catalog.install(artifact.manifest, definition);
+    this.#commitCandidate(name, artifact, etag);
     this.#assertActive();
     if (options?.activate !== 'if-compatible') return undefined;
     const activationOptions =
@@ -319,22 +343,34 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
 
   #validateArtifact(name: string, artifact: WorkflowRefreshArtifact, digest: string): void {
     if (artifact.bytes.byteLength > this.#maxArtifactBytes)
-      throw new Error(`Workflow artifact exceeds ${this.#maxArtifactBytes} bytes`);
+      throw new WorkflowRefreshError(
+        'integrity',
+        `Workflow artifact exceeds ${this.#maxArtifactBytes} bytes`,
+      );
     if (artifact.digest !== digest)
-      throw new Error('Workflow artifact digest does not match its bytes');
+      throw new WorkflowRefreshError(
+        'integrity',
+        'Workflow artifact digest does not match its bytes',
+      );
     if (
       artifact.identity.name !== name ||
       artifact.identity.revision !== artifact.manifest.revision
     ) {
-      throw new Error('Workflow artifact identity does not match its requested catalog identity');
+      throw new WorkflowRefreshError(
+        'identity',
+        'Workflow artifact identity does not match its requested catalog identity',
+      );
     }
     if (artifact.manifest.name !== name)
-      throw new Error(
+      throw new WorkflowRefreshError(
+        'identity',
         'Workflow artifact manifest name does not match its requested catalog identity',
       );
     if (!artifact.manifest.revision || artifact.runtime.length === 0)
-      throw new Error('Workflow artifact manifest/runtime proof is incomplete');
-    this.#record(name, { digest });
+      throw new WorkflowRefreshError(
+        'integrity',
+        'Workflow artifact manifest/runtime proof is incomplete',
+      );
   }
 
   #record(name: string, patch: Partial<WorkflowRefreshDiagnostics>): void {
@@ -343,13 +379,15 @@ export class WorkflowRefreshCoordinator implements AsyncDisposable {
   }
 
   #assertActive(): void {
-    if (this.#stopped) throw new Error('Workflow refresh coordinator is stopped');
+    if (this.#stopped) throw stoppedError();
   }
 
   #schedulePoll(delay: number): void {
     if (this.#stopped) return;
+    this.#nextPollAt = this.#now() + delay;
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
+      this.#nextPollAt = undefined;
       if (this.#stopped) return;
       void this.runMaintenance()
         .then(() => this.#schedulePoll(this.#pollIntervalMs))
@@ -378,15 +416,46 @@ function validateArtifactBinding(artifact: WorkflowRefreshArtifact): void {
   try {
     encoded = JSON.parse(new TextDecoder().decode(artifact.bytes));
   } catch {
-    throw new Error('Workflow artifact bytes are not a complete JSON artifact');
+    throw new WorkflowRefreshError(
+      'integrity',
+      'Workflow artifact bytes are not a complete JSON artifact',
+    );
   }
   if (typeof encoded !== 'object' || encoded === null)
-    throw new Error('Workflow artifact bytes are not a complete artifact envelope');
+    throw new WorkflowRefreshError(
+      'integrity',
+      'Workflow artifact bytes are not a complete artifact envelope',
+    );
   const envelope = encoded as Record<string, unknown>;
   if (JSON.stringify(envelope['manifest']) !== JSON.stringify(artifact.manifest))
-    throw new Error('Workflow artifact manifest is not bound to its bytes');
+    throw new WorkflowRefreshError(
+      'integrity',
+      'Workflow artifact manifest is not bound to its bytes',
+    );
   if (JSON.stringify(envelope['identity']) !== JSON.stringify(artifact.identity))
-    throw new Error('Workflow artifact identity is not bound to its bytes');
+    throw new WorkflowRefreshError(
+      'integrity',
+      'Workflow artifact identity is not bound to its bytes',
+    );
   if (envelope['runtime'] !== artifact.runtime)
-    throw new Error('Workflow artifact runtime proof is not bound to its bytes');
+    throw new WorkflowRefreshError(
+      'integrity',
+      'Workflow artifact runtime proof is not bound to its bytes',
+    );
+}
+
+function assertRefreshLimits(
+  maxArtifactBytes: number,
+  pollIntervalMs: number,
+  maxBackoffMs: number,
+): void {
+  if (!Number.isSafeInteger(maxArtifactBytes) || maxArtifactBytes <= 0) {
+    throw new RangeError('maxArtifactBytes must be a positive safe integer');
+  }
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new RangeError('pollIntervalMs must be positive');
+  }
+  if (!Number.isFinite(maxBackoffMs) || maxBackoffMs <= 0) {
+    throw new RangeError('maxBackoffMs must be positive');
+  }
 }

@@ -72,6 +72,39 @@ describe('engine validation helpers', () => {
     ).toBe(true);
   });
 
+  it('accepts a string taskOperationId on a timeline entry and refuses any other type', () => {
+    const entry = {
+      step: 1,
+      operationType: 'activity',
+      operationLabel: 'demo',
+      inputSummary: 'input',
+      timestamp: 1,
+      status: 'completed',
+    };
+    expect(isWorkflowTimelineEntry({ ...entry, taskOperationId: 'async-act:v1:wf:0:1' })).toBe(
+      true,
+    );
+    expect(isWorkflowTimelineEntry({ ...entry, taskOperationId: 7 })).toBe(false);
+  });
+
+  it('accepts a timeline entry without a stepIndex and refuses one that is not a non-negative integer', () => {
+    const entry = {
+      step: 1,
+      operationType: 'activity',
+      operationLabel: 'demo',
+      inputSummary: 'input',
+      timestamp: 1,
+      status: 'completed',
+    };
+    // An entry persisted before COR-1988 has none.
+    expect(isWorkflowTimelineEntry(entry)).toBe(true);
+    expect(isWorkflowTimelineEntry({ ...entry, stepIndex: 0 })).toBe(true);
+    expect(isWorkflowTimelineEntry({ ...entry, stepIndex: 7 })).toBe(true);
+    for (const stepIndex of [-1, 1.5, '2', Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      expect(isWorkflowTimelineEntry({ ...entry, stepIndex })).toBe(false);
+    }
+  });
+
   it('validates workflow timeline entries', () => {
     expect(isWorkflowTimelineEntry(null)).toBe(false);
     expect(
@@ -701,6 +734,8 @@ describe('engine validation helpers', () => {
         skippedCount: 0,
         queuedRuns: [{ workflowId: 'queued-run', queuedAt: 2, occurrence: 3 }],
         jitterMs: 30_000,
+        timeZone: 'UTC',
+        revision: 0,
       } satisfies Pick<
         ScheduleState,
         | 'backfill'
@@ -711,9 +746,11 @@ describe('engine validation helpers', () => {
         | 'nextFireAt'
         | 'currentWorkflowId'
         | 'missedFireCount'
+        | 'timeZone'
         | 'skippedCount'
         | 'queuedRuns'
         | 'jitterMs'
+        | 'revision'
       >);
       expect(decodeScheduleRuntimeFields(createScheduleRecord(), 'schedule-id')).toMatchObject({
         missedFireCount: 0,

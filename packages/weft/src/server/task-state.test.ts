@@ -1,12 +1,12 @@
+import { sleepForTesting, waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import { decodeRemoteTaskRecord, taskLedgerKey } from '../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { KEYS } from '../storage/keys.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import type { WeftServer } from './index.ts';
@@ -51,7 +51,6 @@ async function connectAndRegisterWorker(
     }),
   );
   await waitForCondition(() => wsServer.registry.getWorker(options.workerId) !== undefined, {
-    timeoutMs: 5000,
     intervalMs: 25,
     label: `worker "${options.workerId}" to register`,
   });
@@ -110,6 +109,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'test',
       input: null,
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     const state = await readLedgerState(storage, 'ws-op-1');
@@ -129,6 +129,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'testWorkflow',
       input: { amount: 50 },
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     const state = await readLedgerState(storage, 'lp-op-1');
@@ -171,7 +172,7 @@ describe('task state invariant (server integration)', () => {
 
     await waitForCondition(
       async () => (await readLedgerState(storage, 'ws-resolve-1')) === 'resolved',
-      { timeoutMs: 5000, intervalMs: 25, label: 'ws-resolve-1 to reach resolved' },
+      { intervalMs: 25, label: 'ws-resolve-1 to reach resolved' },
     );
 
     const state = await readLedgerState(storage, 'ws-resolve-1');
@@ -194,6 +195,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'test',
       input: null,
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     // The current dispatch path writes exactly one key — the ledger record
@@ -220,6 +222,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'testWorkflow',
       input: { x: 1 },
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     expect(await readLedgerState(storage, 'lp-claim-1')).toBe('queued');
@@ -230,6 +233,7 @@ describe('task state invariant (server integration)', () => {
 
     expect(task).not.toBeNull();
     expect(task!.operationId).toBe('lp-claim-1');
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     // After claiming, the task should be inflight
@@ -247,6 +251,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'testWorkflow',
       input: null,
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     // Claim via long-poll → inflight
@@ -254,6 +259,7 @@ describe('task state invariant (server integration)', () => {
       `${server.url}/v1/tasks/default?activity=charge&timeout=1000`,
     );
     const task = (await claimResponse.json()) as { workerId: string; attemptToken: string };
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     // Complete via POST → resolved
@@ -268,6 +274,7 @@ describe('task state invariant (server integration)', () => {
         value: 'done',
       }),
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     const state = await readLedgerState(storage, 'lp-done-1');
@@ -287,6 +294,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'test',
       input: null,
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     expect(await readLedgerState(storage, 'dc-op-1')).toBe('inflight');
@@ -295,7 +303,6 @@ describe('task state invariant (server integration)', () => {
     ws.close();
     await waitForCondition(async () => (await readLedgerState(storage, 'dc-op-1')) === 'queued', {
       label: 'worker disconnect to requeue the ledger record',
-      timeoutMs: 1_000,
       intervalMs: 5,
     });
   });
@@ -323,6 +330,7 @@ describe('task state invariant (server integration)', () => {
       workflowType: 'testWorkflow',
       input: null,
     });
+    // load-proof: the awaited dispatchTask or fetch has already committed its ledger write, so the read below needs no further turn; the yield is surplus
     await sleepForTesting(50);
 
     const wsState = await readLedgerState(storage, 'find-ws-1');

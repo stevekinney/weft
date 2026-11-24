@@ -82,6 +82,33 @@ export interface ListFilter {
    * remains authoritative when index entries are stale.
    */
   failureCategory?: FailureCategory | FailureCategory[] | undefined;
+  /**
+   * Match failed workflows that stopped at the step with this operation label (an activity's name,
+   * for one), compared with the `label` of {@link WorkflowState.failedStep}. A label longer than 200
+   * characters is compared as the 200 characters the engine stores. The engine narrows candidates
+   * with the `failed` status index and verifies the loaded state, which stays authoritative.
+   *
+   * @example
+   * ```ts
+   * import type { ListFilter } from '@lostgradient/weft';
+   * const filter: ListFilter = { failedStep: 'charge-card' };
+   * ```
+   */
+  failedStep?: string | undefined;
+  /**
+   * `true` matches running workflows that are retrying an activity from its second attempt on (see
+   * {@link WorkflowSummary.retrying}); `false` matches every workflow that is not. The engine reads
+   * the `wf-retrying:` records as an index to narrow `true`, and verifies each candidate against
+   * its loaded state and the record's run token, so an entry left by a run that has since ended
+   * never matches.
+   *
+   * @example
+   * ```ts
+   * import type { ListFilter } from '@lostgradient/weft';
+   * const filter: ListFilter = { retrying: true };
+   * ```
+   */
+  retrying?: boolean | undefined;
 }
 
 /**

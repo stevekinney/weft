@@ -429,6 +429,8 @@ export type MailboxRecord = Readonly<{
   openCount: number;
   /** Lifetime admissions. Never decremented; diagnostic provenance only. */
   admittedCount: number;
+  /** Epoch milliseconds of `Mailbox.purge`, when it ran: the seal every later admission is refused by. */
+  purgedAt?: number;
 }>;
 
 /** The idempotency index record binding a retry identity to one admitted command. */

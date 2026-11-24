@@ -30,8 +30,8 @@
  * @module core/engine/retained-recovery-record-count
  */
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
-import { decodeStorageKeyComponent } from '../../storage/key-encoding.ts';
+import { type Storage, decodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { isRecord } from '../debug-output.ts';
 import { LEGACY_DEAD_LETTER_HISTORY_TOKEN } from './termination/finalizer-claim.ts';

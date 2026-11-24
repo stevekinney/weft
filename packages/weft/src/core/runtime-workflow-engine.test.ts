@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from './engine.ts';
 import { registerOnRuntimeEngine, runtimeWorkflowEngine } from './runtime-workflow-engine.ts';
 import { workflow } from './types.ts';

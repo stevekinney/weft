@@ -6,7 +6,6 @@ import {
   type McpAccessContext,
 } from './access.ts';
 import { parseMcpListFilterFromSearchParams } from './list-filter.ts';
-import type { McpSession } from './session.ts';
 
 /** MCP resource definition. */
 export type McpResourceDefinition = {
@@ -84,6 +83,19 @@ export async function listMcpResources(
   }));
 }
 
+/**
+ * Assert that the caller may hear about `uri`: the scopes reading it would
+ * need, checked without reading it. A URI that is not a Weft resource needs
+ * nothing, since no change is ever published for it.
+ */
+export function assertResourceSubscriptionAllowed(uri: string, context: McpAccessContext): void {
+  const parsed = parseWeftResourceUri(uri);
+  if (parsed === null) return;
+  assertScope(context, 'workflows:read', 'Subscribing to workflow resources');
+  if (parsed.kind === 'events')
+    assertScope(context, 'events:read', 'Subscribing to workflow events');
+}
+
 /** Read a visible Weft MCP resource. */
 export async function readMcpResource(
   uri: string,
@@ -116,23 +128,6 @@ export async function readMcpResource(
       throw new Error(`Unknown Weft resource URI kind: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
-}
-
-/** Subscribe to updates for a visible resource. */
-export async function subscribeMcpResource(
-  uri: string,
-  session: McpSession,
-  context: McpAccessContext,
-): Promise<boolean> {
-  const result = await readMcpResource(uri, context);
-  if (result === null) return false;
-  session.subscriptions.add(uri);
-  return true;
-}
-
-/** Remove a resource subscription. */
-export function unsubscribeMcpResource(uri: string, session: McpSession): void {
-  session.subscriptions.delete(uri);
 }
 
 function jsonResource(uri: string, value: unknown): McpResourceReadResult {

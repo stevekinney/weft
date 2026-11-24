@@ -5,16 +5,16 @@
  */
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { z } from 'zod';
 import { WORKFLOW_CATALOG_KEYS } from '../../storage/catalog-keys.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { OWNERSHIP_CLAIM_KEYS } from '../../storage/ownership-keys.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 
 import { decode, encode } from '../codec.ts';
-import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
+import { activity, workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import { VersionMismatchError } from '../versioning.ts';
 import { ensureWorkflowCatalogReady } from './catalog-readiness.ts';
 import { getWorkflowRevisionDiagnostics } from './catalog-removal.ts';
@@ -26,7 +26,10 @@ import { EagerRecoveryRevisionRefusedError } from './revision-errors.ts';
 
 const TYPE = 'eager-restamp';
 
-type Variant = 'a' | 'b' | 'incompatible' | 'version-bump';
+type Variant = 'a' | 'b' | 'incompatible' | 'uses' | 'version-bump';
+
+/** An engine-provided activity the `uses` variant declares; registered globally on every engine. */
+const shout = activity({ name: 'shout', execute: async (value: string) => value.toUpperCase() });
 
 function definitionFor(variant: Variant) {
   const body = async function* (ctx: WorkflowContext) {
@@ -43,6 +46,8 @@ function definitionFor(variant: Variant) {
       return workflow({ name: TYPE, version: '1.0.0', description: 'revision-b' }).execute(body);
     case 'incompatible':
       return workflow({ name: TYPE, version: '1.0.0', outputSchema: z.string() }).execute(body);
+    case 'uses':
+      return workflow({ name: TYPE, version: '1.0.0' }).uses({ shout }).execute(body);
     default:
       return workflow({ name: TYPE, version: '1.1.0' }).execute(body);
   }
@@ -116,6 +121,7 @@ async function seedParkedRuns(storage: MemoryStorage, ids: string[]): Promise<st
 
 async function redeployedEngine(storage: MemoryStorage, variant: Variant) {
   const engine = new Engine({ storage, checkpointHistory: 20 });
+  engine.register(shout);
   engine.register(definitionFor(variant));
   await ensureWorkflowCatalogReady(engine);
   return engine;
@@ -157,6 +163,21 @@ describe('eager-type recovery revision policy (COR-13)', () => {
     expect(replay?.revision).toBe(revisionB);
     // No later write reverts the re-stamp.
     expect(await revisionOf(storage, 'restamp-run')).toBe(revisionB);
+  });
+
+  it('re-stamps a redeploy that only adds a .uses() declaration, so adopting it strands no run', async () => {
+    const storage = new MemoryStorage();
+    const revisionA = await seedParkedRuns(storage, ['uses-run']);
+    const revisionUses = await revisionOfRedeploy('uses');
+    expect(revisionUses).not.toBe(revisionA);
+
+    await using engine = await redeployedEngine(storage, 'uses');
+    const handles = await engine.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['uses-run']);
+    expect(await revisionOf(storage, 'uses-run')).toBe(revisionUses);
+
+    await handles[0]!.signal('continue', 'x');
+    expect(await handles[0]!.result()).toBe('done:x');
   });
 
   it('re-stamps and reactivates a suspended run in one recovery', async () => {

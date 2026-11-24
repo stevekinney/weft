@@ -15,19 +15,20 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import { records } from './protocol.test-support.ts';
 
-import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
-import { generateOpenRpcDocument } from './openrpc.ts';
-import { type OperationRegistry } from './operation-catalog.ts';
-import type { ParameterizedAccessHint } from './operation-catalog/types.ts';
-import type { UnarySchemaOperationDefinition } from './operation-registry.ts';
-import { defineOperation } from './operation-registry.ts';
+import { type UnarySchemaOperationDefinition, defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type OperationRegistry,
+  type ParameterizedAccessHint,
+  OpenRpcDocumentSchema,
+  generateOpenRpcDocument,
+} from "../embedded/backchannel/src/internals.ts";
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 
 export function makeOp(overrides: {
   readonly name: string;
   readonly inputSchema?: z.ZodObject;
   readonly outputSchema?: z.ZodType;
-  readonly access?: import('./authorization.ts').AccessPolicy;
+  readonly access?: import("../embedded/backchannel/src/internals.ts").AccessPolicy;
   readonly discoverable?: boolean;
   readonly mcpExposable?: boolean;
   readonly mcpTool?: { readonly workflowType: string };
@@ -62,7 +63,7 @@ export function makeOp(overrides: {
 }
 
 export function createRegistryDouble(
-  operations: ReadonlyArray<import('./operation-catalog.ts').ErasedOperation>,
+  operations: ReadonlyArray<import("../embedded/backchannel/src/internals.ts").ErasedOperation>,
 ): OperationRegistry {
   return {
     get(name) {

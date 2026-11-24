@@ -90,7 +90,10 @@ export const getTaskDeadLetterInput = getTaskDetailInput.extend({
     .int()
     .min(1)
     .max(DEAD_LETTER_PAYLOAD_MAX_BYTES_LIMIT)
-    .default(DEAD_LETTER_PAYLOAD_DEFAULT_MAX_BYTES),
+    .default(DEAD_LETTER_PAYLOAD_DEFAULT_MAX_BYTES)
+    .describe(
+      'Largest dead-letter payload, in bytes, returned inline: 1 to 1 MiB, default 64 KiB. A larger payload is reported as omitted with its size.',
+    ),
 });
 
 const deadLetterPayloadValueSchema = z

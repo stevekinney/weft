@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  createReplayLiveFeed,
+  principalFromApiKey,
+  type ReplayLiveSubscribeOptions,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeStream } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   createFleetEventFeed,
   type FleetEventEnvelope,
   type FleetEventFeed,
 } from '../fleet-event-feed.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
-import { createReplayLiveFeed, type ReplayLiveSubscribeOptions } from '../workflow-event-feed.ts';
 import { fleetEventsSseOperation, fleetEventsSseRestBinding } from './fleet-events-sse.ts';
 
 const registry = createOperationRegistry([fleetEventsSseOperation]);
@@ -40,8 +43,10 @@ class RecordingFleetEventFeed implements Pick<FleetEventFeed, 'subscribe'> {
         ? replayLimitFault.message
         : undefined;
     this.subscribeCalls.push({ fromCursor: options?.fromCursor, delivered });
+    const fromCursor = Number(options?.fromCursor ?? '-1');
     return (async function* replay() {
       for (const eventEnvelope of envelopes) {
+        if (eventEnvelope.sequence <= fromCursor) continue;
         if (!(options?.filterEnvelope?.(eventEnvelope) ?? true)) continue;
         delivered.push(eventEnvelope.sequence);
         yield eventEnvelope;
@@ -149,6 +154,59 @@ describe('weft.events.sse', () => {
     expect(feed.replayLimitFaultMessage).toBe(
       'Fleet event replay window is 1001 matching events; maximum is 1000. Supply a more recent fromCursor.',
     );
+  });
+
+  it('delivers every event whose kind appears in a kind-list filter', async () => {
+    const feed = new RecordingFleetEventFeed([
+      envelope(0, { kind: 'workflow:started' }),
+      envelope(1, { kind: 'workflow:failed' }),
+      envelope(2, { kind: 'workflow:completed' }),
+    ]);
+
+    const result = await executeStream(
+      'weft.events.sse',
+      { kind: ['workflow:started', 'workflow:completed'] },
+      {
+        registry,
+        host: { fleetEventFeed: feed },
+        transport: 'http-rest',
+        principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const delivered: number[] = [];
+    for await (const item of result.value) delivered.push((item as FleetEventEnvelope).sequence);
+    expect(delivered).toEqual([0, 2]);
+  });
+
+  it('delivers catalog and workflow-source events, then replays them after reconnecting from a cursor', async () => {
+    const feed = new RecordingFleetEventFeed([
+      envelope(0, { kind: 'catalog:revision-installed', workflowId: undefined }),
+      envelope(1, { kind: 'workflow-source:load-ready', workflowId: undefined }),
+    ]);
+    await using engine = new Engine({ storage: new MemoryStorage() });
+
+    const firstResponse = await handleRequest(
+      request('/v1/events/sse?fromCursor=-1'),
+      engine,
+      handlerOptions(feed),
+    );
+    expect(firstResponse.status).toBe(200);
+    expect(await firstResponse.text()).toContain('event: catalog:revision-installed');
+    expect(feed.subscribeCalls[0]?.delivered).toEqual([0, 1]);
+
+    const reconnectResponse = await handleRequest(
+      request('/v1/events/sse?fromCursor=0'),
+      engine,
+      handlerOptions(feed),
+    );
+    expect(reconnectResponse.status).toBe(200);
+    const replayed = await reconnectResponse.text();
+    expect(replayed).toContain('event: workflow-source:load-ready');
+    expect(replayed).not.toContain('event: catalog:revision-installed');
+    expect(feed.subscribeCalls[1]?.delivered).toEqual([1]);
   });
 
   it('delivers retention gaps before applying workflow and kind filters', async () => {
@@ -291,7 +349,7 @@ describe('weft.events.sse', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid cursor' });
+    expect(await response.json()).toEqual({ error: 'Invalid cursor', retryable: false });
     expect(feed.subscribeCalls).toEqual([]);
   });
 
@@ -393,7 +451,7 @@ describe('weft.events.sse', () => {
         fleetEventsSseOperation.invoke({
           input: {},
           principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
-          engine: null,
+          host: null,
           transport: 'http-rest',
         }),
       ),
@@ -418,6 +476,6 @@ describe('weft.events.sse', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });

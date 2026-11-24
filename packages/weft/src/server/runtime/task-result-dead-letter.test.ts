@@ -1,22 +1,23 @@
 /**
  * Pins the dead-letter guard in `applyTaskResult` (`task-result-submission.ts`):
  * a result whose terminal ledger commit escalated to a dead letter must not be
- * signalled to the local task queue as a delivered completion, while an
- * ordinary applied result must be. The characterization suite asserts the
- * `200`/`disposition` response and the ledger and event side effects of the
- * dead-letter path, but never observes `taskQueue.complete()` itself, so
- * removing the guard would otherwise go unnoticed.
+ * signalled to the local task queue as a delivered completion (it is released
+ * instead, COR-2003), while an ordinary applied result must be. The
+ * characterization suite asserts the `200`/`disposition` response and the
+ * ledger and event side effects of the dead-letter path, but never observes
+ * `taskQueue.complete()` itself, so removing the guard would otherwise go
+ * unnoticed.
  */
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskLeased,
 } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { principalFromApiKey } from '../principal.ts';
 import {
   FailingTerminalCommitStorage,
   minimalServeOptions,
@@ -62,6 +63,7 @@ async function submitCompletedResult(storage: MemoryStorage, operationId: string
   const options = minimalServeOptions(storage);
   await storage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(leasedFixture(operationId)));
   using completeSpy = spyOn(context.taskQueue, 'complete');
+  using releaseSpy = spyOn(context.taskQueue, 'release');
 
   const response = await handleTaskResultRequest(
     context,
@@ -85,11 +87,12 @@ async function submitCompletedResult(storage: MemoryStorage, operationId: string
     status: response?.status,
     body: await response?.json(),
     completeCallCount: completeSpy.mock.calls.length,
+    releaseCallCount: releaseSpy.mock.calls.length,
   };
 }
 
 describe('applyTaskResult dead-letter guard', () => {
-  it('does not complete the local task queue entry when the result is dead-lettered', async () => {
+  it('releases, and does not complete, the local task queue entry when the result is dead-lettered', async () => {
     const operationId = 'op-dead-letter-skips-complete';
 
     const outcome = await submitCompletedResult(
@@ -100,6 +103,7 @@ describe('applyTaskResult dead-letter guard', () => {
     expect(outcome.status).toBe(200);
     expect(outcome.body).toEqual({ ok: true, disposition: 'dead-lettered' });
     expect(outcome.completeCallCount).toBe(0);
+    expect(outcome.releaseCallCount).toBe(1);
   });
 
   it('completes the local task queue entry exactly once when the result is applied', async () => {
@@ -110,5 +114,6 @@ describe('applyTaskResult dead-letter guard', () => {
     expect(outcome.status).toBe(200);
     expect(outcome.body).toEqual({ ok: true, disposition: 'applied' });
     expect(outcome.completeCallCount).toBe(1);
+    expect(outcome.releaseCallCount).toBe(0);
   });
 });

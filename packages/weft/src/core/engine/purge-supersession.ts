@@ -1,5 +1,5 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { WorkflowState } from '../types.ts';
 import { commitFencedEngineWriteAllowingPreconditionFailure } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';

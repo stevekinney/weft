@@ -1,12 +1,12 @@
+import { sleepForTesting } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { awakeTurns } from "../../../test-support/embedded/testing/src/wait-until.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, signal, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { signalWorkflowOperation, signalWorkflowRestBinding } from './signal-workflow.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (ctx: WorkflowContext) {
@@ -21,11 +21,18 @@ const twoSignalWorkflow = workflow({ name: 'two-signal' }).execute(async functio
   return [first, second];
 });
 
+const declaredWorkflow = workflow({ name: 'declared' })
+  .signals({ release: signal('release') })
+  .execute(async function* (ctx: WorkflowContext) {
+    return yield* ctx.waitForSignal('release');
+  });
+
 function createEngine(): Engine {
   const storage = new MemoryStorage();
   const engine = new Engine({ storage });
   engine.register(holdWorkflow);
   engine.register(twoSignalWorkflow);
+  engine.register(declaredWorkflow);
   return engine;
 }
 
@@ -33,10 +40,8 @@ async function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns()) {
     const state = await engine.get(workflowId);
     if (state?.status === status) {
       return;
@@ -44,13 +49,33 @@ async function waitForStatus(
     await sleepForTesting(5);
   }
 
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
+  throw new Error(`Workflow ${workflowId} did not reach ${status} before the hang guard elapsed`);
 }
 
 const registry = createOperationRegistry([signalWorkflowOperation]);
 const bindings = [signalWorkflowRestBinding];
 
 describe('weft.workflows.signal', () => {
+  it('answers 422 when the workflow declares its signals and this name is not one of them', async () => {
+    await using engine = createEngine();
+    const handle = await engine.start('declared', null, { id: 'signal-undeclared' });
+    await waitForStatus(engine, handle.id, 'running');
+
+    const response = await handleRequest(
+      new Request(`http://localhost/v1/workflows/${handle.id}/signal/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload: null }),
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error?: string };
+    expect(JSON.stringify(body)).toContain('does not declare signal');
+  });
+
   it('signals a workflow and returns the ok response', async () => {
     await using engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-success' });
@@ -206,6 +231,7 @@ describe('weft.workflows.signal', () => {
       expect(await response.json()).toEqual({
         error: 'Workflow not found',
         data: { resource: 'workflow', identifier: 'missing' },
+        retryable: false,
       });
     } finally {
       engine.signal = originalSignal;
@@ -230,7 +256,7 @@ describe('weft.workflows.signal', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.signal = originalSignal;
     }

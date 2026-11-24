@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import { readVersion } from './application-primitive-codec.ts';
 import { encode } from './codec.ts';
 import {

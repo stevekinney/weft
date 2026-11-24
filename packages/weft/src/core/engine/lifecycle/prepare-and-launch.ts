@@ -42,7 +42,7 @@
  * @module core/engine/lifecycle/prepare-and-launch
  */
 
-import { KEYS } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/keys.ts';
 import { resolveWorkflowWorkerStartBinding } from '../../../worker/versioning-policy.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
@@ -59,6 +59,14 @@ import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { commitFencedEngineWrite } from '../fenced-write.ts';
 import type { WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
+import {
+  handOverPendingLaunch,
+  letGoOfPendingLaunch,
+  recordLaunchPending,
+  settleUncommittedLaunch,
+  type PendingLaunch,
+} from '../local-execution.ts';
+import { validateInboundPayload } from '../payload-validation.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from '../storage-io.ts';
 import { buildWorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
@@ -197,10 +205,10 @@ export async function prepareWorkflow(
       resolvedRevision,
     } = await resolveAndReserveStartRegistration(internals, type, undefined, callbacks);
     inFlightRevision = reservedRevision;
+    await validateInboundPayload(internals, 'start', registration.inputSchema, input);
     const workflowConcurrency = registration.concurrency;
-    const revision =
-      resolveCachedStartRevision(internals, type, resolvedRevision) ??
-      (await resolveStartRevisionUncached(internals, type));
+    const cachedRevision = resolveCachedStartRevision(internals, type, resolvedRevision);
+    const revision = cachedRevision ?? (await resolveStartRevisionUncached(internals, type));
 
     const {
       terminalRunToPurge,
@@ -381,48 +389,60 @@ export async function launchPreparedWorkflow(
       callbacks,
     );
 
-    const runningState = await runSerializedWorkflowStateWrite(internals, context.workflowId, () =>
-      commitPendingToRunning(internals, context.workflowId, executionDeadline, now),
-    );
-    if (!runningState) {
-      throw new Error(`Cannot launch workflow "${context.workflowId}": it is no longer pending.`);
-    }
-
-    const servicesUnavailable = await reprovideRecoveredServices(
-      internals,
-      runningState,
-      (workflowId, error) => callbacks.failWorkflowForUnavailableServices(workflowId, error),
-      callbacks.handleCleanupError,
-      callbacks.dispatchEvent,
-    );
-    if (servicesUnavailable) {
-      throw new Error(
-        `Cannot launch workflow "${context.workflowId}": its recorded services could not be re-provided.`,
+    // From the commit to the launch the run is held and launching (COR-1625). The marker is handed
+    // to the inline queue by the enqueue, settled once a worker has the run, and otherwise let go of.
+    let handedOver = false;
+    let launch: PendingLaunch | undefined;
+    try {
+      const committed = await runSerializedWorkflowStateWrite(internals, context.workflowId, () =>
+        commitPendingToRunning(internals, context.workflowId, executionDeadline, now),
       );
+      if (!committed) {
+        throw new Error(`Cannot launch workflow "${context.workflowId}": it is no longer pending.`);
+      }
+      const runningState = committed.state;
+      launch = committed.launch;
+
+      const servicesUnavailable = await reprovideRecoveredServices(
+        internals,
+        runningState,
+        (workflowId, error) => callbacks.failWorkflowForUnavailableServices(workflowId, error),
+        callbacks.handleCleanupError,
+        callbacks.dispatchEvent,
+      );
+      if (servicesUnavailable) {
+        throw new Error(
+          `Cannot launch workflow "${context.workflowId}": its recorded services could not be re-provided.`,
+        );
+      }
+
+      adoptLaunchCheckpoint(internals, context.workflowId, checkpoint, checkpointBytes);
+      internals.workflowVersionTuples.set(
+        context.workflowId,
+        workflowVersionTupleFromState(internals, runningState, callbacks),
+      );
+
+      const handle = createWorkflowHandle(internals, context.workflowId, callbacks);
+      await beginExecutionAwaitingLiveness(
+        internals,
+        {
+          type: runningState.type,
+          input: runningState.input,
+          checkpoint,
+          state: runningState,
+          registration,
+          options: context.options,
+          isDelayed: false,
+        },
+        context.workflowId,
+        callbacks,
+      );
+      handedOver = true;
+      handOverPendingLaunch(internals, launch);
+      return handle;
+    } finally {
+      if (!handedOver) await letGoOfPendingLaunch(internals, launch);
     }
-
-    adoptLaunchCheckpoint(internals, context.workflowId, checkpoint, checkpointBytes);
-    internals.workflowVersionTuples.set(
-      context.workflowId,
-      workflowVersionTupleFromState(internals, runningState, callbacks),
-    );
-
-    const handle = createWorkflowHandle(internals, context.workflowId, callbacks);
-    await beginExecutionAwaitingLiveness(
-      internals,
-      {
-        type: runningState.type,
-        input: runningState.input,
-        checkpoint,
-        state: runningState,
-        registration,
-        options: context.options,
-        isDelayed: false,
-      },
-      context.workflowId,
-      callbacks,
-    );
-    return handle;
   } finally {
     releasePreparedWorkflowReservation(internals, context);
   }
@@ -457,7 +477,7 @@ async function commitPendingToRunning(
   workflowId: string,
   executionDeadline: number | undefined,
   now: number,
-): Promise<WorkflowState | null> {
+): Promise<{ state: WorkflowState; launch: PendingLaunch } | null> {
   const latestState = await loadWorkflowState(internals, workflowId);
   if (!latestState || latestState.status !== 'pending') {
     return null;
@@ -490,18 +510,30 @@ async function commitPendingToRunning(
       : []),
   ];
 
-  // Ownership was already acquired when `prepareWorkflow()`'s create batch
-  // committed (unlike a delayed start's create batch, which is deliberately
-  // claim-less) — fence on the already-held epoch, exactly like any other
-  // write this engine makes for a workflow it already owns.
-  await commitFencedEngineWrite(
-    internals,
-    workflowId,
-    operations,
-    [],
-    () => new Error(`Launch transition for workflow "${workflowId}" lost its CAS race.`),
-  );
-  return nextRunningState;
+  // Launching before the commit that makes the run visible as `running`, under the claim held
+  // since `prepare()`: a reclaim that lists that claim and resumes once the batch has applied, in
+  // the turns before this continuation, already finds the marker and defers (COR-1625). While the
+  // run is still `pending` the record changes nothing a reader sees.
+  const launch = recordLaunchPending(internals, workflowId);
+  try {
+    // Ownership was already acquired when `prepareWorkflow()`'s create batch
+    // committed (unlike a delayed start's create batch, which is deliberately
+    // claim-less) — fence on the already-held epoch, exactly like any other
+    // write this engine makes for a workflow it already owns.
+    await commitFencedEngineWrite(
+      internals,
+      workflowId,
+      operations,
+      [],
+      () => new Error(`Launch transition for workflow "${workflowId}" lost its CAS race.`),
+    );
+  } catch (error) {
+    // The run is not running under this launch: settle only the record. The claim stays as
+    // `prepare()` left it, and the error reaches the caller as it always did.
+    settleUncommittedLaunch(internals, launch);
+    throw error;
+  }
+  return { state: nextRunningState, launch };
 }
 
 /**

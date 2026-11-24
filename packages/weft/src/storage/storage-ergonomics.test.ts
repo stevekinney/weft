@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
+import { storageDeleteRange, type DeleteRangeOptions } from "../embedded/storage/src/index.ts";
 import { storageBackends } from '../testing/storage-backends.test-support.ts';
-import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
-import { KEYS } from './interface.ts';
+import { KEYS } from './keys.ts';
 
 function encode(value: string): Uint8Array {
   return new TextEncoder().encode(value);

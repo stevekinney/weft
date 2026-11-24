@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { anonymousPrincipal } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  executeOperation,
+  generateOpenRpcDocument,
+} from "../../embedded/backchannel/src/internals.ts";
 import {
   WorkflowAlreadyExistsError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import { workflow } from '../../core/types.ts';
-import { generateOpenRpcDocument } from '../openrpc.ts';
-import { anonymousPrincipal } from '../principal.ts';
-import { createOperationRegistry, executeOperation } from './index.ts';
 import {
   catalogCheckoutWorkflow,
   catalogTransports,
@@ -65,7 +68,7 @@ describe('catalogWorkflow — registration and metadata', () => {
       { orderId: 'ord_registration', amount: 99 },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -176,7 +179,7 @@ describe('catalogWorkflow — registration and metadata', () => {
         { orderId: 'ord_5', amount: 12 },
         {
           principal: anonymousPrincipal(),
-          engine,
+          host: engine,
           transport: 'jsonRpcHttp',
           registry,
         },

@@ -22,6 +22,8 @@ import type {
   WorkflowLogger,
   WorkflowMapOptions,
   WorkflowOperation,
+  WorkflowOperationResult,
+  WorkflowOperationSettledResult,
   WorkflowOperationTupleResult,
   WorkflowPipeStage,
   WorkflowPipeStageDefinition,
@@ -63,14 +65,22 @@ export type {
   StreamReference,
   StreamSink,
 } from './types.ts';
-
+/**
+ * End the replay of a relaunched run (`ContextOptions.resumed`): its body reached the operation it
+ * was parked on (or ended), so what it logs from here on is new. The inline strategy calls this
+ * each time the body hands back control.
+ *
+ * @internal
+ */
+export function endResumeReplay(context: Context): void {
+  getInternals(context).replayingToPark = false;
+}
 export function setContextWorkflowInterceptor(
   context: Context,
   workflowInterceptor: ComposedWorkflowInterceptor | null,
 ): void {
   getInternals(context).workflowInterceptor = workflowInterceptor;
 }
-
 /**
  * Concrete workflow execution context injected as the first argument of every
  * registered workflow generator. Implements durable operations such as `run`,
@@ -329,6 +339,28 @@ export class Context implements WorkflowContext {
       unknown,
       unknown
     >[])) as WorkflowOperationTupleResult<TOperations>;
+  }
+  /** Runs operations concurrently and returns indexed fulfilled or rejected outcomes. */
+  *allSettled<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): Generator<
+    ContextOperationRequest,
+    {
+      [TIndex in keyof TOperations]: WorkflowOperationSettledResult<
+        WorkflowOperationResult<TOperations[TIndex]>
+      >;
+    },
+    unknown
+  > {
+    return (yield* parallelOperations.allSettled(this, getInternals(this), [
+      ...operations,
+    ] as Generator<ContextOperationRequest, unknown, unknown>[])) as {
+      [TIndex in keyof TOperations]: unknown;
+    } as {
+      [TIndex in keyof TOperations]: WorkflowOperationSettledResult<
+        WorkflowOperationResult<TOperations[TIndex]>
+      >;
+    };
   }
   *race<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,

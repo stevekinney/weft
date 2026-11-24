@@ -103,6 +103,7 @@ describe('WorkerProtocolGuard revision validation (WFT-20)', () => {
     watchdog.begin(worker, 'wf-1', 2, 'resume', undefined, 'revision-1');
     const checkpointResult = guard.acceptWorkerMessage(worker, {
       type: 'checkpoint',
+      pendingStepIndex: 0,
       protocolVersion: WORKER_PROTOCOL_VERSION,
       turnId: 2,
       workflowId: 'wf-1',
@@ -111,5 +112,59 @@ describe('WorkerProtocolGuard revision validation (WFT-20)', () => {
       workflowRevision: 'revision-1',
     });
     expect(checkpointResult.accepted).toBe(true);
+  });
+});
+
+describe('WorkerProtocolGuard turn matching and anonymous violations', () => {
+  const completed = (overrides: Record<string, unknown>) => ({
+    type: 'completed',
+    protocolVersion: WORKER_PROTOCOL_VERSION,
+    turnId: 1,
+    workflowId: 'wf-1',
+    result: null,
+    ...overrides,
+  });
+
+  it('rejects a message whose turn id is not the active turn', () => {
+    const { guard, watchdog } = buildGuard();
+    const worker = fakeWorker();
+    watchdog.begin(worker, 'wf-1', 1, 'run');
+
+    const result = guard.acceptWorkerMessage(worker, completed({ turnId: 2 }));
+
+    expect(result.accepted).toBe(false);
+    if (!result.accepted) {
+      expect(result.failure.error).toBe('Worker message did not match the active turn');
+      expect(result.failure.targetWorkflowId).toBe('wf-1');
+    }
+  });
+
+  it('rejects a message whose workflow is not the one running the active turn', () => {
+    const { guard, watchdog } = buildGuard();
+    const worker = fakeWorker();
+    watchdog.begin(worker, 'wf-1', 1, 'run');
+
+    const result = guard.acceptWorkerMessage(worker, completed({ workflowId: 'wf-other' }));
+
+    expect(result.accepted).toBe(false);
+    if (!result.accepted) {
+      expect(result.failure.error).toBe('Worker message did not match the active turn');
+      expect(result.failure.targetWorkflowId).toBe('wf-other');
+    }
+  });
+
+  it('names no target workflow when the rejected message is not an object or carries no workflow id', () => {
+    const { guard } = buildGuard();
+
+    for (const message of [null, 'garbage', 42, { type: 'completed', result: null }]) {
+      const result = guard.acceptWorkerMessage(fakeWorker(), message);
+
+      expect(result.accepted).toBe(false);
+      if (!result.accepted) {
+        expect(result.failure.targetWorkflowId).toBeUndefined();
+        expect(result.failure.otherError).toBe('Worker discarded after protocol violation');
+        expect(result.failure.failureCategory).toBe('system');
+      }
+    }
   });
 });

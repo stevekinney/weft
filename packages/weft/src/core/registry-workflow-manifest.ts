@@ -91,7 +91,9 @@ export class RegistryManifestLimitError extends WeftError<'RegistryManifestLimit
  * moves a worker manifest's contract in
  * `worker/manifest/registry-contract-builder.ts`. An activity with neither
  * schema declared still contributes an empty `{}` entry: its *presence*
- * under this workflow, not just its schema, is part of the contract.
+ * under this workflow, not just its schema, is part of the contract. The
+ * same conversion builds `WorkflowContract.usedActivities` from the
+ * workflow's `.uses({...})` declarations.
  *
  * Takes the already-resolved `activityDefinitions` array rather than an
  * `Engine` + lookup, so this can build a manifest for a workflow that is not
@@ -102,7 +104,7 @@ export class RegistryManifestLimitError extends WeftError<'RegistryManifestLimit
  * `engine.register()` drain would have produced for byte-identical content.
  */
 function buildWorkflowScopedActivityContracts(
-  activityDefinitions: readonly ActivityMetadata[],
+  activityDefinitions: readonly Pick<ActivityMetadata, 'name' | 'inputSchema' | 'outputSchema'>[],
   workflowType: string,
 ): Record<string, WorkflowActivityContract> {
   // Null-prototype: an activity literally named `__proto__` is
@@ -278,11 +280,27 @@ export async function buildWorkflowManifestFromDefinition(
     activityDefinitions,
     definition.type,
   );
+  // A used activity's schemas come from the definition the workflow declared,
+  // not from whatever the engine registered under that name, so the contract
+  // (and the revision derived from it) depends only on the workflow's own
+  // module: a dynamic source's revision is derived without any engine.
+  const usedActivities = buildWorkflowScopedActivityContracts(
+    Object.values(definition.uses ?? {}),
+    definition.type,
+  );
+  for (const name of Object.keys(usedActivities)) {
+    if (Object.hasOwn(workflowScopedActivities, name)) {
+      throw new Error(
+        `Workflow "${definition.type}" declares activity "${name}" in both activities and uses`,
+      );
+    }
+  }
   const contract = toWorkflowContractDraft(
     definition.type,
     definition.version,
     entry,
     workflowScopedActivities,
+    usedActivities,
   );
   try {
     return await buildWorkflowRevisionManifest(contract);

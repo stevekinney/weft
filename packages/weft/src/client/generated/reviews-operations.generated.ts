@@ -30,10 +30,12 @@ export type ReviewsOperationTypes = {
             readonly allowPartial: boolean;
             readonly artifact: unknown;
             readonly createdAt: number;
+            readonly message?: string;
             readonly reviewId: string;
             readonly reviewType: string;
             readonly reviewers: ReadonlyArray<string>;
             readonly status: 'pending';
+            readonly step?: string;
             readonly timeout?: number;
             readonly webhookUrl?: string;
             readonly workflowId: string;
@@ -44,12 +46,14 @@ export type ReviewsOperationTypes = {
             readonly createdAt: number;
             readonly decision: 'approved' | 'rejected' | 'needs-changes';
             readonly feedback?: string;
+            readonly message?: string;
             readonly reviewId: string;
             readonly reviewType: string;
             readonly reviewer: string;
             readonly reviewers: ReadonlyArray<string>;
             readonly sectionDecisions?: Record<string, unknown>;
             readonly status: 'completed';
+            readonly step?: string;
             readonly timeout?: number;
             readonly timestamp: number;
             readonly webhookUrl?: string;

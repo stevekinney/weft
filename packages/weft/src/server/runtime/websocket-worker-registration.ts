@@ -12,67 +12,35 @@
 import type { ServerWebSocket } from 'bun';
 
 import { WorkerConnectedEvent } from '../../core/events.ts';
+import type { WorkerDeploymentVersionState } from '../../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../../worker/manifest/index.ts';
 import { digestCanonicalWorkerManifest, parseWorkerManifest } from '../../worker/manifest/index.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
-  type RegisterErrorMessage,
   type RegisterMessage,
   type RemoteWorkerCapabilities,
 } from '../../worker/protocol.ts';
 import type { WorkerRegistrationInfo } from '../../worker/registry.ts';
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import { isAuthenticated } from '../principal.ts';
-import type {
-  WorkerAdmissionDecision,
-  WorkerAdmissionPolicy,
-  WorkerAdmissionRequest,
-} from '../worker-admission-policy.ts';
 import type { ServerContext } from './context.ts';
+import { applyRecordedVersionState } from './deployment-version-registration.ts';
 import { drainLongPollQueueInBackground } from './long-poll-drain.ts';
-import { rejectRegistration, sendWorkerProtocolMessage } from './websocket-worker-messaging.ts';
+import {
+  evaluateWorkerAdmissionPolicy,
+  HIJACK_MESSAGE,
+  isActiveWorkerIdHijack,
+  principalMayRegisterWorker,
+} from './websocket-registration-admission.ts';
+import {
+  recordVersionOrReject,
+  rejectAndRecordRegistration,
+} from './websocket-registration-rejection.ts';
+import { sendWorkerProtocolMessage } from './websocket-worker-messaging.ts';
 import { runWorkerDisconnectRequeue } from './worker-disconnect-requeue.ts';
 
 const MAX_WORKER_CONCURRENCY = 1_000;
 const DEFAULT_WORKER_CONCURRENCY = 10;
-
-/**
- * Record one declined `register` attempt in the registry's bounded rejection
- * log (WFT-29), then send the `registerError` frame and close the socket.
- * `identity` carries whatever deployment fields had already been parsed by
- * the time the calling gate rejected the attempt — most gates run before a
- * `WorkerManifest` exists, so it is usually absent.
- */
-function rejectAndRecordRegistration(
-  context: ServerContext,
-  ws: ServerWebSocket<WebSocketData>,
-  code: RegisterErrorMessage['code'],
-  message: string,
-  workerId: string | undefined,
-  requestedProtocolVersion: number | undefined,
-  identity?: { deploymentName?: string; buildId?: string },
-): void {
-  context.registry.recordRejection({
-    code,
-    ...(workerId !== undefined ? { workerId } : {}),
-    rejectedAt: Date.now(),
-    queue: ws.data.queue ?? 'default',
-    ...(identity?.deploymentName !== undefined ? { deploymentName: identity.deploymentName } : {}),
-    ...(identity?.buildId !== undefined ? { buildId: identity.buildId } : {}),
-  });
-  rejectRegistration(ws, code, message, requestedProtocolVersion);
-}
-
-/**
- * Whether the connection's principal is allowed to register a worker. An
- * absent principal means authentication is disabled on this server, so the
- * registration is allowed; a present principal must carry `workers:write`.
- */
-function principalMayRegisterWorker(principal: WebSocketData['principal']): boolean {
-  if (principal === undefined) return true;
-  return isAuthenticated(principal) && principal.hasScope('workers:write');
-}
 
 /**
  * Flatten a manifest's declared workflows into qualified
@@ -137,7 +105,7 @@ function buildWorkerRegistrationInfo(
  *     the owner at close so the stale-socket guard did not trip), and it
  *     will not fire again. That path is made safe here — the deferred-
  *     requeue timer is cleared, and the caller's `workerSockets.set`
- *     overwrites the stale entry, not the close handler.
+ *     installs the fresh socket.
  * A different unauthenticated or malicious client claiming an actively-
  * connected workerId (no pending requeue) is rejected here instead.
  *
@@ -150,47 +118,25 @@ function admitReconnectingSocket(
   message: RegisterMessage,
   manifest: WorkerManifest,
 ): boolean {
-  const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
-  const isGracePeriodReconnect = pendingRequeue !== undefined;
-  if (isGracePeriodReconnect) {
-    clearTimeout(pendingRequeue);
-    context.pendingWorkerRequeues.delete(message.workerId);
-  }
-
-  const existingSocket = context.workerSockets.get(message.workerId);
-  if (!isGracePeriodReconnect && existingSocket !== undefined && existingSocket !== ws) {
+  // Decided before the pending requeue is cleared: a pending requeue is what marks a reconnect.
+  if (isActiveWorkerIdHijack(context, ws, message.workerId)) {
     rejectAndRecordRegistration(
       context,
       ws,
       'invalid_registration',
-      'workerId is already registered to an active connection',
+      HIJACK_MESSAGE,
       message.workerId,
       message.protocolVersion,
       { deploymentName: manifest.deployment.name, buildId: manifest.deployment.buildId },
     );
     return false;
   }
-  return true;
-}
-
-/**
- * Run the operator-supplied admission policy, converting a thrown error into
- * a rejection decision instead of letting it propagate. A throwing policy
- * must not leave the client hanging with no `registerError` and no closed
- * socket — `registerWorker`'s caller only logs an unhandled rejection.
- */
-function evaluateWorkerAdmissionPolicy(
-  policy: WorkerAdmissionPolicy,
-  request: WorkerAdmissionRequest,
-): WorkerAdmissionDecision {
-  try {
-    return policy(request);
-  } catch (error) {
-    return {
-      status: 'rejected',
-      reason: `workerAdmissionPolicy threw: ${error instanceof Error ? error.message : String(error)}`,
-    };
+  const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
+  if (pendingRequeue !== undefined) {
+    clearTimeout(pendingRequeue.timer);
+    context.pendingWorkerRequeues.delete(message.workerId);
   }
+  return true;
 }
 
 /**
@@ -228,6 +174,7 @@ function commitWorkerRegistration(
   queue: string,
   concurrency: number,
   acceptedManifestDigest: string,
+  versionState: WorkerDeploymentVersionState | undefined,
   resumingSessionGeneration?: number,
 ): void {
   if (ws.readyState !== WebSocket.OPEN) return;
@@ -270,7 +217,11 @@ function commitWorkerRegistration(
   ws.data.workerRegistered = true;
   ws.data.workerProtocolVersion = message.protocolVersion;
   context.registry.register(registrationInfo, resumingSessionGeneration);
+  // A build the catalog records as draining or removed joins drained, before anything can route to it.
+  applyRecordedVersionState(context, manifest, versionState);
   context.workerSockets.set(message.workerId, ws);
+  context.connectionCounts.workers = context.workerSockets.size;
+  context.refreshConnectionMetrics();
   // The generation just committed — always defined immediately after a
   // successful `register()` call for this exact `workerId`.
   const sessionGeneration = context.registry.sessionIdentity(message.workerId)?.sessionGeneration;
@@ -290,6 +241,66 @@ function commitWorkerRegistration(
   // Tasks that fell back to the long-poll queue while no WebSocket worker
   // could take them have somewhere to go now.
   drainLongPollQueueInBackground(context, options, queue);
+}
+
+/**
+ * The tail of {@link registerWorker}, once the manifest is parsed and admitted:
+ * clamp the concurrency, digest the manifest, record its deployment version in the
+ * durable catalog (only once the read-only admission gates pass), prove or forfeit a
+ * pending reconnect, and commit.
+ *
+ * The proof comes last, with nothing yielding between it and the synchronous commit, as it
+ * does without a catalog. A proof is a claim about the session as it stands; the catalog
+ * write is slow, and a grace timer that fires during it would forfeit the session, after
+ * which a commit that still carried the proof would acknowledge a resume of work already
+ * requeued.
+ */
+async function completeRegistration(
+  context: ServerContext,
+  options: ServeOptions,
+  ws: ServerWebSocket<WebSocketData>,
+  message: RegisterMessage,
+  manifest: WorkerManifest,
+  canonicalJson: string,
+  queue: string,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): Promise<void> {
+  const rawConcurrency = message.concurrency ?? DEFAULT_WORKER_CONCURRENCY;
+  const clampedConcurrency = Math.min(
+    Math.max(1, Math.floor(rawConcurrency)),
+    MAX_WORKER_CONCURRENCY,
+  );
+
+  const acceptedManifestDigest = await digestCanonicalWorkerManifest(canonicalJson);
+
+  const recorded = await recordVersionOrReject(
+    context,
+    ws,
+    message,
+    manifest,
+    acceptedManifestDigest,
+  );
+  if (recorded === null) return;
+
+  const resumingSessionGeneration = await resolveReconnectProof(
+    context,
+    options,
+    message,
+    cleanupWorkflowIndex,
+  );
+
+  commitWorkerRegistration(
+    context,
+    options,
+    ws,
+    message,
+    manifest,
+    queue,
+    clampedConcurrency,
+    acceptedManifestDigest,
+    recorded.state,
+    resumingSessionGeneration,
+  );
 }
 
 /**
@@ -435,31 +446,15 @@ export async function registerWorker(
     }
   }
 
-  const rawConcurrency = message.concurrency ?? DEFAULT_WORKER_CONCURRENCY;
-  const clampedConcurrency = Math.min(
-    Math.max(1, Math.floor(rawConcurrency)),
-    MAX_WORKER_CONCURRENCY,
-  );
-
-  const acceptedManifestDigest = await digestCanonicalWorkerManifest(canonicalJson);
-
-  const resumingSessionGeneration = await resolveReconnectProof(
-    context,
-    options,
-    message,
-    cleanupWorkflowIndex,
-  );
-
-  commitWorkerRegistration(
+  await completeRegistration(
     context,
     options,
     ws,
     message,
     manifest,
+    canonicalJson,
     queue,
-    clampedConcurrency,
-    acceptedManifestDigest,
-    resumingSessionGeneration,
+    cleanupWorkflowIndex,
   );
 }
 
@@ -493,7 +488,7 @@ async function resolveReconnectProof(
     return message.resumeSessionGeneration;
   }
 
-  clearTimeout(pendingRequeue);
+  clearTimeout(pendingRequeue.timer);
   context.pendingWorkerRequeues.delete(message.workerId);
   await runWorkerDisconnectRequeue(context, options, message.workerId, cleanupWorkflowIndex);
   return undefined;

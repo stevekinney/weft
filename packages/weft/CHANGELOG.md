@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.30.0
+
+### Minor Changes
+
+- Bring the standalone release up to date with the current engine, remote worker, and A2A implementation. The package now exports the worker SDK and authoring modules, the A2A entry point, and the timezone canonicalization helper.
+
+  This release changes package imports. Server, client, MCP, observability, Service Worker, and testing APIs that still exist are exported from `@lostgradient/weft`. Import remote worker APIs from `@lostgradient/weft/worker`. Use the current memory and key-value APIs through `@lostgradient/weft/storage`, Bun SQLite through `@lostgradient/weft/storage/bun-sqlite`, and IndexedDB through `@lostgradient/weft/storage/indexeddb`.
+
+  The old `storage/auto` and `storage/resolve` helpers and the old storage backend subpaths are retired. Construct an adapter directly and pass it to the engine. Applications using a backend outside the three included adapters need to supply their own implementation of the storage interface.
+
 ## 0.29.0
 
 ### Minor Changes

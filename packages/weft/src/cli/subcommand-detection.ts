@@ -20,6 +20,7 @@ export const CLI_FLAG_VALUE_OPTIONS = new Set([
   '--shell',
   '--type',
   '--status',
+  '--failed-step',
   '--limit',
   '--id',
   '--wait-timeout',

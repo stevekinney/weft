@@ -7,14 +7,14 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import {
   advanceTimersByTime,
   flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   beginOne,
   claimOne,

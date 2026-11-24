@@ -10,14 +10,14 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import {
   advanceTimersByTime,
   flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   admitOne,
   claimOne,
@@ -121,6 +121,7 @@ describe('Mailbox waitForAvailable', () => {
     const { mailbox } = createMailboxFixture();
     await admitOne(mailbox, { availableAfterMs: 10_000 });
     expect(
+      // load-proof: the signal is already aborted, so the wait ends at once and the deadline is never reached
       await mailbox.waitForAvailable({
         timeoutMs: 60_000,
         signal: AbortSignal.abort(),
@@ -143,7 +144,7 @@ describe('Mailbox waitForAvailable', () => {
   it('ignores a delivery-index entry whose command vanished while waiting', async () => {
     const { mailbox, storage } = createMailboxFixture();
     const commandId = await admitOne(mailbox);
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     await storage.delete(KEYS.applicationCommand('bureau', 'agent-7', commandId));
     expect(await mailbox.waitForAvailable()).toBe(false);
     mailbox.dispose();

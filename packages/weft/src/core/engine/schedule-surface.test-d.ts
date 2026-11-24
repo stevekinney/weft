@@ -22,11 +22,13 @@ const metadata: ScheduleSummary = {
   status: 'active',
   overlap: 'skip',
   backfill: false,
+  timeZone: 'UTC',
   revisionPolicy: 'active-at-fire',
   createdAt: 1,
   updatedAt: 1,
   missedFireCount: 0,
   skippedCount: 0,
+  revision: 1,
   nextFireAt: null,
   queuedRuns: [],
 };

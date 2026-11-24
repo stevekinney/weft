@@ -19,8 +19,8 @@
  * `src/core/engine/**` (see documentation/internal-imports-allowlist.json).
  */
 
+import type { Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import type { AlertManager } from '../../alerting/alert-manager.ts';
-import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import type { ActivityRegistry } from '../activity-registry.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -58,6 +58,7 @@ import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
 import type { WorkflowSourceRuntimeState } from './source-runtime-state.ts';
+import type { StreamChunkAnnouncer } from './stream-chunk-announcer.ts';
 import type { WorkflowClaimMetricsRecorder } from './workflow-claim-metrics.ts';
 import type { WorkflowClaimRegistry } from './workflow-claim-registry.ts';
 import type { WorkflowClaimRenewalTask } from './workflow-claim-renewal-task.ts';
@@ -80,9 +81,6 @@ type EngineRuntime = WorkflowHandleEngine &
   ScheduleHandleEngine & {
     start(type: string, input: unknown, options?: StartWorkflowOptions): Promise<WorkflowHandle>;
   };
-// ---------------------------------------------------------------------------
-// EngineInternals
-// ---------------------------------------------------------------------------
 
 export interface EngineInternals {
   engine: EngineRuntime;
@@ -101,8 +99,8 @@ export interface EngineInternals {
   strategy: ExecutionStrategy;
   inlineStrategy: InlineExecutionStrategy | null;
   queuedInlineWorkflowStarts: QueuedInlineWorkflowExecutionStart[];
-  queuedInlineWorkflowStartIds: Set<string>;
-  queuedOrLaunchingInlineWorkflowStartIds: Set<string>;
+  // A queued or launching start's only state is its record in `local-execution.ts`, held beside
+  // the engine; what used to be two membership sets here is derived from it (COR-1625).
   queuedInlineWorkflowStartFlushScheduled: boolean;
   queuedInlineWorkflowStartChannel: MessageChannel | null;
   handleCache: Map<string, { ref: WeakRef<WorkflowHandle>; unregisterToken: object }>;
@@ -198,6 +196,18 @@ export interface EngineInternals {
    */
   activityRegistriesByWorkflow: Map<string, ActivityRegistry>;
   /**
+   * Resumes from storage that have not yet adopted their workflow's checkpoint. Until adoption the
+   * engine holds neither a local checkpoint nor an inline execution for the run, so nothing else
+   * marks it as being resumed here; a second resume that started in that window would drive the
+   * same run alongside the first. `resumeWorkflowFromStorage` joins a resume already listed here.
+   * Keyed by workflow id, then by execution generation, so a replacement run under the same id is
+   * tracked on its own while an older generation's resume is still pending.
+   */
+  resumesAwaitingAdoption: Map<
+    string,
+    Map<string | undefined, Array<import('./resume-awaiting-adoption.ts').ResumeAwaitingAdoption>>
+  >;
+  /**
    * Per-workflow definition references — the actual `WorkflowDefinition`
    * object passed to `engine.register(workflow)`. Used for collision detection
    * (same-reference re-register is idempotent; same-name-different-object
@@ -280,6 +290,7 @@ export interface EngineInternals {
   workflowsNeedingTerminalCleanup: Set<string>;
   cleanupInterval: ReturnType<typeof setInterval> | null;
   cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker | null;
+  storageSizeReportInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInFlight: Promise<void> | null;
   /**
@@ -289,6 +300,12 @@ export interface EngineInternals {
    * `purge-write-tracking.ts`. Never cleared by disposal.
    */
   inFlightPurgeWrites: Set<Promise<unknown>>;
+  /** The top-level operation each inline run's handler turn is processing (COR-1597). */
+  inFlightOperations: Map<string, import('./in-flight-operation.ts').InFlightOperation>;
+  /** Terminated runs whose result waits for their in-flight activity (COR-1597). */
+  pendingTerminalSettlements: Set<
+    import('./terminal-settlement-pending.ts').PendingTerminalSettlement
+  >;
   nextRetentionSweepAt: number | null;
   /** Interval driving the best-effort second-instance detector; `null` when off. */
   secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
@@ -315,6 +332,14 @@ export interface EngineInternals {
    * claim for any workflow yet.
    */
   workflowClaimRegistry: WorkflowClaimRegistry | null;
+  /**
+   * Test-only gate `onWorkflowClaimReclaimed` awaits after reloading the workflow's pending async
+   * activities and before it replays the workflow from storage, so a test can hold a reclaim in
+   * that window and run `recoverAll()` against it. Unset in production, where nothing waits.
+   */
+  reclaimReplayGateForTesting?: (workflowId: string) => Promise<void>;
+  /** Test-only replacement for `STORAGE_WRITE_RETRY_DELAYS_MS`, the waits between a refused write's attempts. */
+  storageWriteRetryDelaysForTesting?: readonly number[];
   /**
    * The active per-workflow claim-renewal task for `ownership: 'workflow-lease'`;
    * `null` under `'none'`/`'lease'` and until `#bootstrapOwnershipIfConfigured`
@@ -431,6 +456,8 @@ export interface EngineInternals {
    * against already-disposed storage.
    */
   pendingResultPollTimers: Set<ReturnType<typeof setTimeout>>;
+  /** Coalesces `stream:chunk` per stream key; terminal cleanup flushes it, disposal cancels it. */
+  streamChunkAnnouncer: StreamChunkAnnouncer;
   alertManager: AlertManager | null;
   eventLogHeads: Map<string, Readonly<EventHeadRecord>>;
   workflowFeedListeners: Map<string, Set<WorkflowFeedListener>>;

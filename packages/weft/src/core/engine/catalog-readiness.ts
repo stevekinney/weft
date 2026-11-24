@@ -182,6 +182,7 @@ export async function ensureWorkflowCatalogReady(engine: Engine): Promise<void> 
       internals.workflowCatalog = new WorkflowCatalog(
         internals.storage,
         await restoreWorkflowCatalog(internals.storage),
+        internals.options.getNow,
       );
       internals.catalogRestored = true;
     }

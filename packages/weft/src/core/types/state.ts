@@ -1,11 +1,13 @@
 import type { WorkflowWorkerBindingRecord } from '../../worker/versioning-policy.ts';
 import type { AtomicStateOptions } from '../atomic-state.ts';
 import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
+import type { WeftErrorCode } from '../weft-error.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { ActivityCallOptions } from './activity.ts';
 import type { CheckpointState } from './checkpoint.ts';
 import type { TerminationReason } from './history-policy.ts';
-import type { FailureCategory, WorkflowId, WorkflowStatus } from './identity.ts';
+import type { FailureCategory, ForkLineage, WorkflowId, WorkflowStatus } from './identity.ts';
+import type { WorkflowFailedStep, WorkflowRetrying } from './workflow-failure.ts';
 import type { WorkflowOperation } from './workflow-function.ts';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +42,10 @@ export interface WorkflowState {
    * `engine.list({ attributes: [{ key: 'failureCategory', value: 'application' }] })`
    */
   failureCategory?: FailureCategory | null;
+  /** The {@link WeftErrorCode} of the Weft error that failed this workflow, stored in the failure write. */
+  errorCode?: WeftErrorCode;
+  /** The step the failed run was on (the one the timeline marks failed), stored in the failure write. */
+  failedStep?: WorkflowFailedStep;
   /**
    * Distinct reason a workflow reached its terminal state, beyond the
    * {@link WorkflowStatus} itself. Currently populated only when the history
@@ -107,6 +113,21 @@ export interface WorkflowState {
   terminalCommittedBy?: string;
   executionDeadline?: number;
   /**
+   * The signal names this running workflow is parked on in `ctx.waitForSignal`
+   * (at the top level, or in a `ctx.race` / `ctx.all` branch), in the order
+   * their waits began and without duplicates. The engine writes it into the
+   * persisted record when a wait begins, so it survives a restart, and removes
+   * a name when its signal is delivered, when the race the wait belongs to
+   * settles without it, or when the workflow leaves `running` (it completes,
+   * fails, is cancelled, times out, or is suspended).
+   *
+   * Absent, never an empty array, whenever no wait is outstanding, so a record
+   * from an engine that predates this field reads the same. A signal already
+   * buffered when the wait begins completes it at once and is never listed.
+   * Each listing is announced once, by `signal:waiting` (`SignalWaitingEvent`).
+   */
+  waitingForSignals?: readonly string[];
+  /**
    * Lineage metadata recorded when this workflow was created by a fork from
    * another workflow checkpoint. Absent for workflows started normally.
    */
@@ -142,16 +163,6 @@ export interface RestartLineage {
 }
 
 /**
- * Lineage metadata recorded when a workflow was created by forking another
- * workflow at a checkpoint boundary. Absent on workflows started normally via
- * {@link Engine.start}. Available on {@link WorkflowState.forkedFrom}.
- */
-export interface ForkLineage {
-  workflowId: WorkflowId;
-  step: number;
-}
-
-/**
  * Status of an individual entry in the workflow execution timeline. Mirrors
  * {@link WorkflowStatus} but scoped to a single timeline step rather than the
  * whole workflow. Used in {@link WorkflowTimelineEntry}.
@@ -177,12 +188,21 @@ export type WorkflowTimelineStatus = 'running' | 'completed' | 'failed' | 'cance
  */
 export type WorkflowTimelineOperationDetail = {
   index: number;
+  /** Optional document step identity for a file-workflow parallel branch. */
+  documentStep?: number;
+  /** Stable document step address for a file-workflow parallel branch. */
+  documentStepAddress?: string;
   key?: string;
   operationId: string;
   operationType: string;
   operationLabel: string;
   outcome: 'fulfilled' | 'rejected' | 'won' | 'lost';
   errorSummary?: string;
+  /**
+   * A keyed `ctx.raceKeyed` that ran as a branch of `ctx.all` and settled: its own branches, each
+   * `won` or `lost`. Absent for every other operation.
+   */
+  branches?: WorkflowTimelineOperationDetail[];
 };
 
 /**
@@ -195,6 +215,24 @@ export type WorkflowTimelineOperationDetail = {
  */
 export type WorkflowTimelineEntry = {
   step: number;
+  /**
+   * The index of the durable step the operation occupies: the value a `ctx.log` line's `step`
+   * carries, so a client places a log line against the entries around it. `step` is the checkpoint
+   * key and counts checkpoints, not durable steps, so it cannot do that. A line logged in front of
+   * an operation carries that operation's `stepIndex`, because logging consumes no step.
+   *
+   * Operations that take a step without writing an entry leave a gap: a session state write and a
+   * `ctx.memo` call that finds its key cached. Each retry of an activity has its own entry with
+   * the activity's `stepIndex`, and each retry sleep between them has its own. A `ctx.speculate`
+   * entry carries the step of the `speculate` call, and a line logged inside the speculation
+   * carries that same step, whether it commits or rolls back. Absent on entries persisted before
+   * this field existed.
+   */
+  stepIndex?: number;
+  /** Optional document step identity for file-workflow lifecycle history. */
+  documentStep?: number;
+  /** Stable document step address, including an optional iteration path. */
+  documentStepAddress?: string;
   operationType: string;
   operationLabel: string;
   inputSummary: string;
@@ -213,6 +251,17 @@ export type WorkflowTimelineEntry = {
   childrenOmitted?: number;
   /** Whether the speculative child context committed or rolled back. */
   speculationOutcome?: 'committed' | 'rolled-back';
+  /**
+   * The task ledger operation id this activity was enqueued under, for an activity that ran in
+   * remote mode (`activityExecution: { mode: 'remote' }`): read the record with
+   * `weft.tasks.get({ operationId })`. Set by the engine where it dispatches, so a client reads it
+   * and never rebuilds the id: the ledger key follows the activity's own counter, which is not
+   * the entry's `step`. Each engine retry of an activity gets its own timeline entry, and each
+   * entry names the record of its own dispatch. Absent for an activity that ran in-process, for
+   * every other operation type (a coordinator such as `ctx.all` or `ctx.race` never carries it),
+   * and, for an entry still running, until the next checkpoint persists it.
+   */
+  taskOperationId?: string;
 };
 
 /**
@@ -361,6 +410,14 @@ export interface WorkflowSummary {
   executionDeadline?: number;
   /** Failure category if set on the workflow state. */
   failureCategory?: FailureCategory;
+  /** The step a failed run stopped at, from {@link WorkflowState.failedStep}. */
+  failedStep?: WorkflowFailedStep;
+  /**
+   * The activity a running workflow is retrying, from attempt 2 (in the backoff before it and
+   * while it runs) until it settles or its retries run out; the one on the highest attempt when
+   * several retry at once.
+   */
+  retrying?: WorkflowRetrying;
 }
 
 // ---------------------------------------------------------------------------

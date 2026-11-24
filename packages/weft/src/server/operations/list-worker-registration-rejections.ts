@@ -13,9 +13,9 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { RegistrationRejectionEntry, WorkerRegistry } from '../../worker/registry.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -39,7 +39,13 @@ const registrationRejectionEntrySchema = z
   .strict() satisfies z.ZodType<RegistrationRejectionEntry>;
 
 const listWorkerRegistrationRejectionsInput = z.object({
-  limit: z.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_LIMIT)
+    .default(DEFAULT_LIMIT)
+    .describe('Maximum number of recent rejections to return, 1 to 100; defaults to 20.'),
 });
 
 const listWorkerRegistrationRejectionsOutput = z.object({

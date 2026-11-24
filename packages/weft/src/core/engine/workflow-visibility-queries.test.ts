@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 
 import {
   WORKFLOW_VISIBILITY_UPDATED_BUCKET_MILLISECONDS,

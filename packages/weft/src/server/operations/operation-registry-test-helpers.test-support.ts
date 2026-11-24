@@ -1,13 +1,14 @@
 import { expect } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
-import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { executeOperation, type OperationRegistry } from '../operation-catalog.ts';
 import {
   principalFromApiKey,
   principalFromJwtClaims,
   type AuthenticatedPrincipal,
-} from '../principal.ts';
+} from "../../embedded/backchannel/src/index.ts";
+import { executeOperation, type OperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { Engine } from '../../core/engine.ts';
 
 /** Engine backed by `MemoryStorage` for operation tests. */
 export function createOperationTestEngine(): Engine {
@@ -41,7 +42,7 @@ export async function assertOperationRejectsUnauthenticated(
     {},
     {
       principal: { method: 'unauthenticated' },
-      engine: options.engine,
+      host: options.engine,
       transport: 'jsonRpcStdio',
       registry: options.liveRegistry,
     },
@@ -60,8 +61,11 @@ export async function assertOperationRejectsInsufficientScope(
     options.operationName,
     {},
     {
-      principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-      engine: options.engine,
+      principal: principalFromJwtClaims(
+        { sub: 'user', scope: 'workflows:read' },
+        { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+      ),
+      host: options.engine,
       transport: 'jsonRpcStdio',
       registry: options.liveRegistry,
     },

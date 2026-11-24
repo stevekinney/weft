@@ -15,6 +15,11 @@
 export interface WorkflowScheduleProvenance {
   scheduleId: string;
   occurrence?: number;
+  /**
+   * Present and `true` when a person started the run with `engine.triggerSchedule` rather than the
+   * schedule's cadence; such a run has no `occurrence`.
+   */
+  manual?: true;
 }
 
 /**

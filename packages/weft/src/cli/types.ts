@@ -1,7 +1,7 @@
 import type { ScheduleOverlapPolicy, ScheduleRevisionPolicy } from '../index.ts';
 
 /** Supported storage backend identifiers for the `--storage` flag. */
-export type StorageBackend = 'sqlite' | 'lmdb' | 'memory';
+export type StorageBackend = 'sqlite' | 'memory';
 
 /** Storage backends suitable for commands that must survive process exit. */
 export type PersistentStorageBackend = Exclude<StorageBackend, 'memory'>;
@@ -56,6 +56,8 @@ export type CliCommand =
       list: boolean;
       describe?: string;
       yes: boolean;
+      /** `--dry-run`: set `dryRun: true` on the operation's input. Absent is the same as `false`. */
+      dryRun?: boolean;
       help: boolean;
       json: boolean;
     }
@@ -129,6 +131,8 @@ export type CliCommand =
       profile?: string;
       type?: string;
       status?: string;
+      failedStep?: string;
+      retrying?: boolean;
       limit?: number;
       help: boolean;
       json: boolean;

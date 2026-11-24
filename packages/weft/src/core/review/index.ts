@@ -9,8 +9,8 @@
 
 import { z } from 'zod';
 
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation, Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { WeftError } from '../weft-error.ts';
 import { ReviewRequestedEvent } from './events.ts';
@@ -47,6 +47,17 @@ export interface ReviewRequest {
   allowPartial: boolean;
   timeout?: number;
   webhookUrl?: string;
+  /**
+   * The step of the workflow that asks for the review, as a person reads it ("Collect merged
+   * changes"), when the workflow names it. Absent on a request stored before it was kept.
+   */
+  step?: string;
+  /**
+   * What the workflow's author says to the reviewer above the artifact ("Here is the draft. Approve
+   * it to publish, or send it back with a note."), when the workflow gives it. Absent on a request
+   * stored before it was kept.
+   */
+  message?: string;
   createdAt: number;
 }
 
@@ -73,8 +84,33 @@ const reviewRequestFields = {
   allowPartial: z.boolean(),
   timeout: z.number().optional(),
   webhookUrl: z.string().optional(),
+  // COR-2426: optional, so a request stored before they were kept still reads.
+  step: z.string().optional(),
+  message: z.string().optional(),
   createdAt: z.number(),
 };
+
+/** The longest `step` a review request keeps. */
+export const REVIEW_STEP_MAXIMUM_LENGTH = 200;
+/** The longest `message` a review request keeps. */
+export const REVIEW_MESSAGE_MAXIMUM_LENGTH = 4_000;
+
+/**
+ * A review's `step` or `message` as it is kept, checked where a workflow asks for the review: a
+ * string, trimmed, at most `maximum` characters. An empty one is not kept; anything else is a
+ * `TypeError`, and no review is created.
+ */
+function reviewText(name: string, value: unknown, maximum: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new TypeError(`A review's ${name} must be a string.`);
+  }
+  const text = value.trim();
+  if (text.length > maximum) {
+    throw new TypeError(`A review's ${name} must be at most ${String(maximum)} characters.`);
+  }
+  return text === '' ? undefined : text;
+}
 
 const reviewDecisionFields = {
   decision: z.enum(['approved', 'rejected', 'needs-changes']),
@@ -151,6 +187,16 @@ export interface ReviewOptions {
   timeout?: number;
   escalation?: EscalationStep[];
   webhookUrl?: string;
+  /**
+   * The step of the workflow that asks, as a person reads it, kept on the request
+   * ({@link ReviewRequest.step}). At most 200 characters.
+   */
+  step?: string;
+  /**
+   * What the author says to the reviewer above the artifact, kept on the request
+   * ({@link ReviewRequest.message}). At most 4,000 characters.
+   */
+  message?: string;
 }
 
 /**
@@ -272,7 +318,7 @@ export class ReviewTimeoutError extends WeftError<'ReviewTimeoutError'> {
  * @example Attach an event target and a fixed clock for tests
  * ```ts
  * import { ReviewCoordinator, type ReviewCoordinatorOptions } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const options: ReviewCoordinatorOptions = {
@@ -299,7 +345,7 @@ export interface ReviewCoordinatorOptions {
  * @example Create a review and later submit a decision
  * ```ts
  * import { ReviewCoordinator } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const coordinator = new ReviewCoordinator(storage);
@@ -334,6 +380,9 @@ export class ReviewCoordinator {
 
   /** Create a review request and persist it. */
   async createReview(workflowId: string, options: ReviewOptions): Promise<ReviewRequest> {
+    // Checked before anything is written, so a bad step or message creates no review.
+    const step = reviewText('step', options.step, REVIEW_STEP_MAXIMUM_LENGTH);
+    const message = reviewText('message', options.message, REVIEW_MESSAGE_MAXIMUM_LENGTH);
     const reviewId = crypto.randomUUID();
 
     const request: ReviewRequest = {
@@ -353,6 +402,9 @@ export class ReviewCoordinator {
     if (options.webhookUrl !== undefined) {
       request.webhookUrl = options.webhookUrl;
     }
+
+    if (step !== undefined) request.step = step;
+    if (message !== undefined) request.message = message;
 
     const key = KEYS.review(workflowId, reviewId);
     await this.#storage.put(key, encode(request));

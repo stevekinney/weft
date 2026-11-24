@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
-import { createInMemoryReplayLiveBackend } from './in-memory-replay-live-backend.ts';
 import {
+  createInMemoryReplayLiveBackend,
   createReplayLiveFeed,
   encodeCursor,
   type SequencedEventEnvelope,
-} from './workflow-event-feed.ts';
+} from "../embedded/backchannel/src/index.ts";
 
-type ProbeEnvelope = SequencedEventEnvelope & { readonly kind: string };
+type ProbeEnvelope = SequencedEventEnvelope & { readonly kind: string; readonly payload?: unknown };
 
 function envelope(sequence: number, kind = 'probe'): ProbeEnvelope {
   return { sequence, cursor: encodeCursor(sequence), kind };
@@ -112,10 +112,120 @@ describe('the in-memory replay-live backend', () => {
     for (let sequence = 0; sequence < 3; sequence += 1) backend.append(envelope(sequence));
 
     const resumed: ProbeEnvelope[] = [];
-    for await (const item of feed.replay({ fromCursor: encodeCursor(0) })) resumed.push(item);
+    for await (const item of feed.replay({
+      fromCursor: backend.encodeCursor?.(0) ?? encodeCursor(0),
+    }))
+      resumed.push(item);
 
     expect(resumed.map((item) => item.sequence)).toEqual([1, 2]);
     feed.dispose();
+  });
+
+  it('distinguishes contiguous replay from a retention gap and advances its cursor', async () => {
+    const makeGap = ({
+      requestedCursor,
+      firstRetainedSequence,
+      continuationCursor,
+    }: {
+      requestedCursor: string;
+      firstRetainedSequence: number;
+      continuationCursor: string;
+    }): ProbeEnvelope => ({
+      sequence: firstRetainedSequence - 1,
+      cursor: continuationCursor,
+      kind: 'gap',
+      payload: { requestedCursor, firstRetainedSequence },
+    });
+    const first = createInMemoryReplayLiveBackend<ProbeEnvelope>({
+      maxEvents: 2,
+      createGapEnvelope: makeGap,
+    });
+    first.append(envelope(0));
+    first.append(envelope(1));
+    first.append(envelope(2));
+    const feed = createReplayLiveFeed(first);
+    const currentCursor = first.encodeCursor?.(0) ?? '';
+    expect(first.decodeCursor?.(currentCursor)).toEqual({ sequence: 0 });
+    expect(first.decodeCursor?.('0')).toBe('gap');
+    expect(first.decodeCursor?.('bad')).toBe('invalid');
+    expect(first.decodeCursor?.('not-an-incarnation:0')).toBe('invalid');
+    expect(first.decodeCursor?.('-1')).toEqual({ sequence: -1 });
+    const contiguous: ProbeEnvelope[] = [];
+    for await (const item of feed.replay({ fromCursor: currentCursor, limit: 1 }))
+      contiguous.push(item);
+    expect(contiguous.map((item) => item.sequence)).toEqual([1]);
+    expect(contiguous.map((item) => item.kind)).toEqual(['probe']);
+
+    first.append(envelope(3));
+    const replayed: ProbeEnvelope[] = [];
+    for await (const item of feed.replay({ fromCursor: currentCursor })) replayed.push(item);
+    expect(replayed.map((item) => item.kind)).toEqual(['gap', 'probe', 'probe']);
+    expect(replayed[0]?.payload).toEqual({
+      requestedCursor: currentCursor,
+      firstRetainedSequence: 2,
+    });
+    const continued: ProbeEnvelope[] = [];
+    for await (const item of feed.replay({ fromCursor: replayed[0]!.cursor, limit: 1 }))
+      continued.push(item);
+    expect(continued.map((item) => item.sequence)).toEqual([2]);
+    expect(continued.map((item) => item.kind)).toEqual(['probe']);
+  });
+
+  it('emits a gap when a cursor belongs to a previous backend instance', async () => {
+    const makeGap = ({
+      requestedCursor,
+      firstRetainedSequence,
+      continuationCursor,
+    }: {
+      requestedCursor: string;
+      firstRetainedSequence: number;
+      continuationCursor: string;
+    }): ProbeEnvelope => ({
+      sequence: firstRetainedSequence - 1,
+      cursor: continuationCursor,
+      kind: 'gap',
+      payload: { requestedCursor, firstRetainedSequence },
+    });
+    const previous = createInMemoryReplayLiveBackend<ProbeEnvelope>();
+    previous.append(envelope(0));
+    const cursor = previous.encodeCursor?.(0) ?? '';
+    const current = createInMemoryReplayLiveBackend<ProbeEnvelope>({ createGapEnvelope: makeGap });
+    current.append(envelope(0));
+    const replayed: ProbeEnvelope[] = [];
+    for await (const item of createReplayLiveFeed(current).replay({ fromCursor: cursor }))
+      replayed.push(item);
+    expect(replayed.map((item) => item.kind)).toEqual(['gap', 'probe']);
+    expect(replayed[0]?.payload).toEqual({ requestedCursor: cursor, firstRetainedSequence: 0 });
+  });
+
+  it('stops a canceled subscription before emitting a gap after retention lookup', async () => {
+    const prior = createInMemoryReplayLiveBackend<ProbeEnvelope>();
+    const cursor = prior.encodeCursor?.(0) ?? '';
+    const lookup = Promise.withResolvers<number>();
+    const started = Promise.withResolvers<void>();
+    const backend = createInMemoryReplayLiveBackend<ProbeEnvelope>({
+      createGapEnvelope: ({ firstRetainedSequence, continuationCursor }) => ({
+        sequence: firstRetainedSequence - 1,
+        cursor: continuationCursor,
+        kind: 'gap',
+      }),
+    });
+    const feed = createReplayLiveFeed({
+      ...backend,
+      snapshotFirstRetainedSequence: () => {
+        started.resolve();
+        return lookup.promise;
+      },
+    });
+    const controller = new AbortController();
+    const subscription = feed.subscribe({ fromCursor: cursor, signal: controller.signal });
+    const iterator = subscription[Symbol.asyncIterator]();
+    const next = iterator.next();
+    await started.promise;
+    controller.abort();
+    lookup.resolve(0);
+    expect(await next).toEqual({ done: true, value: undefined });
+    await iterator.return?.();
   });
 
   it('counts the replay cap against filtered-in envelopes only', async () => {
@@ -143,6 +253,28 @@ describe('the in-memory replay-live backend', () => {
 
     expect(delivered.map((item) => item.sequence)).toEqual([4]);
     feed.dispose();
+  });
+
+  it('rejects a digit string beyond the safe integers from the default cursor decoder', () => {
+    const feed = createReplayLiveFeed<ProbeEnvelope>({
+      replay: async function* () {},
+      snapshotTailSequence: () => Promise.resolve(-1),
+      subscribeLive: () => () => {},
+    });
+
+    expect(feed.decodeCursor('9'.repeat(400))).toBe('invalid');
+    expect(feed.decodeCursor('12')).toEqual({ sequence: 12 });
+    feed.dispose();
+  });
+
+  it('encodes only the sequences a cursor can name', () => {
+    const backend = createInMemoryReplayLiveBackend<ProbeEnvelope>();
+
+    expect(backend.encodeCursor?.(-1)).toEndWith(':-1');
+    expect(backend.encodeCursor?.(7)).toEndWith(':7');
+    for (const sequence of [-2, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => backend.encodeCursor?.(sequence)).toThrow('Invalid sequence');
+    }
   });
 
   it('releases subscribers on dispose', () => {

@@ -1,4 +1,4 @@
-import type { ContextInternals } from './internals.ts';
+import { stepStateKey, type ContextInternals } from './internals.ts';
 
 const SLEEP_DEADLINE_LOCAL_PREFIX = '__weftSleepDeadline:';
 
@@ -22,7 +22,7 @@ export function readOrInitSleepFireAt(
   const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
   internals.sleepReferenceTime = undefined;
 
-  const localKey = `${SLEEP_DEADLINE_LOCAL_PREFIX}${step}`;
+  const localKey = `${SLEEP_DEADLINE_LOCAL_PREFIX}${stepStateKey(internals, step)}`;
   const existing = internals.checkpointLocals[localKey];
   if (typeof existing === 'number' && Number.isFinite(existing)) {
     return existing;
@@ -45,7 +45,9 @@ export function readOrInitSleepFireAt(
  * checkpoint by one entry per sleep a recurring workflow takes.
  */
 export function dropSleepFireAt(internals: ContextInternals, step: number): void {
-  const { [`${SLEEP_DEADLINE_LOCAL_PREFIX}${step}`]: _completed, ...remainingLocals } =
-    internals.checkpointLocals;
+  const {
+    [`${SLEEP_DEADLINE_LOCAL_PREFIX}${stepStateKey(internals, step)}`]: _completed,
+    ...remainingLocals
+  } = internals.checkpointLocals;
   internals.checkpointLocals = remainingLocals;
 }

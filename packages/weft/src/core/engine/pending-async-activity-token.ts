@@ -39,3 +39,13 @@ export function isPendingAsyncActivityToken(engine: object, token: string): bool
   const internals = peekInternals(engine);
   return internals !== undefined && internals.pendingAsyncActivities.has(token);
 }
+
+export function isPendingAsyncActivityTokenForWorkflowExecution(
+  engine: object,
+  token: string,
+  workflowExecutionToken: string | undefined,
+): boolean {
+  const internals = peekInternals(engine);
+  const pending = internals?.pendingAsyncActivities.get(token);
+  return pending !== undefined && pending.workflowExecutionToken === workflowExecutionToken;
+}

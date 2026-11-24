@@ -11,10 +11,10 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -46,7 +46,7 @@ function registerGenerationWorkflow(
 async function waitForParked(engine: Engine, workflowId: string): Promise<void> {
   await waitForCondition(
     async () => (await engine.storage.get(KEYS.checkpoint(workflowId))) !== null,
-    { label: `workflow ${workflowId} parked`, timeoutMs: 2000, intervalMs: 5 },
+    { label: `workflow ${workflowId} parked`, intervalMs: 5 },
   );
 }
 

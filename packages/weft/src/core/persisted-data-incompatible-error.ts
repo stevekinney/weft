@@ -77,6 +77,6 @@ export const CURRENT_PERSISTED_DATA_SCHEMA_VERSION = 2;
  * Storage key holding the persisted-data schema version (encoded as the UTF-8
  * digits of an integer). Kept under a `weft:` prefix so it cannot collide with
  * the public `wf:` / `op:` / `schedule:` / etc. layouts in
- * `src/storage/interface.ts#KEYS`.
+ * `src/storage/keys.ts#KEYS`.
  */
 export const PERSISTED_DATA_SCHEMA_VERSION_KEY = 'weft:schema-version';

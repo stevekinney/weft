@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from "../embedded/storage/src/testing/index.ts";
 import { encode } from '../core/codec.ts';
 import {
   CURRENT_CHECKPOINT_SCHEMA_VERSION,
   type Checkpoint,
   type WorkflowState,
 } from '../core/types.ts';
-import { BunSQLiteStorage } from '../storage/bun-sql.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import {
-  createDiskBackedTestFixture,
-  sqliteDatabaseSidecarSuffixes,
-} from '../testing/storage-backends.test-support.ts';
+import { KEYS } from '../storage/keys.ts';
 import { collectDiagnostics } from './doctor.ts';
 
 // ---------------------------------------------------------------------------

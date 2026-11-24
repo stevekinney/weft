@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { removeCatalogEntry } from '../catalog/removal.ts';
 import { WorkflowCatalog } from '../catalog/workflow-catalog.ts';
 import { encode } from '../codec.ts';
@@ -137,6 +137,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
       status: 'active',
       overlap: 'skip',
       backfill: false,
+      timeZone: 'UTC',
       revisionPolicy: 'pinned',
       pinnedRevision: v1.revision,
       createdAt: 1,
@@ -144,6 +145,7 @@ describe('resolveOrphanedCatalogTombstones', () => {
       nextFireAt: 60_000,
       missedFireCount: 0,
       skippedCount: 0,
+      revision: 1,
       queuedRuns: [],
     };
     await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));

@@ -1,5 +1,5 @@
 import type { ContextOperationRequest } from '../context/operation-request.ts';
-import { WeftError } from '../weft-error.ts';
+import { WeftError, type WeftErrorCode } from '../weft-error.ts';
 import type { FailureCategory, OperationId, WorkflowId } from './identity.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
 import type { SearchAttributeValue } from './search-attributes.ts';
@@ -149,6 +149,17 @@ export interface Checkpoint {
    * for those, same as before this field existed.
    */
   workflowExecutionToken?: string;
+  /**
+   * Steps whose entry in {@link Checkpoint.workerReplaySignatures} a fork copied from the run it
+   * forked while that run had no outcome for them yet: the operation the source was parked on, and
+   * any step whose result is not kept, such as a completed `getVersion`. Such a signature is
+   * evidence about the SOURCE's execution, so a worker does not read it as proof that an earlier
+   * execution of this run already logged what sits in front of that step. The fork's own execution
+   * removes a step from this list when it yields that step's operation, which pins the signature as
+   * the fork's own. Absent on every other checkpoint, including every checkpoint persisted before
+   * this field existed, which reads as before.
+   */
+  forkCopiedSignatureSteps?: number[];
 }
 
 /**
@@ -362,6 +373,13 @@ export type WorkerOutboundMessage =
       workflowId: WorkflowId;
       checkpoint: ArrayBuffer;
       operationRequest: OperationRequest | ContextOperationRequest;
+      /**
+       * The durable step index `operationRequest` occupies: the value this run's `ctx.log` lines
+       * carry as `step`, and the `stepIndex` its timeline entry records. The worker counts steps,
+       * and `checkpoint.step` counts checkpoints, so the host cannot derive it. Inline execution
+       * fills it from its context but the host reads it only for a worker's checkpoint bytes.
+       */
+      pendingStepIndex: number;
       /** Echo of the captured `run.workflowRevision` (WFT-20) — see that field's doc. */
       workflowRevision?: string;
     }
@@ -381,6 +399,11 @@ export type WorkerOutboundMessage =
       workflowId: WorkflowId;
       error: string;
       errorStack?: string;
+      /**
+       * The code of the Weft error that failed the run, carried beside the message because the
+       * message alone loses it (COR-2529). Absent when the error is not a Weft error.
+       */
+      errorCode?: WeftErrorCode;
       /** Populated when the execution strategy can classify the failure cause. */
       failureCategory?: FailureCategory;
       /** Echo of the captured `run.workflowRevision` (WFT-20) — see that field's doc. */

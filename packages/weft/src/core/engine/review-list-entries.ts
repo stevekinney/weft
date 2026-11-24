@@ -42,6 +42,8 @@ function normalizeStoredReviewRequest(review: ParsedReviewRequest): ReviewReques
 
   assignWhenDefined(normalizedReview, 'timeout', review.timeout);
   assignWhenDefined(normalizedReview, 'webhookUrl', review.webhookUrl);
+  assignWhenDefined(normalizedReview, 'step', review.step);
+  assignWhenDefined(normalizedReview, 'message', review.message);
 
   return normalizedReview;
 }
@@ -82,6 +84,8 @@ export function toCompletedReviewEntry(
 
   assignWhenDefined(completedReview, 'timeout', review.timeout);
   assignWhenDefined(completedReview, 'webhookUrl', review.webhookUrl);
+  assignWhenDefined(completedReview, 'step', review.step);
+  assignWhenDefined(completedReview, 'message', review.message);
   assignWhenDefined(completedReview, 'feedback', decisionResult.feedback);
   assignWhenDefined(completedReview, 'sectionDecisions', decisionResult.sectionDecisions);
 
@@ -107,6 +111,8 @@ function normalizeCompletedReviewEntry(
 
   assignWhenDefined(completedReview, 'timeout', persistedReview.timeout);
   assignWhenDefined(completedReview, 'webhookUrl', persistedReview.webhookUrl);
+  assignWhenDefined(completedReview, 'step', persistedReview.step);
+  assignWhenDefined(completedReview, 'message', persistedReview.message);
   assignWhenDefined(completedReview, 'feedback', persistedReview.feedback);
   assignWhenDefined(completedReview, 'sectionDecisions', persistedReview.sectionDecisions);
 

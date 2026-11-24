@@ -4,6 +4,7 @@ import type { AttributesOperationTypes } from './attributes-operations.generated
 import type { BulkWorkflowsOperationTypes } from './bulk-workflows-operations.generated.ts';
 import type { CheckpointsOperationTypes } from './checkpoints-operations.generated.ts';
 import type { EventsOperationTypes } from './events-operations.generated.ts';
+import type { LogsOperationTypes } from './logs-operations.generated.ts';
 import type { ObservabilityOperationTypes } from './observability-operations.generated.ts';
 import type { ReviewsOperationTypes } from './reviews-operations.generated.ts';
 import type { SchedulesOperationTypes } from './schedules-operations.generated.ts';
@@ -20,12 +21,11 @@ import type { WorkflowCatalogOperationTypes } from './workflow-catalog-operation
 import type { WorkflowsOperationTypes } from './workflows-operations.generated.ts';
 
 import {
-  createCatalogWeftClient,
-  httpJsonRpcTransport,
-  type CatalogWeftClient,
+  createCatalogClient,
+  type CatalogClient,
   type ClientRestOperationBinding,
-  type WeftClientConnection,
-} from '../operation-client-runtime.ts';
+} from "../../embedded/backchannel/src/client/index.ts";
+import { httpJsonRpcTransport, type WeftClientConnection } from '../weft-connection-transport.ts';
 
 /**
  * Every unary operation this server exposes over JSON-RPC, sorted by name.
@@ -62,8 +62,12 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.schedules.create',
   'weft.schedules.get',
   'weft.schedules.list',
+  'weft.schedules.missed',
   'weft.schedules.pause',
   'weft.schedules.resume',
+  'weft.schedules.runnow',
+  'weft.schedules.skipnext',
+  'weft.schedules.unskip',
   'weft.schedules.update',
   'weft.storage.capabilities',
   'weft.system.lease',
@@ -71,7 +75,9 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.system.principal',
   'weft.system.registry',
   'weft.task.queues.list',
+  'weft.task.queues.tasks',
   'weft.tasks.deadletters.get',
+  'weft.tasks.deadletters.retry',
   'weft.tasks.deliveries',
   'weft.tasks.diagnostics',
   'weft.tasks.get',
@@ -80,12 +86,14 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.worker.deployments.drain',
   'weft.worker.deployments.preview',
   'weft.worker.deployments.promote',
+  'weft.worker.deployments.remove',
   'weft.worker.deployments.resume',
   'weft.worker.deployments.rollback',
   'weft.worker.deployments.setrouting',
   'weft.worker.startoverrides.preview',
   'weft.workers.diagnostics',
   'weft.workers.drain',
+  'weft.workers.forget',
   'weft.workers.list',
   'weft.workers.rejections',
   'weft.workers.resume',
@@ -102,13 +110,19 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.cancel',
   'weft.workflows.checkpoints.get',
   'weft.workflows.checkpoints.list',
+  'weft.workflows.compare',
+  'weft.workflows.definitions.get',
+  'weft.workflows.definitions.list',
   'weft.workflows.events.list',
   'weft.workflows.finalizer.get',
   'weft.workflows.fork',
   'weft.workflows.get',
   'weft.workflows.list',
+  'weft.workflows.logs.list',
   'weft.workflows.purge',
   'weft.workflows.query',
+  'weft.workflows.refresh',
+  'weft.workflows.refresh.diagnostics',
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
@@ -128,6 +142,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.timeline.get',
   'weft.workflows.timeout',
   'weft.workflows.update',
+  'weft.workflows.updates.list',
 ] as const;
 
 /**
@@ -185,8 +200,12 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.schedules.create',
   'weft.schedules.get',
   'weft.schedules.list',
+  'weft.schedules.missed',
   'weft.schedules.pause',
   'weft.schedules.resume',
+  'weft.schedules.runnow',
+  'weft.schedules.skipnext',
+  'weft.schedules.unskip',
   'weft.schedules.update',
   'weft.storage.capabilities',
   'weft.system.lease',
@@ -194,7 +213,9 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.system.principal',
   'weft.system.registry',
   'weft.task.queues.list',
+  'weft.task.queues.tasks',
   'weft.tasks.deadletters.get',
+  'weft.tasks.deadletters.retry',
   'weft.tasks.deliveries',
   'weft.tasks.diagnostics',
   'weft.tasks.diagnostics.deadletters.clear',
@@ -204,12 +225,14 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.worker.deployments.drain',
   'weft.worker.deployments.preview',
   'weft.worker.deployments.promote',
+  'weft.worker.deployments.remove',
   'weft.worker.deployments.resume',
   'weft.worker.deployments.rollback',
   'weft.worker.deployments.setrouting',
   'weft.worker.startoverrides.preview',
   'weft.workers.diagnostics',
   'weft.workers.drain',
+  'weft.workers.forget',
   'weft.workers.list',
   'weft.workers.rejections',
   'weft.workers.resume',
@@ -226,13 +249,19 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.cancel',
   'weft.workflows.checkpoints.get',
   'weft.workflows.checkpoints.list',
+  'weft.workflows.compare',
+  'weft.workflows.definitions.get',
+  'weft.workflows.definitions.list',
   'weft.workflows.events.list',
   'weft.workflows.finalizer.get',
   'weft.workflows.fork',
   'weft.workflows.get',
   'weft.workflows.list',
+  'weft.workflows.logs.list',
   'weft.workflows.purge',
   'weft.workflows.query',
+  'weft.workflows.refresh',
+  'weft.workflows.refresh.diagnostics',
   'weft.workflows.replay',
   'weft.workflows.result.get',
   'weft.workflows.resume',
@@ -252,6 +281,7 @@ export const CLIENT_OPERATION_NAMES = [
   'weft.workflows.timeline.get',
   'weft.workflows.timeout',
   'weft.workflows.update',
+  'weft.workflows.updates.list',
 ] as const;
 
 /**
@@ -322,6 +352,7 @@ export type ClientOperationTypes = ActivitiesOperationTypes &
   BulkWorkflowsOperationTypes &
   CheckpointsOperationTypes &
   EventsOperationTypes &
+  LogsOperationTypes &
   ObservabilityOperationTypes &
   ReviewsOperationTypes &
   SchedulesOperationTypes &
@@ -370,7 +401,7 @@ export type CatalogOperationTypes = Pick<ClientOperationTypes, CatalogOperationN
  * console.log(typeof listAlerts);
  * ```
  */
-export type CatalogOperations = CatalogWeftClient<CatalogOperationTypes>;
+export type CatalogOperations = CatalogClient<CatalogOperationTypes>;
 
 /**
  * A client shaped over every operation, REST included: each operation name is
@@ -389,7 +420,7 @@ export type CatalogOperations = CatalogWeftClient<CatalogOperationTypes>;
  * console.log(typeof diagnostics);
  * ```
  */
-export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
+export type ClientOperations = CatalogClient<ClientOperationTypes>;
 
 /**
  * Build a typed client for a remote Weft server, with one method per operation
@@ -416,7 +447,7 @@ export type ClientOperations = CatalogWeftClient<ClientOperationTypes>;
  * ```
  */
 export function createWeftClient(connection: WeftClientConnection = {}): CatalogOperations {
-  return createCatalogWeftClient<CatalogOperationTypes>(
+  return createCatalogClient<CatalogOperationTypes>(
     CATALOG_OPERATION_NAMES,
     httpJsonRpcTransport(connection),
   );

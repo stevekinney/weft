@@ -1,8 +1,11 @@
+import type { OperationFault } from "../../embedded/backchannel/src/index.ts";
+import { invalidParamsFault, withRemediation } from "../../embedded/backchannel/src/internals.ts";
 import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
+import type { BulkOperationConfirmationError } from '../../core/engine/errors.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { ListFilter } from '../../core/types.ts';
 import { listFilterFromBulkInput, type BulkListFilterInput } from './bulk-filter-input.ts';
-import { faultMessage, invalidParamsFault } from './operation-helpers.ts';
+import { faultMessage } from './operation-helpers.ts';
 
 /**
  * Coerces filter tags (label `Field "filter.tags"`), builds a `ListFilter`
@@ -39,4 +42,31 @@ export function validatedListFilterFromBulkInput(input: BulkListFilterInput): Li
   }
 
   return filter;
+}
+
+/** `data.reason` of the `Conflict` a bulk commit answers when its confirmation token no longer matches. */
+const STALE_PREVIEW_REASON = 'confirmation-token-stale';
+
+/** Ends the stale-token message, so a caller that shows only the message still says what to do. */
+const STALE_PREVIEW_REMEDIATION =
+  'The workflows that match the filter changed after the preview. Run the preview again with ' +
+  '`dryRun: true`, then commit with its new `confirmationToken`.';
+
+/**
+ * The fault every bulk operation answers when a commit's confirmation token no longer matches the
+ * workflows its filter selects. The input was well formed; the matching workflows moved after the
+ * preview. That is a conflict with the state the preview described, which a caller answers by
+ * previewing again, so it must not share a code with input the caller got wrong. A commit that
+ * carries no token never reaches this: `bulkOperationOptionsFromInput` answers it `InvalidParams`.
+ * The token is checked before any workflow is touched, so nothing has changed when this is thrown.
+ */
+export function staleConfirmationFault(error: BulkOperationConfirmationError): OperationFault {
+  return withRemediation(
+    {
+      code: 'Conflict',
+      message: `${error.message}. ${STALE_PREVIEW_REMEDIATION}`,
+      data: { reason: STALE_PREVIEW_REASON, weftCode: error.code },
+    },
+    STALE_PREVIEW_REMEDIATION,
+  );
 }

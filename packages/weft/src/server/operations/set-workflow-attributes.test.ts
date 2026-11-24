@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { decode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import {
   setWorkflowAttributesOperation,
   setWorkflowAttributesRestBinding,
@@ -95,6 +95,117 @@ describe('weft.workflows.attributes.set', () => {
     engine[Symbol.dispose]();
   });
 
+  describe('date-time attributes', () => {
+    const scheduled = workflow({ name: 'scheduled-job' })
+      .searchAttributes({
+        runAfter: { type: 'string', format: 'date-time' },
+        label: { type: 'string' },
+      })
+      .execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('finish');
+        return 'done';
+      });
+
+    async function startScheduled(): Promise<{
+      engine: Engine;
+      storage: MemoryStorage;
+      id: string;
+    }> {
+      const storage = new MemoryStorage();
+      const engine = new Engine({ storage });
+      engine.register(scheduled);
+      const handle = await engine.start('scheduled-job', undefined, {
+        searchAttributes: { runAfter: new Date('2026-01-01T00:00:00.000Z'), label: 'first' },
+      });
+      handle.result().catch(() => {});
+      await waitForCondition(async () => (await engine.getAttributes(handle.id)) !== null);
+      return { engine, storage, id: handle.id };
+    }
+
+    it('converts an ISO string for an attribute the schema declares date-time', async () => {
+      const { engine, storage, id } = await startScheduled();
+      try {
+        const response = await handleRequest(
+          request('PATCH', `/v1/workflows/${id}/attributes`, {
+            attributes: { runAfter: '2026-06-15T12:30:00.000Z' },
+          }),
+          engine,
+          { operationRegistry: registry, restBindings: bindings },
+        );
+
+        expect(response.status).toBe(200);
+        const stored = decode((await storage.get(KEYS.attribute(id)))!) as Record<string, unknown>;
+        expect(stored['runAfter']).toBeInstanceOf(Date);
+        expect((stored['runAfter'] as Date).toISOString()).toBe('2026-06-15T12:30:00.000Z');
+        // The other attribute is merged, not replaced, and a plain string stays a string.
+        expect(stored['label']).toBe('first');
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+
+    it('leaves a string for a plain string attribute as a string', async () => {
+      const { engine, storage, id } = await startScheduled();
+      try {
+        const response = await handleRequest(
+          request('PATCH', `/v1/workflows/${id}/attributes`, {
+            attributes: { label: '2026-06-15T12:30:00.000Z' },
+          }),
+          engine,
+          { operationRegistry: registry, restBindings: bindings },
+        );
+
+        expect(response.status).toBe(200);
+        const stored = decode((await storage.get(KEYS.attribute(id)))!) as Record<string, unknown>;
+        expect(stored['label']).toBe('2026-06-15T12:30:00.000Z');
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+
+    it('leaves a value that is not an object for the engine to refuse, as it did before', async () => {
+      const { engine, storage, id } = await startScheduled();
+      try {
+        const response = await handleRequest(
+          request('PATCH', `/v1/workflows/${id}/attributes`, {
+            attributes: ['2026-06-15T12:30:00.000Z'],
+          }),
+          engine,
+          { operationRegistry: registry, restBindings: bindings },
+        );
+
+        // The engine rejects the "0" key the array spreads into, which is masked as a server error.
+        expect(response.status).toBe(500);
+        const stored = decode((await storage.get(KEYS.attribute(id)))!) as Record<string, unknown>;
+        expect(Object.keys(stored).toSorted()).toEqual(['label', 'runAfter']);
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+
+    it('refuses a string that is not a date-time as invalid parameters, leaving the stored value', async () => {
+      const { engine, storage, id } = await startScheduled();
+      try {
+        const response = await handleRequest(
+          request('PATCH', `/v1/workflows/${id}/attributes`, {
+            attributes: { runAfter: 'next tuesday' },
+          }),
+          engine,
+          { operationRegistry: registry, restBindings: bindings },
+        );
+
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as { error: string }).error).toContain(
+          'must be a valid date-time string',
+        );
+        const stored = decode((await storage.get(KEYS.attribute(id)))!) as Record<string, unknown>;
+        expect((stored['runAfter'] as Date).toISOString()).toBe('2026-01-01T00:00:00.000Z');
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+  });
+
   it('returns the sanitized 500 body when the engine throws', async () => {
     const { engine } = createEngine();
     const originalSetAttributes = engine.setAttributes.bind(engine);
@@ -115,7 +226,7 @@ describe('weft.workflows.attributes.set', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.setAttributes = originalSetAttributes;
       engine[Symbol.dispose]();

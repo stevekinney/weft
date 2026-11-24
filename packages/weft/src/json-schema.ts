@@ -4,12 +4,14 @@
  * @module json-schema
  */
 
+import { definitionSchemaToJsonSchema } from './core/types/definition-schema-to-json.ts';
 import {
   StandardSchemaValidationError,
   formatStandardSchemaIssues,
   validateStandardSchema,
 } from './core/types/standard-schema-validate.ts';
 
+export type { DefinitionSchemaDirection } from './core/types/definition-schema-to-json.ts';
 export type {
   DefinitionSchema,
   InferSchemaOutput,
@@ -84,8 +86,24 @@ const exportedStandardSchemaValidationError = StandardSchemaValidationError;
  */
 const exportedValidateStandardSchema = validateStandardSchema;
 
+/**
+ * Convert a {@link DefinitionSchema} to a JSON Schema fragment through its vendor adapter (Zod or
+ * Valibot) or its `~standard.jsonSchema` converter, as Weft does for an activity's schemas.
+ *
+ * @example
+ * ```ts
+ * import { definitionSchemaToJsonSchema } from '@lostgradient/weft';
+ * import { z } from 'zod';
+ *
+ * const jsonSchema = definitionSchemaToJsonSchema(z.object({ email: z.string() }), 'input');
+ * console.log(jsonSchema);
+ * ```
+ */
+const exportedDefinitionSchemaToJsonSchema = definitionSchemaToJsonSchema;
+
 export {
   exportedStandardSchemaValidationError as StandardSchemaValidationError,
+  exportedDefinitionSchemaToJsonSchema as definitionSchemaToJsonSchema,
   exportedFormatStandardSchemaIssues as formatStandardSchemaIssues,
   exportedValidateStandardSchema as validateStandardSchema,
 };

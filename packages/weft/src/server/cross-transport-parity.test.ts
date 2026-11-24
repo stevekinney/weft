@@ -1,22 +1,27 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { WEFT_SCOPE_VOCABULARY } from '../authorization-scopes.ts';
+import { createWeftDiscoverDocument } from './weft-documents.ts';
 
+import { runStdioSession } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { Engine } from '../core/engine.ts';
-import type {
-  BulkCancelResult,
-  BulkDeleteResult,
-  BulkOperationCommitOptions,
-  BulkOperationDryRunOptions,
-  BulkOperationDryRunResult,
-  BulkOperationOptions,
-  BulkRetryFailedResult,
-  BulkSignalResult,
-  BulkTagResult,
-  ListFilter,
-  WorkflowContext,
+import {
+  workflow,
+  type BulkCancelResult,
+  type BulkDeleteResult,
+  type BulkOperationCommitOptions,
+  type BulkOperationDryRunOptions,
+  type BulkOperationDryRunResult,
+  type BulkOperationOptions,
+  type BulkRetryFailedResult,
+  type BulkSignalResult,
+  type BulkTagResult,
+  type ListFilter,
+  type WorkflowContext,
 } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import { serve, type WeftServer } from './index.ts';
 import {
@@ -26,7 +31,6 @@ import {
   type ParityInvariants,
 } from './operation-catalog-parity-invariants.test-support.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
-import { runStdioSession } from './stdio-session.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -84,10 +88,8 @@ async function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: WorkflowStatus,
-  timeoutMilliseconds = 2_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns()) {
     const state = await engine.get(workflowId);
     if (state?.status === status) return;
     await sleepForTesting(10);
@@ -145,7 +147,7 @@ async function postJsonRpcExpectError(
 function waitForMessage(
   webSocket: WebSocket,
   predicate: (parsed: unknown) => boolean,
-  timeoutMilliseconds = 3_000,
+  timeoutMilliseconds = HANG_GUARD_MILLISECONDS,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -243,6 +245,7 @@ async function invokeStdioJsonRpcEnvelope(
   const output = collectingWritable();
   try {
     const result = await runStdioSession({
+      scopeVocabulary: WEFT_SCOPE_VOCABULARY,
       input: readableFromLines([
         JSON.stringify({
           jsonrpc: '2.0',
@@ -255,6 +258,7 @@ async function invokeStdioJsonRpcEnvelope(
       admission: { kind: 'allow-unauthenticated-local-admin' },
       registry,
       engine,
+      discoverDocument: createWeftDiscoverDocument(registry, engine),
       feed,
     });
 
@@ -336,6 +340,7 @@ function assertBulkOperationInvariants(
 
 function bulkRestFaultCodeFromStatus(status: number): string {
   if (status === 400) return 'InvalidParams';
+  if (status === 409) return 'Conflict';
   if (status === 401) return 'Unauthorized';
   if (status === 403) return 'Forbidden';
   if (status === 422) return 'Unprocessable';
@@ -883,10 +888,10 @@ async function invokeBulkRestPreviewStaleCommit(
     headers: bulkJsonHeaders(),
     body: JSON.stringify(staleBody(confirmationToken)),
   });
-  expect(staleResponse.status).toBe(400);
+  expect(staleResponse.status).toBe(409);
   await staleResponse.json();
   const staleFaultCode = bulkRestFaultCodeFromStatus(staleResponse.status);
-  expect(staleFaultCode).toBe('InvalidParams');
+  expect(staleFaultCode).toBe('Conflict');
 
   const response = await fetch(`${server.url}${route.path}`, {
     method: route.method,
@@ -922,7 +927,7 @@ async function invokeBulkJsonRpcPreviewStaleCommit(
     bulkJsonHeaders(),
   );
   const staleFaultCode = String(staleError.data?.['weftCode']);
-  expect(staleFaultCode).toBe('InvalidParams');
+  expect(staleFaultCode).toBe('Conflict');
 
   return {
     result: await postJsonRpc(
@@ -991,7 +996,7 @@ async function invokeBulkWebSocketPreviewStaleCommit(
       staleParameters(confirmationToken),
     );
     const staleFaultCode = String(staleResponse.error?.data?.['weftCode']);
-    expect(staleFaultCode).toBe('InvalidParams');
+    expect(staleFaultCode).toBe('Conflict');
 
     const response = await sendWebSocketJsonRpc(
       webSocket,
@@ -1029,7 +1034,7 @@ async function invokeBulkStdioPreviewStaleCommit(
     staleParameters(confirmationToken),
   );
   const staleFaultCode = String(staleError.data?.['weftCode']);
-  expect(staleFaultCode).toBe('InvalidParams');
+  expect(staleFaultCode).toBe('Conflict');
 
   return {
     result: await invokeStdioJsonRpc(engine, operationName, commitParameters(confirmationToken)),

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
@@ -91,7 +91,7 @@ describe('review entry schemas', () => {
 // ---------------------------------------------------------------------------
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,7 +1010,6 @@ describe('G8: Review cleanup + timeout error', () => {
 
     // Advance time past the review timeout
     await engine.advanceTime(6000);
-    await sleepForTesting(50);
 
     // Wait for the result rejection to settle
     await resultPromise;

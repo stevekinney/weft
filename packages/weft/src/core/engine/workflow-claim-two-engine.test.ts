@@ -24,21 +24,24 @@
 import { ExtData, decode as msgpackDecode, encode as msgpackEncode } from '@msgpack/msgpack';
 import { describe, expect, it } from 'bun:test';
 
-import { GENERATION_KEYS } from '../../storage/generation-keys.ts';
 import {
-  KEYS,
+  MemoryStorage,
   encodeStorageKeyComponent,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { quietFor } from "../../../test-support/embedded/testing/src/wait-until.ts";
+import { GENERATION_KEYS } from '../../storage/generation-keys.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
+import { EventLog } from '../event-log.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
 import { purgeWorkflow } from './bulk-operations-purge.ts';
 import { TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations.ts';
+import { prepareFileWorkflowTerminalHistory } from './file-workflow-history.ts';
 import { decodeGeneration } from './generation-codec.ts';
 import {
   ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING,
@@ -422,6 +425,82 @@ describe('Engine.lostWorkflowClaim', () => {
     expect(secondEngine.lostWorkflowClaim(secondEngine.getHandle(workflowId))).toBe(false);
   });
 
+  it('never settles a pending result with the outcome of a start-new replacement another engine ran under the same id', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'pending-result-then-replaced-elsewhere';
+    await seedParkedWorkflow(storage, workflowId);
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    // Engine A holds run X and is waiting on its result.
+    const [originalOnFirst] = await firstEngine.recoverAll();
+    expect(originalOnFirst?.id).toBe(workflowId);
+    const originalOutcome = originalOnFirst!.result();
+    void originalOutcome.catch(() => {});
+
+    // Engine B reclaims and completes X, then replaces it with X' under the same id before A's
+    // waiter has polled. The purge happens on B, so nothing on A clears A's waiter or its handle.
+    await takeOverAndComplete(clock, second, workflowId);
+    const replacementOnSecond = await secondEngine.start('claim-race-recovery', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    const replacementOutcome = replacementOnSecond.result();
+    await secondEngine.signal(workflowId, 'go');
+    expect(await replacementOutcome).toBe('ran');
+
+    // A's waiter polls only now. X' is the record under the id, and X' is not the run A awaited.
+    await firstEngine.runMaintenance();
+    expect(await rejectionOf(originalOutcome)).toMatchObject({
+      message: expect.stringContaining('was replaced by a newer run'),
+    });
+    // X's outcome was committed by another engine, so A must not publish it again.
+    expect(firstEngine.lostWorkflowClaim(originalOnFirst!)).toBe(true);
+    expect(secondEngine.lostWorkflowClaim(replacementOnSecond)).toBe(false);
+  });
+
+  it('does not let a later run of the id that this engine completes settle the waiter of the run it replaced', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'pending-result-then-replaced-and-reclaimed';
+    await seedParkedWorkflow(storage, workflowId);
+    const { clock, first, second } = await createLapsingEngines(storage);
+    await using firstEngine = first.engine;
+    await using secondEngine = second.engine;
+
+    const [originalOnFirst] = await firstEngine.recoverAll();
+    const originalOutcome = originalOnFirst!.result();
+    void originalOutcome.catch(() => {});
+
+    // Engine B finishes X and starts X', then its claim lapses and engine A reclaims X' and completes
+    // it. Engine A's waiter for X is still registered when its own terminal path runs for X'.
+    await takeOverAndComplete(clock, second, workflowId);
+    await secondEngine.start('claim-race-recovery', null, {
+      id: workflowId,
+      onTerminalConflict: 'start-new',
+    });
+    clock.now += lapseMs;
+    expect(await first.registry.takeover(workflowId)).toMatchObject({ status: 'acquired' });
+    // Engine A no longer holds X's checkpoint in memory, as after a restart, so recovery adopts X'.
+    getInternals(firstEngine).checkpoints.delete(workflowId);
+    await firstEngine.recoverAll();
+    await firstEngine.signal(workflowId, 'go');
+    await waitForCondition(
+      async () => {
+        const state = await loadWorkflowState(getInternals(firstEngine), workflowId);
+        return state?.status === 'completed';
+      },
+      { label: 'the replacement run completed on the first engine' },
+    );
+
+    await firstEngine.runMaintenance();
+    expect(await rejectionOf(originalOutcome)).toMatchObject({
+      message: expect.stringContaining('was replaced by a newer run'),
+    });
+    // Engine A committed X', so settling X's waiter with it would read as A's own outcome.
+    expect(firstEngine.lostWorkflowClaim(originalOnFirst!)).toBe(true);
+  });
+
   it('keeps reporting a lost claim through a same-engine suspend and resume', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'suspended-resumed-then-lost';
@@ -524,6 +603,7 @@ describe('Engine.lostWorkflowClaim', () => {
         getNow: () => now,
         workflowClaimTtl: 3_000,
         workflowClaimRenewInterval: 1_000,
+        inlineLaunchScheduling: 'manual',
       });
       engine.register(claimRaceRecoveryWorkflow);
       await engine.recoverAll();
@@ -538,8 +618,12 @@ describe('Engine.lostWorkflowClaim', () => {
     });
     const outcome = handle.result();
     void outcome.catch(() => {});
-    await waitForCondition(async () => (await storage.get(KEYS.checkpoint(workflowId))) !== null, {
-      label: 'checkpoint for the started run',
+    // The start's own launch runs, and parks, before the claim changes hands: a reclaim joins a
+    // launch still queued and leaves a run that launch drives under the reacquired claim alone, so
+    // the replay this case needs is reached only when the launch is already over (COR-1618).
+    await engineA.flushInlineLaunches();
+    await waitForCondition(() => getInternals(engineA).parkedInlineWorkflows.has(workflowId), {
+      label: 'the started run parks on its signal',
     });
 
     // Engine B takes the lapsed claim and holds it without driving the run, then its claim lapses too.
@@ -1766,7 +1850,7 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
       await engineB.start('claim-race-echo', 'NEW', { id, onTerminalConflict: 'start-new' });
       release.resolve();
 
-      expect(await Promise.race([oldResult, Bun.sleep(1000).then(() => 'TIMEOUT')])).toBe('OLD');
+      expect(await oldResult).toBe('OLD');
       const internals = getInternals(engineA);
       expect(internals.checkpoints.has(id)).toBe(false);
       expect(internals.resultResolvers.has(id)).toBe(false);
@@ -1852,9 +1936,7 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
 
       expect(getInternals(engine).parkedInlineWorkflows.has(id)).toBe(true);
       await engine.signal(id, 'go');
-      expect(
-        await Promise.race([replacement.result(), Bun.sleep(1000).then(() => 'TIMEOUT')]),
-      ).toBe('ran');
+      expect(await replacement.result()).toBe('ran');
     } finally {
       release.resolve();
       await engine[Symbol.asyncDispose]();
@@ -1890,9 +1972,7 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
 
       expect(getInternals(engine).parkedInlineWorkflows.has(id)).toBe(true);
       await engine.signal(id, 'go');
-      expect(
-        await Promise.race([replacement.result(), Bun.sleep(1000).then(() => 'TIMEOUT')]),
-      ).toBe('ran');
+      expect(await replacement.result()).toBe('ran');
     } finally {
       release.resolve();
       await engine[Symbol.asyncDispose]();
@@ -1916,7 +1996,7 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
       };
       release.resolve();
       try {
-        expect(await Promise.race([oldResult, Bun.sleep(1000).then(() => 'TIMEOUT')])).toBe('OLD');
+        expect(await oldResult).toBe('OLD');
       } finally {
         storage.get = originalGet;
       }
@@ -1930,6 +2010,34 @@ describe('COR-1383: an old run terminal in-memory teardown must not wipe a same-
 
 describe('COR-1384: an old run durable terminal teardown must not touch a same-id start-new replacement', () => {
   const TYPE = 'teardown-durable';
+  const FILE_RACE_TYPE = 'file-cancel-race';
+  const FILE_REPLACEMENT_RACE_TYPE = 'file-cancel-replacement-race';
+  let releaseFileActivity: (() => void) | undefined;
+  let releaseReplacementActivity: (() => void) | undefined;
+  const fileCancelRaceWorkflow = workflow({
+    name: FILE_RACE_TYPE,
+    tags: ['file-workflow'],
+  }).execute(async function* (ctx: WorkflowContext) {
+    yield* ctx.waitForSignal('go');
+    yield* ctx.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFileActivity = resolve;
+        }),
+    );
+  });
+  const fileCancelReplacementRaceWorkflow = workflow({
+    name: FILE_REPLACEMENT_RACE_TYPE,
+    tags: ['file-workflow'],
+  }).execute(async function* (ctx: WorkflowContext) {
+    yield* ctx.waitForSignal('go');
+    yield* ctx.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseReplacementActivity = resolve;
+        }),
+    );
+  });
   /** Input is `partition:behavior`; the partition names the concurrency slot, the behavior is `fail` or anything else. */
   const teardownWorkflow = workflow({
     name: TYPE,
@@ -2003,7 +2111,15 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
   };
 
   async function createEngine(storage: MemoryStorage) {
-    return Engine.create({ storage, workflows: { [TYPE]: teardownWorkflow }, recover: false });
+    return Engine.create({
+      storage,
+      workflows: {
+        [TYPE]: teardownWorkflow,
+        [FILE_RACE_TYPE]: fileCancelRaceWorkflow,
+        [FILE_REPLACEMENT_RACE_TYPE]: fileCancelReplacementRaceWorkflow,
+      },
+      recover: false,
+    });
   }
 
   /** Park the old run, then commit its terminal state and freeze it at `gate`. */
@@ -2075,7 +2191,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
         await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
         gate.release.resolve();
         await oldDone;
-        await Bun.sleep(50);
+        await quietFor(50);
         await expectReplacementIntact(storage, engine, id, replacement, 'P1');
       } finally {
         gate.release.resolve();
@@ -2102,7 +2218,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engineB[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
       await expectReplacementIntact(storage, engineB, id, replacement, 'P1');
     } finally {
       gate.release.resolve();
@@ -2139,7 +2255,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
 
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       expect(await scratchKeys()).toEqual(before);
       await expectReplacementIntact(storage, engineB, id, replacement, 'P1');
@@ -2178,7 +2294,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
 
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       expect(await storage.get(reviewKey('new'))).not.toBeNull();
       await expectReplacementIntact(storage, engineB, id, replacement, 'P1');
@@ -2201,7 +2317,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engine.addTags(id, 'edited');
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       expect(await slotHolders(storage, 'P1')).toEqual([]);
       expect(await storage.get(KEYS.workflowConcurrencyHolder(id))).toBeNull();
@@ -2262,7 +2378,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await gate.reached.promise;
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       await expectReplacementIntact(storage, engineB, id, replacement, 'P1');
     } finally {
@@ -2317,7 +2433,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       holdingGenerationReads = false;
       generationHold.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       expect(await slotHolders(storage, 'P1')).toEqual([]);
       await expectReplacementIntact(storage, engineB, id, replacement, 'P2');
@@ -2352,7 +2468,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
 
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       // The old engine's id-keyed cancel must not delete the replacement's execution deadline.
       expect(await storage.get(`timer-idx:deadline:${id}`)).not.toBeNull();
@@ -2414,7 +2530,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
 
       gate.release.resolve();
       await ticking;
-      await Bun.sleep(50);
+      await quietFor(50);
 
       expect(await scratchKeys()).toEqual(before);
       await expectReplacementIntact(storage, engineB, id, replacement, 'P1');
@@ -2459,8 +2575,8 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
 
       gate.release.resolve();
-      await cancelled;
-      await Bun.sleep(50);
+      await rejectionOf(cancelled);
+      await quietFor(50);
 
       // The cancel meant the old run; the replacement is untouched and still running.
       const state = await engineA.get(id);
@@ -2525,6 +2641,187 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       expect(await slotHolders(storage, 'P1')).toEqual([]);
       expect(await storage.get(KEYS.workflowConcurrencyHolder(id))).toBeNull();
     } finally {
+      await engineB[Symbol.asyncDispose]();
+      await engineA[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rebuilds cancellation history after a concurrent checkpoint advances the event head', async () => {
+    const id = `file-cancel-race-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    const gate = newGate();
+    const engineA = await createEngine(storage);
+    let cancellationWrites = 0;
+    let armed = true;
+    const gatedStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            const cancelling = operations.some(
+              (operation) =>
+                operation.type === 'put' &&
+                operation.key === KEYS.workflow(id) &&
+                (decode(operation.value) as { status?: string }).status === 'cancelled',
+            );
+            if (armed && cancelling) {
+              armed = false;
+              gate.reached.resolve();
+              await gate.release.promise;
+            }
+            if (cancelling) cancellationWrites += 1;
+            return target.conditionalBatch(conditions, operations);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const engineB = await createEngine(gatedStorage);
+    try {
+      const old = await engineA.start(FILE_RACE_TYPE, null, { id });
+      void old.result().catch(() => undefined);
+      await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+      const headBeforeCancel = await new EventLog(storage, id).loadHead();
+      const cancellation = engineB.cancel(id);
+      await gate.reached.promise;
+      await engineA.signal(id, 'go');
+      releaseFileActivity?.();
+      await waitForCondition(
+        async () => {
+          const head = await new EventLog(storage, id).loadHead();
+          return head.sequence > headBeforeCancel.sequence;
+        },
+        { label: 'checkpoint after cancellation race signal' },
+      );
+      gate.release.resolve();
+      await cancellation;
+      expect(cancellationWrites).toBeGreaterThan(1);
+      const recordedEvents = await engineA.getEvents(id);
+      const events = recordedEvents
+        .filter((event) => event.type.startsWith('file-workflow:'))
+        .map(({ type, data }) => ({ type, data }));
+      expect(events.at(-1)).toEqual({
+        type: 'file-workflow:run-terminal',
+        data: { status: 'cancelled' },
+      });
+      expect(events.filter(({ type }) => type === 'file-workflow:run-terminal')).toHaveLength(1);
+      const verification = await new EventLog(storage, id).verify();
+      expect(verification.valid).toBe(true);
+    } finally {
+      gate.release.resolve();
+      await engineB[Symbol.asyncDispose]();
+      await engineA[Symbol.asyncDispose]();
+    }
+  });
+
+  it('does not retry remote cancellation history against a same-id replacement', async () => {
+    const id = `file-cancel-replacement-race-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    const gate = newGate();
+    const cancellationGate = newGate();
+    let holdCancellationCommit = true;
+    let holdPostCasEventHeadRead = false;
+    let heldPostCasEventHeadRead = false;
+    const gatedStorage = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'conditionalBatch') {
+          return async (conditions: ConditionalBatchCondition[], operations: BatchOperation[]) => {
+            const cancelling = operations.some(
+              (operation) =>
+                operation.type === 'put' &&
+                operation.key === KEYS.workflow(id) &&
+                (decode(operation.value) as { status?: string }).status === 'cancelled',
+            );
+            if (cancelling && holdCancellationCommit) {
+              holdCancellationCommit = false;
+              cancellationGate.reached.resolve();
+              await cancellationGate.release.promise;
+            }
+            const committed = await target.conditionalBatch(conditions, operations);
+            if (cancelling && !committed) holdPostCasEventHeadRead = true;
+            return committed;
+          };
+        }
+        if (property === 'get') {
+          return async (key: string) => {
+            if (holdPostCasEventHeadRead && key === KEYS.eventHead(id)) {
+              holdPostCasEventHeadRead = false;
+              heldPostCasEventHeadRead = true;
+              gate.reached.resolve();
+              await gate.release.promise;
+            }
+            return target.get(key);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const engineA = await createEngine(storage);
+    const engineB = await createEngine(gatedStorage);
+    try {
+      await engineA.start(FILE_REPLACEMENT_RACE_TYPE, null, { id });
+      await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+      const headBeforeSignal = await new EventLog(storage, id).loadHead();
+      const cancellation = engineB.cancel(id);
+      await cancellationGate.reached.promise;
+      await new EventLog(storage, id).append({ type: 'test:interleaving', payload: {} });
+      await waitForCondition(
+        async () => {
+          const head = await new EventLog(storage, id).loadHead();
+          return head.sequence > headBeforeSignal.sequence;
+        },
+        { label: 'old checkpoint advanced event head' },
+      );
+      cancellationGate.release.resolve();
+      await waitForCondition(() => heldPostCasEventHeadRead, {
+        label: 'remote cancellation history head read',
+      });
+      const stateBeforeCompletion = await engineA.get(id);
+      expect(stateBeforeCompletion?.status).toBe('running');
+
+      await engineA.signal(id, 'go');
+      await waitForCondition(() => releaseReplacementActivity !== undefined, {
+        label: 'old file activity started',
+      });
+      releaseReplacementActivity?.();
+      await waitForCondition(
+        async () => {
+          const state = await engineA.get(id);
+          return state?.status === 'completed';
+        },
+        { label: 'old run completed before releasing history retry' },
+      );
+      const replacement = await engineA.start(FILE_REPLACEMENT_RACE_TYPE, null, {
+        id,
+        onTerminalConflict: 'start-new',
+      });
+      await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+
+      gate.release.resolve();
+      expect(await throwingRejectionOf(cancellation)).toThrow(
+        `Workflow "${id}" was replaced before it was cancelled.`,
+      );
+      releaseReplacementActivity = undefined;
+      await engineA.signal(id, 'go');
+      await waitForCondition(() => releaseReplacementActivity !== undefined, {
+        label: 'replacement file activity started',
+      });
+      const releaseReplacement = releaseReplacementActivity as (() => void) | undefined;
+      if (releaseReplacement !== undefined) releaseReplacement();
+      await replacement.result();
+      const replacementState = await engineA.get(id);
+      expect(replacementState?.status).toBe('completed');
+      const recordedEvents = await engineA.getEvents(id);
+      const events = recordedEvents.filter((event) => event.type.startsWith('file-workflow:'));
+      expect(events.filter((event) => event.type === 'file-workflow:run-terminal')).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({
+        type: 'file-workflow:run-terminal',
+        data: { status: 'completed' },
+      });
+    } finally {
+      gate.release.resolve();
+      releaseReplacementActivity?.();
       await engineB[Symbol.asyncDispose]();
       await engineA[Symbol.asyncDispose]();
     }
@@ -2607,7 +2904,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
     // Cancelling again locally finds the record already terminal and must still settle the waiter.
     await engineA.cancel(id);
 
-    const settled = await Promise.race([outcome, Bun.sleep(3_000).then(() => 'hung')]);
+    const settled = await outcome;
     expect(settled).toBe('rejected');
   });
 
@@ -2658,9 +2955,9 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       expect(await replacement.result()).toBe('P1:NEW');
 
       gate.release.resolve();
-      await cancelOld;
+      await rejectionOf(cancelOld);
 
-      const settled = await Promise.race([oldOutcome, Bun.sleep(3_000).then(() => 'hung')]);
+      const settled = await oldOutcome;
       expect(settled).toContain('rejected:');
       expect(settled).not.toContain('P1:NEW');
       // The replacement's durable outcome is untouched.
@@ -2687,7 +2984,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engineA[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
 
       gate.release.resolve();
-      await cancelOld;
+      await rejectionOf(cancelOld);
 
       // The old waiter settled as the old run's, not the replacement's, and the replacement lives on.
       expect(await oldOutcome).toContain('rejected:');
@@ -2741,7 +3038,7 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
       await expectReplacementIntact(storage, engine, id, replacement, 'P1');
     } finally {
       gate.release.resolve();
@@ -2766,12 +3063,101 @@ describe('COR-1384: an old run durable terminal teardown must not touch a same-i
       await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
       gate.release.resolve();
       await oldDone;
-      await Bun.sleep(50);
+      await quietFor(50);
       expect(await slotHolders(storage, 'P1')).toEqual([]);
       await expectReplacementIntact(storage, engine, id, replacement, 'P2');
     } finally {
       gate.release.resolve();
     }
+  });
+
+  it('commits remote file cancellation when the optional generation read fails', async () => {
+    const id = `file-cancel-generation-read-failure-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    await using owner = await createEngine(storage);
+    await owner.start(FILE_RACE_TYPE, null, { id });
+    await owner[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+
+    let generationReads = 0;
+    const unreadable = new Proxy(storage, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string) => {
+            if (key === KEYS.workflowGeneration(id) && generationReads++ === 0) {
+              throw new Error('generation unreadable');
+            }
+            return target.get(key);
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await using terminator = await createEngine(unreadable);
+
+    await terminator.cancel(id);
+
+    const cancelledState = await terminator.get(id);
+    const recordedEvents = await terminator.getEvents(id);
+    expect(cancelledState?.status).toBe('cancelled');
+    expect(recordedEvents.filter((event) => event.type.startsWith('file-workflow:'))).toEqual([]);
+  });
+
+  it('fences terminal history when the persisted generation is absent on both reads', async () => {
+    const id = `file-cancel-missing-generation-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    await using owner = await createEngine(storage);
+    await owner.start(FILE_RACE_TYPE, null, { id });
+    await owner[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    await storage.delete(KEYS.workflowGeneration(id));
+    await using terminator = await createEngine(storage);
+
+    await terminator.cancel(id);
+
+    const cancelledState = await terminator.get(id);
+    const recordedEvents = await terminator.getEvents(id);
+    expect(cancelledState?.status).toBe('cancelled');
+    expect(
+      recordedEvents.filter((event) => event.type === 'file-workflow:run-terminal'),
+    ).toHaveLength(1);
+  });
+
+  it('skips completed terminal history when the pinned source disappears during preparation', async () => {
+    const id = `file-terminal-source-disappears-${nextInvocation()}`;
+    const storage = new MemoryStorage();
+    const revision = 'revision-1';
+    await storage.put(
+      KEYS.workflow(id),
+      encode({
+        id,
+        type: FILE_RACE_TYPE,
+        revision,
+        status: 'completed',
+        workflowExecutionToken: 'token-1',
+      }),
+    );
+    class SourceMap extends Map<string, { definition: unknown }> {
+      private lookups = 0;
+
+      override get(key: string): { definition: unknown } | undefined {
+        this.lookups += 1;
+        if (this.lookups > 1) throw new Error('source disappeared');
+        return super.get(key);
+      }
+    }
+    const resolved = new SourceMap([[revision, { definition: { tags: ['file-workflow'] } }]]);
+    const internals = {
+      storage,
+      options: { getNow: () => 1_000 },
+      workflowTypeByWorkflowId: new Map([[id, { type: FILE_RACE_TYPE, revision }]]),
+      workflowDefinitionsByName: new Map(),
+      sources: {
+        byName: new Map(),
+        resolved: new Map([[FILE_RACE_TYPE, resolved]]),
+      },
+    } as never;
+
+    expect(await prepareFileWorkflowTerminalHistory(internals, id, 'completed')).toBeUndefined();
   });
 });
 
@@ -2790,7 +3176,8 @@ describe('COR-1386: a start-new purge settles the old run result waiter with the
     return { state: () => outcome };
   }
 
-  /** Let every already-queued microtask and macrotask drain; only bounds a failure, never gates a pass. */
+  /** Let every already-queued microtask and macrotask drain before an outcome is read. */
+  // load-proof: every caller waits for the replacement run to park first, so the purge that settles the old waiter has already run and the settlement is a promise continuation that this turn only drains; the outcome read afterwards is produced by no timer or I/O
   const drain = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
   it('gated release: result() taken before the signal resolves with the old run result after a start-new', async () => {

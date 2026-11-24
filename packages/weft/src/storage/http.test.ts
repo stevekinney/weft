@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { assertCapabilitiesShape } from "../embedded/storage/src/testing/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../core/engine.ts';
 import { handleRequest } from '../server/handler.ts';
-import { principalFromApiKey } from '../server/principal.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { HTTPStorage } from './http.ts';
-import { MemoryStorage } from './memory.ts';
-import { assertCapabilitiesShape } from './storage-adapter.test-support.ts';
 
 describe('HTTPStorage capabilities()', () => {
   it('reports the conservative remote-client floor, conditionalBatch false by default', () => {
@@ -388,6 +388,86 @@ describe('HTTPStorage', () => {
       const storage = new HTTPStorage({ baseUrl: 'http://localhost' });
 
       expect(await throwingRejectionOf(storage.get('wf:key'))).toThrow('returned 403');
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it.each([
+    ['a scan line that is not an object', '42'],
+    ['a scan entry whose key is not a string', JSON.stringify({ key: 7, value: base64('a') })],
+    ['a scan entry whose value is not a string', JSON.stringify({ key: 'wf:a', value: 7 })],
+  ])('rejects %s as an invalid NDJSON entry', async (_label, line) => {
+    const restoreFetch = installFetch(
+      async () =>
+        new Response(`${line}\n`, {
+          status: 200,
+          headers: { 'content-type': 'application/x-ndjson' },
+        }),
+    );
+    try {
+      const storage = new HTTPStorage({ baseUrl: 'https://example.test' });
+
+      expect(await throwingRejectionOf(collect(storage.scan('wf:')))).toThrow(
+        'HTTPStorage scan response contained an invalid NDJSON entry.',
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it.each([
+    ['an array', []],
+    ['an object without applied', { ok: true }],
+    ['an object whose applied is not a boolean', { applied: 'yes' }],
+  ])('rejects a conditional batch response that is %s', async (_label, body) => {
+    const restoreFetch = installFetch(async () => Response.json(body));
+    try {
+      const storage = new HTTPStorage({ baseUrl: 'https://example.test' });
+
+      expect(
+        await throwingRejectionOf(
+          storage.conditionalBatch?.(
+            [{ key: 'a', expectedValue: null }],
+            [{ type: 'put', key: 'a', value: encode('new') }],
+          ) ?? Promise.resolve(true),
+        ),
+      ).toThrow('HTTPStorage conditional batch response must include a boolean "applied" field.');
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it('abandons a scan response that grows past the maximum allowed size', async () => {
+    // Nine 8 MiB blank lines are 72 MiB, past the 64 MiB ceiling; blank lines parse to nothing, so
+    // only the size guard can end the scan.
+    const blankLine = new Uint8Array(8 * 1024 * 1024).fill(0x20);
+    blankLine[blankLine.length - 1] = 0x0a;
+    let chunksSent = 0;
+    let cancelled = false;
+    const restoreFetch = installFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              chunksSent += 1;
+              controller.enqueue(blankLine);
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/x-ndjson' } },
+        ),
+    );
+    try {
+      const storage = new HTTPStorage({ baseUrl: 'https://example.test' });
+
+      expect(await throwingRejectionOf(collect(storage.scan('wf:')))).toThrow(
+        'HTTPStorage scan response exceeded the maximum allowed size.',
+      );
+      expect(chunksSent).toBeLessThan(12);
+      expect(cancelled).toBe(true);
     } finally {
       restoreFetch();
     }

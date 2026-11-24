@@ -11,9 +11,9 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { encode } from './codec.ts';
 import {
   beginOne,
@@ -290,5 +290,55 @@ describe('Outbox retention', () => {
     await deliverOne(outbox);
     expect(await outbox.runMaintenance()).toMatchObject({ retired: 0 });
     outbox.dispose();
+  });
+});
+
+describe('Outbox purge', () => {
+  it('deletes settled records of one destination with their bindings, and nothing else', async () => {
+    const { outbox, storage } = createOutboxFixture();
+    const settled = await enqueueOne(outbox, { idempotencyKey: 'k-1' });
+    await deliverOne(outbox);
+    const other = await outbox.enqueue({
+      destinationRef: 'webhook:other',
+      kind: 'order.shipped',
+      payload: { form: 'inline', value: { orderId: 1 } },
+      idempotencyKey: 'k-other',
+    });
+    const open = await enqueueOne(outbox, { idempotencyKey: 'k-open' });
+    expect(await outbox.purge({ destinationRef: 'webhook:orders' })).toBe(1);
+    expect(await outbox.receipt(settled)).toBeNull();
+    expect(
+      await storage.get(KEYS.applicationDeliveryIdempotency('bureau', 'agent-7', 'k-1')),
+    ).toBeNull();
+    expect(await fieldOf(outbox.receipt(open), 'state')).toBe('queued');
+    expect(other.status).toBe('enqueued');
+    expect(await outbox.purge({ destinationRef: 'webhook:orders' })).toBe(0);
+    const again = await outbox.enqueue({
+      destinationRef: 'webhook:orders',
+      kind: 'order.shipped',
+      payload: { form: 'inline', value: { orderId: 42 } },
+      idempotencyKey: 'k-1',
+    });
+    expect(again.status).toBe('enqueued');
+    outbox.dispose();
+  });
+
+  it('pages past the maintenance batch size', async () => {
+    const { outbox } = createOutboxFixture({ maintenanceBatchSize: 2 });
+    for (let index = 0; index < 5; index += 1) {
+      await enqueueOne(outbox, { idempotencyKey: `k-${index}` });
+      await deliverOne(outbox);
+    }
+    expect(await outbox.purge({ destinationRef: 'webhook:orders' })).toBe(5);
+    outbox.dispose();
+  });
+
+  it('rejects an empty destination and a disposed outbox', async () => {
+    const { outbox } = createOutboxFixture();
+    expect(await throwingRejectionOf(outbox.purge({ destinationRef: '' }))).toThrow(
+      /destinationRef/,
+    );
+    outbox.dispose();
+    expect(await throwingRejectionOf(outbox.purge({ destinationRef: 'x' }))).toThrow(/disposed/);
   });
 });

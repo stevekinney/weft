@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import * as zlib from 'node:zlib';
 
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { setPortableRuntimeTestOverridesForTesting } from '../runtime/portable.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   compressPayload,
   createBunCompressor,
@@ -57,7 +58,7 @@ describe('resolveCompressionOptions', () => {
       },
     } as unknown as typeof globalThis.process;
 
-    await withRuntimeOverrides({ bun: undefined, process: processStub }, async () => {
+    await withRuntimeOverrides({ process: processStub }, async () => {
       const compressor = createBunCompressor('brotli');
       expect(() => compressor.compress(new Uint8Array([1, 2, 3]))).toThrow(
         'Brotli compression requires Bun or Node 22.5+ with process.getBuiltinModule support. Use gzip compression for browser/edge runtimes.',
@@ -85,6 +86,35 @@ describe('gzip round-trip', () => {
     const compressed = await compressPayload(original, compressor, 4096);
     const decompressed = await decompressPayload(compressed);
     expect(decompressed).toEqual(original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persisted format: gzip written and read by the previous implementation
+// ---------------------------------------------------------------------------
+
+describe('gzip persisted format', () => {
+  // Payloads written before gzip moved to CompressionStream came from `Bun.gzipSync` (under Bun) or
+  // `node:zlib` (elsewhere). Both stay readable, and what is written now stays readable by them.
+  const original = new TextEncoder().encode('workflow state '.repeat(600));
+
+  it('reads a payload gzipped by Bun.gzipSync', async () => {
+    const stored = new Uint8Array([0xc1, 0x01, ...Bun.gzipSync(original)]);
+    expect(await decompressPayload(stored)).toEqual(original);
+  });
+
+  it('reads a payload gzipped by node:zlib', async () => {
+    const stored = new Uint8Array([0xc1, 0x01, ...zlib.gzipSync(original)]);
+    expect(await decompressPayload(stored)).toEqual(original);
+  });
+
+  it('writes a payload that Bun.gunzipSync and node:zlib both read', async () => {
+    const stored = await compressPayload(original, createBunCompressor('gzip'), 0);
+    expect(stored[0]).toBe(0xc1);
+    expect(stored[1]).toBe(0x01);
+    const body = stored.slice(2);
+    expect(new Uint8Array(Bun.gunzipSync(body))).toEqual(original);
+    expect(new Uint8Array(zlib.gunzipSync(body))).toEqual(original);
   });
 });
 

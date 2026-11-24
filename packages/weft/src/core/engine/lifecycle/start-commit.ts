@@ -1,18 +1,18 @@
 import {
-  KEYS,
   requireStorageCapability,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../../storage/interface.ts';
+} from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import { getCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { recordExecutionAttemptIdentity } from '../execution-attempts.ts';
 import {
-  commitFencedEngineWrite,
   commitFencedEngineWriteAllowingPreconditionFailure,
+  commitFencedEngineWriteWithoutPreconditions,
 } from '../fenced-write.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
@@ -27,6 +27,7 @@ import { buildWorkflowGenerationBumpOperation } from '../workflow-generation-fen
 import { refreshWorkflowVisibilityMaintenance } from '../workflow-visibility-maintenance.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
+import { throwIfStartLostToRemoval, workerBuildStartBinding } from './start-build-binding.ts';
 import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
 import { tagStartConditions, type TaggedStartCondition } from './start-condition-tags.ts';
 import { identityFromStartOperations } from './start-identity.ts';
@@ -41,7 +42,10 @@ import { attributeLostStartPreconditionOrRetry } from './start-precondition-attr
  * lost CAS rolls back the start and throws {@link StartIdempotencyRaceLostError}
  * so the caller resolves to the winner.
  */
-export type BuildIdempotentStartOperations = (workflowId: string) => {
+export type BuildIdempotentStartOperations = (
+  workflowId: string,
+  state: WorkflowState,
+) => {
   operations: BatchOperation[];
   conditions: ConditionalBatchCondition[];
 };
@@ -211,12 +215,11 @@ async function persistStartBatch(
   // not a regression.
   const fenceWorkflowId = isDelayedStart ? null : workflowId;
   if (conditions.length === 0) {
-    await commitFencedEngineWrite(
+    await commitFencedEngineWriteWithoutPreconditions(
       internals,
       fenceWorkflowId,
       startOperations,
-      [],
-      () => new Error('Workflow start lost its CAS race.'),
+      'Workflow start',
     );
     return 'committed';
   }
@@ -359,7 +362,7 @@ export async function buildAndCommitStartBatch(
   let lastWorkflowConcurrencyStateKey: string | undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const idempotent = buildIdempotentStartOperations?.(workflowId);
+    const idempotent = buildIdempotentStartOperations?.(workflowId, state);
     const workflowConcurrency = await context.buildWorkflowConcurrencyStartOperations?.();
     lastWorkflowConcurrencyStateKey =
       workflowConcurrency?.stateKey ?? lastWorkflowConcurrencyStateKey;
@@ -378,6 +381,8 @@ export async function buildAndCommitStartBatch(
 
     const visibilityMaintenance = refreshWorkflowVisibilityMaintenance(internals);
     if (visibilityMaintenance !== undefined) await visibilityMaintenance;
+    // The build this run binds to: its tombstone must be absent, and its stamp moves with the run.
+    const workerBuild = workerBuildStartBinding(state);
     const startOperations = buildStartBatchOperations(
       internals,
       workflowId,
@@ -390,7 +395,7 @@ export async function buildAndCommitStartBatch(
       context.persistedWorkflowStartHeaders,
       mergeAdditionalStartOperations(
         mergeAdditionalStartOperations(
-          context.additionalStartOperations,
+          mergeAdditionalStartOperations(context.additionalStartOperations, workerBuild.operations),
           buildExplicitCreateGenerationOperations(context),
         ),
         mergeAdditionalStartOperations(idempotent?.operations, workflowConcurrency?.operations),
@@ -406,6 +411,7 @@ export async function buildAndCommitStartBatch(
       workflowConcurrency: workflowConcurrency?.conditions,
       workerStartOverride: context.additionalStartConditions,
       catalogEntry: catalogEntryPrecondition,
+      workerBuildTombstone: workerBuild.condition,
     });
     // ADR 0002 row `startWorkflow`/`buildAndCommitStartBatch`: claim-acquiring for
     // an ordinary start, but the delayed `startAt`/`startAfter` create batch is
@@ -471,6 +477,8 @@ export async function buildAndCommitStartBatch(
     if (await hasCatalogEntryConflict(internals, conditions)) {
       throw new WorkflowRevisionUnavailableError(state.type, state.revision, 'not-installed');
     }
+    // The build this run binds to was removed: say so, before the fallback below names a duplicate.
+    await throwIfStartLostToRemoval(internals.storage, state);
     if (outcome === 'claim-lost') {
       return throwWorkflowClaimUnavailable(internals, workflowId);
     }

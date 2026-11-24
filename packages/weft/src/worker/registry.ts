@@ -1,15 +1,24 @@
 /* oxlint-disable max-lines -- Worker lifecycle, leases, and routing share one cohesive registry state machine. */
 // Server-side worker tracking and pluggable routing policies.
+import { WorkerRegistrationRejectedEvent } from '../core/events/fleet-state-events.ts';
 import { workerDeploymentRolloutBucket } from './deployment-routing.ts';
+import { DepartedWorkers } from './registry/departed.ts';
 import {
   DeploymentConsistencyGuard,
   type DeploymentConsistencyResult,
 } from './registry/deployment-consistency.ts';
 import {
   createDrainRecord,
+  deleteBuildDrain,
+  drainProgressOf,
+  drainRecordForWorker,
+  getBuildDrain,
   isWorkerDraining,
+  setBuildDrain,
   workerHealth,
+  type BuildDrainMarkers,
   type DrainRecord,
+  type DrainStates,
 } from './registry/drain.ts';
 import { FairShareCounters } from './registry/fair-share.ts';
 import {
@@ -37,6 +46,7 @@ import type {
   RoutingPolicy,
   WorkerDrainMutationResult,
   WorkerDrainOptions,
+  WorkerHealth,
   WorkerInfo,
   WorkerRegistrationInfo,
   WorkerRegistryOptions,
@@ -99,6 +109,7 @@ export class WorkerRegistry {
   #workers: Map<string, WorkerInfo>;
   #inFlightTasks: Map<string, InFlightTask>;
   #deploymentDrainStates: Map<string, DrainRecord>;
+  #buildDrainStates: BuildDrainMarkers;
   #policy: RoutingPolicy;
   /** Keyed by `${queue}::${activity}` — independent cursors per (queue, activity) pair. */
   #roundRobinCursor: Map<string, number>;
@@ -108,16 +119,22 @@ export class WorkerRegistry {
   #deploymentConsistency: DeploymentConsistencyGuard;
   /** Bounded, in-memory log of declined `register` attempts (WFT-29). */
   #rejections: RegistrationRejectionEntry[];
+  #dispatchEvent: ((event: Event) => void) | undefined;
+  /** Workers that went away and are still listed, and drained workers an operator forgot. */
+  #departed: DepartedWorkers;
 
   constructor(options?: WorkerRegistryOptions) {
     this.#workers = new Map();
     this.#inFlightTasks = new Map();
     this.#deploymentDrainStates = new Map();
+    this.#buildDrainStates = new Map();
     this.#policy = options?.policy ?? 'least-loaded';
     this.#roundRobinCursor = new Map();
     this.#fairShareCounts = new FairShareCounters();
     this.#deploymentConsistency = new DeploymentConsistencyGuard();
     this.#rejections = [];
+    this.#departed = new DepartedWorkers();
+    this.#dispatchEvent = options?.dispatchEvent;
   }
 
   /** The routing policy this registry was configured with. */
@@ -188,6 +205,8 @@ export class WorkerRegistry {
       resumingSessionGeneration !== undefined && resumingSessionGeneration === currentGeneration
         ? resumingSessionGeneration
         : (currentGeneration ?? 0) + 1;
+    // A worker that registers is connected, so nothing lists it as gone, and a forget no longer applies.
+    this.#departed.clear(info.id);
     this.#workers.set(info.id, {
       id: info.id,
       queue: info.queue,
@@ -231,6 +250,8 @@ export class WorkerRegistry {
     const info = this.#workers.get(workerId);
     if (info === undefined) return undefined;
 
+    // Kept, as it stood, so the list can say the worker went away rather than lose it.
+    this.#departed.record(this.#snapshotOf(info), Date.now());
     this.#workers.delete(workerId);
     this.#fairShareCounts.purge(workerId);
 
@@ -259,12 +280,28 @@ export class WorkerRegistry {
     }
   }
 
-  /** Decrement in-flight count. */
+  /**
+   * Decrement in-flight count. While the worker drains, the task is counted as finished under the
+   * drain, and the moment nothing is left in flight is recorded as when the drain finished.
+   */
   taskCompleted(workerId: string): void {
     const info = this.#workers.get(workerId);
-    if (info !== undefined) {
-      info.inFlight = Math.max(0, info.inFlight - 1);
+    if (info === undefined) return;
+    info.inFlight = Math.max(0, info.inFlight - 1);
+    const drain = drainRecordForWorker(info, this.#drainStates);
+    if (drain === undefined) {
+      delete info.drainCountedFrom;
+      delete info.drainFinishedTasks;
+      delete info.drainedAt;
+      return;
     }
+    if (info.drainCountedFrom !== drain.startedAt) {
+      info.drainCountedFrom = drain.startedAt;
+      info.drainFinishedTasks = 0;
+      delete info.drainedAt;
+    }
+    info.drainFinishedTasks = (info.drainFinishedTasks ?? 0) + 1;
+    if (info.inFlight === 0) info.drainedAt = Date.now();
   }
 
   /**
@@ -317,7 +354,7 @@ export class WorkerRegistry {
   ): boolean {
     if (excludeWorkerIds?.has(worker.id)) return false;
     if (!matchesWorkerCapabilities(worker, activityName, queue)) return false;
-    if (isWorkerDraining(worker, this.#deploymentDrainStates)) return false;
+    if (isWorkerDraining(worker, this.#drainStates)) return false;
     if (
       executionRequirement !== undefined &&
       !workerMatchesRequirement(worker, executionRequirement, activityName)
@@ -499,6 +536,7 @@ export class WorkerRegistry {
   /** Record one declined `register` attempt, evicting the oldest once the bounded log is full. */
   recordRejection(entry: RegistrationRejectionEntry): void {
     appendRegistrationRejection(this.#rejections, entry);
+    this.#dispatchEvent?.(new WorkerRegistrationRejectedEvent(entry.workerId, entry.code));
   }
 
   /** Return the `limit` most recently recorded rejections, newest first. */
@@ -527,7 +565,7 @@ export class WorkerRegistry {
       workerId,
       affectedWorkers: 1,
       inFlight: worker.inFlight,
-      health: workerHealth(worker, this.#deploymentDrainStates),
+      health: workerHealth(worker, this.#drainStates),
     };
   }
 
@@ -538,13 +576,14 @@ export class WorkerRegistry {
 
     delete worker.drainReason;
     delete worker.drainStartedAt;
+    this.#departed.restore(workerId);
 
     return {
       target: 'worker',
       workerId,
       affectedWorkers: 1,
       inFlight: worker.inFlight,
-      health: workerHealth(worker, this.#deploymentDrainStates),
+      health: workerHealth(worker, this.#drainStates),
     };
   }
 
@@ -565,6 +604,57 @@ export class WorkerRegistry {
   }
 
   /**
+   * Mark every current and future worker of one build as draining, leaving the
+   * deployment's other builds routable. A deployment-level marker still covers
+   * the build too, so draining a build never overrides a wider drain.
+   */
+  markBuildDraining(
+    deploymentName: string,
+    buildId: string,
+    options?: WorkerDrainOptions,
+  ): WorkerDrainMutationResult {
+    setBuildDrain(this.#buildDrainStates, deploymentName, buildId, createDrainRecord(options));
+    return this.#buildDrainResult(deploymentName, buildId);
+  }
+
+  /**
+   * Drain one build only if no marker is set, so an operator's own reason and start time survive
+   * a worker of the build registering again. Used when the deployment catalog already records the
+   * build as draining or removed.
+   */
+  ensureBuildDraining(deploymentName: string, buildId: string, options?: WorkerDrainOptions): void {
+    if (getBuildDrain(this.#buildDrainStates, deploymentName, buildId) === undefined) {
+      setBuildDrain(this.#buildDrainStates, deploymentName, buildId, createDrainRecord(options));
+    }
+  }
+
+  /**
+   * Clear one build's drain marker. A deployment-level or worker-level marker
+   * that still applies keeps the affected workers drained.
+   */
+  clearBuildDrain(deploymentName: string, buildId: string): WorkerDrainMutationResult {
+    deleteBuildDrain(this.#buildDrainStates, deploymentName, buildId);
+    return this.#buildDrainResult(deploymentName, buildId);
+  }
+
+  /**
+   * Drain state of one deployment, or of one of its builds when `buildId` is given, as the
+   * deployment drain operations report it. `'active'` when no marker applies, including when no
+   * worker of the deployment is connected.
+   */
+  deploymentDrainState(deploymentName: string, buildId?: string): WorkerHealth {
+    return (
+      buildId === undefined
+        ? this.#deploymentDrainResult(deploymentName)
+        : this.#buildDrainResult(deploymentName, buildId)
+    ).health;
+  }
+
+  get #drainStates(): DrainStates {
+    return { deployments: this.#deploymentDrainStates, builds: this.#buildDrainStates };
+  }
+
+  /**
    * Stable, sorted-by-id snapshot of every connected worker for the public
    * `weft.workers.list` operation. The caller passes a per-request `now`
    * so heartbeat ages across the response use one consistent clock; the
@@ -577,7 +667,11 @@ export class WorkerRegistry {
 
   /** Build a plain-object snapshot of all workers with computed health. */
   #workerSnapshots(): WorkerSnapshot[] {
-    return [...this.#workers.values()].map((worker) => ({
+    return [...this.#workers.values()].map((worker) => this.#snapshotOf(worker));
+  }
+
+  #snapshotOf(worker: WorkerInfo): WorkerSnapshot {
+    return {
       id: worker.id,
       queue: worker.queue,
       transport: worker.transport,
@@ -588,11 +682,52 @@ export class WorkerRegistry {
       lastHeartbeat: worker.lastHeartbeat,
       startedAt: worker.startedAt,
       capabilities: worker.capabilities,
-      health: workerHealth(worker, this.#deploymentDrainStates),
+      health: workerHealth(worker, this.#drainStates),
+      workflows: Object.keys(worker.manifest.workflows).toSorted(),
       deploymentName: worker.deploymentName,
       buildId: worker.buildId,
       runtimeVersion: worker.runtimeVersion,
-    }));
+      ...drainProgressOf(worker, this.#drainStates),
+    };
+  }
+
+  /**
+   * What `weft.workers.list` reports: every connected worker the operator has not forgotten, and
+   * every worker that went away and has not been forgotten or registered again, sorted by id. A
+   * worker that went away reads `disconnected`, with its last heartbeat as when it was last heard
+   * from. Unlike {@link WorkerRegistry.getWorkerSummaries}, which is the live fleet that routing
+   * and the queue totals count, this is the list an operator reads and manages.
+   */
+  getWorkerListing(now: number): WorkerSummary[] {
+    const live = this.#workerSnapshots().filter(
+      (snapshot) =>
+        !(
+          snapshot.health === 'drained' &&
+          this.#departed.isForgotten(
+            snapshot.id,
+            this.#workers.get(snapshot.id)?.sessionGeneration ?? -1,
+          )
+        ),
+    );
+    const departed = this.#departed.list().map((entry) => entry.snapshot);
+    return projectWorkerSummaries([...live, ...departed], now);
+  }
+
+  /**
+   * Stop listing one worker. A worker that went away is dropped from the list; a connected worker
+   * that finished draining is hidden until it registers again or is resumed. A connected worker
+   * still taking work is refused, since forgetting it would not stop it.
+   *
+   * @returns `forgotten`, `connected` for a worker still routable or draining, or `undefined` when
+   * no listed worker has that id.
+   */
+  forgetWorker(workerId: string): 'forgotten' | 'connected' | undefined {
+    if (this.#departed.forgetDeparted(workerId)) return 'forgotten';
+    const worker = this.#workers.get(workerId);
+    if (worker === undefined) return undefined;
+    if (workerHealth(worker, this.#drainStates) !== 'drained') return 'connected';
+    this.#departed.forgetConnected(workerId, worker.sessionGeneration);
+    return 'forgotten';
   }
 
   /**
@@ -602,7 +737,13 @@ export class WorkerRegistry {
    */
   getDeploymentSummaries(_now: number): WorkerDeploymentSummary[] {
     const snapshots = this.#workerSnapshots();
-    return projectDeploymentSummaries(snapshots, (name) => this.#deploymentDrainStates.has(name));
+    return projectDeploymentSummaries(
+      snapshots,
+      (name, buildId) =>
+        this.#deploymentDrainStates.has(name) ||
+        (buildId !== undefined &&
+          getBuildDrain(this.#buildDrainStates, name, buildId) !== undefined),
+    );
   }
 
   /** Get worker count. */
@@ -610,12 +751,30 @@ export class WorkerRegistry {
     return this.#workers.size;
   }
 
+  #buildDrainResult(deploymentName: string, buildId: string): WorkerDrainMutationResult {
+    const workers = [...this.#workers.values()].filter(
+      (worker) => worker.deploymentName === deploymentName && worker.buildId === buildId,
+    );
+    const healthValues = workers.map((worker) => workerHealth(worker, this.#drainStates));
+    const drainActive =
+      this.#deploymentDrainStates.has(deploymentName) ||
+      getBuildDrain(this.#buildDrainStates, deploymentName, buildId) !== undefined;
+    return {
+      target: 'deployment',
+      deploymentName,
+      buildId,
+      affectedWorkers: workers.length,
+      inFlight: workers.reduce((total, worker) => total + worker.inFlight, 0),
+      health: deploymentHealth(healthValues, drainActive),
+    };
+  }
+
   #deploymentDrainResult(deploymentName: string): WorkerDrainMutationResult {
     const workers = [...this.#workers.values()].filter(
       (worker) => worker.deploymentName === deploymentName,
     );
     const inFlight = workers.reduce((total, worker) => total + worker.inFlight, 0);
-    const healthValues = workers.map((worker) => workerHealth(worker, this.#deploymentDrainStates));
+    const healthValues = workers.map((worker) => workerHealth(worker, this.#drainStates));
     return {
       target: 'deployment',
       deploymentName,

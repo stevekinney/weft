@@ -1,34 +1,34 @@
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
-import {
-  createDiskBackedTestFixture,
-  sqliteDatabaseSidecarSuffixes,
-} from '../testing/storage-backends.test-support.ts';
-import { BunSQLiteStorage } from './bun-sql.ts';
-import { normalizeDeleteRangeOptions, storageDeleteRange } from './delete-range.ts';
-import { HTTPStorage } from './http.ts';
-import type { Storage } from './interface.ts';
 import {
   assertDurableStorageForRecovery,
   decodeStorageKeyComponent,
   encodeStorageKeyComponent,
-  KEYS,
   matchesScanOptions,
   MAX_BATCH_OPERATIONS,
+  MemoryStorage,
+  normalizeDeleteRangeOptions,
   resolvePrefixRangeEnd,
   StorageBatchOperationLimitExceededError,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
+  storageDeleteRange,
   storageHas,
   storageKeys,
   storageValuesEqual,
   tryDecodeStorageKeyComponent,
-  WEFT_RESERVED_KEY_PREFIXES,
-} from './interface.ts';
-import { MemoryStorage } from './memory.ts';
-import { TursoStorage } from './turso.ts';
+  type Storage,
+} from "../embedded/storage/src/index.ts";
+import { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from "../embedded/storage/src/testing/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { HTTPStorage } from './http.ts';
+import { KEYS, WEFT_RESERVED_KEY_PREFIXES } from './keys.ts';
+import { resolveNonEmptyPrefixRangeEnd } from './non-empty-prefix-range-end.ts';
 
 function createCoreStorageAdapter(): Storage {
   const storage = new MemoryStorage();
@@ -89,6 +89,8 @@ describe('KEYS insertion order', () => {
       'scheduleRunLink',
       'scheduleRunBySchedulePrefix',
       'scheduleRunBySchedule',
+      'scheduleMissedPrefix',
+      'scheduleMissed',
       'operation',
       'operationInflight',
       'operationQueued',
@@ -105,6 +107,8 @@ describe('KEYS insertion order', () => {
       'event',
       'eventHead',
       'eventWatermark',
+      'watchEventPrefix',
+      'watchEvent',
       'fleetEventPrefix',
       'fleetEvent',
       'fleetEventTail',
@@ -128,6 +132,8 @@ describe('KEYS insertion order', () => {
       'updatePrefix',
       'update',
       'updateResponse',
+      'updateHistoryPrefix',
+      'updateHistory',
       'updateIdempotency',
       'startIdempotency',
       'startIdempotencySignalId',
@@ -168,6 +174,12 @@ describe('KEYS insertion order', () => {
       'catalogTombstonePrefix',
       'catalogRemovalGeneration',
       'workflowGeneration',
+      'fileWorkflowEventReceiptPrefix',
+      'fileWorkflowEventReceipt',
+      'workflowLogPrefix',
+      'workflowLog',
+      'workflowLogCounterPrefix',
+      'workflowLogCounter',
       'budget',
       'review',
       'workflowHeaders',
@@ -182,6 +194,8 @@ describe('KEYS insertion order', () => {
       'finalizerState',
       'teardownOwed',
       'teardownSucceeded',
+      'activityRetrying',
+      'activityRetryingPrefix',
       'teardownDeadLetter',
       'teardownDeadLetterPrefix',
       'teardownDeadLetterHistory',
@@ -281,7 +295,10 @@ describe('encodeStorageKeyComponent prefix preservation', () => {
 describe('scan utilities', () => {
   it('computes lexicographic prefix bounds and applies scan filters', () => {
     expect(resolvePrefixRangeEnd('job:')).toBe('job;');
-    expect(resolvePrefixRangeEnd('')).toBe('\xff');
+    // An empty prefix matches every key, so it has no upper bound: no sentinel can sit above every key.
+    expect(resolvePrefixRangeEnd('')).toBeUndefined();
+    expect(resolveNonEmptyPrefixRangeEnd('job:')).toBe('job;');
+    expect(() => resolveNonEmptyPrefixRangeEnd('')).toThrow('has no upper bound');
 
     expect(matchesScanOptions('b', { gt: 'a', lt: 'c' })).toBe(true);
     expect(matchesScanOptions('a', { gt: 'a' })).toBe(false);
@@ -302,10 +319,14 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.timeline('workflow-id', 1),
       KEYS.schedule('schedule-id'),
       KEYS.scheduleTick(1, 'schedule-id'),
+      // The scheduler's timer index, written beside every durable timer.
+      'timer-idx:schedule:schedule-id',
       KEYS.scheduleRun('workflow-id'),
       KEYS.scheduleRunLink('workflow-id'),
       KEYS.scheduleRunBySchedule('schedule-id', 'workflow-id'),
+      KEYS.scheduleMissed('schedule-id', 1, 'late'),
       KEYS.teardownSucceeded('workflow-id'),
+      KEYS.activityRetrying('workflow-id'),
       KEYS.operation('default', 1, 'operation-id'),
       KEYS.operationInflight('operation-id'),
       KEYS.operationQueued('operation-id'),
@@ -317,6 +338,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.event('workflow-id', 1),
       KEYS.eventHead('workflow-id'),
       KEYS.eventWatermark('workflow-id'),
+      KEYS.watchEvent('workflow-id', 1),
       KEYS.fleetEvent(1),
       KEYS.fleetEventTail(),
       KEYS.fleetEventByWorkflow('workflow-id', 1),
@@ -332,6 +354,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.tagIndex('tag', 'workflow-id'),
       KEYS.update('workflow-id', 'update-id'),
       KEYS.updateResponse('update-id'),
+      KEYS.updateHistory('workflow-id', 1, 'update-id'),
       KEYS.updateIdempotency('workflow-id', 'idempotency-key'),
       KEYS.startIdempotency('idempotency-key'),
       KEYS.liveness('instance-id'),
@@ -370,6 +393,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowOwnerHolder('workflow-id'),
       KEYS.ownershipModeMarker(),
       KEYS.workflowGeneration('workflow-id'),
+      KEYS.workflowLog('workflow-id', 1),
+      KEYS.workflowLogCounter('workflow-id'),
       KEYS.applicationMailbox('bureau', 'agent-7'),
       KEYS.applicationCommand('bureau', 'agent-7', 'command-id'),
       KEYS.applicationCommandReady('bureau', 'agent-7', 1),
@@ -502,24 +527,6 @@ describe('assertDurableStorageForRecovery', () => {
     expect(() => assertDurableStorageForRecovery(storage)).toThrow(
       /persistence must be "local" or "remote"/,
     );
-  });
-
-  it('rejects file-backed TursoStorage because read-after-write is session-scoped', () => {
-    const fixture = createDiskBackedTestFixture({
-      prefix: 'durable-assertion-turso',
-      suffix: '.db',
-      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
-    });
-    const storage = new TursoStorage({ url: `file:${fixture.path}` });
-
-    try {
-      expect(() => assertDurableStorageForRecovery(storage)).toThrow(
-        /readAfterWrite must be "linearizable"/,
-      );
-    } finally {
-      storage[Symbol.dispose]();
-      fixture.cleanup();
-    }
   });
 
   it('rejects HTTPStorage because its consistency is too weak for recovery', () => {
@@ -963,6 +970,10 @@ describe('KEYS', () => {
     expect(KEYS.updatePrefix(workflowId)).toBe(`upd:${encodedWorkflowId}:`);
     expect(KEYS.update(workflowId, 'update-1')).toBe(`upd:${encodedWorkflowId}:update-1`);
     expect(KEYS.updateResponse('update-1')).toBe('upr:update-1');
+    expect(KEYS.updateHistoryPrefix(workflowId)).toBe(`uph:${encodedWorkflowId}:`);
+    expect(KEYS.updateHistory(workflowId, 1_700_000_000_000, 'update-1')).toBe(
+      `uph:${encodedWorkflowId}:0001700000000000:update-1`,
+    );
     expect(KEYS.updateIdempotency(workflowId, 'idem-1')).toBe(`upk:${encodedWorkflowId}:idem-1`);
     expect(KEYS.startIdempotency('idem-1')).toBe('start-idem:idem-1');
     expect(KEYS.startIdempotency('a:b')).toBe('start-idem:a%3Ab');
@@ -1024,6 +1035,14 @@ describe('KEYS', () => {
     expect(KEYS.workflowVisibilityMetaBuiltAt()).toBe('wf-idx-meta:built-at');
     expect(KEYS.workflowVisibilityMetaCursor()).toBe('wf-idx-meta:cursor');
     expect(KEYS.workflowVisibilityMetaBuilding()).toBe('wf-idx-meta:building');
+  });
+
+  it('keys a missed-fire row by schedule, padded occurrence and reason', () => {
+    expect(KEYS.scheduleMissedPrefix('schedule:id')).toBe('schedule-missed:schedule%3Aid:');
+    expect(KEYS.scheduleMissed('schedule:id', 42, 'dst-gap')).toBe(
+      'schedule-missed:schedule%3Aid:0000000000000042:dst-gap',
+    );
+    expect(KEYS.scheduleMissed('s', 9, 'late') < KEYS.scheduleMissed('s', 10, 'late')).toBe(true);
   });
 
   it('encodes both dimensions of the schedule-run reverse index', () => {

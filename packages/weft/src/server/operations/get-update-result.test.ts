@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { UpdateCoordinator } from '../../core/updates.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { getUpdateResultOperation, getUpdateResultRestBinding } from './get-update-result.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -49,9 +48,10 @@ describe('weft.updates.result.get', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
     const coordinator = new UpdateCoordinator(setup.storage);
-    const updateId = await coordinator.createRequest('wf-update-completed', 'setName', {
+    const request = await coordinator.submitRequest('wf-update-completed', 'setName', {
       name: 'Alice',
     });
+    const { updateId } = request;
 
     await setup.storage.batch(
       coordinator.buildResponseOperations(
@@ -59,6 +59,8 @@ describe('weft.updates.result.get', () => {
         'wf-update-completed',
         { accepted: true },
         'minor issue',
+        undefined,
+        { name: request.name, receivedAt: request.createdAt },
       ),
     );
 
@@ -129,6 +131,6 @@ describe('weft.updates.result.get', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });

@@ -55,7 +55,7 @@ export const WORKFLOW_CONTRACT_DIGEST_ALGORITHM = 'sha256';
 /**
  * Payload-only canonical serialization: the digest input for
  * {@link contractHash}. Deliberately excludes `name`, `workflowVersion`,
- * `description`, and `tags` — see this module's JSDoc.
+ * `description`, `tags`, and `usedActivities` — see this module's JSDoc.
  */
 function canonicalWorkflowContractPayloadJson(contract: WorkflowContract): string {
   const fields: string[] = [`"contractVersion":${JSON.stringify(WORKFLOW_CONTRACT_VERSION)}`];
@@ -66,6 +66,11 @@ function canonicalWorkflowContractPayloadJson(contract: WorkflowContract): strin
   appendContractRecordField(fields, 'updates', contract.updates);
   appendContractRecordField(fields, 'queries', contract.queries);
   appendContractRecordField(fields, 'activities', contract.activities);
+  // `usedActivities` is deliberately absent. Declaring an engine-provided
+  // activity with `.uses()` records what the workflow calls, not anything a
+  // caller sends or receives; keeping it out of the payload hash is what lets
+  // an already-deployed workflow adopt `.uses()` as a compatible redeploy that
+  // eager recovery re-stamps rather than refuses.
   if (contract.finalizer !== undefined) {
     fields.push(`"finalizer":${canonicalMessageContractJson(contract.finalizer)}`);
   }

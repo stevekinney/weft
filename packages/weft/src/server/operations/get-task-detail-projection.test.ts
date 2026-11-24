@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { principalFromJwtClaims } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry, REST_BINDINGS } from '../rest-bindings.ts';
 import * as fixture from './get-task-detail.test-support.ts';
 import {
@@ -139,8 +140,11 @@ describe('weft.tasks.get — projection', () => {
       'weft.tasks.get',
       { operationId: 'op-queued' },
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'workflows:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([getTaskDetailOperation]),
       },

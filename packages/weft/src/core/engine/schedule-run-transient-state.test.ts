@@ -21,9 +21,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { createDeferred, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { createDeferred, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec/api.ts';
 import {
   workflow,
@@ -375,7 +375,8 @@ const interleavings: readonly {
       expectNothingHeld(harness);
 
       expectLaunched(await harness.launch());
-      return { kind: 'launch', index: 1 };
+      // Launch A was rejected before its batch committed, so only B consulted the resolver.
+      return { kind: 'launch', index: 0 };
     },
   },
   {
@@ -393,7 +394,8 @@ const interleavings: readonly {
       expectSameHoldings(atSecondStart, NOTHING_HELD);
 
       expectLaunched(await second);
-      return { kind: 'launch', index: 1 };
+      // Launch A was rejected before its batch committed, so only B consulted the resolver.
+      return { kind: 'launch', index: 0 };
     },
   },
   {
@@ -412,7 +414,8 @@ const interleavings: readonly {
       expectSameHoldings(atSecondStart, NOTHING_HELD);
 
       expectLaunched(await second);
-      return { kind: 'launch', index: 1 };
+      // Launch A was rejected before its batch committed, so only B consulted the resolver.
+      return { kind: 'launch', index: 0 };
     },
   },
   {

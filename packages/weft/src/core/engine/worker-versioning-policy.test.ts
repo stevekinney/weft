@@ -1,7 +1,7 @@
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { describe, expect, it } from 'bun:test';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { WorkerDeploymentCatalog } from '../../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../../worker/manifest/types.ts';
 import { issueWorkflowWorkerStartOverridePreview } from '../../worker/start-override-preview.ts';
@@ -12,7 +12,7 @@ import type { WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
-import { applyForkWorkerBindingInheritance } from './lifecycle/fork-helpers.ts';
+import { applyForkWorkerBindingInheritance } from './lifecycle/fork-worker-binding.ts';
 import { createInitialWorkflowState } from './lifecycle/start-state.ts';
 
 describe('workflow worker versioning integration', () => {

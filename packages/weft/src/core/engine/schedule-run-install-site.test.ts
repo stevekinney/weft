@@ -20,9 +20,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   workflow,
   type Checkpoint,
@@ -241,11 +241,13 @@ function createScheduleState(): ScheduleState {
     status: 'paused',
     overlap: 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     createdAt: 0,
     updatedAt: 0,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     nextFireAt: null,
     queuedRuns: [],
   };
@@ -331,7 +333,7 @@ function indexOfEvent(timeline: Timeline, event: TimelineEntry['event']): number
 
 describe('where a scheduled run installs its transient state', () => {
   for (const resolution of RESOLUTIONS) {
-    it(`reads nothing for the occurrence's id before the install, and installs when the launch adopts the id, before the start batch commits, with ${RESOLUTION_LABELS[resolution]}`, async () => {
+    it(`reads nothing for the occurrence's id before the install, installs its cleanup membership when the launch adopts the id, before the start batch commits, and its services after it, with ${RESOLUTION_LABELS[resolution]}`, async () => {
       const observed = await launchObservedOccurrence(resolution, false);
       try {
         const { timeline } = observed;
@@ -356,19 +358,26 @@ describe('where a scheduled run installs its transient state', () => {
         const beforeInstall = timeline.slice(called, firstInstall).filter(concernsOccurrence);
         expect(beforeInstall).toEqual([]);
 
-        // The install is the first write to either collection for the id, and the services entry
-        // and the membership are written there and nowhere else before the run begins.
+        // The install is the first write to either collection for the id, and it is the
+        // membership alone (COR-1925): the services are resolved once the create batch has
+        // committed, so a start that loses its batch never resolves them.
         const installed = occurrence.filter((entry) => entry.event === 'write');
         expect(installed[0]).toBeDefined();
-        const writesFromTheInstall = timeline
-          .slice(firstInstall)
+        const writesBeforeCommit = timeline
+          .slice(firstInstall, committed)
           .filter(concernsOccurrence)
           .filter((entry) => entry.event === 'write')
           .map((entry) => `${entry.collection}.${entry.operation}`);
-        expect(writesFromTheInstall.slice(0, resolution === 'available' ? 2 : 1)).toEqual(
-          resolution === 'available'
-            ? ['workflowServices.set', 'workflowsNeedingTerminalCleanup.add']
-            : ['workflowsNeedingTerminalCleanup.add'],
+        expect(writesBeforeCommit).toEqual(['workflowsNeedingTerminalCleanup.add']);
+        const writesAfterCommit = timeline
+          .slice(committed)
+          .filter(concernsOccurrence)
+          .filter((entry) => entry.event === 'write')
+          .map((entry) => `${entry.collection}.${entry.operation}`)
+          // An unavailable resolution fails the run, which takes its entries back.
+          .filter((write) => !write.endsWith('.delete'));
+        expect(writesAfterCommit).toEqual(
+          resolution === 'available' ? ['workflowServices.set'] : [],
         );
       } finally {
         await observed.dispose();
@@ -390,7 +399,6 @@ describe('where a scheduled run installs its transient state', () => {
         // already made a no-op, as main's seed had.
         expect(beforeCommit.filter((entry) => entry.event === 'read')).toEqual([]);
         expect(beforeCommit.map((entry) => `${entry.collection}.${entry.operation}`)).toEqual([
-          ...(resolution === 'available' ? ['workflowServices.set'] : []),
           'workflowsNeedingTerminalCleanup.add',
           'workflowsNeedingTerminalCleanup.add',
         ]);

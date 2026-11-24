@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { HeartbeatManager } from './heartbeat.ts';
 
 describe('HeartbeatManager', () => {

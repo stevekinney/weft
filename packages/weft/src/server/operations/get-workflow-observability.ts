@@ -1,18 +1,19 @@
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowFinalizerStatus, WorkflowScheduleProvenance } from '../../core/types.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const workflowObservabilityInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow to inspect.'),
 });
 
 const scheduleProvenanceOutput = z
   .object({
     scheduleId: z.string(),
     occurrence: z.number().optional(),
+    manual: z.literal(true).optional(),
   })
   .nullable();
 
@@ -55,11 +56,12 @@ export const getWorkflowScheduleProvenanceOperation = defineOperation({
   // Zod models an optional property as `number | undefined`; Engine omits the
   // property entirely under exactOptionalPropertyTypes.
   outputSchema: scheduleProvenanceOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: [],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
+  invoke: async ({ input, host: engine }) => {
     assertOperationEngineMethods(engine, ['getScheduleProvenance']);
     return engine.getScheduleProvenance(input.workflowId);
   },
@@ -76,11 +78,12 @@ export const getWorkflowFinalizerOperation = defineOperation({
   tags: ['Workflows'],
   inputSchema: workflowObservabilityInput,
   outputSchema: finalizerStatusOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: [],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
+  invoke: async ({ input, host: engine }) => {
     assertOperationEngineMethods(engine, ['getFinalizerStatus']);
     return engine.getFinalizerStatus(input.workflowId);
   },

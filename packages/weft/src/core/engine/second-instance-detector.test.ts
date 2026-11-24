@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   createSecondInstanceDetectionTick,
   createSecondInstanceDetector,
@@ -402,6 +402,7 @@ describe('createSecondInstanceDetector', () => {
       disposed: false,
       cleanupInterval: null,
       secondInstanceDetectionInterval: interval,
+      storageSizeReportInterval: null,
       testToken: undefined,
     };
     const tick = createSecondInstanceDetectionTick(() => null, tracker);
@@ -428,6 +429,7 @@ describe('createSecondInstanceDetector', () => {
       disposed: false,
       cleanupInterval: null,
       secondInstanceDetectionInterval: interval,
+      storageSizeReportInterval: null,
       testToken: undefined,
     };
     const tick = createSecondInstanceDetectionTick(() => failingDetector, tracker);

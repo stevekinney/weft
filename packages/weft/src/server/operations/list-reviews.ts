@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { reviewListEntrySchema } from '../../core/review/index.ts';
 import type { ReviewListEntry, ReviewListFilter, ReviewStatus } from '../../core/types.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const reviewStatusSchema = z.enum(['pending', 'completed']) satisfies z.ZodType<ReviewStatus>;
 const listReviewsInput = z.object({
@@ -35,7 +35,7 @@ export const listReviewsOperation = defineOperation({
   access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['reviews:read'] } },
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ListReviewsOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ListReviewsOutput> => {
     assertOperationEngineMethods(engine, ['listReviews']);
     const e = engine;
     const filter: ReviewListFilter = {
@@ -81,5 +81,5 @@ export const listReviewsRestBinding: UnknownRestBinding = {
   },
   extractInput: async (request) => extractListReviewsInput(request),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };

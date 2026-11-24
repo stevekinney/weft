@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { executeCodegen } from './codegen.ts';
 
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
@@ -42,7 +44,7 @@ describe('executeCodegen HTTP fetch path', () => {
         server: server.url.toString(),
         token: 'sekret',
         out,
-        timeoutMs: 30_000,
+        timeoutMs: HANG_GUARD_MILLISECONDS,
       });
       expect(result.exitCode).toBe(0);
       expect(observedAuth).toBe('Bearer sekret');
@@ -67,7 +69,7 @@ describe('executeCodegen HTTP fetch path', () => {
       const result = await executeCodegen({
         server: server.url.toString(),
         out,
-        timeoutMs: 30_000,
+        timeoutMs: HANG_GUARD_MILLISECONDS,
       });
       expect(result.exitCode).toBe(0);
       expect(observedAuth).toBe('Bearer env-token');
@@ -95,7 +97,7 @@ describe('executeCodegen HTTP fetch path', () => {
         server: server.url.toString(),
         token: 'flag-token',
         out,
-        timeoutMs: 30_000,
+        timeoutMs: HANG_GUARD_MILLISECONDS,
       });
       expect(observedAuth).toBe('Bearer flag-token');
     } finally {
@@ -122,7 +124,7 @@ describe('executeCodegen HTTP fetch path', () => {
     try {
       const dir = makeTempDir();
       const out = join(dir, 'weft.d.ts');
-      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      const result = await executeCodegen({ out, timeoutMs: HANG_GUARD_MILLISECONDS });
       expect(result.exitCode).toBe(0);
       expect(observedAuth).toBe('Bearer environment-token');
       expect(observedUrl).toBe(new URL('/api/v1/registry', server.url).toString());
@@ -145,9 +147,33 @@ describe('executeCodegen HTTP fetch path', () => {
     delete Bun.env['WEFT_ADDR'];
 
     try {
-      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      const result = await executeCodegen({ out, timeoutMs: HANG_GUARD_MILLISECONDS });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('codegen: Failed to read connection configuration');
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
+      else Bun.env['WEFT_HOME'] = priorHome;
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+    }
+  });
+
+  it('lets an unreadable run lockfile surface as the error it is, not as a configuration diagnostic', async () => {
+    // The lockfile path is a directory, so reading it fails with `EISDIR`, which is not a
+    // `ConnectionConfigurationError` and is therefore not reported as a codegen diagnostic.
+    const home = makeTempDir();
+    mkdirSync(join(home, 'run'));
+    const out = join(home, 'weft.d.ts');
+    const priorHome = Bun.env['WEFT_HOME'];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+
+    try {
+      expect(
+        await throwingRejectionOf(executeCodegen({ out, timeoutMs: HANG_GUARD_MILLISECONDS })),
+      ).toThrow(/EISDIR/);
       expect(existsSync(out)).toBe(false);
     } finally {
       if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
@@ -169,7 +195,7 @@ describe('executeCodegen HTTP fetch path', () => {
       const result = await executeCodegen({
         server: 'not a url',
         out,
-        timeoutMs: 30_000,
+        timeoutMs: HANG_GUARD_MILLISECONDS,
       });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("codegen: Invalid server URL 'not a url'");
@@ -186,7 +212,7 @@ describe('executeCodegen HTTP fetch path', () => {
     const priorAddress = Bun.env['WEFT_ADDR'];
     Bun.env['WEFT_ADDR'] = ':::not-a-url:::';
     try {
-      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      const result = await executeCodegen({ out, timeoutMs: HANG_GUARD_MILLISECONDS });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("codegen: Invalid server URL ':::not-a-url:::'");
       expect(existsSync(out)).toBe(false);
@@ -218,7 +244,7 @@ describe('executeCodegen HTTP fetch path', () => {
     // the malformed URL resolves from the config's "main" profile as intended.
     delete Bun.env['WEFT_PROFILE'];
     try {
-      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      const result = await executeCodegen({ out, timeoutMs: HANG_GUARD_MILLISECONDS });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("codegen: Invalid server URL 'http://[::bad'");
       expect(result.stderr).not.toContain("URL ''");
@@ -238,6 +264,7 @@ describe('executeCodegen HTTP fetch path', () => {
     try {
       const dir = makeTempDir();
       const out = join(dir, 'weft.d.ts');
+      // load-proof: the server never responds, so no load can make the request succeed before the deadline
       const result = await executeCodegen({
         server: server.url.toString(),
         out,

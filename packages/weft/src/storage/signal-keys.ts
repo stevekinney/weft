@@ -10,7 +10,7 @@
  * @module storage/signal-keys
  */
 
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 
 // Leading sort-class digit for a buffered-signal key. `consumeSignal` scans the
 // `sig:<workflowId>:<name>:` prefix with `limit: 1` and takes the lexically-first

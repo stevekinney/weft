@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowReduceInput } from '../types.ts';

@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
@@ -14,7 +15,6 @@ import {
   type RemoteTaskCompleting,
   type RemoteTaskTerminalCancelled,
 } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import { FailingTerminalCommitStorage } from './server-context.test-support.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';

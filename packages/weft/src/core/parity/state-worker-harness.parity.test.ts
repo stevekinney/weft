@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { Engine } from '../../core/engine.ts';
 import { serve, type WeftServer } from '../../server/index.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { RemoteWorker } from '../../worker/index.ts';
 import type { RemoteTaskTerminalResolved } from '../task-ledger/task-ledger-types.ts';
@@ -22,7 +22,6 @@ async function waitForQuery<T>(
       return latestResult !== undefined && predicate(latestResult);
     },
     {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: `query "${definition.name}" to match the requested state`,
     },
@@ -163,7 +162,6 @@ describe('durable state, remote worker, and testing-harness parity', () => {
 
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('parity-remote-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });

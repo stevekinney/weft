@@ -5,13 +5,14 @@
 import { describe, expect, it } from 'bun:test';
 import type { Engine } from '../../core/engine.ts';
 
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
-import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { waitForStatus } from '../workflow-status.test-support.ts';
 import {
   createBulkTestEngine,
@@ -117,6 +118,7 @@ describe('weft.workflows.bulk.retryfailed', () => {
     expect(missingTokenResponse.status).toBe(400);
     expect(await missingTokenResponse.json()).toEqual({
       error: 'Field "confirmationToken" is required after a dry run',
+      retryable: false,
     });
 
     control.shouldFail = false;
@@ -145,6 +147,29 @@ describe('weft.workflows.bulk.retryfailed', () => {
     await waitForStatus(engine, 'rest-retry-selected', 'completed');
   });
 
+  it('rejects a malformed REST control field as invalid params without retrying anything', async () => {
+    const control = { shouldFail: true };
+    using engine = createEngine(control);
+    await startFailedWorkflow(engine, 'rest-retry-malformed', ['rest-malformed']);
+
+    const response = await handleRequest(
+      request('/v1/workflows/bulk/retry-failed', {
+        filter: { tags: ['rest-malformed'] },
+        dryRun: 'yes',
+      }),
+      engine,
+      bulkAdminHandlerOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Field "dryRun" must be a boolean',
+      retryable: false,
+    });
+    const untouched = await engine.get('rest-retry-malformed');
+    expect(untouched?.status).toBe('failed');
+  });
+
   it('previews and confirms failed-workflow retry over JSON-RPC HTTP', async () => {
     const control = { shouldFail: true };
     using engine = createEngine(control);
@@ -156,7 +181,7 @@ describe('weft.workflows.bulk.retryfailed', () => {
         dryRun: true,
         requestId: 'json-rpc-retry-request',
       }),
-      { registry, engine, principal: bulkAdminPrincipal() },
+      { registry, host: engine, principal: bulkAdminPrincipal() },
     );
 
     expect(previewResponse.status).toBe(200);
@@ -184,7 +209,7 @@ describe('weft.workflows.bulk.retryfailed', () => {
         },
         2,
       ),
-      { registry, engine, principal: bulkAdminPrincipal() },
+      { registry, host: engine, principal: bulkAdminPrincipal() },
     );
 
     expect(confirmedResponse.status).toBe(200);

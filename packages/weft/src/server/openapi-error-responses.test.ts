@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import type { FaultCode } from '../core/fault-code.ts';
-import { buildErrorResponses } from './openapi-error-responses.ts';
-import { generateOpenApiDocument } from './openapi.ts';
-import type { ErasedOperation } from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
+import { type FaultCode, defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type ErasedOperation,
+  buildErrorResponses,
+  generateOpenApiDocument,
+} from "../embedded/backchannel/src/internals.ts";
 import { isRecord } from './protocol.test-support.ts';
+import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
 
 function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
   const base = defineOperation({
@@ -36,7 +38,10 @@ function responseSchema(response: unknown): unknown {
 
 describe('OpenAPI error responses', () => {
   it('documents the generated canonical REST fault component and audited data fields (#720, #763, #771)', () => {
-    const document = generateOpenApiDocument();
+    const document = generateOpenApiDocument({
+      registry: createLiveOperationRegistry(),
+      restBindings: createLiveRestBindings(),
+    });
     const components = isRecord(document['components']) ? document['components'] : undefined;
     const schemas =
       components && isRecord(components['schemas']) ? components['schemas'] : undefined;
@@ -51,6 +56,17 @@ describe('OpenAPI error responses', () => {
           type: 'string',
           description: 'Fine-grained public Weft error code when one is available',
         },
+        retryable: {
+          type: 'boolean',
+          description:
+            'Whether repeating the identical call later can succeed; present on every operation fault',
+        },
+        remediation: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 500,
+          description: 'One line of plain text saying what to do next; omitted when none is known',
+        },
         data: {
           type: 'object',
           description: 'Audited fault-specific context; omitted when no fields are safe to expose',
@@ -63,6 +79,7 @@ describe('OpenAPI error responses', () => {
             samplesTruncated: { type: 'boolean' },
             maxBytes: { type: 'integer', minimum: 0 },
             operationName: { type: 'string' },
+            updateId: { type: 'string' },
             transport: { type: 'string' },
             supported: { type: 'array', items: { type: 'string' } },
             droppedCount: { type: 'integer', minimum: 0 },
@@ -83,6 +100,10 @@ describe('OpenAPI error responses', () => {
               },
             },
             method: { type: 'string' },
+            expectedRevision: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+            currentRevision: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+            retryAfterSeconds: { type: 'number', minimum: 0 },
+            capability: { type: 'string' },
           },
         },
       },
@@ -100,7 +121,7 @@ describe('OpenAPI error responses', () => {
 
   it('includes operation-specific statuses in addition to universal defaults', () => {
     expect(Object.keys(buildErrorResponses(operation(['Conflict', 'Timeout']))).toSorted()).toEqual(
-      ['400', '401', '403', '408', '409', '500'],
+      ['400', '401', '403', '409', '500', '504'],
     );
   });
 

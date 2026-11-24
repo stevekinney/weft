@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
 } from './single-workflow-control-operation.ts';
 
 const timeoutWorkflowInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow to force into the timed-out state.'),
 });
 
 export type TimeoutWorkflowInput = z.infer<typeof timeoutWorkflowInput>;
@@ -20,6 +20,7 @@ export const timeoutWorkflowOperation = createSingleWorkflowControlOperation({
     'timeout had elapsed. Irreversible. Use for operator intervention on stuck workflows. ' +
     'Faults with NotFound when the workflow is not visible.',
   destructive: true,
+  scope: 'workflows:write',
   tags: ['Workflows'],
   inputSchema: timeoutWorkflowInput,
   outputSchema: z.null(),

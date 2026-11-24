@@ -28,6 +28,36 @@ export class SignalReceivedEvent extends Event {
 }
 
 /**
+ * Fired on the {@link Engine} when a workflow begins waiting for a signal that
+ * has not arrived, once the engine has recorded the name in the workflow's
+ * persisted `WorkflowState.waitingForSignals`. A signal already buffered when
+ * `waitForSignal` runs completes the wait at once and fires no
+ * `signal:waiting`, and a wait recovered after a restart, whose name the
+ * persisted record already lists, does not fire it again.
+ *
+ * @example
+ * ```ts
+ * import { Engine, SignalWaitingEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(SignalWaitingEvent.type, (event) => {
+ *   console.log(event.workflowId, 'is waiting for', event.signalName);
+ * });
+ * ```
+ */
+export class SignalWaitingEvent extends Event {
+  static readonly type = 'signal:waiting' as const;
+  readonly workflowId: string;
+  readonly signalName: string;
+
+  constructor(workflowId: string, signalName: string) {
+    super(SignalWaitingEvent.type);
+    this.workflowId = workflowId;
+    this.signalName = signalName;
+  }
+}
+
+/**
  * Fired on the {@link Engine} when a pending `waitForSignal` operation in a
  * workflow is resolved by the delivered signal. Emitted after the signal
  * unblocks the workflow and resumes execution.

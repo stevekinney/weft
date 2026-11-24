@@ -1,5 +1,10 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 
+import {
+  requirePlainObject,
+  stripDialect,
+  zodToJsonSchema,
+} from "../../embedded/backchannel/src/internals.ts";
 import { tryLoadNodeBuiltin } from '../../runtime/portable.ts';
 import type {
   DefinitionSchema,
@@ -78,7 +83,7 @@ export function definitionSchemaToJsonSchema(
   // `~standard.jsonSchema` that does not honor the project's
   // `unrepresentable: 'any'` option; deferring to the vendor adapter keeps
   // generated artifacts stable.
-  if (vendor === 'zod') return convertZod(schema as z.ZodType, direction);
+  if (vendor === 'zod') return zodToJsonSchema(schema as z.ZodType, direction);
   if (vendor === 'valibot') return convertValibot(schema);
 
   const structuralConverter = (standard as { jsonSchema?: unknown }).jsonSchema;
@@ -116,28 +121,6 @@ function isStructuralConverter(value: unknown): value is {
 // ---------------------------------------------------------------------------
 
 const defaultTarget: StandardJSONSchemaV1Target = 'draft-2020-12';
-
-function convertZod(
-  schema: z.ZodType,
-  direction: DefinitionSchemaDirection,
-): Record<string, unknown> {
-  // `io` decides whether a `.default()` field is required: the input side
-  // leaves it optional, the output side always carries it. Zod also stops
-  // closing plain objects (`additionalProperties: false`) on the input side;
-  // the override restores that so published contracts keep the closed shape
-  // they had before `io` was forwarded and only `required` changes.
-  const result: unknown = z.toJSONSchema(schema, {
-    unrepresentable: 'any',
-    io: direction,
-    override: ({ zodSchema, jsonSchema }) => {
-      if (direction !== 'input' || !(zodSchema instanceof z.ZodObject)) return;
-      if (!zodSchema.def.catchall && jsonSchema.additionalProperties === undefined) {
-        jsonSchema.additionalProperties = false;
-      }
-    },
-  });
-  return stripDialect(requirePlainObject(result, 'zod'));
-}
 
 function convertValibot(schema: DefinitionSchema): Record<string, unknown> {
   const toJsonSchema = loadValibotConverter();
@@ -205,23 +188,4 @@ export function loadValibotConverter(
     ? (cachedValibotConverter = valibotModule.toJsonSchema)
     : valibotModule.toJsonSchema;
   return converter;
-}
-
-function stripDialect(object: Record<string, unknown>): Record<string, unknown> {
-  if (!('$schema' in object)) return object;
-  const result = { ...object };
-  delete result['$schema'];
-  return result;
-}
-
-function requirePlainObject(value: unknown, vendor: string): Record<string, unknown> {
-  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  // Fail loudly: silently swapping a non-object converter result for `{}`
-  // would emit unconstrained schemas in OpenRPC / OpenAPI / AsyncAPI output.
-  throw new Error(
-    `definitionSchemaToJsonSchema: ${vendor} converter returned a non-object ` +
-      `(${typeof value}). Expected a JSON Schema object.`,
-  );
 }

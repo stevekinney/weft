@@ -1,16 +1,15 @@
+import { invalidParamsFault, type UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { bulkCancelOutputSchema } from './bulk-output-schemas.ts';
 import {
   assertOperationEngineMethods,
   engineFailureFault,
   faultMessage,
-  invalidParamsFault,
   readOptionalJsonBody,
 } from './operation-helpers.ts';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
 import { BulkOperationConfirmationError } from '../../core/engine.ts';
 import type { BulkCancelResult, BulkOperationDryRunResult } from '../../core/types.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
 import { bulkListFilterInputSchema, type BulkListFilterInput } from './bulk-filter-input.ts';
 import {
@@ -20,7 +19,10 @@ import {
   parseBulkOperationControlFromBody,
   type BulkOperationControlInput,
 } from './bulk-operation-controls.ts';
-import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
+import {
+  staleConfirmationFault,
+  validatedListFilterFromBulkInput,
+} from './bulk-operation-helpers.ts';
 
 const bulkCancelWorkflowsInput = bulkListFilterInputSchema.merge(bulkOperationControlInputSchema);
 
@@ -31,14 +33,20 @@ export const bulkCancelWorkflowsOperation = defineOperation({
   name: 'weft.workflows.bulk.cancel',
   mcpExposable: false,
   summary: 'Cancel workflows in bulk',
+  description:
+    'Cancel every workflow that matches the filter. Run it first with `dryRun: true` ' +
+    'to preview the matches and receive a `confirmationToken`, then repeat the same ' +
+    'filter with that token to commit; a commit whose token no longer matches is refused ' +
+    'with `Conflict`, so run the preview again. Requires workflows:admin.',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkCancelWorkflowsInput,
   outputSchema: bulkCancelOutputSchema,
+  producibleFaults: ['Conflict'],
   access: bulkOperatorAccessPolicy,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<BulkCancelWorkflowsOutput> => {
+  invoke: async ({ input, host: engine, principal }): Promise<BulkCancelWorkflowsOutput> => {
     assertOperationEngineMethods(engine, ['cancelAll']);
     const e = engine;
 
@@ -52,7 +60,7 @@ export const bulkCancelWorkflowsOperation = defineOperation({
       return await e.cancelAll(filter, operationOptions);
     } catch (error) {
       if (error instanceof BulkOperationConfirmationError) {
-        throw invalidParamsFault(error.message);
+        throw staleConfirmationFault(error);
       }
       throw engineFailureFault(faultMessage(error));
     }

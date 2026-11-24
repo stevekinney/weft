@@ -44,6 +44,9 @@ export type ContextOperationRequest =
        * anchors the durable async-completion task token to a fixed activity.
        */
       step?: number;
+      /** Optional document step identity used by file-workflow lifecycle history. */
+      documentStep?: number;
+      documentStepAddress?: string;
       /**
        * Optional deterministic state key for activity sub-operations that are
        * owned by another workflow step. Plain `ctx.run()` leaves this unset and
@@ -61,12 +64,18 @@ export type ContextOperationRequest =
       duration: number;
       scheduledFireAt: number;
       callerStack?: string;
+      /** Optional document step identity used by file-workflow lifecycle history. */
+      documentStep?: number;
+      documentStepAddress?: string;
     }
   | {
       type: 'wait-signal';
       operationId: string;
       signalName: string;
       callerStack?: string;
+      /** Optional document step identity used by file-workflow lifecycle history. */
+      documentStep?: number;
+      documentStepAddress?: string;
     }
   | {
       type: 'wait-update';
@@ -113,6 +122,7 @@ export type ContextOperationRequest =
     }
   | {
       type: 'parallel';
+      settle?: 'all' | 'settled';
       operationId: string;
       operations: ContextOperationRequest[];
       /**
@@ -136,6 +146,12 @@ export type ContextOperationRequest =
       type: 'race';
       operationId: string;
       operations: ContextOperationRequest[];
+      /**
+       * Workflow step index where this race lives — see note on `parallel.step`. The branches are
+       * primed before the race is yielded and take the steps after it, so the live step index is
+       * no longer the race's own by the time the engine records its timeline entry.
+       */
+      step: number;
       /** Ordered branch names for `ctx.raceKeyed`; absent for positional `ctx.race`. */
       branchNames?: string[];
       callerStack?: string;

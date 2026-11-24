@@ -49,9 +49,33 @@ describe('callCatalogOperation version skew', () => {
     if (result.ok) throw new Error('expected failure');
     expect(result.kind).toBe('compat');
     expect(result.message).toContain('not available on this server');
-    expect(result.message).toContain('weft server info');
     expect(result.message).not.toContain('404');
+    expect(result).toMatchObject({
+      code: 'MethodNotFound',
+      retryable: false,
+      remediation: "Run 'weft server info' to compare versions, or upgrade the server",
+    });
     expect(failureExitCode(result.kind)).toBe(4);
+  });
+
+  it('carries the server fault code, retryable and remediation of a failed operation', async () => {
+    const engine = new Engine();
+    const server = serve({ engine, port: 0 });
+    try {
+      const result = await callCatalogOperation({ server: server.url }, 'weft.workflows.get', {
+        workflowId: 'missing',
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        kind: 'operation',
+        code: 'NotFound',
+        retryable: false,
+        notFound: true,
+      });
+    } finally {
+      await server.stop();
+      engine[Symbol.dispose]();
+    }
   });
 
   it('returns a connection failure when the server is unreachable', async () => {
@@ -63,6 +87,8 @@ describe('callCatalogOperation version skew', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected failure');
     expect(result.kind).toBe('connection');
+    expect(result).toMatchObject({ code: 'Unavailable', retryable: true });
+    expect(result.message).toStartWith('connection failed: ');
     expect(failureExitCode(result.kind)).toBe(2);
   });
 

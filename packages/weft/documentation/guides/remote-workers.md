@@ -43,22 +43,30 @@ Use `wss://` for deployed workers. Plain `ws://` is only appropriate for localho
 The following subset shows the required identity and common execution options. The [worker API reference](../reference/api-workers.md#remoteworkeroptions) also covers complete manifests, artifact digests, authentication headers, and runtime metadata:
 
 ```typescript
-import type { ActivityInterceptor } from '@lostgradient/weft';
+import type { ActivityInterceptor, RemoteWorkerOptions } from '@lostgradient/weft';
 
-interface RemoteWorkerOptions {
-  serverUrl: string;
-  deploymentName: string;
-  buildId: string;
-  workerId?: string; // default: crypto.randomUUID()
-  workflows: Record<
-    string,
-    { name: string; activities: Record<string, (input: unknown) => Promise<unknown>> }
-  >;
-  concurrency?: number; // default: 10
-  queue?: string; // default: 'default'
-  disconnectTimeoutMs?: number; // default: 30_000
-  interceptors?: ActivityInterceptor[];
-}
+declare const interceptor: ActivityInterceptor;
+
+const options: RemoteWorkerOptions = {
+  serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
+  deploymentName: 'media-workers',
+  buildId: '2026.08.19-1',
+  workerId: 'media-worker-1', // default: crypto.randomUUID()
+  workflows: {
+    media: {
+      name: 'media',
+      activities: {
+        transcribe: async (input) => {
+          /* ... */
+        },
+      },
+    },
+  },
+  concurrency: 10, // default: 10
+  queue: 'default', // default: 'default'
+  disconnectTimeoutMs: 30_000, // default: 30_000
+  interceptors: [interceptor],
+};
 ```
 
 On connection, the worker sends a v8 `register` message carrying its worker ID, concurrency limit, and a canonical manifest describing its deployment, runtime, and workflows. The server derives routing activities from the manifest and reads the queue from the connection URL. `connect()` resolves only after the server replies with `registerAck`; it rejects on `registerError` or if the socket closes before acknowledgement. The server tracks the accepted worker in the `WorkerRegistry`.
@@ -172,22 +180,24 @@ const worker = new RemoteWorker({
 The interception context gives you everything you need to observe the call:
 
 ```typescript
-interface ActivityExecutionInterception {
-  activityName: string;
-  input: unknown; // mutable — interceptors can transform it
-  attempt: number;
-  headers: Map<string, string>; // propagated from the dispatching workflow
-  operationId?: string; // Operation identifier, available when executing on a remote worker.
-  signal?: AbortSignal; // Abort signal for cancellation, available when executing on a remote worker.
-}
+import type { ActivityExecutionInterception } from '@lostgradient/weft';
+
+const interception: ActivityExecutionInterception = {
+  activityName: 'transcribe',
+  input: { url: 'https://example.com/audio.wav' }, // mutable — interceptors can transform it
+  attempt: 1,
+  headers: new Map([['traceparent', '00-…-01']]), // propagated from the dispatching workflow
+  operationId: 'op-1', // available when executing on a remote worker
+  signal: new AbortController().signal, // cancellation, available when executing on a remote worker
+};
 ```
 
 The `headers` Map is the important piece for remote workers. When a workflow interceptor sets a header on the dispatch side (for example, an OpenTelemetry `traceparent` or an opaque credential reference such as `x-weft-credential-reference`), the engine serializes it into the WebSocket task message, and the `RemoteWorker` rehydrates it into the `headers` Map before calling your interceptor chain. Use the reference to resolve real secrets inside the worker from its own secret store; do not propagate raw bearer tokens, API keys, or encryption keys through task headers. That's how trace context and authorization context cross the network boundary without your activity function knowing anything about tracing.
 
 The most common use case is observability. The built-in `createObservabilityInterceptors()` factory returns a unified interceptor whose workflow and activity hooks share trace context across the boundary. Pass the same interceptor to every remote worker that should show up in your traces:
 
-```typescript partial
-import { createObservabilityInterceptors } from '@lostgradient/weft';
+```typescript
+import { createObservabilityInterceptors, RemoteWorker } from '@lostgradient/weft';
 
 const { interceptor } = createObservabilityInterceptors();
 
@@ -198,7 +208,11 @@ const worker = new RemoteWorker({
   workflows: {
     media: {
       name: 'media',
-      activities: {/* ... */},
+      activities: {
+        transcribe: async (input) => {
+          /* ... */
+        },
+      },
     },
   },
   interceptors: [interceptor],
@@ -216,15 +230,19 @@ Two independent clocks run on their own intervals, but they renew different thin
 - The **worker-session heartbeat** (`{ type: 'heartbeat', workerId }`) tells the server the connection is alive, every 10 seconds. `WorkerRegistry.heartbeat()` updates `lastHeartbeat` and nothing else — it does NOT extend any task's visibility timeout, even though it did before v5.
 - The **activity heartbeat** (`{ type: 'activityHeartbeat', workerId, operationId, attemptToken, details? }`) extends the visibility timeout of exactly one in-flight attempt, fenced by the same `(operationId, attemptToken)` identity check `taskResult` uses. `RemoteWorker` sends one automatically for every in-flight attempt, on an interval derived from that dispatch's `visibilityTimeout` (COR-226, protocol v8) — roughly a third of it, floored at one second — so an ordinary missed heartbeat still leaves margin before the lease actually expires. `LongPollWorker` does the identical thing over HTTP (see [Long-poll fallback](#long-poll-fallback) below); both transports keep a long-running attempt's lease alive without the activity doing anything.
 
-```typescript partial
-// Internally, RemoteWorker does:
-this.#heartbeat = new HeartbeatManager(() => {
-  this.#sendMessage({ type: 'heartbeat', workerId: this.#options.workerId });
-}, 10_000);
+```typescript
+import { HeartbeatManager, type WorkerToServerMessage } from '@lostgradient/weft';
 
-// ...and, automatically, once per in-flight attempt, on an interval derived
-// from that attempt's visibilityTimeout:
-this.#sendActivityHeartbeat(task);
+declare function sendMessage(message: WorkerToServerMessage): void;
+
+// Internally, RemoteWorker runs the session heartbeat like this:
+const heartbeat = new HeartbeatManager(() => {
+  sendMessage({ type: 'heartbeat', workerId: 'worker-1' });
+}, 10_000);
+heartbeat.start();
+
+// ...and, automatically, sends an `activityHeartbeat` once per in-flight
+// attempt, on an interval derived from that attempt's visibilityTimeout.
 ```
 
 Renewal is capped by the attempt's absolute deadline — a fixed ceiling on total attempt lifetime that neither heartbeat kind can extend, so a stalled worker that only ever heartbeats cannot hold an attempt open forever. Before COR-226, only `LongPollWorker` sent this automatic per-attempt heartbeat; a long-running `RemoteWorker`-dispatched activity had to outlive its own visibility timeout with nothing renewing the lease, so its attempt would silently expire, get reassigned by the server's expiry scan, and run a second time concurrently. `RemoteWorker` now behaves the same way as `LongPollWorker` here.
@@ -233,16 +251,21 @@ Renewal is capped by the attempt's absolute deadline — a fixed ceiling on tota
 
 An activity can attach progress details to its heartbeat, exactly the way an inline (in-process) activity uses `ActivityContext.heartbeat()` — this is the same public surface, not a second heartbeat API:
 
-```typescript partial
+```typescript
+import { RemoteWorker } from '@lostgradient/weft';
+
 const worker = new RemoteWorker({
-  /* ... */
+  serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
+  deploymentName: 'media-workers',
+  buildId: '2026.08.19-1',
   workflows: {
     media: {
       name: 'media',
       activities: {
-        transcode: async (input: { chunks: number }, context) => {
+        transcode: async (input, context) => {
+          const { chunks } = input as { chunks: number };
           const start = (context?.lastHeartbeatDetails as { done?: number } | undefined)?.done ?? 0;
-          for (let done = start; done < input.chunks; done++) {
+          for (let done = start; done < chunks; done++) {
             // ... process chunk `done` ...
             context?.heartbeat({ done: done + 1 });
           }
@@ -262,17 +285,22 @@ The server can request cancellation of an in-flight remote activity — for exam
 
 An activity observes cancellation the same way on both transports:
 
-```typescript partial
+```typescript
+import { RemoteWorker } from '@lostgradient/weft';
+
 const worker = new RemoteWorker({
-  /* ... */
+  serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
+  deploymentName: 'media-workers',
+  buildId: '2026.08.19-1',
   workflows: {
     media: {
       name: 'media',
       activities: {
         transcode: async (input, context) => {
-          for (const chunk of input.chunks) {
+          const { chunks } = input as { chunks: unknown[] };
+          for (const chunk of chunks) {
             if (context?.signal.aborted) {
-              throw new Error(context.signal.reason as string);
+              throw new Error(String(context.signal.reason));
             }
             // ... process chunk ...
           }
@@ -297,11 +325,13 @@ The registry supports three routing policies, configured via `serve({ routingPol
 - **`'fair-share'`** -- picks the worker with the fewest in-flight tasks for a given partition key (`fairShareKey`). Useful for workload isolation: tasks sharing a partition key go to the same worker when capacity allows, preventing one partition's burst from starving others.
 
 ```typescript
-interface RoutingOptions {
-  sticky?: string; // preferred worker ID for cache locality
-  queue?: string;
-  fairShareKey?: string; // partition key for fair-share routing
-}
+import type { RoutingOptions } from '@lostgradient/weft';
+
+const routing: RoutingOptions = {
+  sticky: 'worker-1', // preferred worker ID for cache locality
+  queue: 'default',
+  fairShareKey: 'tenant-42', // partition key for fair-share routing
+};
 ```
 
 If a `sticky` preference is provided (useful for cache locality), the registry checks that worker first. If it has capacity, it gets the task. Otherwise, least-loaded routing kicks in.
@@ -313,15 +343,30 @@ Workers inside the server's reconnect grace window are temporarily excluded from
 On the server side, `WorkerRegistry` tracks all connected workers and their state:
 
 ```typescript
-interface WorkerInfo {
-  id: string;
-  queue: string;
-  activities: string[];
-  concurrency: number;
-  inFlight: number;
-  connectedAt: number;
-  lastHeartbeat: number;
-}
+import type { WorkerInfo, WorkerManifest } from '@lostgradient/weft';
+
+declare const manifest: WorkerManifest;
+
+const worker: WorkerInfo = {
+  id: 'worker-1',
+  queue: 'default',
+  transport: 'websocket', // or 'long-poll'
+  activities: ['checkout.charge'],
+  concurrency: 10,
+  inFlight: 2,
+  connectedAt: 1_760_000_000_000, // epoch ms
+  lastHeartbeat: 1_760_000_050_000, // epoch ms
+  startedAt: 1_759_999_990_000, // epoch ms
+  sessionGeneration: 1,
+  capabilities: { region: 'us-east-1' },
+  deploymentName: 'billing',
+  buildId: '2026.08.18-3',
+  runtimeVersion: '1.3.14',
+  manifest, // the accepted canonical worker manifest
+  acceptedManifestDigest: 'sha256:deadbeef',
+  drainReason: 'maintenance', // set while the worker is drained
+  drainStartedAt: 1_760_000_060_000, // epoch ms
+};
 ```
 
 Key operations:
@@ -389,7 +434,11 @@ This durability is **process-memory only** for both worker classes: neither the 
 
 Both worker types support graceful shutdown. The `RemoteWorker` drains in-flight tasks before closing the WebSocket:
 
-```typescript partial
+```typescript
+import type { RemoteWorker } from '@lostgradient/weft';
+
+declare const worker: RemoteWorker;
+
 await worker.disconnect();
 ```
 
@@ -399,7 +448,11 @@ The server can also initiate shutdown by sending a `{ type: 'shutdown' }` messag
 
 Both classes implement `Disposable` for immediate cleanup with `using`. That synchronous cleanup is not an awaited drain. Call `disconnect()` for a remote worker or `stop()` for a long-poll worker before leaving the scope when in-flight work must settle:
 
-```typescript partial
+```typescript
+import { RemoteWorker, type RemoteWorkerOptions } from '@lostgradient/weft';
+
+declare const options: RemoteWorkerOptions;
+
 {
   using worker = new RemoteWorker(options);
   await worker.connect();

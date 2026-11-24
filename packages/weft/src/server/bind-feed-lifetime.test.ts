@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
-import { bindFeedLifetime } from './bind-feed-lifetime.ts';
-import { createInMemoryReplayLiveBackend } from './in-memory-replay-live-backend.ts';
-import { createReplayLiveFeed, encodeCursor } from './workflow-event-feed.ts';
+import {
+  bindFeedLifetime,
+  createInMemoryReplayLiveBackend,
+  createReplayLiveFeed,
+  encodeCursor,
+} from "../embedded/backchannel/src/index.ts";
 
 type TestEnvelope = { sequence: number; cursor: string; value: string };
 

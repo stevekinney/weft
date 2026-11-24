@@ -11,11 +11,15 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { LocalClient } from '../client/local.ts';
-import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { KEYS } from '../storage/keys.ts';
 import { nextAsyncPendingToken } from '../testing/async-activity.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { encode } from './codec.ts';
 import { AsyncActivityTokenNotFoundError, Engine } from './engine.ts';
 import type { ActivityContext, WorkflowContext } from './types.ts';

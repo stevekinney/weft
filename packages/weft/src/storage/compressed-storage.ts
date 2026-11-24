@@ -16,11 +16,15 @@ import {
 
 import {
   assertStorageBatchOperationCount,
+  storageScanWithMetadata,
+  storageStat,
   type BatchOperation,
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface.ts';
+  type StorageEntryMetadata,
+  type StorageScanEntryWithMetadata,
+} from "../embedded/storage/src/index.ts";
 
 /**
  * {@link Storage} decorator that transparently compresses payloads above a
@@ -33,7 +37,8 @@ import {
  * @example
  * ```ts
  * import { CompressedStorage } from '@lostgradient/weft';
- * import { workflow, Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { workflow, Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using inner = new MemoryStorage();
  * await using storage = new CompressedStorage(inner, {
@@ -66,6 +71,13 @@ export class CompressedStorage implements Storage {
       const boundQuery = inner.query.bind(inner);
       Object.defineProperty(this, 'query', {
         value: boundQuery,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    if (inner.sizeBytes) {
+      Object.defineProperty(this, 'sizeBytes', {
+        value: inner.sizeBytes.bind(inner),
         enumerable: true,
         configurable: true,
       });
@@ -110,6 +122,25 @@ export class CompressedStorage implements Storage {
   async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
     for await (const [key, value] of this.#inner.scan(prefix, options)) {
       yield [key, await decompressPayload(value)];
+    }
+  }
+
+  /** What the inner store knows about `key`; compression changes the value, never its write time. */
+  async stat(key: string): Promise<StorageEntryMetadata | null> {
+    return storageStat(this.#inner, key);
+  }
+
+  /** {@link CompressedStorage.scan} with each entry's metadata from the inner store. */
+  async *scanWithMetadata(
+    prefix: string,
+    options?: ScanOptions,
+  ): AsyncIterable<StorageScanEntryWithMetadata> {
+    for await (const [key, value, metadata] of storageScanWithMetadata(
+      this.#inner,
+      prefix,
+      options,
+    )) {
+      yield [key, await decompressPayload(value), metadata];
     }
   }
 

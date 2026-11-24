@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  generateOpenApiDocument,
+} from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
-import { generateOpenApiDocument } from './openapi.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
 
 describe('OpenAPI hydration', () => {
   const servers: WeftServer[] = [];

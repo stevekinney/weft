@@ -13,8 +13,8 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { UpdateRequest } from '../updates.ts';
 import { deliverCoordinatedUpdateToWaiterIfAvailable, update } from './updates.ts';
@@ -36,8 +36,10 @@ function createDeliveryHarness(registry: unknown) {
   const waiter = mock(() => {});
   const deleteRequest = mock(async () => {});
   const internals = {
+    options: { payloadValidation: 'none' },
     storage: new MemoryStorage(),
     workflowClaimRegistry: registry,
+    abortController: new AbortController(),
     updateCoordinator: { deleteRequest },
     durableInlineOperations: new Map([
       [
@@ -130,6 +132,7 @@ describe('update() bypasses the in-memory waiter when the workflow is owned else
 
     const waiter = mock(() => {});
     const internals = {
+      options: { payloadValidation: 'none' },
       storage,
       inlineStrategy: null,
       workflowClaimRegistry: { engineId: 'deposed-engine', currentEpoch: () => null },
@@ -137,8 +140,15 @@ describe('update() bypasses the in-memory waiter when the workflow is owned else
       updateWaitersByWorkflow: new Map<string, Set<string>>([
         ['workflow-1', new Set([WAITER_KEY])],
       ]),
+      abortController: new AbortController(),
       updateCoordinator: {
-        createRequest: mock(async () => 'update-1'),
+        submitRequest: mock(async () => ({
+          updateId: 'update-1',
+          workflowId: 'workflow-1',
+          name: 'rename',
+          payload: undefined,
+          createdAt: 1_000,
+        })),
         waitForResponse: mock(async () => ({ updateId: 'update-1', result: 'coordinated' })),
       },
     } as any;

@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { restoreRealTimers, useFakeTimers } from './fake-timers.test-support.ts';
-import { throwingRejectionOf } from './promise-outcome.test-support.ts';
+import { restoreRealTimers, useFakeTimers } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
-  createDiskBackedTestFixture,
   flush,
-  sqliteDatabaseSidecarSuffixes,
+  storageBackends,
   teardown,
   waitForWorkflowStatus,
 } from './storage-backends.test-support.ts';
@@ -26,9 +23,7 @@ describe('waitForWorkflowStatus', () => {
       }),
     };
 
-    expect(
-      await waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 500),
-    ).toBeUndefined();
+    expect(await waitForWorkflowStatus(engine as never, 'workflow-1', 'completed')).toBeUndefined();
   });
 
   it('throws when the workflow never reaches the requested status before timeout', async () => {
@@ -38,87 +33,38 @@ describe('waitForWorkflowStatus', () => {
 
     expect(
       await throwingRejectionOf(
-        waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', 20),
+        // hang-guard-self-test: the workflow stays running, so no load can make it reach completed
+        waitForWorkflowStatus(engine as never, 'workflow-1', 'completed', {
+          hangGuardMilliseconds: 20,
+        }),
       ),
     ).toThrow('Expected workflow "workflow-1" to reach status "completed"');
   });
 });
 
-describe('storage backend testing helpers', () => {
-  it('cleans up SQLite fixture files and sidecars', async () => {
-    const fixture = createDiskBackedTestFixture({
-      prefix: 'weft-storage-helper-sqlite',
-      suffix: '.db',
-      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
-    });
-
-    await Bun.write(fixture.path, 'database');
-    await Bun.write(`${fixture.path}-wal`, 'wal');
-    await Bun.write(`${fixture.path}-shm`, 'shm');
-
-    await fixture.cleanup();
-
-    expect(existsSync(fixture.path)).toBe(false);
-    expect(existsSync(`${fixture.path}-wal`)).toBe(false);
-    expect(existsSync(`${fixture.path}-shm`)).toBe(false);
+describe('storageBackends', () => {
+  it('holds the three adapters Weft depends on at runtime, in order', () => {
+    expect(storageBackends.map((backend) => backend.name)).toEqual([
+      'MemoryStorage',
+      'BunSQLiteStorage',
+      'IndexedDBStorage',
+    ]);
   });
 
-  it('cleans up recursive LMDB fixture directories', async () => {
-    const fixture = createDiskBackedTestFixture({
-      prefix: 'weft-storage-helper-lmdb',
-      recursive: true,
-    });
-    const nestedDirectory = join(fixture.path, 'data.mdb');
-
-    mkdirSync(nestedDirectory, { recursive: true });
-    await Bun.write(join(nestedDirectory, 'lock'), 'lock');
-
-    await fixture.cleanup();
-
-    expect(existsSync(fixture.path)).toBe(false);
-  });
-
-  it('continues best-effort cleanup after a sidecar removal failure', async () => {
-    const fixture = createDiskBackedTestFixture({
-      prefix: 'weft-storage-helper-best-effort',
-      suffix: '.db',
-      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
-    });
-    const nonRecursiveSidecarDirectory = `${fixture.path}-wal`;
-
-    try {
-      mkdirSync(nonRecursiveSidecarDirectory, { recursive: true });
-      await Bun.write(join(nonRecursiveSidecarDirectory, 'lock'), 'lock');
-      await Bun.write(fixture.path, 'database');
-
-      expect(() => fixture.cleanup()).not.toThrow();
-      expect(existsSync(fixture.path)).toBe(false);
-    } finally {
-      rmSync(nonRecursiveSidecarDirectory, { force: true, recursive: true });
-      fixture.cleanup();
+  it('builds a fresh storage for each backend and cleans it up', async () => {
+    for (const backend of storageBackends) {
+      const { storage, cleanup } = backend.factory();
+      try {
+        await storage.put('probe', new Uint8Array([1]));
+        expect(await storage.get('probe')).toEqual(new Uint8Array([1]));
+      } finally {
+        await cleanup();
+      }
     }
   });
+});
 
-  it('rejects path-like fixture fragments before cleanup can target them', () => {
-    expect(() => createDiskBackedTestFixture({ prefix: '../outside' })).toThrow(
-      'Fixture prefix must be a plain filename fragment',
-    );
-
-    expect(() =>
-      createDiskBackedTestFixture({
-        prefix: 'weft-storage-helper',
-        suffix: '../outside',
-      }),
-    ).toThrow('Fixture suffix must be a plain filename fragment');
-
-    expect(() =>
-      createDiskBackedTestFixture({
-        prefix: 'weft-storage-helper',
-        sidecarSuffixes: ['/outside'],
-      }),
-    ).toThrow('Fixture sidecar suffix must be a plain filename fragment');
-  });
-
+describe('storage backend testing helpers', () => {
   it('flush resolves without throwing', async () => {
     expect(await flush()).toBeUndefined();
   });

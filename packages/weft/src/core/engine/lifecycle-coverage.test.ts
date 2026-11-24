@@ -1,8 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS, MAX_BATCH_OPERATIONS, type BatchOperation } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MAX_BATCH_OPERATIONS, MemoryStorage, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowStartInterception } from '../interceptor/interception-contexts.ts';
@@ -45,6 +45,8 @@ import {
   workflowStateWithVersionTuple,
   workflowVersionTupleFromState,
 } from './lifecycle.ts';
+import type { FreshResumeClaimTracker } from './lifecycle/resume.ts';
+import type { ResumeAwaitingAdoption } from './resume-awaiting-adoption.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 
 /**
@@ -166,6 +168,7 @@ function createResumeWorkflowFromStorageInternals({
     options: { development: false, getNow: () => 1_000, historyPolicy: { maxEvents: null } },
     parkedInlineWorkflows: new Set<string>(),
     registrations: RESUME_TEST_REGISTRATIONS,
+    resumesAwaitingAdoption: new Map(),
     storage,
     strategy,
     terminalizingWorkflows,
@@ -882,6 +885,8 @@ describe('engine lifecycle coverage helpers', () => {
     const dispatchEvent = mock(() => {});
     const checkpoint = createCheckpoint('workflow-begin-worker');
     const internals = {
+      // No `runConcurrency`: the launch takes no slot.
+      options: {},
       inlineStrategy: null,
       pendingNestingDepth: 2,
       strategy: { startWorkflow: startWorkflowStrategy },
@@ -921,6 +926,8 @@ describe('engine lifecycle coverage helpers', () => {
   it('starts workflow execution with zero-depth and nested metadata', () => {
     const startWorkflowStrategy = mock(() => {});
     const internals = {
+      // No `runConcurrency`: the launch takes no slot.
+      options: {},
       strategy: { startWorkflow: startWorkflowStrategy },
       workflowHeaders: new Map<string, Map<string, string>>(),
       workflowNestingDepths: new Map<string, number>(),
@@ -968,7 +975,7 @@ describe('engine lifecycle coverage helpers', () => {
     });
     const lineage = createForkLineage(
       {} as never,
-      'workflow-source',
+      createWorkflowState('workflow-source'),
       sourceCheckpoint,
       createLifecycleCallbacks() as never,
     );
@@ -1061,6 +1068,8 @@ describe('engine lifecycle coverage helpers', () => {
     const startWorkflowStrategy = mock(() => {});
     const dispatchEvent = mock(() => {});
     const internals = {
+      // No `runConcurrency`: the launch takes no slot.
+      options: {},
       storage: new MemoryStorage(),
       checkpoints: new Map<string, Checkpoint>(),
       inlineStrategy: null,
@@ -1077,6 +1086,7 @@ describe('engine lifecycle coverage helpers', () => {
     const state = createWorkflowState('workflow-worker-launch', {
       executionDeadline: 9_000,
       type: 'worker-launch',
+      workflowExecutionToken: 'worker-launch-generation',
     });
     const handle = { id: 'workflow-worker-launch' };
 
@@ -1108,6 +1118,7 @@ describe('engine lifecycle coverage helpers', () => {
         executionStateOwnerId: state.id,
         headers: [['x-test', '1']],
         input: state.input,
+        workflowExecutionToken: 'worker-launch-generation',
         workflowId: state.id,
         workflowType: 'worker-launch',
       }),
@@ -1211,6 +1222,7 @@ describe('engine lifecycle coverage helpers', () => {
       await throwingRejectionOf(
         resumeWorkflowFromStorage(
           {
+            resumesAwaitingAdoption: new Map(),
             registrations: new Map(),
             storage,
           } as never,
@@ -1248,6 +1260,7 @@ describe('engine lifecycle coverage helpers', () => {
       await throwingRejectionOf(
         resumeWorkflowFromStorage(
           {
+            resumesAwaitingAdoption: new Map(),
             registrations: new Map(),
             storage,
             options: { ownershipMode: 'workflow-lease' },
@@ -1278,6 +1291,7 @@ describe('engine lifecycle coverage helpers', () => {
       await throwingRejectionOf(
         resumeWorkflowFromStorage(
           {
+            resumesAwaitingAdoption: new Map(),
             registrations: new Map(),
             storage,
             options: { ownershipMode: 'none' },
@@ -1302,6 +1316,7 @@ describe('engine lifecycle coverage helpers', () => {
       await throwingRejectionOf(
         resumeWorkflowFromStorage(
           {
+            resumesAwaitingAdoption: new Map(),
             registrations: new Map(),
             storage,
             options: { ownershipMode: 'none' },
@@ -1312,6 +1327,276 @@ describe('engine lifecycle coverage helpers', () => {
         ),
       ),
     ).toThrow('Checkpoint not found for workflow "workflow-resume-missing-checkpoint"');
+  });
+
+  it('resumeWorkflowFromStorage joins a resume of the same generation still awaiting adoption', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-join-same-generation';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'generation-a' })),
+    );
+    const joinedHandle = { id: workflowId };
+    const inFlight: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'generation-a',
+      handle: Promise.resolve(joinedHandle as never),
+      performs: { eagerRevisionCheck: true, resumedEvent: true },
+      claimEpoch: 7,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+    const tracker: FreshResumeClaimTracker = { epoch: null };
+
+    const handle = await resumeWorkflowFromStorage(
+      {
+        resumesAwaitingAdoption: new Map([[workflowId, new Map([['generation-a', [inFlight]]])]]),
+        registrations: new Map(),
+        storage,
+        options: { ownershipMode: 'none' },
+      } as never,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+      undefined,
+      { freshClaimTracker: tracker, deferClaimReleaseOnRejection: true },
+    );
+
+    expect(handle).toBe(joinedHandle as never);
+    // The joiner keeps its claim contract: it learns the joined resume's fresh claim, and its
+    // deferred release stops the joined resume from releasing that claim first.
+    expect(tracker.epoch).toBe(7);
+    expect(inFlight.deferClaimReleaseOnRejection).toBe(true);
+  });
+
+  it('resumeWorkflowFromStorage queues a joiner tracker until the joined resume acquires its claim', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-join-pending-claim';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'generation-a' })),
+    );
+    const inFlight: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'generation-a',
+      handle: Promise.resolve({ id: workflowId } as never),
+      performs: { eagerRevisionCheck: true, resumedEvent: true },
+      claimEpoch: null,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+    const tracker: FreshResumeClaimTracker = { epoch: null };
+
+    await resumeWorkflowFromStorage(
+      {
+        resumesAwaitingAdoption: new Map([[workflowId, new Map([['generation-a', [inFlight]]])]]),
+        registrations: new Map(),
+        storage,
+        options: { ownershipMode: 'none' },
+      } as never,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+      undefined,
+      { freshClaimTracker: tracker },
+    );
+
+    expect(inFlight.freshClaimTrackers).toEqual([tracker]);
+  });
+
+  it('resumeWorkflowFromStorage never joins a resume of another generation of the same id', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-other-generation';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'replacement' })),
+    );
+    const olderResume: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'replaced',
+      // An older generation's resume still held, for example, in `resolveWorkflowServices`.
+      handle: new Promise<never>(() => {}),
+      performs: { eagerRevisionCheck: true, resumedEvent: true },
+      claimEpoch: null,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+    const resumesAwaitingAdoption = new Map([[workflowId, new Map([['replaced', [olderResume]]])]]);
+
+    // The replacement resumes on its own, so it reaches its own checkpoint read rather than waiting
+    // on the older generation forever.
+    expect(
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            resumesAwaitingAdoption,
+            registrations: new Map(),
+            storage,
+            options: { ownershipMode: 'none' },
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
+      ),
+    ).toThrow('Checkpoint not found for workflow "workflow-resume-other-generation"');
+    expect(resumesAwaitingAdoption.get(workflowId)?.get('replaced')).toEqual([olderResume]);
+  });
+
+  it('resumeWorkflowFromStorage never joins an in-flight resume that skips a check the joiner requires', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-resume-stricter-joiner';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'generation-a' })),
+    );
+    // A parked run's wake skips the eager revision check that recovery entry points require.
+    const parkedWake: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'generation-a',
+      handle: new Promise<never>(() => {}),
+      performs: { eagerRevisionCheck: false, resumedEvent: false },
+      claimEpoch: null,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+
+    // The stricter resume runs on its own, so it reaches its own checkpoint read instead of
+    // inheriting the wake's skipped check.
+    expect(
+      await throwingRejectionOf(
+        resumeWorkflowFromStorage(
+          {
+            resumesAwaitingAdoption: new Map([
+              [workflowId, new Map([['generation-a', [parkedWake]]])],
+            ]),
+            registrations: new Map(),
+            storage,
+            options: { ownershipMode: 'none' },
+          } as never,
+          workflowId,
+          true,
+          createLifecycleCallbacks() as never,
+        ),
+      ),
+    ).toThrow('Checkpoint not found for workflow "workflow-resume-stricter-joiner"');
+  });
+
+  it('resumeWorkflowFromStorage joins strict resumes to each other while a weaker resume is pending', async () => {
+    const baseStorage = new MemoryStorage();
+    const workflowId = 'workflow-resume-two-strict-resumes';
+    await baseStorage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'generation-a' })),
+    );
+    const checkpointReadsReleased = Promise.withResolvers<void>();
+    let checkpointReads = 0;
+    const storage = {
+      get: async (key: string) => {
+        if (key === KEYS.checkpoint(workflowId)) {
+          checkpointReads++;
+          await checkpointReadsReleased.promise;
+        }
+        return baseStorage.get(key);
+      },
+    };
+    // A parked run's wake skips the eager revision check, so neither strict resume can join it.
+    const parkedWake: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'generation-a',
+      handle: new Promise<never>(() => {}),
+      performs: { eagerRevisionCheck: false, resumedEvent: false },
+      claimEpoch: null,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+    const internals = {
+      resumesAwaitingAdoption: new Map([[workflowId, new Map([['generation-a', [parkedWake]]])]]),
+      registrations: new Map(),
+      storage,
+      options: { ownershipMode: 'none' },
+    } as never;
+
+    const first = resumeWorkflowFromStorage(
+      internals,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+    );
+    const second = resumeWorkflowFromStorage(
+      internals,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+    );
+    for (let turn = 0; turn < 10; turn++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    checkpointReadsReleased.resolve();
+
+    const missing = 'Checkpoint not found for workflow "workflow-resume-two-strict-resumes"';
+    const [firstFailure, secondFailure] = await Promise.all([
+      throwingRejectionOf(first),
+      throwingRejectionOf(second),
+    ]);
+    expect(firstFailure).toThrow(missing);
+    expect(secondFailure).toThrow(missing);
+    // The second strict resume found the first and joined it, rather than driving the run again.
+    expect(checkpointReads).toBe(1);
+  });
+
+  it('resumeWorkflowFromStorage joins resumes of a replacement while an older generation is pending', async () => {
+    const baseStorage = new MemoryStorage();
+    const workflowId = 'workflow-resume-two-replacement-resumes';
+    await baseStorage.put(
+      KEYS.workflow(workflowId),
+      encode(createWorkflowState(workflowId, { workflowExecutionToken: 'replacement' })),
+    );
+    const checkpointReadsReleased = Promise.withResolvers<void>();
+    let checkpointReads = 0;
+    const storage = {
+      get: async (key: string) => {
+        if (key === KEYS.checkpoint(workflowId)) {
+          checkpointReads++;
+          await checkpointReadsReleased.promise;
+        }
+        return baseStorage.get(key);
+      },
+    };
+    const olderResume: ResumeAwaitingAdoption = {
+      workflowExecutionToken: 'replaced',
+      handle: new Promise<never>(() => {}),
+      performs: { eagerRevisionCheck: true, resumedEvent: true },
+      claimEpoch: null,
+      freshClaimTrackers: [],
+      deferClaimReleaseOnRejection: false,
+    };
+    const internals = {
+      resumesAwaitingAdoption: new Map([[workflowId, new Map([['replaced', [olderResume]]])]]),
+      registrations: new Map(),
+      storage,
+      options: { ownershipMode: 'none' },
+    } as never;
+
+    const first = resumeWorkflowFromStorage(
+      internals,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+    );
+    const second = resumeWorkflowFromStorage(
+      internals,
+      workflowId,
+      true,
+      createLifecycleCallbacks() as never,
+    );
+    for (let turn = 0; turn < 10; turn++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    checkpointReadsReleased.resolve();
+
+    const missing = 'Checkpoint not found for workflow "workflow-resume-two-replacement-resumes"';
+    const [firstFailure, secondFailure] = await Promise.all([
+      throwingRejectionOf(first),
+      throwingRejectionOf(second),
+    ]);
+    expect(firstFailure).toThrow(missing);
+    expect(secondFailure).toThrow(missing);
+    // The second replacement resume joined the first instead of reading and driving the run again.
+    expect(checkpointReads).toBe(1);
   });
 
   it('resumeWorkflowFromStorage rejects when termination starts during the serialized resume write', async () => {
@@ -1486,6 +1771,7 @@ describe('engine lifecycle coverage helpers', () => {
 
     const handle = { id: workflowId };
     const internals = {
+      resumesAwaitingAdoption: new Map(),
       checkpoints: new Map<string, Checkpoint>(),
       eventLogHeads: new Map(),
       inlineStrategy: null,

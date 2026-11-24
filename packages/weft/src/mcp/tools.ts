@@ -1,8 +1,11 @@
+import type { FaultCode } from "../embedded/backchannel/src/index.ts";
+import { FAULT_CODE_RETRYABLE, remediationProblem } from "../embedded/backchannel/src/internals.ts";
 import type { Engine } from '../core/engine.ts';
 import { RegistrySchemaConversionError } from '../core/registry-snapshot.ts';
 import { runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
 import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to-json.ts';
 import type { DefinitionSchema } from '../core/types/definition-schema.ts';
+import { weftFaultPolicy } from '../server/weft-fault-policy.ts';
 import {
   McpToolExecutionError,
   assertScope,
@@ -11,7 +14,6 @@ import {
   type McpAccessContext,
 } from './access.ts';
 import { parseMcpListFilter } from './list-filter.ts';
-import type { McpSession } from './session.ts';
 import { tupleListsEqual } from './tuple-list-equality.ts';
 
 /** MCP tool definition. */
@@ -22,20 +24,45 @@ export type McpToolDefinition = {
   readonly inputSchema: Record<string, unknown>;
 };
 
-/** Result shape returned by MCP `tools/call`. */
+/**
+ * What a failed tool call reports as `structuredContent`: the same fields as every other Weft
+ * surface's fault. `retryable` is the code's own answer, and `remediation` is one line saying what
+ * to do next, when there is something to say.
+ */
+type McpToolFault = {
+  readonly code: FaultCode;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly remediation?: string;
+};
+
+/**
+ * Result shape returned by MCP `tools/call`. A failure keeps its message as text, so a host that
+ * ignores `structuredContent` still reads it, and carries the {@link McpToolFault} beside it.
+ */
 export type McpToolResult = {
   readonly content: ReadonlyArray<{ readonly type: 'text'; readonly text: string }>;
   readonly isError?: boolean;
+  readonly structuredContent?: McpToolFault;
 };
 
-type ToolCallContext = McpAccessContext & {
-  readonly session: McpSession;
-  readonly requestId: unknown;
+/**
+ * What a tool call runs with: the caller's access context and the abort signal
+ * of the MCP request that carries it. The SDK aborts the signal when the client
+ * cancels the request, and a workflow tool cancels the workflow it started.
+ */
+export type McpToolCallContext = McpAccessContext & {
+  readonly signal?: AbortSignal | undefined;
+  /**
+   * Receives work a call starts and does not await, such as cancelling the workflow of a call the
+   * client cancelled, so the entry that owns the connection can wait for it before closing.
+   */
+  readonly trackPendingWork?: ((work: Promise<unknown>) => void) | undefined;
 };
 
 type ToolImplementation = {
   readonly definition: McpToolDefinition;
-  readonly call: (argumentsValue: unknown, context: ToolCallContext) => Promise<unknown>;
+  readonly call: (argumentsValue: unknown, context: McpToolCallContext) => Promise<unknown>;
 };
 
 type ToolRegistrySignatureEntry = readonly [
@@ -76,11 +103,17 @@ export function listMcpTools(engine: Engine): McpToolDefinition[] {
 export async function callMcpTool(
   name: string,
   argumentsValue: unknown,
-  context: ToolCallContext,
+  context: McpToolCallContext,
 ): Promise<McpToolResult> {
   const tool = getToolRegistry(context.engine).toolsByName.get(name);
   if (tool === undefined) {
-    return toolError(`Unknown tool: ${name}`);
+    return toolError(
+      toolFault(
+        'MethodNotFound',
+        `Unknown tool: ${name}`,
+        'Call tools/list for the tools this server offers',
+      ),
+    );
   }
 
   try {
@@ -88,13 +121,54 @@ export async function callMcpTool(
     return toolSuccess(value);
   } catch (error) {
     if (error instanceof McpToolExecutionError) {
-      return toolError(error.message);
+      return toolError(toolFault(error.faultCode, error.message, error.remediation));
     }
-    if (error instanceof Error && error.message === 'Workflow cancelled') {
-      return toolError(error.message);
+    if (error instanceof Error && error.message === WORKFLOW_CANCELLED_MESSAGE) {
+      return toolError(toolFault('Conflict', error.message));
     }
+    const classified = classifyEngineToolError(error);
+    if (classified !== undefined) return toolError(classified);
     console.warn('MCP tool execution failed:', error);
-    return toolError('Tool execution failed');
+    return toolError(toolFault('EngineFailure', 'Tool execution failed'));
+  }
+}
+
+const WORKFLOW_CANCELLED_MESSAGE = 'Workflow cancelled';
+
+/** A cancelled workflow or request: the call cannot finish as asked, and repeating it is not the repair. */
+function workflowCancelledError(): McpToolExecutionError {
+  return new McpToolExecutionError(WORKFLOW_CANCELLED_MESSAGE, { faultCode: 'Conflict' });
+}
+
+/**
+ * The fault of an engine error whose class Weft's fault policy names (an id already taken, a
+ * workflow type that is not registered, a workflow that does not exist), with the caller's own
+ * input in its message. Any other error is masked by the caller: its message may hold internals.
+ */
+function classifyEngineToolError(error: unknown): McpToolFault | undefined {
+  const classified = weftFaultPolicy.classifyError?.(error);
+  if (classified === undefined || !(error instanceof Error)) return undefined;
+  switch (classified.code) {
+    case 'Conflict':
+      return toolFault(
+        'Conflict',
+        error.message,
+        'Choose a different id, or omit id to let the engine generate one',
+      );
+    case 'InvalidParams':
+      return toolFault(
+        'InvalidParams',
+        error.message,
+        'Use a workflow type that is registered on this engine',
+      );
+    case 'NotFound':
+      return toolFault(
+        'NotFound',
+        error.message,
+        'Call list_workflows to find a workflow id that exists',
+      );
+    default:
+      return undefined;
   }
 }
 
@@ -157,29 +231,22 @@ function buildToolImplementations(engine: Engine): ToolImplementation[] {
       call: async (argumentsValue, context) => {
         assertScope(context, 'workflows:write', 'Calling workflow tools');
         const { input, timeoutMs } = parseWorkflowToolArguments(argumentsValue);
-        const workflowId = crypto.randomUUID();
-        context.session.trackRequest(context.requestId, workflowId);
-        try {
-          if (context.session.isRequestCancelled(context.requestId)) {
-            throw new McpToolExecutionError('Workflow cancelled');
-          }
-          const handle = await runtimeWorkflowEngine(context.engine).start(definition.type, input, {
-            id: workflowId,
-          });
-          if (context.session.isRequestCancelled(context.requestId)) {
+        if (context.signal?.aborted) throw workflowCancelledError();
+        const handle = await runtimeWorkflowEngine(context.engine).start(definition.type, input, {
+          id: crypto.randomUUID(),
+        });
+        const outcome = await waitForWorkflowToolResult(handle, {
+          timeoutMs,
+          signal: context.signal,
+          cancel: async () => {
             await context.engine.cancel(handle.id);
-          }
-          const outcome = await waitForWorkflowToolResult(handle, {
-            timeoutMs,
-            signal: context.session.requestSignal(context.requestId),
-          });
-          if (outcome.status === 'timed-out') {
-            return workflowToolStillRunningResult(handle.id, timeoutMs);
-          }
-          return { workflowId: handle.id, result: outcome.result };
-        } finally {
-          context.session.untrackRequest(context.requestId);
+          },
+          trackPendingWork: context.trackPendingWork,
+        });
+        if (outcome.status === 'timed-out') {
+          return workflowToolStillRunningResult(handle.id, timeoutMs);
         }
+        return { workflowId: handle.id, result: outcome.result };
       },
     });
   }
@@ -242,10 +309,16 @@ function parseWorkflowToolTimeoutMs(value: unknown): number {
 
 async function waitForWorkflowToolResult(
   handle: ResultHandle,
-  options: { timeoutMs: number; signal?: AbortSignal | undefined },
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal | undefined;
+    cancel: () => Promise<void>;
+    trackPendingWork?: ((work: Promise<unknown>) => void) | undefined;
+  },
 ): Promise<WorkflowToolResultWaitOutcome> {
   if (options.signal?.aborted) {
-    throw new McpToolExecutionError('Workflow cancelled');
+    await options.cancel();
+    throw workflowCancelledError();
   }
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -260,7 +333,13 @@ async function waitForWorkflowToolResult(
     options.signal === undefined
       ? undefined
       : new Promise<never>((_resolve, reject) => {
-          const abort = () => reject(new McpToolExecutionError('Workflow cancelled'));
+          const abort = () => {
+            reject(workflowCancelledError());
+            const cancellation = options.cancel().catch((error: unknown) => {
+              console.warn('MCP workflow tool cancellation failed:', error);
+            });
+            options.trackPendingWork?.(cancellation);
+          };
           options.signal?.addEventListener('abort', abort, { once: true });
           cleanupAbortListener = () => options.signal?.removeEventListener('abort', abort);
         });
@@ -422,6 +501,8 @@ function builtInTools(): ToolImplementation[] {
           tags: { type: 'array', items: { type: 'string' } },
           limit: { type: 'number' },
           offset: { type: 'number' },
+          failedStep: { type: 'string', minLength: 1 },
+          retrying: { type: 'boolean' },
         }),
       },
       call: async (argumentsValue, context) => {
@@ -449,7 +530,12 @@ function builtInTools(): ToolImplementation[] {
 
 async function requireVisibleWorkflow(context: McpAccessContext, workflowId: string) {
   const state = await getVisibleWorkflowState(context.engine, workflowId);
-  if (state === null) throw new McpToolExecutionError(`Workflow "${workflowId}" not found`);
+  if (state === null) {
+    throw new McpToolExecutionError(`Workflow "${workflowId}" not found`, {
+      faultCode: 'NotFound',
+      remediation: 'Call list_workflows to find a workflow id that exists',
+    });
+  }
   return state;
 }
 
@@ -457,8 +543,24 @@ function toolSuccess(value: unknown): McpToolResult {
   return { isError: false, content: [{ type: 'text', text: JSON.stringify(value) }] };
 }
 
-function toolError(message: string): McpToolResult {
-  return { isError: true, content: [{ type: 'text', text: message }] };
+/** The fault of `code`: `retryable` from the code's single table, `remediation` only when valid. */
+function toolFault(code: FaultCode, message: string, remediation?: string): McpToolFault {
+  return {
+    code,
+    message,
+    retryable: FAULT_CODE_RETRYABLE[code],
+    ...(remediation === undefined || remediationProblem(remediation) !== undefined
+      ? {}
+      : { remediation }),
+  };
+}
+
+function toolError(fault: McpToolFault): McpToolResult {
+  return {
+    isError: true,
+    content: [{ type: 'text', text: fault.message }],
+    structuredContent: fault,
+  };
 }
 
 function requireObject(value: unknown): Record<string, unknown> {

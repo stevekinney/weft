@@ -72,12 +72,12 @@ describe('worker ctx.log', () => {
     expect(typeof captured.records[0]!.timestamp).toBe('number');
   });
 
-  it('suppresses logs in the replayed prefix on recovery but emits at the live frontier', async () => {
-    // A workflow that logs BEFORE each durable step. On the fresh run it logs
-    // 'before-1' (live) then parks on step 1. On recovery it replays the body:
-    // 'before-1' sits at a cached step (suppressed), then 'before-2' is the live
-    // frontier (emitted). This is the worker analogue of the inline post-step
-    // suppression and the bounded check that nextStepIndex reconciliation works.
+  it('suppresses logs in the replayed prefix on recovery, marks the one in front of the pending operation, and leaves the rest unmarked', async () => {
+    // A workflow that logs BEFORE each durable step. On the first life it logs 'before-1',
+    // completes op1, logs 'before-2', and parks on op2. Recovering replays the body: 'before-1'
+    // sits at a cached step and is suppressed; 'before-2' sits in front of the pending op2, which
+    // the first life already ran up to, so it is delivered marked `replayed` for a sink that
+    // wants it (the persisted log store skips it). The log after op2 is new work, unmarked.
     const op1 = activityOperation('wf-worker-replay', 'step1', 'one');
     const op2 = activityOperation('wf-worker-replay', 'step2', 'two');
 
@@ -86,10 +86,10 @@ describe('worker ctx.log', () => {
       const first: unknown = yield op1;
       ctx.log.info('before-2');
       const second: unknown = yield op2;
+      ctx.log.info('after-2');
       return { first, second };
     }
 
-    // Fresh run: emits 'before-1' (live), then parks requesting op1.
     const firstContext = createWorkflowRunnerContext();
     const firstResult = await handleRunMessage(
       firstContext,
@@ -108,11 +108,10 @@ describe('worker ctx.log', () => {
     });
     expect(checkpoint.type).toBe('checkpoint');
     if (checkpoint.type !== 'checkpoint') return;
+    expect(captured.records.map((r) => r.message)).toEqual(['before-1', 'before-2']);
 
-    // Recovery: replays the body from a checkpoint that has step 0 cached.
-    // 'before-1' is in the replayed prefix → suppressed. 'before-2' is the live
-    // frontier → emitted, and the recovered run must request op2 (proving the
-    // replay reached the right position, not just that the log sequence matched).
+    // Recovery: replays the body from a checkpoint that has step 0 cached and op2 pending. The
+    // recovered run must request op2 again (proving the replay reached the right position, not just that the log sequence matched).
     captured.restore();
     captured = captureWorkflowLogConsole();
     const recoveredContext = createWorkflowRunnerContext();
@@ -129,7 +128,92 @@ describe('worker ctx.log', () => {
 
     expect(recovered.type).toBe('checkpoint');
     expect(recovered.type === 'checkpoint' ? recovered.operationRequest : undefined).toEqual(op2);
-    expect(captured.records.map((r) => r.message)).toEqual(['before-2']);
+    expect(captured.records.map((r) => [r.message, r.replayed])).toEqual([['before-2', true]]);
+
+    const finished = await handleResumeMessage(recoveredContext, {
+      workflowId: 'wf-worker-replay',
+      result: 'two-result',
+    });
+    expect(finished.type).toBe('completed');
+    // The log past the pending operation carries the position it was logged at (COR-1811).
+    expect(captured.records.map((r) => [r.message, r.step, r.replayed])).toEqual([
+      ['before-2', 1, true],
+      ['after-2', 2, undefined],
+    ]);
+  });
+
+  it('marks a log placed before the pending operation when the run recovers (COR-1811)', async () => {
+    // The fresh run logs 'before-1' and parks on op1, committing op1's signature to the
+    // checkpoint. Recovering from that checkpoint replays the body to the same pending
+    // operation: the log in front of it was already emitted by the first life, so it is delivered
+    // marked `replayed`, and the log after the operation is new work and carries no mark.
+    const op1 = activityOperation('wf-worker-pending', 'step1', 'one');
+    async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+      ctx.log.info('before-1');
+      const first: unknown = yield op1;
+      ctx.log.info('after-1');
+      return first;
+    }
+
+    const firstContext = createWorkflowRunnerContext();
+    const firstResult = await handleRunMessage(
+      firstContext,
+      { workflowId: 'wf-worker-pending', workflowType: 'pending', input: null },
+      () => loggingWorkflow,
+    );
+    expect(firstResult.type).toBe('checkpoint');
+    if (firstResult.type !== 'checkpoint') return;
+    expect(captured.records.map((r) => r.message)).toEqual(['before-1']);
+
+    captured.restore();
+    captured = captureWorkflowLogConsole();
+    const recoveredContext = createWorkflowRunnerContext();
+    const recovered = await handleRunMessage(
+      recoveredContext,
+      {
+        workflowId: 'wf-worker-pending',
+        workflowType: 'pending',
+        input: null,
+        checkpoint: firstResult.checkpoint,
+      },
+      () => loggingWorkflow,
+    );
+    expect(recovered.type).toBe('checkpoint');
+    expect(recovered.type === 'checkpoint' ? recovered.operationRequest : undefined).toEqual(op1);
+    expect(captured.records.map((r) => [r.message, r.replayed])).toEqual([['before-1', true]]);
+
+    const resumed = await handleResumeMessage(recoveredContext, {
+      workflowId: 'wf-worker-pending',
+      result: 'one-result',
+    });
+    expect(resumed.type).toBe('completed');
+    expect(captured.records.map((r) => [r.message, r.step, r.replayed])).toEqual([
+      ['before-1', 0, true],
+      ['after-1', 1, undefined],
+    ]);
+  });
+
+  it('stamps each record with the step the body was about to run', async () => {
+    const op = activityOperation('wf-worker-step', 'step1', 'one');
+    async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+      ctx.log.info('before-first');
+      const first: unknown = yield op;
+      ctx.log.info('after-first');
+      return first;
+    }
+
+    const context = createWorkflowRunnerContext();
+    await handleRunMessage(
+      context,
+      { workflowId: 'wf-worker-step', workflowType: 'step', input: null },
+      () => loggingWorkflow,
+    );
+    await handleResumeMessage(context, { workflowId: 'wf-worker-step', result: 'one-result' });
+
+    expect(captured.records.map((r) => [r.message, r.step])).toEqual([
+      ['before-first', 0],
+      ['after-first', 1],
+    ]);
   });
 
   it('quarantines caller attributes under their own key (no envelope shadowing)', async () => {
@@ -178,6 +262,7 @@ describe('worker ctx.log', () => {
     liveReplayState = {
       accumulatedResults: new Map([[0, 'cached']]),
       failedOutcomes: new Map(),
+      signatures: new Map(),
       nextStepIndex: 0,
     };
     ctx.log.info('replaying');
@@ -187,6 +272,7 @@ describe('worker ctx.log', () => {
     liveReplayState = {
       accumulatedResults: new Map([[0, 'cached']]),
       failedOutcomes: new Map(),
+      signatures: new Map(),
       nextStepIndex: 1,
     };
     ctx.log.info('post-replay');
@@ -208,6 +294,7 @@ describe('worker ctx.log', () => {
     liveReplayState = {
       accumulatedResults: new Map(),
       failedOutcomes: new Map([[0, { error: 'boom', failureCategory: 'application' }]]),
+      signatures: new Map(),
       nextStepIndex: 0,
     };
     ctx.log.info('before failed step — replaying');
@@ -217,6 +304,7 @@ describe('worker ctx.log', () => {
     liveReplayState = {
       accumulatedResults: new Map(),
       failedOutcomes: new Map([[0, { error: 'boom', failureCategory: 'application' }]]),
+      signatures: new Map(),
       nextStepIndex: 1,
     };
     ctx.log.info('after failed step — live');
@@ -253,6 +341,7 @@ describe('worker ctx.log', () => {
       liveReplayState = {
         accumulatedResults: new Map([[0, 'cached']]),
         failedOutcomes: new Map(),
+        signatures: new Map(),
         nextStepIndex: 0,
       };
       ctx.log.info('replaying — suppressed');
@@ -261,6 +350,7 @@ describe('worker ctx.log', () => {
       liveReplayState = {
         accumulatedResults: new Map([[0, 'cached']]),
         failedOutcomes: new Map(),
+        signatures: new Map(),
         nextStepIndex: 1,
       };
       ctx.log.info('live — forwarded');

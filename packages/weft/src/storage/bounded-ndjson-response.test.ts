@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { readBoundedNdjsonResponse } from './bounded-ndjson-response.ts';
 
 const textEncoder = new TextEncoder();

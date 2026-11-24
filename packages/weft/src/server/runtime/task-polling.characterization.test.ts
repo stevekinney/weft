@@ -17,17 +17,19 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import type { TaskResultDeadLetteredEvent } from '../../core/events.ts';
+import { decodeTaskAttemptRecord, taskAttemptPrefix } from '../../core/task-ledger/task-attempt.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
   isRemoteTaskTerminalResolved,
   taskLedgerKey,
   type RemoteTaskLeased,
+  type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
 } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { principalFromApiKey } from '../principal.ts';
 import {
   FailingTerminalCommitStorage,
   minimalServeOptions,
@@ -840,6 +842,65 @@ describe('handleTaskPollRequest', () => {
     expect(body.workerId).toMatch(/^longpoll-/);
   });
 
+  it('hands a re-claimed task its prior heartbeat details and records the execution requirement on the claim', async () => {
+    const operationId = 'op-reclaim-details';
+    const storage = new MemoryStorage();
+    const executionRequirement = { deploymentName: 'billing-service', buildId: 'build-42' };
+    const requeued: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId,
+      workflowType: 'testWorkflow',
+      activityName: 'charge',
+      queue: 'default',
+      input: null,
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: Date.now(),
+      generation: 0,
+      state: 'queued',
+      attempt: 2,
+      availableAt: Date.now(),
+      firstQueuedAt: Date.now(),
+      lastQueuedAt: Date.now(),
+      retryCount: 1,
+      requeueCount: 0,
+      lastHeartbeatDetails: { processed: 41 },
+      executionRequirement,
+    };
+    await storage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(requeued));
+    const context = minimalServerContext();
+    const options = minimalServeOptions(storage);
+    expect(
+      await dispatchTaskImpl(context, options, {
+        operationId,
+        activityName: 'charge',
+        workflowType: 'testWorkflow',
+        input: null,
+      }),
+    ).toBe(true);
+    const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+
+    const response = await handleTaskPollRequest(
+      context,
+      options,
+      request,
+      new URL(request.url),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(200);
+    const body = await response?.json();
+    expect(body.lastHeartbeatDetails).toEqual({ processed: 41 });
+    const attempts: unknown[] = [];
+    for await (const [, value] of storage.scan(taskAttemptPrefix(operationId))) {
+      attempts.push(decodeTaskAttemptRecord(value));
+    }
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ attempt: 2, executionRequirement });
+  });
+
   it('settles with 204 when the durable claim loses the race against a stale in-memory match', async () => {
     const storage = new MemoryStorage();
     const context = minimalServerContext();
@@ -1287,19 +1348,27 @@ describe('handleTaskPollRequest', () => {
     expect(await first?.json()).toEqual({ ok: true, disposition: 'applied' });
     const resolved = await readResolvedTerminalRecord(storage, 'op-conflict');
 
-    // Same operation, same attempt token, but a genuinely different result.
-    const conflicting = await handleTaskResultRequest(
-      context,
-      options,
-      makePostRequest({
-        operationId: 'op-conflict',
-        workerId: 'longpoll-worker',
-        attemptToken: 'attempt-token',
-        status: 'completed',
-        value: 'a different value entirely',
-      }),
-      makeUrl(),
-    );
+    // Same operation, same attempt token, but a genuinely different result. The handler logs the
+    // refusal; capture it so the expected line does not leak into the run's output.
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    let conflicting: Response | null | undefined;
+    try {
+      conflicting = await handleTaskResultRequest(
+        context,
+        options,
+        makePostRequest({
+          operationId: 'op-conflict',
+          workerId: 'longpoll-worker',
+          attemptToken: 'attempt-token',
+          status: 'completed',
+          value: 'a different value entirely',
+        }),
+        makeUrl(),
+      );
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain('Failed to commit task result');
+    } finally {
+      errorSpy.mockRestore();
+    }
     expect(conflicting?.status).toBe(403);
     expect(await conflicting?.json()).toEqual({
       error: 'Forbidden',

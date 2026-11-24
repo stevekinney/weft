@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import { WorkflowRevisionTombstonedError } from '../catalog/errors.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';

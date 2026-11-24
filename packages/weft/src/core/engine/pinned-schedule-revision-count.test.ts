@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { ScheduleState } from '../types.ts';
 import { countPinnedSchedulesForRevision } from './pinned-schedule-revision-count.ts';
@@ -14,12 +14,14 @@ function makeScheduleState(overrides: Partial<ScheduleState> & { id: string }): 
     status: 'active',
     overlap: 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     createdAt: 1,
     updatedAt: 1,
     nextFireAt: 60_000,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     queuedRuns: [],
     ...overrides,
   };

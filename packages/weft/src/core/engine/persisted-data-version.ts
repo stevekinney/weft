@@ -1,4 +1,4 @@
-import type { Storage as WeftStorage } from '../../storage/interface.ts';
+import type { Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,

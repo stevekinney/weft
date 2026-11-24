@@ -1,13 +1,9 @@
+import { decodeCursor, encodeCursor, type Cursor } from "../embedded/backchannel/src/index.ts";
+import { type BatchOperation, type Storage } from "../embedded/storage/src/index.ts";
 import { decode, encode } from '../core/codec.ts';
 import { PersistedDataCorruptError } from '../core/persisted-data-incompatible-error.ts';
-import { KEYS, type BatchOperation, type Storage } from '../storage/interface.ts';
-import {
-  decodeCursor,
-  encodeCursor,
-  type Cursor,
-  type FleetEventEnvelope,
-  type FleetEventInput,
-} from './workflow-event-feed.ts';
+import { KEYS } from '../storage/keys.ts';
+import { type FleetEventEnvelope, type FleetEventInput } from './workflow-event-feed.ts';
 
 export const REPLAY_PAGE_SIZE = 128;
 export const DEFAULT_RETENTION_BATCH_SIZE = 100;

@@ -24,10 +24,9 @@
  * per expected type; {@link buildInternalRealmManifest} is what the realm
  * uses to build its own full advertised manifest.
  *
- * `runtime` is a fixed constant rather than `detectRuntime()`: a browser Web
- * Worker has no `window`/`document` in its own scope, so it detects as
- * `'edge'` while the hosting page detects as `'browser'` — real detection
- * would make otherwise-identical manifests diverge on every browser
+ * `runtime` is a fixed constant rather than anything read from the host: a
+ * browser Web Worker and the page hosting it would otherwise report different
+ * runtimes, making otherwise-identical manifests diverge on every browser
  * deployment. Both sides call this same function, so a constant is exactly
  * as comparable and avoids that divergence entirely.
  *

@@ -17,7 +17,7 @@
  * @module storage/catalog-keys
  */
 
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 
 /**
  * Workflow catalog key builders. Spread into `KEYS`; not intended to be

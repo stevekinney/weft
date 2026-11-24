@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { createHttpClientStorage } from './http-client-storage.ts';
 
 afterEach(() => {
@@ -111,5 +111,33 @@ describe('HTTP client storage facade', () => {
     expect(await throwingRejectionOf(storage.conditionalBatch([], []))).toThrow(
       'HttpClient storage conditional batch response must include a boolean "applied" field.',
     );
+  });
+
+  it('base64-encodes a present expected value and sends null for an absent one', async () => {
+    let requestBody: unknown;
+    spyOn(globalThis, 'fetch').mockImplementation(
+      fetchImplementation(async (_input, init) => {
+        requestBody = JSON.parse(await new Response(init?.body).text());
+        return Response.json({ applied: true });
+      }),
+    );
+    const storage = createHttpClientStorage('https://weft.example', {});
+
+    const applied = await storage.conditionalBatch(
+      [
+        { key: 'present', expectedValue: new Uint8Array([1, 2, 3]) },
+        { key: 'absent', expectedValue: null },
+      ],
+      [],
+    );
+
+    expect(applied).toBe(true);
+    expect(requestBody).toEqual({
+      conditions: [
+        { key: 'present', expectedValue: 'AQID' },
+        { key: 'absent', expectedValue: null },
+      ],
+      operations: [],
+    });
   });
 });

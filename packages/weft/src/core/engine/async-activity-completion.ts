@@ -51,7 +51,7 @@
  * resolution buffer live in `async-activity-records.ts`.
  */
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
@@ -66,6 +66,7 @@ import {
 } from './async-activity-records.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';
+import { clearDeferredInFlightOperation } from './in-flight-operation.ts';
 import type { EngineInternals } from './internals.ts';
 import { isCurrentOperation, workflowExecutionTokenForWorkflow } from './strategy-helpers.ts';
 import { confirmWakeOwnership, wakeNeedsOwnershipCheck } from './wake-ownership-guard.ts';
@@ -159,6 +160,9 @@ export async function parkDeferredAsyncActivity(
   details: Omit<PendingAsyncActivity, 'token' | 'createdAt'>,
   callbacks: AsyncActivityResolutionCallbacks,
 ): Promise<never> {
+  // This turn is about to hand the router a promise that never settles, so a termination must not
+  // wait for it (COR-1597). Before the first await, so nothing observes the stale record.
+  clearDeferredInFlightOperation(internals, details.workflowId, details.operationId);
   const queuedResolution = takePendingAsyncActivityResolution(
     internals,
     details.workflowId,

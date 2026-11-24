@@ -14,6 +14,7 @@ import {
   BranchTopologyChangedError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
+  DefinitionSchemaRequiredError,
   DurableActivityScopeError,
   DurableActivityUnsupportedError,
   DynamicWorkflowSourceUnavailableError,
@@ -32,7 +33,9 @@ import {
   PersistedDataCorruptError,
   PersistedDataIncompatibleError,
   ReviewTimeoutError,
+  ScheduleOccurrenceNotNextError,
   StartOrSignalConflictError,
+  UndeclaredWorkflowMessageError,
   UpdateTimeoutError,
   UpdateValidationError,
   VersionMismatchError,
@@ -101,6 +104,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
       registeredTypes: ['known'],
       missingWorkflows: [{ type: 'mystery', workflowId: 'wf-7' }],
     }),
+  DefinitionSchemaRequiredError: () =>
+    new DefinitionSchemaRequiredError('workflow', 'checkout', ['inputSchema']),
   EngineCreateNameMismatchError: () =>
     new EngineCreateNameMismatchError('workflow', 'expected', 'actual'),
   EngineDisposalError: () => new EngineDisposalError(new Error('drain failed'), true),
@@ -146,6 +151,14 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new ActivityScheduleToCloseTimeoutError('charge', 2_000, 1_000),
   ActivityPerAttemptTimeoutError: () => new ActivityPerAttemptTimeoutError('charge', 2, 1_000),
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
+  UndeclaredWorkflowMessageError: () =>
+    new UndeclaredWorkflowMessageError({
+      workflowId: 'wf-1',
+      workflowType: 'approval',
+      messageKind: 'signal',
+      messageName: 'reject',
+      declaredNames: ['approve'],
+    }),
   WorkflowTeardownPendingError: () => new WorkflowTeardownPendingError('wf-1'),
   WorkflowCheckpointConflictError: () => new WorkflowCheckpointConflictError('wf-1'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
@@ -179,6 +192,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkflowRevisionUnavailableError: () =>
     new WorkflowRevisionUnavailableError('checkout', 'r1', 'not-registered'),
   ForkSourceReplacedError: () => new ForkSourceReplacedError('wf-1'),
+  ScheduleOccurrenceNotNextError: () => new ScheduleOccurrenceNotNextError('daily', 100, 200),
 };
 
 describe('WeftError', () => {

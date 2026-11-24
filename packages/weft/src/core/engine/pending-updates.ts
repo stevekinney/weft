@@ -2,7 +2,7 @@ import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import type { UpdateRequest } from '../updates.ts';
 import { UpdateValidationError } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
-import { commitFencedEngineWrite } from './fenced-write.ts';
+import { commitFencedEngineWriteWithoutPreconditions } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { invokeUpdateHandler as invokeUpdateHandlerFromInternals } from './invoke-update-handler.ts';
 import { isLiveContextStale } from './queries.ts';
@@ -274,16 +274,16 @@ async function rejectPendingUpdate(
     undefined,
     errorMessage,
     update.idempotencyKey,
+    { name: update.name, receivedAt: update.createdAt },
   );
   // The update response is engine-generated (derived from running the update
   // handler), so a deposed engine must not write a stale response over the
   // successor's. Fence it on the lease epoch.
-  await commitFencedEngineWrite(
+  await commitFencedEngineWriteWithoutPreconditions(
     internals,
     workflowId,
     responseOperations,
-    [],
-    () => new Error(`Update rejection for workflow "${workflowId}" lost its CAS race.`),
+    `Update rejection for workflow "${workflowId}"`,
   );
   callbacks.broadcast({ type: 'update:completed', workflowId, updateId: update.updateId });
 }
@@ -313,15 +313,15 @@ async function deliverPendingUpdate(
     result,
     error,
     update.idempotencyKey,
+    { name: update.name, receivedAt: update.createdAt },
   );
   // Engine-generated update response (see rejectPendingUpdate) — fence on the
   // lease epoch so a deposed engine cannot overwrite the successor's response.
-  await commitFencedEngineWrite(
+  await commitFencedEngineWriteWithoutPreconditions(
     internals,
     workflowId,
     responseOperations,
-    [],
-    () => new Error(`Update response for workflow "${workflowId}" lost its CAS race.`),
+    `Update response for workflow "${workflowId}"`,
   );
 
   callbacks.dispatchEvent(

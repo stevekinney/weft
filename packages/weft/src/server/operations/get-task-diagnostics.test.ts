@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
@@ -118,12 +118,17 @@ describe('weft.tasks.diagnostics', () => {
       workflowId: 'workflow-a',
       queue: 'payments',
       queueLatencyMs: 9_000,
+      // COR-2009: the evidence says how long in words, never in milliseconds.
+      evidence: ['Task has waited 9 seconds in queue "payments" without a worker claim'],
     });
     const staleInflightItem = diagnostics.items.find((item) => item.kind === 'stale-inflight');
     expect(staleInflightItem).toMatchObject({
       operationId: 'inflight-stale',
       workerId: 'worker-stale',
       heartbeatAgeMs: 7_000,
+      evidence: [
+        'Worker "worker-stale" has not sent a heartbeat for 7 seconds on queue "payments"',
+      ],
     });
     const retryStormItem = diagnostics.items.find((item) => item.kind === 'retry-storm');
     expect(retryStormItem).toMatchObject({
@@ -294,7 +299,7 @@ describe('weft.tasks.diagnostics', () => {
       retryCount: 2,
       requeueCount: 1,
       availableAt: 40_000,
-      evidence: ['Task is delayed until 40000 on queue "payments"'],
+      evidence: ['Task is delayed until 1970-01-01T00:00:40.000Z on queue "payments"'],
     });
     expect(diagnostics.items.some((item) => item.operationId === 'available-now')).toBe(false);
   });

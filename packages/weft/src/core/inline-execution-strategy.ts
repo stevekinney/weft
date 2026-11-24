@@ -11,17 +11,16 @@
  */
 
 import type { ContextOperationRequest } from './context.ts';
-import { Context, setContextWorkflowInterceptor } from './context.ts';
+import { Context, endResumeReplay, setContextWorkflowInterceptor } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
-import {
-  classifyErrorAsFailureCategory,
-  errorFromFailedOperationOutcome,
-} from './failure-categories.ts';
+import { failedMessageForError } from './failed-message.ts';
+import { errorFromFailedOperationOutcome } from './failure-categories.ts';
 import type {
   InlineExecutionDependencies,
   InlineStartWorkflowParameters,
 } from './inline-execution-strategy.context-options.ts';
 import { createInlineContextOptions } from './inline-execution-strategy.context-options.ts';
+import { resolvePendingOperationStep } from './pending-operation-step.ts';
 import type { FailureCategory, OperationOutcome, WorkerOutboundMessage } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -367,30 +366,27 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
 
           const iterationResult = await advance();
           if (this.#generators.get(workflowId) !== generator) return;
+          // The body handed control back: a relaunched run has now replayed up to the operation
+          // it was parked on, so what it logs after that is new. After the identity check, so a
+          // superseded generation settling late never ends the replay of the context that replaced it.
+          this.#endReplay(workflowId);
           this.#handleIterationResult(workflowId, iterationResult);
         } catch (error) {
           if (this.#generators.get(workflowId) !== generator) return;
+          this.#endReplay(workflowId);
           this.#cleanup(workflowId, {
             preserveTrackedAdvance: true,
             preserveTrackedTurn: true,
           });
-          const failedMessage: WorkerOutboundMessage = {
-            type: 'failed',
-            workflowId,
-            error: error instanceof Error ? error.message : String(error),
-            failureCategory:
-              fallbackFailureCategory ??
-              classifyErrorAsFailureCategory(error, {
-                defaultErrorCategory: 'application',
-              }),
-          };
-          if (error instanceof Error && error.stack !== undefined) {
-            failedMessage.errorStack = error.stack;
-          }
-          this.#emit(failedMessage);
+          this.#emit(failedMessageForError(workflowId, error, fallbackFailureCategory));
         }
       })(),
     );
+  }
+
+  #endReplay(workflowId: string): void {
+    const context = this.#contexts.get(workflowId);
+    if (context !== undefined) endResumeReplay(context);
   }
 
   #handleIterationResult(
@@ -418,11 +414,17 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     // The yielded value is a ContextOperationRequest. Emit it as a checkpoint
     // message so the engine can process the operation.
     const operation = iterationResult.value as ContextOperationRequest;
+    const context = this.#contexts.get(workflowId);
     this.#emit({
       type: 'checkpoint',
       workflowId,
       checkpoint: new ArrayBuffer(0),
       operationRequest: operation as never,
+      // A step-less operation sits one step back: the context has taken its step already.
+      pendingStepIndex: resolvePendingOperationStep(
+        operation,
+        context === undefined ? 0 : Math.max(0, context.stepIndex - 1),
+      ),
     });
   }
 

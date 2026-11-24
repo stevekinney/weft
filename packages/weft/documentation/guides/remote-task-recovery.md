@@ -9,7 +9,8 @@ The **task ledger** is that authoritative record. Queue entries, worker capacity
 Use durable storage and await the server's readiness promise before advertising the task plane as healthy. The server needs atomic `conditionalBatch` storage operations to fence task transitions.
 
 ```typescript
-import { BunSQLiteStorage, Engine, serve } from '@lostgradient/weft';
+import { Engine, serve } from '@lostgradient/weft';
+import { BunSQLiteStorage } from '@lostgradient/storage-bun-sqlite';
 
 await using storage = new BunSQLiteStorage('./remote-tasks.db');
 await using engine = await Engine.create({ storage, workflows: {} });
@@ -17,7 +18,7 @@ await using server = serve({
   engine,
   hostname: '127.0.0.1',
   port: 7233,
-  auth: { apiKeys: [crypto.randomUUID()] },
+  auth: { apiKeys: [crypto.randomUUID()], defaultApiKeyScopes: ['workers:write'] },
   trustedHosts: ['127.0.0.1'],
 });
 
@@ -63,19 +64,28 @@ The task ledger's `RemoteTaskRecord` holds exactly one CURRENT state per `operat
 `server.getTaskResult()` (above) omits attempt history entirely—it is a public, session-free projection. Read attempt history through the `weft.tasks.get` operation (`GET /api/v1/tasks/detail/:operationId`) instead, whose response includes an `attempts` array, oldest first:
 
 ```ts
-import type { WorkerExecutionIdentity, WorkerExecutionRequirement } from '@lostgradient/weft';
+import type {
+  ClientOperationTypes,
+  WorkerExecutionIdentity,
+  WorkerExecutionRequirement,
+} from '@lostgradient/weft';
 
-type TaskAttempt = {
-  attempt: number;
-  attemptTokenDigest: string; // sha256Hex(attemptToken)—never the raw token
-  sessionGeneration?: number;
-  executionIdentity?: WorkerExecutionIdentity; // the worker that ACTUALLY executed this attempt
-  executionRequirement?: WorkerExecutionRequirement; // the routing constraint the DISPATCH declared
-  claimedAt: number; // epoch ms
-  disposition: 'leased' | 'requeued' | 'retryExhausted' | 'resolved' | 'cancelled' | 'deadLettered';
-  dispositionAt: number; // epoch ms
-  dispositionReason?: string;
-  lastHeartbeatAt?: number; // epoch ms
+type TaskAttempt = ClientOperationTypes['weft.tasks.get']['output']['attempts'][number];
+
+declare const executionIdentity: WorkerExecutionIdentity;
+declare const executionRequirement: WorkerExecutionRequirement;
+
+const attempt: TaskAttempt = {
+  attempt: 2,
+  attemptTokenDigest: 'sha256:…', // sha256Hex(attemptToken)—never the raw token
+  sessionGeneration: 1,
+  executionIdentity, // the worker that ACTUALLY executed this attempt
+  executionRequirement, // the routing constraint the DISPATCH declared
+  claimedAt: 1_760_000_000_000, // epoch ms
+  disposition: 'resolved', // 'leased' | 'requeued' | 'retryExhausted' | 'resolved' | 'cancelled' | 'deadLettered'
+  dispositionAt: 1_760_000_004_000, // epoch ms
+  dispositionReason: 'completed',
+  lastHeartbeatAt: 1_760_000_003_000, // epoch ms
 };
 ```
 
@@ -83,7 +93,11 @@ Keep `executionRequirement` and `executionIdentity` distinct, the same distincti
 
 **Reading a cross-build retry.** Because `attempts` is ordered oldest first, comparing consecutive entries' `executionIdentity.buildId` (or `.artifactDigest`) tells you whether a retry moved to a different build:
 
-```ts partial
+```ts
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+declare const taskDetail: ClientOperationTypes['weft.tasks.get']['output'];
+
 const attempts = taskDetail.attempts;
 for (let i = 1; i < attempts.length; i++) {
   const previous = attempts[i - 1]?.executionIdentity;
@@ -119,32 +133,37 @@ engine.addEventListener(TaskAttemptTransitionEvent.type, (event) => {
 An attempt's `disposition` above is what the ledger decided. It does not say what each delivery of that attempt's result was told on the wire. A worker that lost its `taskResultAck` and resent the same result has two deliveries, the first acknowledged `applied` and the second `duplicate`, and one `resolved` attempt. Read the deliveries through `weft.tasks.deliveries` (`GET /api/v1/tasks/detail/:operationId/deliveries`, scope `system:read`):
 
 ```ts
-type TaskResultDelivery = {
-  attempt?: number; // the matching attempt; absent for a token the ledger never issued
-  attemptTokenDigest: string; // sha256Hex(attemptToken)—never the raw token
-  transport: 'webSocket' | 'longPoll';
-  workerId?: string;
-  submittedStatus: 'completed' | 'failed' | 'cancelled';
-  receivedAt: number; // epoch ms
-} & (
-  | {
-      outcome: 'acknowledged';
-      disposition: 'applied' | 'duplicate' | 'dead-lettered';
-      oversizedPayload?: true; // the payload was too large; a synthesized failure was applied instead
-    }
-  | {
-      outcome: 'rejected'; // a correlated protocolError (WebSocket) or 403 (long-poll)
-      rejectionCode:
-        | 'stale-attempt'
-        | 'worker-mismatch'
-        | 'attempt-token-mismatch'
-        | 'queue-mismatch'
-        | 'revision-mismatch'
-        | 'conflicting-content'
-        | 'commit-rejected';
-      reason: string; // WebSocket: the protocolError text the worker received; long-poll: server-composed (see below); raw token redacted
-    }
-);
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+type TaskResultDelivery =
+  ClientOperationTypes['weft.tasks.deliveries']['output']['deliveries'][number];
+
+const deliveries: TaskResultDelivery[] = [
+  {
+    attempt: 1, // the matching attempt; absent for a token the ledger never issued
+    attemptTokenDigest: 'sha256:…', // sha256Hex(attemptToken)—never the raw token
+    transport: 'webSocket', // or 'longPoll'
+    workerId: 'worker-1',
+    submittedStatus: 'completed', // or 'failed' | 'cancelled'
+    receivedAt: 1_760_000_000_000, // epoch ms
+    outcome: 'acknowledged',
+    disposition: 'applied', // or 'duplicate' | 'dead-lettered'
+    // oversizedPayload: true when the payload was too large and a synthesized failure was applied
+  },
+  {
+    attemptTokenDigest: 'sha256:…',
+    transport: 'longPoll',
+    submittedStatus: 'completed',
+    receivedAt: 1_760_000_001_000,
+    outcome: 'rejected', // a correlated protocolError (WebSocket) or 403 (long-poll)
+    // Also 'worker-mismatch', 'attempt-token-mismatch', 'queue-mismatch',
+    // 'revision-mismatch', 'conflicting-content', or 'commit-rejected'.
+    rejectionCode: 'stale-attempt',
+    // WebSocket: the protocolError text the worker received; long-poll: server-composed
+    // (see below); raw token redacted.
+    reason: 'taskResult for operation "op-1" rejected — stale-attempt',
+  },
+];
 ```
 
 The response wraps the entries, oldest first, as `{ operationId, deliveries, historyLimit, droppedCount }`. The server keeps the most recent 32 deliveries per operation. `droppedCount` counts older entries it no longer holds, so `0` means the history is complete. A submission for an operation with no ledger record is never recorded. The `operationId` comes from the worker, and recording it would let any worker create storage for arbitrary identifiers. Delivery history follows the same retention as attempt history: it is deleted in the same batch as its ledger record, by retention purge or by clearing a dead letter. Recording never changes the answer a worker receives: a storage failure is logged and dropped, and the response is the same either way. The two transports differ in when the entry is written. On WebSocket it is written after the answer is sent, so the acknowledgement is not delayed, and a read made at the same moment may not show the entry yet. On long-poll it is written before the response is returned, so the `200` or `403` waits for the write, which can take up to three compare-and-swap rounds of storage I/O. The reason for that choice is that a long-poll worker or operator who reads the history after the response arrives finds the entry for it, unless the write failed and was logged.
@@ -163,6 +182,19 @@ Every delivery except a first-time `applied` also fires `task:result-delivery` (
 - **Not exposed to MCP.**
 
 The `payload` field is `{ kind: 'value', value, serializedBytes }`, or `{ kind: 'absent' }` when the dead letter retained no value. That happens in two cases. A `failed` result has no value, and its `error` text is returned alongside. A `completed` result whose value is `undefined`, such as an activity that returns nothing, also has no value; its `pendingStatus` is `completed` and it has no `error`. Read `pendingStatus` to tell the two apart. A task that is not dead-lettered answers `NotFound`.
+
+### Retrying a dead letter
+
+A dead letter is a result the ledger could not store, so the activity's work may be done while its record of that work is not. `weft.tasks.deadletters.retry` (`POST /api/v1/tasks/detail/:operationId/dead-letter/retry`) is the alternative to recovering the value by hand: it puts the task back in the queue so a worker runs it again.
+
+- **Same id, new attempt.** The task becomes `queued` under its own `operationId` with `attempt` one higher and `requeueCount` one higher. `weft.task.requeues` counts it.
+- **History stays.** The dead attempt's attempt record and the delivery history are not touched, so `weft.tasks.get` shows the dead attempt (disposition `deadLettered`) beside the new one once a worker claims it. Only the retained result on the ledger record goes: after a retry, `weft.tasks.deadletters.get` answers `NotFound`. Read the value first if you want to keep it.
+- **The dead attempt is fenced off.** A result or heartbeat carrying the old attempt token is refused, as for any attempt that no longer holds the task.
+- **Scope `system:admin`**, the same as reading or clearing the dead letter.
+- **Refused, not repeated.** Only a dead-lettered task can be retried. A task in any other state, a task that was cleared, a dead letter that is no longer the `attemptTokenDigest` the caller passed, and a task whose workflow has finished are all refused, and a refusal changes nothing. Two simultaneous retries queue the task once.
+- **The activity runs again.** Side effects of the dead attempt, such as a charge it already made, happen a second time unless the activity is idempotent. `retryPolicy.maxAttempts` is not consulted, so an exhausted task stays retryable.
+
+A running server dispatches the queued task immediately. If that immediate dispatch is refused, for example because the workflow's revision moved, the task stays `queued` and the ledger sweep tries to dispatch it again.
 
 ## Reading a result
 

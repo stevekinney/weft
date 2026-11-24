@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage, storageConditionalBatch, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decodeEpoch, encodeEpoch } from './workflow-claim-codec.ts';
 import {
   WorkflowClaimRegistry,

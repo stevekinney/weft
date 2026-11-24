@@ -10,11 +10,14 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { commitTaskLedgerDelete } from './task-ledger-runtime.ts';
-import { canDeleteRetainedTerminalTask } from './task-ledger-transitions.ts';
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { commitTaskLedgerDelete, commitTaskLedgerTransition } from './task-ledger-runtime.ts';
+import { canDeleteRetainedTerminalTask, createQueued } from './task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
@@ -173,5 +176,51 @@ describe('commitTaskLedgerDelete', () => {
         ),
       ),
     ).toThrow('Task ledger deletion requires storage capabilities.');
+  });
+});
+
+describe('commitTaskLedgerTransition creating an entry that requires a build', () => {
+  const dispatch = {
+    recordVersion: 1,
+    createdAt: 1_000,
+    operationId: 'op-build',
+    workflowType: 'checkout',
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    headers: {},
+    visibilityTimeoutMilliseconds: 30_000,
+    executionRequirement: { deploymentName: 'billing', buildId: 'build-1' },
+  } as const;
+
+  it('retries a lost create when the build was not removed, and then commits it', async () => {
+    const storage = new LosesCasNTimesStorage(1);
+
+    const result = await commitTaskLedgerTransition(
+      storage,
+      dispatch.operationId,
+      (current, now) => createQueued(current, dispatch, now),
+      2,
+    );
+
+    expect(result.ok).toBe(true);
+    const stored = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(dispatch.operationId)));
+    expect(stored?.executionRequirement).toEqual(dispatch.executionRequirement);
+  });
+
+  it('reports the lost race, not a removed build, when every attempt loses and the build is intact', async () => {
+    const storage = new LosesCasNTimesStorage(1);
+
+    const result = await commitTaskLedgerTransition(
+      storage,
+      dispatch.operationId,
+      (current, now) => createQueued(current, dispatch, now),
+      1,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'lost the compare-and-swap race on operation "op-build" after 1 attempt(s)',
+    });
   });
 });

@@ -28,7 +28,9 @@
  * @module server/runtime/task-result-delivery-recorder
  */
 
+import { storageConditionalBatch, type Storage } from "../../embedded/storage/src/index.ts";
 import { TaskResultDeliveryEvent } from '../../core/events.ts';
+import { tagWorkflowEventGeneration } from '../../core/events/workflow-event-generation.ts';
 import { isBoundedIdentifier } from '../../core/task-ledger/task-ledger-codec.ts';
 import { decodeRemoteTaskRecord, taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
 import {
@@ -42,7 +44,6 @@ import {
   type TaskResultDeliveryRejectionCode,
   type TaskResultDeliveryTransport,
 } from '../../core/task-ledger/task-result-delivery.ts';
-import { storageConditionalBatch, type Storage } from '../../storage/interface.ts';
 import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import type { ServeOptions } from '../index.ts';
 
@@ -124,7 +125,7 @@ function dispatchDeliveryEvent(
   if (entry.outcome === 'acknowledged' && entry.disposition === 'applied') return;
   const record = decodeRemoteTaskRecord(rawLedger);
   if (record === null) return;
-  options.engine.dispatchEvent(
+  const event = tagWorkflowEventGeneration(
     new TaskResultDeliveryEvent({
       operationId,
       workflowId: record.workflowId,
@@ -138,7 +139,9 @@ function dispatchDeliveryEvent(
         ? { disposition: entry.disposition === 'applied' ? undefined : entry.disposition }
         : { rejectionCode: entry.rejectionCode }),
     }),
+    record.workflowExecutionToken,
   );
+  options.engine.dispatchEvent(event);
 }
 
 async function appendFenced(

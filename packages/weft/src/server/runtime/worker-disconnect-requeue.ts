@@ -61,6 +61,8 @@ export async function runWorkerDisconnectRequeue(
 
   context.registry.unregister(workerId);
   context.workerSockets.delete(workerId);
+  context.connectionCounts.workers = context.workerSockets.size;
+  context.refreshConnectionMetrics();
   options.engine.dispatchEvent(new WorkerDisconnectedEvent(workerId, inFlightTasks.length));
 
   // Clean up affinity entries that pointed at this worker.
@@ -146,8 +148,8 @@ export function endWorkerReconnectGracePeriods(
   options: ServeOptions,
   cleanupWorkflowIndex: (operationId: string) => void,
 ): void {
-  for (const [workerId, timer] of context.pendingWorkerRequeues) {
-    clearTimeout(timer);
+  for (const [workerId, pending] of context.pendingWorkerRequeues) {
+    clearTimeout(pending.timer);
     void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
   }
   context.pendingWorkerRequeues.clear();

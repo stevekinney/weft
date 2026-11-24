@@ -1,7 +1,8 @@
 import { sleep } from '../../runtime/portable.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { WorkflowStatus } from '../types.ts';
 import { WorkflowTerminalError, type UpdateResponse } from '../updates.ts';
+import { assertWorkflowMessageDeclared } from './declared-messages.ts';
 import type { EngineInternals } from './internals.ts';
 import { decodeWorkflowState } from './validation.ts';
 
@@ -42,17 +43,27 @@ export type GuardCallbacks = {
   getUpdateResponse: (updateId: string) => Promise<UpdateResponse | null>;
 };
 
-/** Throw {@link WorkflowTerminalError} if the workflow is in a terminal state. */
+/**
+ * Throw {@link WorkflowTerminalError} if the workflow is in a terminal state.
+ * Given `updateName`, also throw `UndeclaredWorkflowMessageError` when the
+ * workflow declares its updates and that name is not one of them — checked
+ * against the same state read, so admitting an update costs no extra read.
+ */
 export async function guardTerminalWorkflow(
   internals: EngineInternals,
   workflowId: string,
   _callbacks: GuardCallbacks,
+  updateName?: string,
 ): Promise<void> {
   const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
   if (!stateBytes) return; // unknown workflow — let downstream handle it
   const state = decodeWorkflowState(stateBytes);
   if (TERMINAL_STATUSES.has(state.status)) {
     throw new WorkflowTerminalError(workflowId, state.status);
+  }
+  if (updateName !== undefined) {
+    const identity = { type: state.type, revision: state.revision };
+    assertWorkflowMessageDeclared(internals, 'update', workflowId, identity, updateName);
   }
 }
 

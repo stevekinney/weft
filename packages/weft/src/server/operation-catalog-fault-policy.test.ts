@@ -19,8 +19,9 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { classifyEngineError } from './operation-catalog.ts';
-import type { OperationFault } from './operation-fault.ts';
+import type { OperationFault } from "../embedded/backchannel/src/index.ts";
+import { classifyEngineError } from "../embedded/backchannel/src/internals.ts";
+import { weftFaultPolicy } from './weft-fault-policy.ts';
 
 describe('classifyEngineError — producibleFaults enforcement', () => {
   it('strict mode: undeclared fault becomes EngineFailure with the diagnostic message', () => {
@@ -83,9 +84,7 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
         message: 'too slow',
         data: { operationName: 'weft.test.production' },
       };
-      const result = classifyEngineError(fault, {
-        name: 'weft.test.production',
-      });
+      const result = classifyEngineError(fault, { name: 'weft.test.production' }, weftFaultPolicy);
       // Production preserves the original fault on the wire so clients
       // keep their actionable semantics.
       expect(result.code).toBe('Timeout');
@@ -114,9 +113,7 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
         message: 'gone',
         data: { resource: 'thing' },
       };
-      const result = classifyEngineError(fault, {
-        name: 'weft.test.forcestrict',
-      });
+      const result = classifyEngineError(fault, { name: 'weft.test.forcestrict' }, weftFaultPolicy);
       // Strict mode applies: result is EngineFailure with the diagnostic
       // message, NOT the original NotFound.
       expect(result.code).toBe('EngineFailure');

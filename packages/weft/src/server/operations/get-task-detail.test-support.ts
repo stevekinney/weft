@@ -1,7 +1,12 @@
+import { type AuthorizationScope, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import {
+  type DispatchResult,
+  createOperationRegistry,
+  executeOperation,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import {
-  encodeRemoteTaskRecord,
-  taskLedgerKey,
   type RemoteTaskCancelling,
   type RemoteTaskCompleting,
   type RemoteTaskDeadLettered,
@@ -11,18 +16,14 @@ import {
   type RemoteTaskTerminalCancelled,
   type RemoteTaskTerminalResolved,
   type RemoteTaskTerminalRetryExhausted,
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import type { DispatchResult } from '../operation-catalog.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import {
+  type GetTaskDetailOutput,
   getTaskDetailOperation,
   getTaskDetailOutputSchema,
-  type GetTaskDetailOutput,
 } from './get-task-detail.ts';
 
 function emptyAsyncIterable<T>(): AsyncIterable<T> {
@@ -288,7 +289,7 @@ export function runGetTaskDetail(
     { operationId },
     {
       principal: principalFromApiKey({ subject: 'operator', scopes }),
-      engine,
+      host: engine,
       transport: 'jsonRpcStdio',
       registry: operationRegistry,
     },

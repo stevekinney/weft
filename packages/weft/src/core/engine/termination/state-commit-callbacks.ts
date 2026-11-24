@@ -1,4 +1,4 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
+import type { BatchOperation } from "../../../embedded/storage/src/index.ts";
 import type { WorkflowState } from '../../types.ts';
 
 /**
@@ -14,5 +14,11 @@ import type { WorkflowState } from '../../types.ts';
 export type WorkflowStateCommitCallback = (
   state: WorkflowState,
   operations: BatchOperation[],
-  options?: { includePendingAtomicSideEffects?: boolean },
+  options?: {
+    includePendingAtomicSideEffects?: boolean;
+    /** Retry a refused write in process; see `commitSelfWorkflowStateOperations`. */
+    retryRefusedWrite?: 'completion' | 'failure';
+    /** Rebuild the batch over a fresher record of the same run; see `commitSelfWorkflowStateOperations`. */
+    rebuildOperations?: (fresh: WorkflowState) => BatchOperation[];
+  },
 ) => Promise<void>;

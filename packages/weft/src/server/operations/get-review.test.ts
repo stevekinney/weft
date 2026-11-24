@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import type { ReviewRequest } from '../../core/review/index.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { getReviewOperation, getReviewRestBinding } from './get-review.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
@@ -71,6 +70,7 @@ describe('weft.reviews.get', () => {
     expect(await response.json()).toEqual({
       error: 'Review "rev-missing" not found for workflow "wf-1"',
       data: { resource: 'review', identifier: 'rev-missing' },
+      retryable: false,
     });
   });
 
@@ -100,6 +100,6 @@ describe('weft.reviews.get', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });

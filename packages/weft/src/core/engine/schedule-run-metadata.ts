@@ -6,15 +6,18 @@ import { isValidScheduleIdentifier } from './validation/schedule.ts';
 type EncodedScheduleRunMetadata = {
   id: string;
   occurrence?: number;
+  manual?: true;
 };
 
 export function encodeScheduleRunMetadata(
   scheduleId: string,
   occurrence: number | undefined,
+  manual?: true,
 ): Uint8Array {
   return encode({
     id: scheduleId,
     ...(occurrence !== undefined ? { occurrence } : {}),
+    ...(manual === true ? { manual } : {}),
   } satisfies EncodedScheduleRunMetadata);
 }
 
@@ -36,18 +39,19 @@ export function decodeScheduleRunMetadata(
     return null;
   }
 
-  const { id, occurrence } = decoded;
+  const { id, occurrence, manual } = decoded;
   if (!isValidScheduleIdentifier(id)) {
     return null;
   }
+  const manualFields: { manual?: true } = manual === true ? { manual: true } : {};
 
   if (occurrence === undefined) {
-    return { id };
+    return { id, ...manualFields };
   }
 
   if (typeof occurrence !== 'number' || !Number.isSafeInteger(occurrence)) {
     return null;
   }
 
-  return { id, occurrence };
+  return { id, occurrence, ...manualFields };
 }

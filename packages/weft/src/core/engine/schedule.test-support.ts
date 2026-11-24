@@ -1,8 +1,9 @@
-import { MemoryStorage } from '../../storage/memory.ts';
-import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage, type Storage } from "../../embedded/storage/src/index.ts";
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { Engine } from '../engine.ts';
 import {
   workflow as defineWorkflow,
+  type EngineOptions,
   type ScheduleSummary,
   type WorkflowFunction,
 } from '../types.ts';
@@ -16,8 +17,12 @@ export type Clock = { now: number };
 export const MINUTE = 60_000;
 export const START = Date.UTC(2026, 0, 1, 0, 0, 0);
 
-export function createEngine(clock: Clock, storage = new MemoryStorage()): Engine {
-  return new Engine({ storage, getNow: () => clock.now });
+export function createEngine(
+  clock: Clock,
+  storage: Storage = new MemoryStorage(),
+  options: Pick<EngineOptions, 'resolveWorkflowServices'> = {},
+): Engine {
+  return new Engine({ storage, getNow: () => clock.now, ...options });
 }
 
 export function registerWorkflow<TInput, TOutput>(
@@ -29,11 +34,10 @@ export function registerWorkflow<TInput, TOutput>(
   (engine.register as (workflow: typeof definition) => unknown)(definition);
 }
 
-// Yield to the event loop twice so a tick's synchronous launch and its follow-on
-// microtasks both settle before the test asserts.
+// Let a tick's queued inline launch run its first turn (the engine defers it behind a message
+// port), then drain the microtasks it leaves, before the test asserts.
 export async function drainEngine(): Promise<void> {
-  await yieldToEventLoop();
-  await yieldToEventLoop();
+  await settleInlineLaunches();
 }
 
 export function requireNextFireAt(summary: ScheduleSummary): number {

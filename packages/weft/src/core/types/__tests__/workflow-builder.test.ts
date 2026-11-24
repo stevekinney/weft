@@ -147,6 +147,19 @@ describe('workflow() builder — .activities() normalisation', () => {
     );
   });
 
+  it('rejects an entry that is neither a function nor an object with an execute function', () => {
+    for (const malformed of [
+      { retry: { maxAttempts: 2 } },
+      { execute: 'not-a-function' },
+      42,
+      null,
+    ]) {
+      expect(() => workflow({ name: 'w' }).activities({ broken: malformed as never })).toThrow(
+        '.activities(): entry "broken" must be a function, an activity() callable, or an object with an `execute` function',
+      );
+    }
+  });
+
   it('accepts inner name matching the outer key', () => {
     const greet = activity({ name: 'greet', execute: async (i: unknown) => i });
     expect(() => workflow({ name: 'w' }).activities({ greet })).not.toThrow();

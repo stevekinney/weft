@@ -1,8 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { CleanupWarningEvent } from '../events.ts';
 import type { WorkflowState } from '../types.ts';
@@ -104,7 +104,7 @@ describe('engine callback creators', () => {
 
     await createUpdateCallbacks(engine).persistCoordinatedUpdateResponse(
       'workflow-update-response',
-      'approve',
+      { name: 'approve', receivedAt: 1_700_000_000_000 },
       'update-1',
       'idempotency-1',
       { approved: true },
@@ -139,7 +139,7 @@ describe('engine callback creators', () => {
 
     await createUpdateCallbacks(engine).persistCoordinatedUpdateResponse(
       'workflow-update-response-failure',
-      'approve',
+      { name: 'approve', receivedAt: 1_700_000_000_000 },
       'update-1',
       'idempotency-1',
       { approved: true },
@@ -180,7 +180,7 @@ describe('engine callback creators', () => {
 
     await createUpdateCallbacks(engine).persistCoordinatedUpdateResponse(
       'workflow-update-response-race',
-      'approve',
+      { name: 'approve', receivedAt: 1_700_000_000_000 },
       'update-2',
       undefined,
       { approved: true },
@@ -259,7 +259,18 @@ describe('engine callback creators', () => {
             message: `${source}:${error instanceof Error ? error.message : String(error)}`,
           });
         },
-        startWorkflow: async () => {},
+        // The services resolve once the start's batch has committed, which this stub stands for.
+        startWorkflow: async (
+          _type,
+          _input,
+          _options,
+          _operations,
+          _revision,
+          _skip,
+          transient,
+        ) => {
+          await transient?.resolveServices?.();
+        },
       };
 
       await startScheduledRun(
@@ -272,9 +283,11 @@ describe('engine callback creators', () => {
           input: null,
           missedFireCount: 0,
           skippedCount: 0,
+          revision: 1,
           nextFireAt: 60_000,
           overlap: 'skip',
           queuedRuns: [],
+          timeZone: 'UTC',
           revisionPolicy: 'active-at-fire',
           status: 'active',
           updatedAt: 1,

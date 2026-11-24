@@ -11,7 +11,7 @@
  * @module storage/workflow-record-keys
  */
 
-import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key-encoding.ts';
+import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from "../embedded/storage/src/index.ts";
 
 const formatSortableTimestamp = formatSortableStorageTimestamp;
 
@@ -46,6 +46,15 @@ export const WORKFLOW_RECORD_KEYS_CORE = {
     `schedule-run-by-schedule:${encodeStorageKeyComponent(scheduleId)}:`,
   scheduleRunBySchedule: (scheduleId: string, workflowId: string) =>
     `schedule-run-by-schedule:${encodeStorageKeyComponent(scheduleId)}:${encodeStorageKeyComponent(workflowId)}`,
+  /** The prefix of a schedule's missed-fire rows (COR-1829), oldest occurrence first. */
+  scheduleMissedPrefix: (scheduleId: string) =>
+    `schedule-missed:${encodeStorageKeyComponent(scheduleId)}:`,
+  /**
+   * One missed-fire row: keyed by schedule, occurrence and reason, so a tick replayed after a crash
+   * writes the same key and not a second row. The occurrence is padded so rows sort oldest first.
+   */
+  scheduleMissed: (scheduleId: string, occurrence: number, reason: string) =>
+    `schedule-missed:${encodeStorageKeyComponent(scheduleId)}:${String(occurrence).padStart(16, '0')}:${encodeStorageKeyComponent(reason)}`,
   operation: (queue: string, scheduledAt: number, id: string) =>
     `op:${queue}:${formatSortableTimestamp(scheduledAt)}:${id}`,
   operationInflight: (id: string) => `op:inflight:${id}`,
@@ -76,6 +85,14 @@ export const WORKFLOW_RECORD_KEYS_CORE = {
     `ev:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
   eventHead: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:head`,
   eventWatermark: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:watermark`,
+  // The `serve()` watch stream's per-workflow event copies. They need a
+  // keyspace of their own: the engine's hash-chained event log owns every
+  // `ev:<workflowId>:<sequence>` key, and a watch copy written there replaced
+  // the log record at the same sequence, losing the checkpoint replay payload
+  // a recovery reads back (COR-1472).
+  watchEventPrefix: (workflowId: string) => `watch-event:${encodeStorageKeyComponent(workflowId)}:`,
+  watchEvent: (workflowId: string, sequence: number) =>
+    `watch-event:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
   fleetEventPrefix: () => 'fleet-event:',
   fleetEvent: (sequence: number) => `fleet-event:${String(sequence).padStart(10, '0')}`,
   fleetEventTail: () => 'fleet-event-tail',
@@ -103,6 +120,23 @@ export const WORKFLOW_RECORD_KEYS_EXTENDED = {
   update: (workflowId: string, updateId: string) =>
     `upd:${encodeStorageKeyComponent(workflowId)}:${updateId}`,
   updateResponse: (updateId: string) => `upr:${updateId}`,
+  /**
+   * The per-workflow update-history record (COR-1463): one entry per update the
+   * workflow has received through the durable request path, written `pending` in
+   * the same batch as the request and replaced by the outcome in the response's
+   * batch. Unlike `upd:` (deleted on answer) and `upr:` (swept after five
+   * minutes), it outlives both: terminal cleanup never sweeps it and only a
+   * purge removes it.
+   *
+   * The key is `uph:<workflowId>:<receivedAt>:<updateId>`, with `receivedAt` as a
+   * sixteen-digit sortable timestamp, so a reverse scan lists the newest update
+   * first and the `<receivedAt>:<updateId>` suffix is a stable paging cursor.
+   * The answer replaces the entry by minting the identical key, which is why the
+   * response's batch must carry the request's own `receivedAt`.
+   */
+  updateHistoryPrefix: (workflowId: string) => `uph:${encodeStorageKeyComponent(workflowId)}:`,
+  updateHistory: (workflowId: string, receivedAt: number, updateId: string) =>
+    `uph:${encodeStorageKeyComponent(workflowId)}:${formatSortableTimestamp(receivedAt)}:${updateId}`,
   updateIdempotency: (workflowId: string, key: string) =>
     `upk:${encodeStorageKeyComponent(workflowId)}:${key}`,
   /**

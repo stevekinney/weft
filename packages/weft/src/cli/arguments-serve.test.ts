@@ -137,11 +137,10 @@ describe('CLI argument parsing', () => {
       expect(result.storage).toBe('sqlite');
     });
 
-    it('parses --storage flag with lmdb', () => {
-      const result = parseCliArguments(['--storage', 'lmdb']);
-      if (result.command !== 'serve') throw new Error('Unexpected command variant');
-      expect(result.command).toBe('serve');
-      expect(result.storage).toBe('lmdb');
+    it('rejects the removed lmdb backend for --storage', () => {
+      expect(() => parseCliArguments(['--storage', 'lmdb'])).toThrow(
+        "Invalid storage backend 'lmdb'. Must be one of: sqlite, memory",
+      );
     });
 
     it('parses --storage flag with memory', () => {
@@ -153,15 +152,15 @@ describe('CLI argument parsing', () => {
 
     it('throws for an invalid storage backend', () => {
       expect(() => parseCliArguments(['--storage', 'postgres'])).toThrow(
-        "Invalid storage backend 'postgres'",
+        "Invalid storage backend 'postgres'. Must be one of: sqlite, memory",
       );
     });
 
     it('parses -s short flag for storage', () => {
-      const result = parseCliArguments(['-s', 'lmdb']);
+      const result = parseCliArguments(['-s', 'memory']);
       if (result.command !== 'serve') throw new Error('Unexpected command variant');
       expect(result.command).toBe('serve');
-      expect(result.storage).toBe('lmdb');
+      expect(result.storage).toBe('memory');
     });
 
     it('defaults storage to sqlite', () => {

@@ -5,9 +5,9 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import { workflow, type WorkflowContext } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -80,7 +80,7 @@ describe('serve({ cors }) — preflight', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: ['secret-key'] },
+      auth: { apiKeys: ['secret-key'], defaultApiKeyScopes: ['workflows:read'] },
       cors: { allowedOrigins: ['https://app.example.com'], credentials: true },
     });
 
@@ -254,7 +254,7 @@ describe('serve({ cors }) — fail-fast validation', () => {
         serve({
           engine,
           port: 0,
-          auth: { apiKeys: ['secret-key'] },
+          auth: { apiKeys: ['secret-key'], defaultApiKeyScopes: ['workflows:read'] },
           cors: { allowedOrigins: ['*'], allowedHeaders: ['Content-Type'] },
         }),
       ).toThrow(/bearer tokens/);

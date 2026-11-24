@@ -24,6 +24,8 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { RemoteWorkerJsonValue } from '../../worker/protocol.ts';
 import type {
   RoutingPolicy,
@@ -33,9 +35,7 @@ import type {
   WorkerSummary,
   WorkerTransport,
 } from '../../worker/registry.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const listWorkersInput = z.object({});
 
@@ -84,6 +84,11 @@ const workerSummarySchema = z.object({
   deploymentName: z.string().optional(),
   buildId: z.string().optional(),
   runtimeVersion: z.string().optional(),
+  drainFinishedTasks: z.number().optional(),
+  drainedAt: z.number().optional(),
+  name: z.string().optional(),
+  workflows: z.array(z.string()).optional(),
+  disconnectedAt: z.number().optional(),
 }) satisfies z.ZodType<WorkerSummary>;
 
 const workerDeploymentSummarySchema = z.object({
@@ -133,11 +138,12 @@ export function createListWorkersOperation(options?: ListWorkersOptions) {
   return defineOperation({
     name: 'weft.workers.list',
     mcpExposable: false,
-    summary: 'List connected workers, their advertised activities, and saturation',
+    summary: 'List workers, their advertised activities, and saturation',
     description:
-      'List workers currently connected to the engine, including each worker id, its advertised ' +
-      'activities and workflows, drain state, and saturation. Read-only. Use this to observe ' +
-      'the worker fleet before draining or rebalancing.',
+      'List the workers connected to the engine, including each worker id, its advertised ' +
+      'name, activities and workflows, drain state, and saturation. A worker that went away stays ' +
+      'listed, with `disconnectedAt` set, until it is forgotten or registers again. Read-only. ' +
+      'Use this to observe the worker fleet before draining or rebalancing.',
     destructive: false,
     tags: ['System'],
     inputSchema: listWorkersInput,
@@ -154,7 +160,7 @@ export function createListWorkersOperation(options?: ListWorkersOptions) {
       }
       const now = clock();
       return {
-        items: registry.getWorkerSummaries(now),
+        items: registry.getWorkerListing(now),
         deployments: registry.getDeploymentSummaries(now),
         routingPolicy: registry.policy,
       };
@@ -179,6 +185,6 @@ export function createListWorkersRestBinding(): UnknownRestBinding {
     inputSources: {},
     extractInput: async () => ({}),
     success: { kind: 'json', status: 200 },
-    shapeFault: shapeOperationFaultAsJson,
+    shapeFault: shapeWeftOperationFaultAsJson,
   };
 }

@@ -6,11 +6,10 @@
  * public — part of `WeftErrorCode` and re-exported from `src/index.ts` —
  * because `engine.workflows.install()`/`activate()` can throw either of them
  * directly at a caller who holds no other way to reach the catalog.
- * `WorkflowCatalogActivationConflictError` stays internal: it is reachable
- * only through `engine.register()`'s unconditional `activateRegistered`
- * path, which every public entry point already awaits via
- * `ensureWorkflowCatalogReady` rather than calling directly, so no public
- * caller ever observes it as a typed error to catch.
+ * `WorkflowCatalogActivationConflictError` is public too: the unconditional
+ * `activateRegistered` path can exhaust its retry budget under sustained
+ * contention, and `registerWorkflowDocuments` runs it directly, so a caller
+ * of that helper can observe it. It carries no registered `WeftErrorCode`.
  *
  * @module core/catalog/errors
  */
@@ -77,8 +76,7 @@ export class WorkflowCatalogConflictError extends WeftError<'WorkflowCatalogConf
  * the cause as "already installed with different content."
  *
  * Stays internal (not re-exported from `src/index.ts`, not part of
- * `WeftErrorCode`), like {@link WorkflowCatalogActivationConflictError}:
- * `core/catalog/**` must never import `core/engine/**`
+ * `WeftErrorCode`): `core/catalog/**` must never import `core/engine/**`
  * ({@link import('../engine/catalog-tombstone-recovery.ts')}'s own module
  * doc), so `install()` cannot throw the engine-layer
  * `WorkflowRevisionUnavailableError` directly. Every dynamic-source-load

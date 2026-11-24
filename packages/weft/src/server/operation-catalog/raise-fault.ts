@@ -4,21 +4,12 @@
  * @module server/operation-catalog/raise-fault
  */
 
-import type { FaultCode } from '../../core/fault-code.ts';
+import type { FaultCode, OperationFault } from "../../embedded/backchannel/src/index.ts";
+import {
+  type ErasedOperation,
+  UNIVERSAL_FAULT_DEFAULTS,
+} from "../../embedded/backchannel/src/internals.ts";
 import { resolveServerEnvironment } from '../../runtime/environment-configuration.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import type { ErasedOperation } from './types.ts';
-
-/**
- * Fault codes that every operation can raise through the shared pipeline
- * without listing them in `producibleFaults`.
- */
-export const UNIVERSAL_FAULT_DEFAULTS: ReadonlySet<FaultCode> = new Set([
-  'Unauthorized',
-  'Forbidden',
-  'InvalidParams',
-  'EngineFailure',
-]);
 
 /**
  * Throw an `OperationFault` after checking it against an operation's declared

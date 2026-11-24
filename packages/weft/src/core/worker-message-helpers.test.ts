@@ -56,6 +56,27 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     expect(outcome).toBe('accepted-valid');
   });
 
+  it('carries the step of a forwarded record to the sink, and drops a record with an invalid step', () => {
+    const received: Array<{ step?: number | undefined }> = [];
+    expect(
+      deliverForwardedWorkerLog(
+        logMessage({ ...validRecord, step: 3 }),
+        (record) => received.push(record),
+        4_096,
+      ),
+    ).toBe('accepted-valid');
+    expect(received).toEqual([expect.objectContaining({ step: 3 })]);
+
+    expect(
+      deliverForwardedWorkerLog(
+        logMessage({ ...validRecord, step: -2 }),
+        (record) => received.push(record),
+        4_096,
+      ),
+    ).toBe('dropped-invalid');
+    expect(received).toHaveLength(1);
+  });
+
   it('delivers when no size cap is configured', () => {
     const sink = mock(() => {});
     expect(deliverForwardedWorkerLog(logMessage(validRecord), sink, undefined)).toBe(

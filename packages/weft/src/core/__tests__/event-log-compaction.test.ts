@@ -7,10 +7,10 @@
 
 import { describe, expect, it, mock } from 'bun:test';
 
+import { MemoryStorage, type BatchOperation, type Storage } from "../../embedded/storage/src/index.ts";
 import { hashBytes } from '../../runtime/portable.ts';
-import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import {
@@ -34,7 +34,7 @@ const noop = async () => null;
 
 /** Drain microtasks so fire-and-forget work (archival) completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 /** Append `count` chained entries to a fresh log and return it. */

@@ -5,12 +5,12 @@
  * caller-controlled (it flows from `TaskDispatch.operationId`), so it is
  * encoded through {@link encodeStorageKeyComponent} the same way every other
  * hostile key component in this codebase is — see `signalStorageKey` in
- * `storage/interface.ts` for the established precedent.
+ * `storage/keys.ts` for the established precedent.
  *
  * @module server/task-ledger-keys
  */
 
-import { encodeStorageKeyComponent } from '../../storage/interface.ts';
+import { encodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
 
 const TASK_LEDGER_KEY_PREFIX = 'task-ledger:';
 

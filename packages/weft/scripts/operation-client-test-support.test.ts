@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { anonymousPrincipal } from '../src/server/principal.ts';
+import { anonymousPrincipal } from "../src/embedded/backchannel/src/index.ts";
 import { snapshotTestOperation } from './operation-client-test-support.ts';
 
 describe('snapshotTestOperation', () => {
@@ -19,7 +19,7 @@ describe('snapshotTestOperation', () => {
       await operation.invoke({
         input: {},
         principal: anonymousPrincipal(),
-        engine: undefined,
+        host: undefined,
         transport: 'http-rest',
       }),
     ).toBeNull();

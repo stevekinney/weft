@@ -1,15 +1,26 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  generateAsyncApiDocument as generateDocument,
+  isDiscoverable,
+  type AsyncApiOptions,
+  type OperationRegistry,
+} from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { VERSION } from '../version.ts';
-import { generateAsyncApiDocument } from './asyncapi.ts';
-import { isDiscoverable } from './discovery-filter.ts';
 import { serve, type WeftServer } from './index.ts';
-import type { OperationRegistry } from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
-import { createLiveOperationRegistry } from './rest-bindings.ts';
+import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
+import { weftDiscoveryInfo } from './weft-documents.ts';
+
+/** The generator over Weft's live REST bindings unless the test supplies its own. */
+function generateAsyncApiDocument(
+  options: Omit<AsyncApiOptions, 'restBindings'> & Partial<Pick<AsyncApiOptions, 'restBindings'>>,
+): Record<string, unknown> {
+  return generateDocument({ restBindings: createLiveRestBindings(), ...options });
+}
 
 const PRIVATE_STREAM_OPERATION = defineOperation({
   name: 'weft.private.stream',
@@ -167,7 +178,11 @@ describe('AsyncAPI document', () => {
   it('serves /asyncapi.json without an auth header when authentication is enabled', async () => {
     const engine = createEngine();
     engines.push(engine);
-    const server = serve({ engine, port: 0, auth: { apiKeys: ['test-key'] } });
+    const server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: ['test-key'], defaultApiKeyScopes: ['workflows:read'] },
+    });
     servers.push(server);
 
     const response = await fetch(`${server.url}/asyncapi.json`);
@@ -183,9 +198,19 @@ describe('AsyncAPI document', () => {
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
 
-  it('uses default info title and version', () => {
+  it('uses a neutral default info title and version', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),
+    });
+    const info = isRecord(document['info']) ? document['info'] : undefined;
+    expect(info?.['title']).toBe('API');
+    expect(info?.['version']).toBe('0.0.0');
+  });
+
+  it("takes Weft's title and version from the discovery info Weft's server supplies", () => {
+    const document = generateAsyncApiDocument({
+      registry: createLiveOperationRegistry(),
+      discoveryInfo: weftDiscoveryInfo(undefined),
     });
     const info = isRecord(document['info']) ? document['info'] : undefined;
     expect(info?.['title']).toBe('Weft Workflow Engine');

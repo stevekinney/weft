@@ -9,6 +9,8 @@
  */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { createDeferred } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { Engine } from '../../core/engine.ts';
 import type { RemoteTaskRecord } from '../../core/task-ledger/task-ledger-types.ts';
 import {
@@ -16,8 +18,6 @@ import {
   encodeRemoteTaskRecord,
   taskLedgerKey,
 } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { createDeferred } from '../../testing/fake-timers.test-support.ts';
 import {
   connectFaultInjectingWorker,
   type FaultInjectingWorker,

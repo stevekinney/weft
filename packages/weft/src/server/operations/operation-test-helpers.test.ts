@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { restoreRealTimers, useFakeTimers } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext, WorkflowState, WorkflowStatus } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import {
   invalidJsonRequest,
   jsonRequest,
@@ -102,6 +102,7 @@ describe('operation test helpers', () => {
     try {
       expect(
         await throwingRejectionOf(
+          // hang-guard-self-test: the workflow does not exist, so no load can make it reach running
           waitForWorkflowStatus(engine, 'missing-workflow', 'running', {
             intervalMilliseconds: 1,
             timeoutMilliseconds: 1,
@@ -121,7 +122,6 @@ describe('operation test helpers', () => {
         await throwingRejectionOf(
           waitForWorkflowStatus(engine, 'invalid-interval-workflow', 'running', {
             intervalMilliseconds: 0,
-            timeoutMilliseconds: 1,
           }),
         ),
       ).toThrow('intervalMs must be a finite, positive number');

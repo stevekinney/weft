@@ -13,7 +13,7 @@
  * @module core/outbox-contract
  */
 
-import type { Storage } from '../storage/interface.ts';
+import type { Storage } from "../embedded/storage/src/index.ts";
 import type { ApplicationEventSink } from './application-primitive-commit.ts';
 import type { JSONValue } from './json.ts';
 import type { ApplicationDeliveryClaimedPayload } from './outbox-claims.ts';
@@ -33,7 +33,7 @@ import type {
  *
  * @example
  * ```ts
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import type { OutboxEventSink } from '@lostgradient/weft';
  * import { createFleetEventFeed } from '@lostgradient/weft';
  *
@@ -146,7 +146,8 @@ export type ApplicationDeliveryAdapter = {
  *
  * @example
  * ```ts
- * import { MemoryStorage, type OutboxOptions } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { type OutboxOptions } from '@lostgradient/weft';
  *
  * const options: OutboxOptions = {
  *   storage: new MemoryStorage(),

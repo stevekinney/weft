@@ -49,6 +49,16 @@ export type WorkflowEventStreamOptions = {
    */
   readonly webSocketFactory?: WebSocketFactory;
   /**
+   * Declare that the global `WebSocket` accepts an options bag with upgrade
+   * headers as its second constructor argument (Bun's extension), so
+   * authentication headers can ride the `/watch` handshake. Default `false`:
+   * browsers, service workers, and Node's global `WebSocket` cannot carry
+   * headers, so a connection that has headers configured uses the SSE fallback
+   * under `eventTransport: 'auto'` and fails with an actionable error under
+   * `eventTransport: 'websocket'`. Ignored when `webSocketFactory` is supplied.
+   */
+  readonly webSocketCarriesHeaders?: boolean;
+  /**
    * Buffer events for async iteration from construction rather than lazily on
    * first iterator pull. `tail()` sets this so the documented
    * `await tail.whenConnected(); for await (...)` pattern still sees the connect

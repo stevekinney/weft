@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { decode, encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import {
@@ -9,24 +10,47 @@ import {
   CleanupWarningEvent,
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
+  LeaseHealthChangedEvent,
+  QueueDepthChangedEvent,
+  RealmStateChangedEvent,
+  RemoteActivityCancellationRequestedEvent,
+  RemoteActivityQueuedEvent,
   ScheduleFiredEvent,
   ScheduleMissedFireEvent,
   StorageSizeReportedEvent,
+  StreamChunkEvent,
   TaskResultDeadLetteredEvent,
   WorkerConnectedEvent,
+  WorkerDeploymentChangedEvent,
   WorkerDisconnectedEvent,
+  WorkerRegistrationRejectedEvent,
   WorkflowCancelledEvent,
+  WorkflowDefinitionRegisteredEvent,
+  WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
+  WorkflowRevisionActivatedEvent,
+  WorkflowRevisionActivationRejectedEvent,
+  WorkflowRevisionDrainingEvent,
+  WorkflowRevisionInstalledEvent,
+  WorkflowRevisionRemovedEvent,
+  WorkflowSourceLoadCancelledEvent,
+  WorkflowSourceLoadFailedEvent,
+  WorkflowSourceLoadReadyEvent,
+  WorkflowSourceLoadStartedEvent,
   WorkflowSuspendedEvent,
   WorkflowTeardownEvent,
 } from '../../core/events.ts';
 import { waitForParityCondition as waitFor } from '../../core/parity/real-timer-wait.test-support.ts';
 import { ReviewCompletedEvent, ReviewRequestedEvent } from '../../core/review/events.ts';
 import { taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { createFleetEventFeed, type FleetEventEnvelope } from '../fleet-event-feed.ts';
-import { CLIENT_VISIBLE_EVENT_TYPES, TOKEN_EVENT_TYPE } from './client-visible-events.ts';
+import {
+  CLIENT_VISIBLE_EVENT_TYPES,
+  EVENT_CLASSIFICATIONS,
+  serializeClientVisibleEventData,
+  TOKEN_EVENT_TYPE,
+} from './client-visible-events.ts';
 import { registerWorkflowEventLifecycle, wireEventBroadcasting } from './event-broadcasting.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 
@@ -41,6 +65,111 @@ class TokenEvent extends Event {
 }
 
 describe('wireEventBroadcasting', () => {
+  it('keeps every newly published event own-property payload within the wire whitelist', () => {
+    const safeEvents: Array<[string, Event]> = [
+      ['workflow:definition-registered', new WorkflowDefinitionRegisteredEvent('checkout')],
+      [
+        'workflow:recovery-skipped',
+        new WorkflowRecoverySkippedEvent('wf-1', 'checkout', 'type-not-registered'),
+      ],
+      ['activity:remote-queued', new RemoteActivityQueuedEvent('op-1', 'wf-1', 'default')],
+      [
+        'activity:remote-cancellation-requested',
+        new RemoteActivityCancellationRequestedEvent('op-1', 'wf-1'),
+      ],
+      ['catalog:revision-installed', new WorkflowRevisionInstalledEvent('checkout', 'r1')],
+      [
+        'catalog:revision-activated',
+        new WorkflowRevisionActivatedEvent('checkout', 'r1', 1, undefined),
+      ],
+      [
+        'catalog:activation-rejected',
+        new WorkflowRevisionActivationRejectedEvent('checkout', 'r2', 'conflict'),
+      ],
+      ['catalog:revision-draining', new WorkflowRevisionDrainingEvent('checkout', 'r1')],
+      ['catalog:revision-removed', new WorkflowRevisionRemovedEvent('checkout', 'r1')],
+      [
+        'workflow-source:load-started',
+        new WorkflowSourceLoadStartedEvent('checkout', 'r1', 'module'),
+      ],
+      [
+        'workflow-source:load-ready',
+        new WorkflowSourceLoadReadyEvent('checkout', 'r1', 'module', 12),
+      ],
+      [
+        'workflow-source:load-failed',
+        new WorkflowSourceLoadFailedEvent('checkout', 'r1', 'module', 12, 'application'),
+      ],
+      [
+        'workflow-source:load-cancelled',
+        new WorkflowSourceLoadCancelledEvent('checkout', 'r1', 'module'),
+      ],
+      ['realm:state-changed', new RealmStateChangedEvent('realm-1', 'r1', 'crashed', 2)],
+      ['lease:health-changed', new LeaseHealthChangedEvent('contested')],
+      [
+        'worker:registration-rejected',
+        new WorkerRegistrationRejectedEvent('worker-1', 'deployment_conflict'),
+      ],
+      [
+        'worker:deployment-changed',
+        new WorkerDeploymentChangedEvent('billing', 'b1', 'draining', 4),
+      ],
+      ['stream:chunk', new StreamChunkEvent('wf-1', 'progress', 7)],
+      ['queue:depth-changed', new QueueDepthChangedEvent('payments', 12)],
+    ];
+    const allowed = new Set([
+      'isTrusted',
+      'workflowId',
+      'workflowType',
+      'revision',
+      'generation',
+      'previousRevision',
+      'candidateRevision',
+      'reason',
+      'incompatibilityReasons',
+      'operationId',
+      'queue',
+      'kind',
+      'loadDurationMs',
+      'failureCategory',
+      'realmId',
+      'state',
+      'restartCount',
+      'status',
+      'workerId',
+      'code',
+      'deploymentName',
+      'buildId',
+      'drainState',
+      'routingGeneration',
+      'key',
+      'sequence',
+      'queue',
+      'depth',
+    ]);
+
+    for (const [kind, event] of safeEvents) {
+      expect(EVENT_CLASSIFICATIONS[kind as keyof typeof EVENT_CLASSIFICATIONS]).toBe('published');
+      expect(
+        Object.keys(event)
+          .filter((key) => key !== 'type')
+          .every((key) => allowed.has(key)),
+      ).toBe(true);
+      expect(serializeClientVisibleEventData(event)).not.toHaveProperty('isTrusted');
+    }
+
+    expect(serializeClientVisibleEventData(new WorkflowSuspendedEvent('wf-legacy'))).toHaveProperty(
+      'isTrusted',
+      false,
+    );
+  });
+
+  it('denies the unsafe task-attempt event with a reason and keeps it out of read filters', () => {
+    const classification = EVENT_CLASSIFICATIONS['task:attempt-transition'];
+    expect(classification).toMatchObject({ denied: expect.any(String) });
+    expect(CLIENT_VISIBLE_EVENT_TYPES).not.toContain('task:attempt-transition');
+  });
+
   it('keeps workflow-facing operational events in the client-visible broadcast set', () => {
     expect(CLIENT_VISIBLE_EVENT_TYPES).toEqual(
       expect.arrayContaining([
@@ -91,6 +220,86 @@ describe('wireEventBroadcasting', () => {
     });
   });
 
+  it('publishes the realm, lease, rejection, deployment and queue-depth events through the fleet feed with identifier-only payloads (COR-1724)', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const fleetEventFeed = createFleetEventFeed(engine.storage);
+    const handle = wireEventBroadcasting(engine, { publish() {} } as never, { fleetEventFeed });
+
+    engine.dispatchEvent(new RealmStateChangedEvent('realm-1', 'r1', 'crashed', 2));
+    engine.dispatchEvent(new LeaseHealthChangedEvent('contested'));
+    engine.dispatchEvent(new WorkerRegistrationRejectedEvent('worker-1', 'deployment_conflict'));
+    engine.dispatchEvent(new WorkerDeploymentChangedEvent('billing', undefined, 'draining', 4));
+    engine.dispatchEvent(new QueueDepthChangedEvent('payments', 12));
+
+    const events: FleetEventEnvelope[] = [];
+    await waitFor(
+      async () => {
+        events.length = 0;
+        for await (const envelope of fleetEventFeed.replay()) events.push(envelope);
+        return events.length === 5;
+      },
+      { label: 'five fleet events persisted' },
+    );
+    handle.dispose();
+    engine[Symbol.dispose]();
+
+    expect(events.map((envelope) => [envelope.kind, envelope.payload])).toEqual([
+      [
+        'realm:state-changed',
+        { realmId: 'realm-1', revision: 'r1', state: 'crashed', restartCount: 2 },
+      ],
+      ['lease:health-changed', { status: 'contested' }],
+      ['worker:registration-rejected', { workerId: 'worker-1', code: 'deployment_conflict' }],
+      [
+        'worker:deployment-changed',
+        { deploymentName: 'billing', drainState: 'draining', routingGeneration: 4 },
+      ],
+      ['queue:depth-changed', { queue: 'payments', depth: 12 }],
+    ]);
+  });
+
+  it('keeps workflowless catalog events out of workflow watch storage and publication', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const fleetEventFeed = createFleetEventFeed(engine.storage);
+    const published: string[] = [];
+    const handle = wireEventBroadcasting(
+      engine,
+      {
+        publish(_channel: string, message: string) {
+          published.push(message);
+        },
+      } as never,
+      { fleetEventFeed },
+    );
+
+    engine.dispatchEvent(new WorkflowRevisionInstalledEvent('checkout', 'r1'));
+
+    await waitFor(
+      async () => {
+        for await (const _envelope of fleetEventFeed.replay()) return true;
+        return false;
+      },
+      { label: 'workflowless catalog event persisted to fleet feed' },
+    );
+    const fleetEvents: FleetEventEnvelope[] = [];
+    for await (const envelope of fleetEventFeed.replay()) fleetEvents.push(envelope);
+    const watchKeys: string[] = [];
+    for await (const [key] of engine.storage.scan('watch-event:')) watchKeys.push(key);
+
+    handle.dispose();
+    engine[Symbol.dispose]();
+
+    expect(fleetEvents).toHaveLength(1);
+    expect(fleetEvents[0]).toMatchObject({
+      kind: WorkflowRevisionInstalledEvent.type,
+      payload: { workflowType: 'checkout', revision: 'r1' },
+    });
+    expect(fleetEvents[0]!.payload).not.toHaveProperty('isTrusted');
+    expect(fleetEvents[0]).not.toHaveProperty('workflowId');
+    expect(watchKeys).toEqual([]);
+    expect(published).toEqual([]);
+  });
+
   it('keeps token stream payloads out of events-read feeds and watch storage', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const fleetEventFeed = createFleetEventFeed(engine.storage);
@@ -105,7 +314,7 @@ describe('wireEventBroadcasting', () => {
 
     const fleetEvents: FleetEventEnvelope[] = [];
     for await (const envelope of fleetEventFeed.replay()) fleetEvents.push(envelope);
-    const storedWatchEvent = await engine.storage.get(KEYS.event('wf-token', 0));
+    const storedWatchEvent = await engine.storage.get(KEYS.watchEvent('wf-token', 0));
     handle.dispose();
     engine[Symbol.dispose]();
 
@@ -175,6 +384,7 @@ describe('wireEventBroadcasting', () => {
       cursor: '0',
       data: { workflowId: 'wf-watch-fallback' },
     });
+    expect(JSON.parse(published[0]!.message).data).toHaveProperty('isTrusted', false);
   });
 
   it('logs and suppresses fleet append failures', async () => {
@@ -226,7 +436,10 @@ describe('registerWorkflowEventLifecycle — cancellation propagation', () => {
     const dispose = registerWorkflowEventLifecycle(
       engine,
       context,
-      { dispose: () => {}, cleanupWorkflow: (workflowId) => cleanedUpWorkflows.push(workflowId) },
+      {
+        dispose: () => Promise.resolve(),
+        cleanupWorkflow: (workflowId) => cleanedUpWorkflows.push(workflowId),
+      },
       options,
     );
 

@@ -1,9 +1,38 @@
 import { describe, expect, it } from 'bun:test';
-import { createCatalogSnapshot } from '../index.ts';
+import { createCatalogSnapshot, createLiveOperationRegistry } from '../index.ts';
 
-import { executeApi } from './api.ts';
+import { z } from 'zod';
+
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
+import { executeApi, formatOperationDescription } from './api.ts';
 
 describe('api command', () => {
+  it('resolves every catalog snapshot operation in the live registry that validates its input', () => {
+    // `weft api` finds an operation in the snapshot, then validates its input against the live
+    // registry's schema; the two lookups agree only while the registry holds every snapshot name.
+    const registry = createLiveOperationRegistry();
+    const missing = createCatalogSnapshot()
+      .operations.map((operation) => operation.name)
+      .filter((name) => registry.get(name) === undefined);
+    expect(missing).toEqual([]);
+  });
+
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+    'reports the inherited object key %p as an unknown operation',
+    async (name) => {
+      const result = await executeApi({
+        command: 'api',
+        operationName: name,
+        list: false,
+        yes: false,
+        help: false,
+        json: true,
+      });
+      expect(result.exitCode).toBe(3);
+      expect(result.stderr).toStartWith(`api: unknown operation ${name}`);
+    },
+  );
+
   it('describes each operation using the current source contract', async () => {
     for (const operation of createCatalogSnapshot().operations) {
       const description = await executeApi({
@@ -94,27 +123,31 @@ describe('api command', () => {
     expect((descriptionLine ?? '').length).toBeGreaterThan((summaryLine ?? '').length);
   });
 
-  it('falls back to the summary when an operation declares no description', async () => {
-    // weft.storage.get is not in the interactive subset and declares no
-    // description, so --describe must echo the summary on the Description line.
-    const result = await executeApi({
-      command: 'api',
-      describe: 'weft.storage.get',
-      list: false,
-      yes: false,
-      help: false,
-      json: false,
-    });
-    expect(result.exitCode).toBe(0);
+  it('falls back to the summary when an operation declares no description', () => {
+    // Every live operation is described, so --describe is rendered here for a
+    // snapshot of an operation that declares none.
+    const [operation] = createCatalogSnapshot([
+      defineOperation({
+        name: 'weft.test.summaryonly',
+        mcpExposable: false,
+        destructive: false,
+        summary: 'just a summary',
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.object({ id: z.string() }),
+        access: { kind: 'public' },
+        transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+        unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+        invoke: async () => ({ id: 'x' }),
+      }),
+    ]).operations;
+    expect(operation).toBeDefined();
 
-    const lines = result.stdout.split('\n');
+    const lines = formatOperationDescription(operation!).split('\n');
     const summaryLine = lines.find((line) => line.startsWith('Summary: '));
     const descriptionLine = lines.find((line) => line.startsWith('Description: '));
-    expect(summaryLine).toBeDefined();
-    expect(descriptionLine).toBeDefined();
-    const summaryText = (summaryLine ?? '').slice('Summary: '.length);
-    const descriptionText = (descriptionLine ?? '').slice('Description: '.length);
-    expect(descriptionText).toBe(summaryText);
+    expect((descriptionLine ?? '').slice('Description: '.length)).toBe(
+      (summaryLine ?? '').slice('Summary: '.length),
+    );
   });
 
   it('blocks destructive operations unless --yes is present', async () => {

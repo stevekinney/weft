@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { defineOperation, principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  createOperationRegistry,
+} from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { handleRequest } from './handler.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
-import { principalFromApiKey } from './principal.ts';
-import type { UnknownRestBinding } from './rest-bindings.ts';
+import { type WorkflowContext, workflow } from '../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from './local-user-request.test-support.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -40,7 +40,10 @@ function apiKeyAuth() {
   return {
     authContext: {
       method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({
+        subject: 'test',
+        scopes: ['workflows:read', 'schedules:read'],
+      }),
     },
   };
 }
@@ -148,7 +151,7 @@ describe('handleRequest coverage regressions', () => {
     });
 
     expect(response.status).toBe(500);
-    expect(await response.text()).toBe('{"error":"Internal server error"}');
+    expect(await response.text()).toBe('{"error":"Internal server error","retryable":false}');
   });
 
   it('maps schedule error messages to their canonical HTTP fault statuses', async () => {

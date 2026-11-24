@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import { serializeCheckpoint } from './checkpoint.ts';
 import { Engine } from './engine.ts';
 import {
@@ -18,9 +18,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Drain microtasks so fire-and-forget work completes. */
+/** Let queued inline workflow starts run their first turn so fire-and-forget work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 const noop = async () => null;

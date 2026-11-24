@@ -187,6 +187,68 @@ describe('normalizeListFilter', () => {
     });
   });
 
+  describe('failedStep', () => {
+    it('accepts a step label', () => {
+      expect(normalizeListFilter({ failedStep: 'charge-card' }).failedStep).toBe('charge-card');
+    });
+
+    it('rejects an empty or non-string label', () => {
+      expect(() => normalizeListFilter({ failedStep: '' })).toThrow(ListFilterValidationError);
+      expect(() => normalizeListFilter({ failedStep: 3 })).toThrow(ListFilterValidationError);
+      expect(() => normalizeListFilter({ failedStep: ['a'] })).toThrow(ListFilterValidationError);
+    });
+  });
+
+  describe('retrying', () => {
+    it('accepts true and false, and keeps false', () => {
+      expect(normalizeListFilter({ retrying: true }).retrying).toBe(true);
+      expect(normalizeListFilter({ retrying: false }).retrying).toBe(false);
+    });
+
+    it('rejects a non-boolean', () => {
+      expect(() => normalizeListFilter({ retrying: 'true' })).toThrow(ListFilterValidationError);
+      expect(() => normalizeListFilter({ retrying: 1 })).toThrow(ListFilterValidationError);
+    });
+  });
+
+  describe('failedStep and retrying combined with the other filters', () => {
+    it('combines with every other filter field, as failureCategory does', () => {
+      const combined = normalizeListFilter({
+        status: ['failed', 'running'],
+        type: 'order',
+        scheduleId: 'schedule-1',
+        parentWorkflowId: 'parent-1',
+        parentWorkflowExecutionToken: 'token-1',
+        tags: ['a'],
+        attributes: [{ key: 'region', value: 'eu' }],
+        limit: 10,
+        offset: 5,
+        idPrefix: 'order-',
+        createdAt: { gte: 1 },
+        updatedAt: { lt: 9 },
+        executionDeadline: { gt: 2 },
+        failureCategory: 'application',
+        failedStep: 'charge-card',
+        retrying: false,
+      });
+
+      expect(combined).toMatchObject({
+        status: ['failed', 'running'],
+        type: 'order',
+        idPrefix: 'order-',
+        failureCategory: 'application',
+        failedStep: 'charge-card',
+        retrying: false,
+      });
+    });
+
+    it('still rejects an unknown key beside them', () => {
+      expect(() => normalizeListFilter({ failedStep: 'a', retrying: true, bogus: 1 })).toThrow(
+        ListFilterValidationError,
+      );
+    });
+  });
+
   describe('error issues', () => {
     it('flattens multiple validation issues with paths', () => {
       try {

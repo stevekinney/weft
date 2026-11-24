@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import { handleMcpHttpRequest } from '../mcp/http.ts';
-import { createMcpSessionManager } from '../mcp/session.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { createMcpEndpoint, handleMcpHttpRequest } from '../mcp/http.ts';
 import {
   createPublicOriginWarner,
   generateApiCatalog,
@@ -156,7 +155,7 @@ describe('API catalog linkset', () => {
       discovery?: { tools?: { method?: string; canonical?: boolean } };
     };
     expect(body.transports?.streamableHttp?.url).toBe('https://api.example.com/api/mcp');
-    expect(body.transports?.streamableHttp?.methods).toEqual(['POST', 'GET', 'DELETE']);
+    expect(body.transports?.streamableHttp?.methods).toEqual(['POST']);
     expect(body.discovery?.tools).toEqual({ method: 'tools/list', canonical: true });
   });
 
@@ -205,21 +204,16 @@ describe('API catalog linkset', () => {
     expect(openRpcText).not.toContain(injectedOrigin);
     expect(openRpcText).toContain('/.well-known/mcp.json');
 
-    const sessionManager = createMcpSessionManager(engine);
-    try {
-      const mcpResponse = await handleMcpHttpRequest({
-        request: new Request(`${injectedOrigin}/mcp`, {
-          method: 'PUT',
-          headers: { origin: injectedOrigin },
-        }),
-        engine,
-        sessionManager,
-        authRequired: false,
-      });
-      expect(mcpResponse.status).toBe(403);
-    } finally {
-      await sessionManager[Symbol.asyncDispose]();
-    }
+    await using endpoint = createMcpEndpoint(engine);
+    const mcpResponse = await handleMcpHttpRequest({
+      request: new Request(`${injectedOrigin}/mcp`, {
+        method: 'PUT',
+        headers: { origin: injectedOrigin },
+      }),
+      endpoint,
+      authRequired: false,
+    });
+    expect(mcpResponse.status).toBe(403);
   });
 
   it('serves /.well-known/mcp.json when the explicit untrusted-origin override is set', async () => {

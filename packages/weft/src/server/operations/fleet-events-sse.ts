@@ -1,36 +1,37 @@
 import { z } from 'zod';
 
-import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
 import {
-  decodeCursor,
   type Cursor,
+  type OperationFault,
+  type ReplayAwareClosableIterable,
   type ReplayLiveSubscribeOptions,
-} from '../workflow-event-feed.ts';
-import {
   createReplayAwareClosableIterable,
-  fleetEventEnvelopeSchema,
+  decodeCursor,
+  defineOperation,
+} from "../../embedded/backchannel/src/index.ts";
+import {
+  type ConnectionLease,
+  type UnknownRestBinding,
+  createEventEnvelopeSSEStream,
+  invalidParamsFault,
   isClosableAsyncIterable,
   isReplayAwareClosableIterable,
-  type ReplayAwareClosableIterable,
-} from './event-stream-contracts.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
-import {
-  createEventEnvelopeSSEStream,
   readServerSentEventsCursor,
   requireServerSentEventsAccept,
   shapeServerSentEventsFault,
   SSE_RESPONSE_HEADERS,
-} from './sse-stream.ts';
+} from "../../embedded/backchannel/src/internals.ts";
+import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
+import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
+import { weftFaultPolicy } from '../weft-fault-policy.ts';
+import { fleetEventEnvelopeSchema } from './event-stream-contracts.ts';
 
 type FleetEventsSseOutput = AsyncIterable<FleetEventEnvelope>;
 type ReplayAwareFleetEventsOutput = ReplayAwareClosableIterable<FleetEventEnvelope>;
 
 type FleetEventStreamOperationContext = {
   readonly fleetEventFeed?: Pick<FleetEventFeed, 'subscribe'>;
+  readonly acquireFleetEventSubscriber?: () => ConnectionLease;
 };
 
 const INITIAL_CURSOR: Cursor = '-1';
@@ -42,11 +43,28 @@ const cursorSchema = z.string().refine((cursor) => decodeCursor(cursor) !== null
 const fleetEventKindSchema = z.enum(EVENTS_READ_EVENT_TYPES);
 
 const fleetEventsSseInputSchema = z.object({
-  workflowId: z.string().min(1).optional(),
+  workflowId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only events of the workflow with this id. Omit it for every workflow.'),
   /* One kind, or several. See `fleet-events-subscription.ts` for the rationale. */
-  kind: z.union([fleetEventKindSchema, z.array(fleetEventKindSchema).min(1)]).optional(),
-  fromCursor: cursorSchema.optional(),
-  lastEventId: cursorSchema.optional(),
+  kind: z
+    .union([fleetEventKindSchema, z.array(fleetEventKindSchema).min(1)])
+    .optional()
+    .describe(
+      'Return only events of this kind, or of any of these kinds. Omit it for every readable kind.',
+    ),
+  fromCursor: cursorSchema
+    .optional()
+    .describe(
+      'Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.',
+    ),
+  lastEventId: cursorSchema
+    .optional()
+    .describe(
+      'Cursor of the last event the client received, as sent in the Last-Event-ID header on an SSE reconnect. It takes precedence over fromCursor when both are given.',
+    ),
 });
 
 type FleetEventsSseInput = z.infer<typeof fleetEventsSseInputSchema>;
@@ -76,7 +94,7 @@ export const fleetEventsSseOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: false, jsonRpcWebSocket: false, jsonRpcStdio: false },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
+  invoke: async ({ input, host: engine }) => {
     return createFleetEventsIterable(input, fleetEventStreamOperationContext(engine));
   },
 });
@@ -125,6 +143,7 @@ function createFleetEventsIterable(
   }
 
   const controller = new AbortController();
+  const lease = context.acquireFleetEventSubscriber?.();
   const fromCursor = input.lastEventId ?? input.fromCursor ?? INITIAL_CURSOR;
   return createReplayAwareClosableIterable(
     (onReplayComplete) => {
@@ -142,7 +161,12 @@ function createFleetEventsIterable(
       };
       return feed.subscribe(subscribeOptions);
     },
-    { close: () => controller.abort() },
+    {
+      close: () => {
+        controller.abort();
+        lease?.release();
+      },
+    },
   );
 }
 
@@ -168,7 +192,7 @@ function shapeFleetEventsSseSuccess(output: FleetEventsSseOutput, request: Reque
 }
 
 function shapeFleetEventsSseFault(fault: OperationFault): Response {
-  return shapeServerSentEventsFault(fault);
+  return shapeServerSentEventsFault(fault, weftFaultPolicy);
 }
 
 export const fleetEventsSseRestBinding: UnknownRestBinding = {

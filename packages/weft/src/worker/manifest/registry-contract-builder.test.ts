@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   activityContractHash,
   buildWorkflowContract,
@@ -8,9 +9,9 @@ import {
   deriveWorkflowRevision,
 } from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
+import { buildRegistrySnapshot } from '../../core/registry-snapshot.ts';
 import { activity, query, signal, update, workflow } from '../../core/types.ts';
 import { definitionSchemaToJsonSchema } from '../../core/types/definition-schema-to-json.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../protocol.ts';
 import {
   buildWorkerManifestFromRegistry,
@@ -490,6 +491,35 @@ describe('buildWorkerManifestFromRegistry', () => {
     const before = await workflowContractHashFor(z.object({ amountCents: z.number() }));
     const after = await workflowContractHashFor(z.object({ amountUsd: z.string() }));
     expect(after).not.toBe(before);
+  });
+
+  it('keeps a .uses() activity out of the hashed scoped activities and the worker activity table, matching the registry identity', async () => {
+    engine = createEngine();
+    const greet = activity({
+      name: 'greet',
+      inputSchema: z.object({ name: z.string() }),
+      execute: async () => 'hello',
+    });
+    engine.register(greet);
+    engine.register(
+      workflow({ name: 'welcome' })
+        .uses({ greet })
+        .execute(async function* () {}),
+    );
+
+    const manifest = await buildWorkerManifestFromRegistry(engine, {
+      workflows: { welcome: ['greet'] },
+      deployment: DEPLOYMENT,
+      runtime: RUNTIME,
+    });
+    const snapshot = await buildRegistrySnapshot(engine);
+    const registered = snapshot.workflows.find((entry) => entry.name === 'welcome');
+
+    const worker = manifest.workflows['welcome'];
+    expect(worker?.contractHash).toBe(registered!.contractHash);
+    expect(worker?.workflowRevision).toBe(registered!.revision);
+    // Not implemented by this worker for `welcome`, so `weft worker verify` sees no extra activity.
+    expect(Object.keys(worker?.activities ?? {})).toEqual([]);
   });
 
   it('defaults sdkVersion and protocolVersion, and accepts explicit overrides', async () => {

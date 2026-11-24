@@ -1,9 +1,15 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { describe, expect, it } from 'bun:test';
 import type { Engine } from '../core/engine.ts';
 import { createWorkflowHandleEventIterator } from '../core/engine/handle-iteration.ts';
-import { SignalReceivedEvent, WorkflowCompletedEvent } from '../core/events.ts';
+import {
+  RemoteActivityQueuedEvent,
+  SignalReceivedEvent,
+  WorkflowCompletedEvent,
+} from '../core/events.ts';
+import { WorkflowRevisionInstalledEvent } from '../core/events/catalog-events.ts';
 import type { WorkflowEvent, WorkflowState } from '../core/types.ts';
-import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 
 function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
@@ -17,9 +23,8 @@ async function drain(tail: {
   const consume = (async () => {
     for await (const e of tail) seen.push(e.type);
   })();
-  // `withTimeout` (shared test support) always clears its timer, so a passing
-  // `consume` never leaves a real timeout alive for the guard to flag.
-  await withTimeout(consume, 1000, 'tail to terminate');
+  // A tail that never terminates is ended by the hang guard.
+  await consume;
   return seen;
 }
 
@@ -101,6 +106,21 @@ describe('createLocalWorkflowEventTail', () => {
     const seen = await drain(tail);
 
     expect(seen).toEqual(['signal:received', 'workflow:completed']);
+  });
+
+  it('delivers newly published workflow events but skips engine-scoped events', async () => {
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(fakeEngine(handle), 'wf-visible');
+
+    await tail.whenConnected();
+    handle.dispatchEvent(new WorkflowRevisionInstalledEvent('checkout', 'r1'));
+    handle.dispatchEvent(new RemoteActivityQueuedEvent('operation-1', 'wf-visible', 'remote'));
+    handle.dispatchEvent(new SignalReceivedEvent('wf-visible', 'continue', 'go'));
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-visible', 'done', 1));
+
+    const seen = await drain(tail);
+
+    expect(seen).toEqual(['activity:remote-queued', 'signal:received', 'workflow:completed']);
   });
 
   it('serializes engine events into transport-neutral WorkflowEvent records', async () => {
@@ -185,7 +205,7 @@ describe('createLocalWorkflowEventTail', () => {
 
     tail.close();
     // Must resolve (from close), not hang on the gated fetch.
-    await withTimeout(tail.whenConnected(), 1000, 'whenConnected to resolve after close');
+    await tail.whenConnected();
   });
 
   it('close() while idle terminates the tail promptly (pump does not hang)', async () => {
@@ -260,6 +280,7 @@ describe('createLocalWorkflowEventTail', () => {
     handle.dispatchEvent(new WorkflowCompletedEvent('wf-overlap', 'ok', 1));
     // Let the pump cycle the dispatched events into #pendingLive before the
     // catch-up drains (the engine iterator delivers them across microtasks).
+    // load-proof: the engine iterator delivers the dispatched events across microtasks only (no timer or socket), so a microtask drain settles the pump
     await sleepForTesting(5);
     releaseFetch.resolve();
 
@@ -327,5 +348,20 @@ describe('createLocalWorkflowEventTail', () => {
 
     const seen = await drain(tail);
     expect(seen).toEqual(['workflow:started', 'workflow:completed']);
+  });
+
+  it('rethrows a failure of the engine event iterator to the consumer', async () => {
+    class FailingWorkflowHandle extends FakeWorkflowHandle {
+      override async *[Symbol.asyncIterator](): AsyncIterableIterator<Event> {
+        yield* [];
+        throw new Error('engine iterator failed');
+      }
+    }
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(new FailingWorkflowHandle()),
+      'wf-iterator-failure',
+    );
+
+    expect(await throwingRejectionOf(drain(tail))).toThrow('engine iterator failed');
   });
 });

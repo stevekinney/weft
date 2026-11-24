@@ -1,5 +1,7 @@
+import type { FaultCode } from "../embedded/backchannel/src/index.ts";
+import type { CatalogFetch } from "../embedded/backchannel/src/client/index.ts";
 import { resolveConnection } from '../connection.ts';
-import { failureCategoryForFaultCode, type FaultCode } from '../core/fault-code.ts';
+import { failureCategoryForFaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { isWeftErrorCode, WeftError, type WeftErrorCode } from '../core/weft-error.ts';
 import type { WorkflowEventTransport } from './event-stream-options.ts';
@@ -48,6 +50,14 @@ export interface HttpClientOptions {
    * subscription protocol without a real socket.
    */
   webSocketFactory?: WebSocketFactory;
+  /**
+   * Declare that the global `WebSocket` accepts an options bag with upgrade
+   * headers (Bun's extension), so auth headers can ride the live event stream's
+   * WebSocket handshake. Defaults to `false`, the platform-neutral assumption:
+   * with headers configured, `eventTransport: 'auto'` then uses fetch-based SSE.
+   * Ignored when `webSocketFactory` is supplied.
+   */
+  webSocketCarriesHeaders?: boolean;
 }
 
 /**
@@ -149,6 +159,17 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
    * union.
    */
   readonly data?: Readonly<Record<string, unknown>> | undefined;
+  /**
+   * Whether repeating the identical call later can succeed, as the server's fault says it (the
+   * REST body's `retryable`, or JSON-RPC `error.data.retryable`). `undefined` when the response
+   * carried none, as a response from an older server or a transport error does.
+   */
+  readonly retryable?: boolean | undefined;
+  /**
+   * One line of plain text saying what to do next, when the fault carried one (the REST body's
+   * `remediation`, or JSON-RPC `error.data.remediation`). `undefined` otherwise.
+   */
+  readonly remediation?: string | undefined;
 
   constructor(
     status: number,
@@ -157,6 +178,8 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
       faultCode?: FaultCode | undefined;
       weftCode?: WeftErrorCode | undefined;
       data?: Readonly<Record<string, unknown>> | undefined;
+      retryable?: boolean | undefined;
+      remediation?: string | undefined;
     },
   ) {
     super('HttpClientError', message);
@@ -166,6 +189,8 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
       options?.faultCode === undefined ? undefined : failureCategoryForFaultCode(options.faultCode);
     this.weftCode = options?.weftCode;
     this.data = options?.data;
+    this.retryable = options?.retryable;
+    this.remediation = options?.remediation;
   }
 }
 
@@ -190,9 +215,15 @@ function buildRequestHeaders(
  * Flat error body shape from `shapeRestFault`: `{ error: string }`, optionally
  * with top-level `weftCode` and audited `data` siblings.
  */
-function isFlatErrorBody(
-  value: unknown,
-): value is { error: string; weftCode?: unknown; data?: unknown } {
+type FlatErrorBody = {
+  error: string;
+  weftCode?: unknown;
+  data?: unknown;
+  retryable?: unknown;
+  remediation?: unknown;
+};
+
+function isFlatErrorBody(value: unknown): value is FlatErrorBody {
   return (
     value !== null &&
     typeof value === 'object' &&
@@ -200,17 +231,36 @@ function isFlatErrorBody(
   );
 }
 
-function parseFlatErrorBody(body: { error: string; weftCode?: unknown; data?: unknown }): {
+/** What a fault's `retryable` and `remediation` wire values become: only a boolean and a string survive. */
+export function parseFaultAdvice(source: unknown): {
+  retryable?: boolean;
+  remediation?: string;
+} {
+  if (!isRecord(source)) return {};
+  const retryable = source['retryable'];
+  const remediation = source['remediation'];
+  return {
+    ...(typeof retryable === 'boolean' ? { retryable } : {}),
+    ...(typeof remediation === 'string' ? { remediation } : {}),
+  };
+}
+
+type ParsedErrorBody = {
   message: string;
   weftCode?: WeftErrorCode;
   data?: Readonly<Record<string, unknown>>;
-} {
+  retryable?: boolean;
+  remediation?: string;
+};
+
+function parseFlatErrorBody(body: FlatErrorBody): ParsedErrorBody {
   const weftCode = isWeftErrorCode(body.weftCode) ? body.weftCode : undefined;
   const data = isRecord(body.data) ? body.data : undefined;
   return {
     message: body.error,
     ...(weftCode === undefined ? {} : { weftCode }),
     ...(data === undefined ? {} : { data }),
+    ...parseFaultAdvice(body),
   };
 }
 
@@ -230,11 +280,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Falls back to `response.statusText` when the body is missing, non-JSON, or
  * carries no usable string message.
  */
-async function parseErrorBody(response: Response): Promise<{
-  message: string;
-  weftCode?: WeftErrorCode;
-  data?: Readonly<Record<string, unknown>>;
-}> {
+async function parseErrorBody(response: Response): Promise<ParsedErrorBody> {
   try {
     const body: unknown = await response.json();
     if (isFlatErrorBody(body) && body.error) {
@@ -253,8 +299,9 @@ export async function request<T>(
   path: string,
   baseHeaders: Record<string, string>,
   options?: RequestInit,
+  fetchImplementation: CatalogFetch = fetch,
 ): Promise<T> {
-  const response = await requestResponse(baseUrl, path, baseHeaders, options);
+  const response = await requestResponse(baseUrl, path, baseHeaders, options, fetchImplementation);
   if (response === null) return null as T;
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -270,16 +317,22 @@ export async function requestResponse(
   path: string,
   baseHeaders: Record<string, string>,
   options?: RequestInit,
+  fetchImplementation: CatalogFetch = fetch,
 ): Promise<Response | null> {
   const headers = buildRequestHeaders(baseHeaders, options);
-  const response = await fetch(`${baseUrl}/v1${path}`, { ...options, headers });
+  const response = await fetchImplementation(`${baseUrl}/v1${path}`, { ...options, headers });
 
   if (response.status === 404 && (!options?.method || options.method === 'GET')) {
     return null;
   }
   if (!response.ok) {
-    const { message, weftCode, data } = await parseErrorBody(response);
-    throw new HttpClientError(response.status, message, { weftCode, data });
+    const { message, weftCode, data, retryable, remediation } = await parseErrorBody(response);
+    throw new HttpClientError(response.status, message, {
+      weftCode,
+      data,
+      retryable,
+      remediation,
+    });
   }
   return response;
 }

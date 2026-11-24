@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { recoverAllOperation, recoverAllRestBinding } from './recover-all.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -83,7 +82,7 @@ describe('weft.recover.all', () => {
       });
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
       expect(response.headers.get('Content-Type')).toContain('application/json');
     } finally {
       engine.recoverAll = originalRecoverAll;
@@ -119,6 +118,7 @@ describe('weft.recover.all', () => {
           missingWorkflowCount: 2,
           samplesTruncated: false,
         },
+        retryable: false,
       });
       // Belt-and-suspenders against future renames of the test fixture IDs:
       // assert each specific workflow ID is absent from the serialized body.
@@ -185,7 +185,7 @@ describe('weft.recover.all', () => {
         // to prove the handler does not read it.
         input: { acknowledgeUnknownWorkflowTypes: true } as never,
         principal: { method: 'unauthenticated' },
-        engine,
+        host: engine,
         transport: 'jsonRpcWebSocket',
       });
 

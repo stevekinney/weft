@@ -63,6 +63,15 @@ export interface WorkerInfo {
   acceptedManifestDigest: string;
   drainReason?: string;
   drainStartedAt?: number;
+  /**
+   * The `startedAt` of the drain {@link drainFinishedTasks} and {@link drainedAt} were counted
+   * under. A drain cleared and set again starts both afresh, so they never carry over.
+   */
+  drainCountedFrom?: number;
+  /** How many tasks the worker finished while the drain counted from `drainCountedFrom` held. */
+  drainFinishedTasks?: number;
+  /** When the worker's last task under that drain finished, leaving nothing in flight. */
+  drainedAt?: number;
 }
 
 /** Shape accepted by {@link WorkerRegistry.register}. */
@@ -103,9 +112,35 @@ export type WorkerSummary = {
   startedAt: number;
   capabilities: RemoteWorkerCapabilities;
   health: WorkerHealth;
+  /**
+   * The worker's name as a person reads it, advertised as the string capability `name` when it
+   * registered; absent when it advertised none.
+   */
+  name?: string | undefined;
+  /**
+   * When the worker's session ended. Present only for a worker that went away: it stays listed
+   * until an operator forgets it or it registers again, and its `lastHeartbeatAt` is when it was
+   * last heard from.
+   */
+  disconnectedAt?: number | undefined;
+  /**
+   * The workflow types the worker's accepted manifest says it can execute, sorted; absent when it
+   * declared none. Kept with a worker that went away, whose manifest is no longer readable.
+   */
+  workflows?: string[] | undefined;
   deploymentName?: string | undefined;
   buildId?: string | undefined;
   runtimeVersion?: string | undefined;
+  /**
+   * How many tasks the worker finished since its drain started, present while it is `draining` or
+   * `drained`, so a list can say a drained worker "finished its 2 tasks".
+   */
+  drainFinishedTasks?: number | undefined;
+  /**
+   * When the drained worker's last task finished, or when the drain started if nothing was in
+   * flight then; present only while it is `drained`. The worker stays listed until it disconnects.
+   */
+  drainedAt?: number | undefined;
 };
 
 export type WorkerDrainMutationResult =
@@ -119,6 +154,8 @@ export type WorkerDrainMutationResult =
   | {
       target: 'deployment';
       deploymentName: string;
+      /** Present when the drain or resume named one build rather than the whole deployment. */
+      buildId?: string | undefined;
       affectedWorkers: number;
       inFlight: number;
       health: WorkerHealth;
@@ -190,4 +227,10 @@ export interface InFlightTask {
 export interface WorkerRegistryOptions {
   /** Routing policy used by {@link WorkerRegistry.findWorker}. Default: `'least-loaded'`. */
   policy?: RoutingPolicy;
+  /**
+   * Receives the lifecycle events this registry raises itself, today a
+   * {@link WorkerRegistrationRejectedEvent} each time {@link WorkerRegistry.recordRejection}
+   * appends. `serve()` passes the engine's `dispatchEvent`. Omitted, the registry raises none.
+   */
+  dispatchEvent?: (event: Event) => void;
 }

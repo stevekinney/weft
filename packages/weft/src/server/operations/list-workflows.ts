@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { WorkflowListScanCapExceededError } from '../../core/engine/workflow-indexes.ts';
 import { ListFilterValidationError } from '../../core/list-filter-validation-error.ts';
-import { listFilterObjectSchema, normalizeListFilter } from '../../core/list-filter-validation.ts';
+import {
+  listFilterDescriptions,
+  listFilterObjectSchema,
+  normalizeListFilter,
+} from '../../core/list-filter-validation.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { ListFilter, PaginatedResult, WorkflowSummary } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
 import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
@@ -26,17 +29,36 @@ const listWorkflowsInput = z
     ...listFilterObjectSchema.shape,
     // Transport parsing stays permissive; invoke owns canonical validation and
     // preserves the existing field-specific fault envelope.
-    status: z.union([z.string(), z.array(z.string())]).optional(),
-    type: z.string().optional(),
-    idPrefix: z.string().optional(),
-    createdAt: z.object(listFilterObjectSchema.shape.createdAt.unwrap().shape).strict().optional(),
-    updatedAt: z.object(listFilterObjectSchema.shape.updatedAt.unwrap().shape).strict().optional(),
+    status: z
+      .union([z.string(), z.array(z.string())])
+      .optional()
+      .describe(listFilterDescriptions.status),
+    type: z.string().optional().describe(listFilterDescriptions.type),
+    idPrefix: z.string().optional().describe(listFilterDescriptions.idPrefix),
+    createdAt: z
+      .object(listFilterObjectSchema.shape.createdAt.unwrap().shape)
+      .strict()
+      .optional()
+      .describe(listFilterDescriptions.createdAt),
+    updatedAt: z
+      .object(listFilterObjectSchema.shape.updatedAt.unwrap().shape)
+      .strict()
+      .optional()
+      .describe(listFilterDescriptions.updatedAt),
     executionDeadline: z
       .object(listFilterObjectSchema.shape.executionDeadline.unwrap().shape)
       .strict()
-      .optional(),
-    failureCategory: z.union([z.string(), z.array(z.string())]).optional(),
-    include: listIncludeSchema.optional(),
+      .optional()
+      .describe(listFilterDescriptions.executionDeadline),
+    failureCategory: z
+      .union([z.string(), z.array(z.string())])
+      .optional()
+      .describe(listFilterDescriptions.failureCategory),
+    include: listIncludeSchema
+      .optional()
+      .describe(
+        'Extra data to attach to each summary. Only "failureCategory" is supported, as one value or an array.',
+      ),
   })
   .strict();
 const listWorkflowsOutput = z.unknown();
@@ -50,18 +72,20 @@ export const listWorkflowsOperation = defineOperation({
   summary: 'List workflows',
   description:
     'List workflows visible to the caller, optionally filtered by status, type, originating ' +
-    'schedule, direct parent run, tags, id prefix, failure category, and time range, with pagination via ' +
+    'schedule, direct parent run, tags, id prefix, failure category, failing step, whether an ' +
+    'activity is being retried, and time range, with pagination via ' +
     '`limit`/`offset`. ' +
     'Read-only. Returns the matching workflow summaries in the engine default ordering.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: listWorkflowsInput,
   outputSchema: listWorkflowsOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['Unprocessable'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ListWorkflowsOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ListWorkflowsOutput> => {
     assertOperationEngineMethods(engine, ['list']);
     const e = engine;
     const { include, ...filterInput } = input;
@@ -87,8 +111,9 @@ export const listWorkflowsOperation = defineOperation({
         ...(validatedTags !== undefined ? { tags: validatedTags } : {}),
       });
     } catch (error) {
-      if (error instanceof ListFilterValidationError) throw toUnprocessable(error);
-      throw error;
+      // `normalizeListFilter` raises only `ListFilterValidationError` for any input the operation
+      // schema lets through; anything else is a defect and propagates untouched.
+      throw error instanceof ListFilterValidationError ? toUnprocessable(error) : error;
     }
 
     try {
@@ -161,6 +186,9 @@ export const listWorkflowsRestBinding: UnknownRestBinding = {
       queryParam: 'parent_workflow_execution_token',
     },
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
+    failureCategory: { kind: 'query', queryParam: 'failure_category', repeating: true },
+    failedStep: { kind: 'query', queryParam: 'failed_step' },
+    retrying: { kind: 'query', queryParam: 'retrying' },
     limit: { kind: 'query', queryParam: 'limit' },
     offset: { kind: 'query', queryParam: 'offset' },
     include: { kind: 'query', queryParam: 'include', repeating: true },

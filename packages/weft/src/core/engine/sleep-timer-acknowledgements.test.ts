@@ -1,18 +1,22 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   workflow,
   type WorkflowContext,
   type WorkflowState,
   type WorkflowStatus,
 } from '../types.ts';
+import type { Checkpoint } from '../types/checkpoint.ts';
+import { adoptLaunchCheckpoint } from './checkpoint-commit-snapshots.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { currentExecutionAttempt } from './execution-attempts.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
+import { registerSleepResolver } from './sleep-resolver-registration.ts';
 import {
   acknowledgeSupersededSleepTimers,
   createSleepTimerAcknowledgement,
@@ -114,7 +118,7 @@ describe('sleep timer durable acknowledgements', () => {
     });
 
     const { registerSleepResolver } = await import('./sleep-resolver-registration.ts');
-    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run');
+    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run', undefined);
 
     expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
   });
@@ -129,8 +133,16 @@ describe('sleep timer durable acknowledgements', () => {
     const stale = mock(() => {});
     const { registerSleepResolver } = await import('./sleep-resolver-registration.ts');
 
-    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run');
-    registerSleepResolver(internals, 'workflow', 'workflow:0', successor, 2_000, 'successor-run');
+    registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, 'old-run', undefined);
+    registerSleepResolver(
+      internals,
+      'workflow',
+      'workflow:0',
+      successor,
+      2_000,
+      'successor-run',
+      undefined,
+    );
 
     expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
   });
@@ -162,6 +174,24 @@ describe('sleep timer durable acknowledgements', () => {
 
     expect(successor).not.toHaveBeenCalled();
     expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(successor);
+  });
+
+  it('resolves the sleep of a worker-mode workflow at once, with no acknowledgement to wait for', async () => {
+    const internals = createInternals();
+    internals.workflowClaimRegistry = null;
+    internals.inlineStrategy = null;
+    internals.sleepResolversByWorkflow = new Map();
+    const resolver = mock(() => {});
+    internals.sleepResolvers.set('workflow:workflow:0', { resolve: resolver, fireAt: 1_000 });
+
+    await handleSleepTimerWithAcknowledgement(
+      internals,
+      { id: 'sleep:workflow:0', workflowId: 'workflow', fireAt: 1_000, kind: 'sleep' },
+      async () => createWorkflowState('workflow', 'running'),
+    );
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(internals.sleepTimerAcknowledgementWaiters.size).toBe(0);
   });
 
   it('cancels acknowledgement when an earlier timer cannot resolve the live sleep', async () => {
@@ -453,7 +483,9 @@ describe('handleSleepTimerWithAcknowledgement + Scheduler: WFT-79 finding 2 regr
     await using nonOwner = await createSharedStoreEngine(storage, () => now);
 
     const handle = await owner.start('wft-79-shared-sleep', null);
-    await sleepForTesting(10);
+    await waitForCondition(async () => (await countSleepTimerIndexKeys(storage)) === 1, {
+      label: 'the sleep timer to be stored',
+    });
     expect(await owner.get(handle.id).then((state) => state?.status)).toBe('running');
     expect(await countSleepTimerIndexKeys(storage)).toBe(1);
 
@@ -483,7 +515,9 @@ describe('handleSleepTimerWithAcknowledgement + Scheduler: WFT-79 finding 2 regr
     await using owner = await createSharedStoreEngine(storage, () => now);
 
     const handle = await owner.start('wft-79-shared-sleep', null);
-    await sleepForTesting(10);
+    await waitForCondition(async () => (await countSleepTimerIndexKeys(storage)) === 1, {
+      label: 'the sleep timer to be stored',
+    });
     expect(await countSleepTimerIndexKeys(storage)).toBe(1);
 
     // Cancel BEFORE the sleep deadline: an intentionally external terminal
@@ -503,5 +537,95 @@ describe('handleSleepTimerWithAcknowledgement + Scheduler: WFT-79 finding 2 regr
     // into the exact immortal-timer hazard the retain fix must not reintroduce.
     await owner.scheduler.tick(now);
     expect(await countSleepTimerIndexKeys(storage)).toBe(0);
+  });
+});
+
+describe('sleep bookkeeping fenced to the run it started under (COR-1604)', () => {
+  it('drops a registration whose run was replaced while neither side had a token', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    const internals = getInternals(engine);
+    // A pre-token run: no token on its checkpoint, so none in memory either.
+    adoptLaunchCheckpoint(internals, 'workflow', {} as Checkpoint);
+    const run = currentExecutionAttempt(internals, 'workflow');
+    // A cancel and a replacement launch land while the sleep's timer write is in flight.
+    adoptLaunchCheckpoint(internals, 'workflow', {} as Checkpoint);
+    const stale = mock(() => {});
+
+    expect(
+      registerSleepResolver(internals, 'workflow', 'workflow:0', stale, 1_000, undefined, run),
+    ).toBe(false);
+    expect(internals.sleepResolvers.has('workflow:workflow:0')).toBe(false);
+
+    const current = currentExecutionAttempt(internals, 'workflow');
+    const live = mock(() => {});
+    expect(
+      registerSleepResolver(internals, 'workflow', 'workflow:0', live, 1_000, undefined, current),
+    ).toBe(true);
+    expect(internals.sleepResolvers.get('workflow:workflow:0')?.resolve).toBe(live);
+  });
+
+  it('never lets a token-bearing timer resolve the sleep of a pre-token run', () => {
+    const internals = createInternals();
+    internals.sleepResolversByWorkflow = new Map();
+    const preTokenSleep = mock(() => {});
+    internals.sleepResolvers.set('workflow:workflow:0', { resolve: preTokenSleep, fireAt: 1_000 });
+    const timer = { id: 'sleep:workflow:0', workflowId: 'workflow', kind: 'sleep' as const };
+
+    expect(
+      resolveSleepTimer(internals, {
+        ...timer,
+        fireAt: 2_000,
+        workflowExecutionToken: 'replacement-run',
+      }),
+    ).toBe(false);
+    expect(preTokenSleep).not.toHaveBeenCalled();
+
+    expect(resolveSleepTimer(internals, { ...timer, fireAt: 1_000 })).toBe(true);
+    expect(preTokenSleep).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears side effects staged by a pre-token generation that a token-bearing one replaced', () => {
+    const internals = createInternals();
+    stageAtomicWorkflowCommitSideEffects(internals, 'workflow', {
+      conditions: [],
+      operations: [{ type: 'delete', key: 'signal:old' }],
+    });
+    internals.durableInlineOperations.set('workflow', {
+      operationId: 'old-operation',
+      type: 'wait-signal',
+    });
+    internals.checkpoints = new Map([
+      ['workflow', { workflowExecutionToken: 'successor-run' }],
+    ]) as never;
+
+    recordDurableInlineOperation(internals, 'workflow', {
+      type: 'wait-signal',
+      operationId: 'successor-operation',
+      signalName: 'release',
+    });
+
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.has('workflow')).toBe(false);
+  });
+
+  it('keeps side effects when the current operation has no token to compare', () => {
+    const internals = createInternals();
+    internals.checkpoints = new Map();
+    stageAtomicWorkflowCommitSideEffects(internals, 'workflow', {
+      conditions: [],
+      operations: [{ type: 'delete', key: 'signal:current' }],
+    });
+    internals.durableInlineOperations.set('workflow', {
+      operationId: 'earlier-operation',
+      type: 'wait-signal',
+      workflowExecutionToken: 'current-run',
+    });
+
+    recordDurableInlineOperation(internals, 'workflow', {
+      type: 'wait-signal',
+      operationId: 'next-operation',
+      signalName: 'release',
+    });
+
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.has('workflow')).toBe(true);
   });
 });

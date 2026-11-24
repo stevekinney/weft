@@ -1,3 +1,4 @@
+import type { Principal } from "../../embedded/backchannel/src/index.ts";
 import {
   digestCanonicalWorkerManifest,
   parseWorkerManifest,
@@ -8,15 +9,18 @@ import {
   type RemoteWorkerCapabilities,
 } from '../../worker/protocol.ts';
 import type { ServeOptions } from '../index.ts';
-import type { Principal } from '../principal.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
-import type { LongPollClaim } from './task-polling.ts';
+import {
+  applyRecordedVersionState,
+  recordDeploymentVersion,
+} from './deployment-version-registration.ts';
 import {
   DEFAULT_POLL_TIMEOUT,
   handleTaskHeartbeatRequest,
   markTaskClaimedByLongPollWorker,
   MAX_POLL_TIMEOUT,
+  type LongPollClaim,
 } from './task-polling.ts';
 import {
   authorizeWorkerPrincipal,
@@ -202,6 +206,25 @@ async function acceptWorkerSession(
   const sessionId = crypto.randomUUID();
   const credential = generateWorkerSessionCredential();
   const acceptedManifestDigest = await digestCanonicalWorkerManifest(registration.canonicalJson);
+  const recording = await recordDeploymentVersion(
+    context,
+    registration.manifest,
+    acceptedManifestDigest,
+  );
+  if (!recording.ok) {
+    if (recording.reason === 'conflict') {
+      return Response.json(
+        { error: 'Deployment artifact digest conflict', code: 'deployment_conflict' },
+        { status: 409 },
+      );
+    }
+    // Nothing was registered: the worker retries registration, as it does for any non-OK answer.
+    console.warn(`[weft] ${recording.message}`);
+    return Response.json(
+      { error: 'Deployment catalog unavailable', code: 'catalog_unavailable' },
+      { status: 503, headers: { 'Retry-After': '1' } },
+    );
+  }
   const activities = deriveActivitiesFromManifest(registration.manifest);
   context.registry.recordDeploymentConsistency(
     registration.manifest.deployment.name,
@@ -223,6 +246,7 @@ async function acceptWorkerSession(
     ...(registration.startedAt !== undefined ? { startedAt: registration.startedAt } : {}),
     capabilities: registration.manifest.capabilities as RemoteWorkerCapabilities,
   });
+  applyRecordedVersionState(context, registration.manifest, recording.state);
   const sessionGeneration = context.registry.sessionIdentity(sessionId)?.sessionGeneration ?? 1;
   const now = Date.now();
   context.longPollWorkerSessions.set(sessionId, {

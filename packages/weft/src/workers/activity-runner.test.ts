@@ -1,5 +1,5 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { ActivityExecutionRequest, ActivityExecutionResult } from './activity-runner.ts';
 import { executeActivity } from './activity-runner.ts';
 
@@ -30,6 +30,7 @@ describe('executeActivity', () => {
     };
 
     const result = await executeActivity(request, async (input: unknown) => {
+      // load-proof: an activity body that stretches the call; executeActivity is awaited so the result is asserted only after it truly finishes
       await sleepForTesting(1);
       return (input as number) * 2;
     });

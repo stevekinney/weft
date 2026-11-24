@@ -1,4 +1,5 @@
-import { KEYS, storageHas, storageKeys, type BatchOperation } from '../../../storage/interface.ts';
+import { storageHas, storageKeys, type BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import type { EngineInternals } from '../internals.ts';
 import { deleteKeysInGuardedChunks } from './terminal-fence.ts';
 
@@ -30,6 +31,7 @@ export async function sweepFenced(
     KEYS.workflowHeaders(workflowId),
     KEYS.signalSequence(workflowId),
     KEYS.workflowHasServices(workflowId),
+    KEYS.activityRetrying(workflowId),
     ...extraDeleteKeys,
   ];
   // The finalizer payload stays while a teardown is still owed; see the unfenced path.

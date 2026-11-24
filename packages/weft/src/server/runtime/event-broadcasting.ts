@@ -10,11 +10,16 @@ import {
   WorkflowFailedEvent,
   WorkflowTimedOutEvent,
 } from '../../core/events.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { getWorkflowIdFromEvent } from '../../core/events/workflow-event-id.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import type { ServeOptions } from '../index.ts';
 import { claimNextSequence } from '../runtime-helpers.ts';
-import { CLIENT_VISIBLE_EVENT_TYPES, TOKEN_EVENT_TYPE } from './client-visible-events.ts';
+import {
+  CLIENT_VISIBLE_EVENT_TYPES,
+  serializeClientVisibleEventData,
+  TOKEN_EVENT_TYPE,
+} from './client-visible-events.ts';
 import type { ServerContext } from './context.ts';
 import { cancelTask } from './task-dispatch.ts';
 import { withRetry } from './websocket-worker.ts';
@@ -30,23 +35,10 @@ function workflowChannelPath(workflowId: string, connectionType: 'watch' | 'stre
  * `{ type: string; timestamp: number; data: Record<string, unknown> }`.
  */
 function serializeEvent(event: Event): string | null {
-  const data: Record<string, unknown> = {};
-
-  // Extract all public properties from the event into the nested data bag
-  for (const [key, value] of Object.entries(event)) {
-    if (key === 'type') continue;
-    // Serialize Error objects to plain strings
-    if (value instanceof Error) {
-      data[key] = value.message;
-    } else {
-      data[key] = value;
-    }
-  }
-
   const message: { type: string; timestamp: number; data: Record<string, unknown> } = {
     type: event.type,
     timestamp: Date.now(),
-    data,
+    data: serializeClientVisibleEventData(event),
   };
 
   return JSON.stringify(message);
@@ -55,40 +47,32 @@ function serializeEvent(event: Event): string | null {
 /**
  * Result of wiring up engine-to-WebSocket event broadcasting.
  *
- * - `dispose`: removes all listeners (abort signal). Called on server shutdown.
+ * - `dispose`: removes all listeners (abort signal), then settles once every event write already
+ *   in flight has settled: the storage write of each queued event and every fleet-feed append, so
+ *   the caller may release the storage under them. An event dispatched after the call is not
+ *   written. A write that fails is logged where it is logged otherwise and does not reject the
+ *   returned promise. The wait has no deadline of its own: a write that never settles holds it.
+ *   Called on server shutdown.
  * - `cleanupWorkflow`: drops the per-workflow sequence state for the given
  *   workflow id. Should be invoked when a workflow reaches a terminal state
  *   so the bookkeeping maps do not grow unbounded over the server's lifetime.
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import { wireEventBroadcasting, type EventBroadcastingHandle } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * const bunServer = Bun.serve({ fetch: () => new Response('ok') });
  * const handle: EventBroadcastingHandle = wireEventBroadcasting(engine, bunServer);
  * // Later, on shutdown:
- * handle.dispose();
+ * await handle.dispose();
  * ```
  */
 export interface EventBroadcastingHandle {
-  dispose: () => void;
+  dispose: () => Promise<void>;
   cleanupWorkflow: (workflowId: string) => void;
-}
-
-/**
- * Extract a `workflowId` from a DOM `Event` when the concrete event carries
- * one. All workflow, activity, token, signal, attribute, and update events
- * in `core/events.ts` expose a `workflowId: string` field, but the `Event`
- * base type does not know about it — so a runtime structural check narrows
- * the value before we use it to key bookkeeping maps. Returns `undefined`
- * for events without a string `workflowId` property.
- */
-export function getWorkflowIdFromEvent(event: Event): string | undefined {
-  if (!('workflowId' in event)) return undefined;
-  const candidate = (event as { workflowId: unknown }).workflowId;
-  return typeof candidate === 'string' ? candidate : undefined;
 }
 
 export function registerWorkflowEventLifecycle(
@@ -174,7 +158,8 @@ export function registerWorkflowEventLifecycle(
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import { wireEventBroadcasting } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
@@ -222,6 +207,9 @@ export function wireEventBroadcasting(
    * race on `sequenceCounters` without requiring an explicit mutex.
    */
   const sequenceChains = new Map<string, Promise<void>>();
+  // Fleet-feed appends of events that belong to no workflow, so they sit on no chain. `dispose`
+  // waits for them too.
+  const pendingWorkflowlessAppends = new Set<Promise<void>>();
 
   /** Ensure the sequence counter for a workflow is seeded from storage. */
   function ensureSequenceInitialized(workflowId: string): Promise<void> {
@@ -229,11 +217,11 @@ export function wireEventBroadcasting(
     if (existing) return existing;
 
     const promise = (async () => {
-      const prefix = KEYS.eventPrefix(workflowId);
+      const prefix = KEYS.watchEventPrefix(workflowId);
       let highestSequence = -1;
 
       for await (const [key] of engine.storage.scan(prefix, { reverse: true, limit: 1 })) {
-        // Key format: ev:{workflowId}:{zero-padded sequence}
+        // Key format: watch-event:{workflowId}:{zero-padded sequence}
         const parts = key.split(':');
         const sequencePart = parts[parts.length - 1];
         if (sequencePart !== undefined) {
@@ -357,7 +345,7 @@ export function wireEventBroadcasting(
       sequence,
       cursor: String(sequence),
     });
-    const storageKey = KEYS.event(workflowId, sequence);
+    const storageKey = KEYS.watchEvent(workflowId, sequence);
     const encoded = encode(JSON.parse(watchMessage));
 
     await withRetry(
@@ -384,7 +372,10 @@ export function wireEventBroadcasting(
         const message = serializeEvent(event);
         if (message === null) return;
         if (workflowId === undefined) {
-          void appendFleetEvent(options?.fleetEventFeed, eventType, undefined, message);
+          // `appendFleetEvent` reports its own failure and never rejects.
+          const append = appendFleetEvent(options?.fleetEventFeed, eventType, undefined, message);
+          pendingWorkflowlessAppends.add(append);
+          void append.then(() => pendingWorkflowlessAppends.delete(append));
           return;
         }
 
@@ -455,7 +446,12 @@ export function wireEventBroadcasting(
   }
 
   return {
-    dispose: () => controller.abort(),
+    dispose: async () => {
+      // Listeners go first, so no chain starts after this snapshot. Every chain already catches
+      // its own failure, so none of these rejects.
+      controller.abort();
+      await Promise.all([...sequenceChains.values(), ...pendingWorkflowlessAppends]);
+    },
     cleanupWorkflow,
   };
 }

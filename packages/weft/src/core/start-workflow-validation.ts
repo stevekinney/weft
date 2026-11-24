@@ -22,6 +22,27 @@ export class StartWorkflowValidationError extends WeftError<'StartWorkflowValida
   }
 }
 
+/**
+ * A worker start-override preview token that cannot authorize this start: it is
+ * expired, already used, issued for another workflow, no longer matches the
+ * accepted binding, or the server has no signing secret to verify it with. It
+ * is a state conflict, not a malformed request, so the operations surface it as
+ * `Conflict` while every other {@link StartWorkflowValidationError} stays
+ * `InvalidParams`. It keeps the parent's `code`, so `isWeftFault` and the
+ * error-code table are unchanged.
+ */
+export class WorkerStartOverrideRejectedError extends StartWorkflowValidationError {
+  /** Marks the rejection for a caller that cannot rely on `instanceof` across a module boundary. */
+  readonly rejection: 'worker-start-override';
+
+  // Explicit rather than implicit: the coverage report never sees an implicit derived constructor
+  // called, so the marker is set here.
+  constructor(message: string) {
+    super(message);
+    this.rejection = 'worker-start-override';
+  }
+}
+
 export const assertExclusiveStartWorkflowOptions = (
   startAt: unknown,
   startAfter: unknown,

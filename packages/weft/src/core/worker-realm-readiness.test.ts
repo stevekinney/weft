@@ -63,6 +63,17 @@ describe('validateRealmReadyMessage', () => {
     });
   });
 
+  describe('the COR-1988 protocol bump', () => {
+    it('refuses a worker that still announces protocol version 2', async () => {
+      const message = readyMessage(['order-workflow'], { protocolVersion: 2 });
+      const outcome = await validateRealmReadyMessage(message, dependencies());
+      expect(outcome).toMatchObject({ ok: false, failureCategory: 'system' });
+      expect(!outcome.ok && outcome.error).toContain(
+        'protocol version mismatch: expected 3, got 2',
+      );
+    });
+  });
+
   describe('the COR-117 opt-in artifact digest check', () => {
     it('accepts a realm whose artifactDigest matches the expected one', async () => {
       const manifest = buildInternalRealmManifest(['order-workflow']);

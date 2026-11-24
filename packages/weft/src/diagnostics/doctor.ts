@@ -7,13 +7,13 @@
  * @module diagnostics/doctor
  */
 
+import type { Storage } from "../embedded/storage/src/index.ts";
 import { decode } from '../core/codec.ts';
 import { decodeWorkflowState } from '../core/engine/validation.ts';
 import { isTopLevelWorkflowStateKey } from '../core/engine/workflow-state-stream.ts';
 import type { Checkpoint, WorkflowState } from '../core/types.ts';
 import { fileSize } from '../runtime/portable.ts';
-import type { Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import { generateRecommendations } from './recommendations.ts';
 import type {
   DatabaseHealth,
@@ -38,7 +38,8 @@ import { THRESHOLDS } from './types.ts';
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, collectDiagnostics } from '@lostgradient/weft';
+ * import { Engine, collectDiagnostics } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * const report = await collectDiagnostics(storage, ':memory:');

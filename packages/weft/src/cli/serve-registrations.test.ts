@@ -1,6 +1,6 @@
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { describe, expect, it } from 'bun:test';
 import { Engine, workflow, type ActivityContext, type ActivityDefinition } from '../index.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { registerModuleExports, toActivityCallable } from './serve-registrations.ts';
 
 describe('registerModuleExports', () => {

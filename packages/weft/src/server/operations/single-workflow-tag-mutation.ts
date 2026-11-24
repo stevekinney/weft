@@ -1,25 +1,34 @@
 import { z } from 'zod';
 
+import {
+  defineOperation,
+  type AuthorizationScope,
+  type OperationFault,
+  type SchemaOperationDefinition,
+} from "../../embedded/backchannel/src/index.ts";
+import {
+  isOperationFault,
+  readRestJsonBody,
+  type RestBinding,
+} from "../../embedded/backchannel/src/internals.ts";
 import type { Engine } from '../../core/engine.ts';
 import { WorkflowNotFoundError } from '../../core/engine/errors.ts';
 import {
   coerceStartWorkflowTags,
   StartWorkflowValidationError,
 } from '../../core/start-workflow-validation.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation, type SchemaOperationDefinition } from '../operation-registry.ts';
-import type { RestBinding } from '../rest-binding.ts';
-import { readRestJsonBody } from '../rest-body.ts';
 import {
   assertOperationEngineMethods,
-  isOperationFault,
   shapeRestFault,
   type OperationEngineMethodName,
 } from './operation-helpers.ts';
 
 const singleWorkflowTagMutationInput = z.object({
-  workflowId: z.string().min(1),
-  tags: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow whose tags change.'),
+  tags: z
+    .unknown()
+    .optional()
+    .describe('Tags the call acts on, as an array of non-empty strings (at most 32 per request).'),
 });
 
 const singleWorkflowTagMutationOutput = z.object({
@@ -32,8 +41,12 @@ export type SingleWorkflowTagMutationOutput = z.infer<typeof singleWorkflowTagMu
 type SingleWorkflowTagMutationOperationConfiguration = {
   readonly name: string;
   readonly summary: string;
+  /** Longer-form prose for discovery documents. */
+  readonly description: string;
   /** Whether this tag mutation irreversibly mutates state. Required. */
   readonly destructive: boolean;
+  /** The scope a caller must hold to run this operation. Required: no tag mutation is public. */
+  readonly scope: AuthorizationScope;
   readonly requiredEngineMethods: readonly OperationEngineMethodName[];
   readonly mutateTags: (
     engine: Pick<Engine, OperationEngineMethodName>,
@@ -57,15 +70,17 @@ export function createSingleWorkflowTagMutationOperation(
     name: configuration.name,
     mcpExposable: false,
     summary: configuration.summary,
+    description: configuration.description,
     tags: ['Tags'],
     destructive: configuration.destructive,
     inputSchema: singleWorkflowTagMutationInput,
     outputSchema: singleWorkflowTagMutationOutput,
-    access: { kind: 'public' },
+    access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: [configuration.scope] } },
+    discoverable: true,
     producibleFaults: ['Unprocessable', 'NotFound'],
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-    invoke: async ({ input, engine }): Promise<SingleWorkflowTagMutationOutput> => {
+    invoke: async ({ input, host: engine }): Promise<SingleWorkflowTagMutationOutput> => {
       let tags: string[];
       try {
         tags = coerceStartWorkflowTags(input.tags, 'Field "tags"');

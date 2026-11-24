@@ -55,6 +55,9 @@ function createSpeculativeChildOptions(
     abortController: internals.abortController,
     getNow: internals.getNow,
     initialStep: internals.stepIndex,
+    // The speculate call took the step before this one; an enclosing speculation's step wins,
+    // because only the outermost call has a timeline entry.
+    logStep: internals.logStep ?? internals.stepIndex - 1,
     locals: internals.checkpointLocals,
     searchAttributes: internals.searchAttributes,
     nestingDepth: internals.nestingDepth,

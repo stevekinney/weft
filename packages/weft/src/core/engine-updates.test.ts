@@ -1,9 +1,9 @@
+import { waitForCondition, waitForever } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForCondition, waitForever } from '../testing/fake-timers.test-support.ts';
 
-import type { ScanOptions, Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-import { rejectionOf } from '../testing/promise-outcome.test-support.ts';
+import type { ScanOptions, Storage } from "../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import {
   collectKeys,
   flush,
@@ -183,7 +183,16 @@ function wrapStorageWithDelayedUpdateResponse(storage: Storage, result: unknown)
     },
     delete: storage.delete.bind(storage),
     scan: storage.scan.bind(storage),
-    batch: storage.batch.bind(storage),
+    // The request is written in a batch with its update-history entry (COR-1463).
+    async batch(operations) {
+      for (const operation of operations) {
+        if (operation.type === 'put' && operation.key.startsWith('upd:')) {
+          pendingRequestKey = operation.key;
+        }
+      }
+
+      await storage.batch(operations);
+    },
     ...(storage.conditionalBatch
       ? { conditionalBatch: storage.conditionalBatch.bind(storage) }
       : {}),
@@ -515,6 +524,16 @@ for (const backend of storageBackends) {
             }
 
             await staleWorkflowStateStorage.storage.put(key, value);
+          },
+          // The request is written in a batch with its update-history entry (COR-1463).
+          async batch(operations) {
+            for (const operation of operations) {
+              if (operation.type === 'put' && operation.key.startsWith('upd:')) {
+                pendingRequestKey = operation.key;
+              }
+            }
+
+            await staleWorkflowStateStorage.storage.batch(operations);
           },
         };
 
@@ -993,7 +1012,6 @@ for (const backend of storageBackends) {
 
         const responseKey = 'upr:pending-drain';
         await waitForCondition(async () => (await result.storage.get(responseKey)) !== null, {
-          timeoutMs: 500,
           label: 'pending update response after resume',
         });
 
@@ -1217,63 +1235,59 @@ for (const backend of storageBackends) {
         // engine-level waiter race. The behavior under test is backend
         // agnostic, so keeping it on the simplest storage avoids adapter
         // timing noise while still covering the fallback path.
-        it(
-          'falls back to coordinated delivery when a stale waiter is consumed during the async gap',
-          async () => {
-            const result = backend.factory();
-            cleanup = result.cleanup;
+        it('falls back to coordinated delivery when a stale waiter is consumed during the async gap', async () => {
+          const result = backend.factory();
+          cleanup = result.cleanup;
 
-            let delayNextUpdateScan = false;
-            const delayedScanStarted = Promise.withResolvers<void>();
-            const releaseDelayedScan = Promise.withResolvers<void>();
-            const storage = wrapStorageWithUpdateScanHook(result.storage, async () => {
-              if (!delayNextUpdateScan) {
-                return;
-              }
+          let delayNextUpdateScan = false;
+          const delayedScanStarted = Promise.withResolvers<void>();
+          const releaseDelayedScan = Promise.withResolvers<void>();
+          const storage = wrapStorageWithUpdateScanHook(result.storage, async () => {
+            if (!delayNextUpdateScan) {
+              return;
+            }
 
-              delayNextUpdateScan = false;
-              delayedScanStarted.resolve();
-              await releaseDelayedScan.promise;
-            });
+            delayNextUpdateScan = false;
+            delayedScanStarted.resolve();
+            await releaseDelayedScan.promise;
+          });
 
-            engine = new Engine({ storage });
+          engine = new Engine({ storage });
 
-            const staleWaiterRaceWorkflow = workflow({ name: 'stale-waiter-race' }).execute(
-              async function* (ctx: WorkflowContext) {
-                const first = yield* ctx.waitForUpdate<string>('data');
-                first.respond(`first:${first.payload}`);
+          const staleWaiterRaceWorkflow = workflow({ name: 'stale-waiter-race' }).execute(
+            async function* (ctx: WorkflowContext) {
+              const first = yield* ctx.waitForUpdate<string>('data');
+              first.respond(`first:${first.payload}`);
 
-                const second = yield* ctx.waitForUpdate<string>('data');
-                second.respond(`second:${second.payload}`);
+              const second = yield* ctx.waitForUpdate<string>('data');
+              second.respond(`second:${second.payload}`);
 
-                return [first.payload, second.payload];
-              },
-            );
-            engine.register(staleWaiterRaceWorkflow);
+              return [first.payload, second.payload];
+            },
+          );
+          engine.register(staleWaiterRaceWorkflow);
 
-            const handle = await engine.start('stale-waiter-race', undefined);
-            await flush();
+          const handle = await engine.start('stale-waiter-race', undefined);
+          await flush();
 
-            delayNextUpdateScan = true;
-            const delayedUpdate = engine.update(handle.id, 'data', 'first-payload', {
-              timeout: 15_000,
-            });
-            delayedUpdate.catch(() => {});
-            await delayedScanStarted.promise;
+          delayNextUpdateScan = true;
+          const delayedUpdate = engine.update(handle.id, 'data', 'first-payload', {
+            timeout: 15_000,
+          });
+          delayedUpdate.catch(() => {});
+          await delayedScanStarted.promise;
 
-            const immediateUpdateResult = await engine.update(handle.id, 'data', 'second-payload', {
-              timeout: 15_000,
-            });
-            expect(immediateUpdateResult).toBe('first:second-payload');
+          const immediateUpdateResult = await engine.update(handle.id, 'data', 'second-payload', {
+            timeout: 15_000,
+          });
+          expect(immediateUpdateResult).toBe('first:second-payload');
 
-            await flush();
-            releaseDelayedScan.resolve();
+          await flush();
+          releaseDelayedScan.resolve();
 
-            expect(await delayedUpdate).toBe('second:first-payload');
-            expect(await handle.result()).toEqual(['second-payload', 'first-payload']);
-          },
-          { timeout: 15_000 },
-        );
+          expect(await delayedUpdate).toBe('second:first-payload');
+          expect(await handle.result()).toEqual(['second-payload', 'first-payload']);
+        });
       }
 
       if (backend.name === 'MemoryStorage') {

@@ -9,20 +9,22 @@
  * - EngineFailure fault shaper returns 500.
  *
  * REST tests inject an authContext with an api-key principal so the
- * `access:authenticated` check passes.
+ * `schedules:read` check passes.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  type OperationFault,
+  anonymousPrincipal,
+  defineOperation,
+  principalFromApiKey,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { getScheduleOperation, getScheduleRestBinding } from './get-schedule.ts';
 
@@ -40,12 +42,12 @@ function createEngine(): Engine {
   return engine;
 }
 
-/** AuthContext for handleRequest that satisfies the access:authenticated check via api-key. */
+/** AuthContext for handleRequest that holds schedules:read, which the schedule reads require. */
 function apiKeyAuthContext() {
   return {
     authContext: {
       method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: [] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['schedules:read'] }),
     },
   };
 }
@@ -80,6 +82,57 @@ describe('weft.schedules.get', () => {
     expect(body.workflowType).toBe('echo');
   });
 
+  it('returns the schedule’s metadata, and none for a schedule created without (COR-2546)', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'owned-schedule',
+      metadata: { owner: 'ada' },
+    });
+    await engine.schedule('echo', null, '0 * * * *', { id: 'plain-schedule' });
+
+    const read = async (scheduleId: string) => {
+      const response = await handleRequest(
+        new Request(`http://localhost/v1/schedules/${scheduleId}`, { method: 'GET' }),
+        engine!,
+        {
+          operationRegistry: registry,
+          restBindings: [getScheduleRestBinding],
+          ...apiKeyAuthContext(),
+        },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as Record<string, unknown>;
+    };
+
+    const owned = await read('owned-schedule');
+    const plain = await read('plain-schedule');
+    expect(owned['metadata']).toEqual({ owner: 'ada' });
+    expect('metadata' in plain).toBe(false);
+  });
+
+  it('returns the schedule revision, and a pause moves it (COR-1482)', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', {}, '0 * * * *', { id: 'revised-schedule' });
+    const readRevision = async () => {
+      const result = await executeOperation(
+        'weft.schedules.get',
+        { scheduleId: 'revised-schedule' },
+        {
+          principal: principalFromApiKey({ subject: 'svc', scopes: ['schedules:read'] }),
+          host: engine,
+          transport: 'jsonRpcStdio',
+          registry: createLiveOperationRegistry(),
+        },
+      );
+      if (!result.ok) throw new Error('expected success');
+      return (result.value as { revision: number }).revision;
+    };
+
+    expect(await readRevision()).toBe(1);
+    await engine.pauseSchedule('revised-schedule');
+    expect(await readRevision()).toBe(2);
+  });
+
   it('returns 404 when the schedule does not exist', async () => {
     engine = createEngine();
 
@@ -97,6 +150,7 @@ describe('weft.schedules.get', () => {
     expect(await response.json()).toEqual({
       error: 'Schedule "does-not-exist" not found',
       data: { resource: 'schedule', identifier: 'does-not-exist' },
+      retryable: false,
     });
   });
 
@@ -105,12 +159,12 @@ describe('weft.schedules.get', () => {
     await engine.schedule('echo', {}, '0 * * * *', { id: 'apikey-schedule' });
 
     const liveRegistry = createLiveOperationRegistry();
-    const principal = principalFromApiKey({ subject: 'svc', scopes: [] });
+    const principal = principalFromApiKey({ subject: 'svc', scopes: ['schedules:read'] });
 
     const result = await executeOperation(
       'weft.schedules.get',
       { scheduleId: 'apikey-schedule' },
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
+      { principal, host: engine, transport: 'jsonRpcStdio', registry: liveRegistry },
     );
 
     expect(result.ok).toBe(true);
@@ -128,7 +182,7 @@ describe('weft.schedules.get', () => {
       { scheduleId: 'any-schedule' },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -165,7 +219,7 @@ describe('weft.schedules.get', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('shapes Unauthorized faults as 401', async () => {
@@ -193,7 +247,7 @@ describe('weft.schedules.get', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'missing credentials' });
+    expect(await response.json()).toEqual({ error: 'missing credentials', retryable: false });
   });
 
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
@@ -221,6 +275,6 @@ describe('weft.schedules.get', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: 'schedule conflict' });
+    expect(await response.json()).toEqual({ error: 'schedule conflict', retryable: false });
   });
 });

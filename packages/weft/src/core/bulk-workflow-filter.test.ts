@@ -68,6 +68,18 @@ describe('hasScopedBulkWorkflowFilter — failureCategory', () => {
   });
 });
 
+describe('hasScopedBulkWorkflowFilter — failedStep and retrying', () => {
+  it('rejects failedStep or retrying alone, as it does failureCategory', () => {
+    expect(hasScopedBulkWorkflowFilter({ failedStep: 'charge-card' })).toBe(false);
+    expect(hasScopedBulkWorkflowFilter({ retrying: true })).toBe(false);
+  });
+
+  it('accepts them beside a real scope', () => {
+    expect(hasScopedBulkWorkflowFilter({ failedStep: 'charge-card', status: 'failed' })).toBe(true);
+    expect(hasScopedBulkWorkflowFilter({ retrying: true, type: 'checkout' })).toBe(true);
+  });
+});
+
 describe('hasScopedBulkWorkflowFilter — time ranges alone', () => {
   it('rejects createdAt range without any other scope', () => {
     expect(hasScopedBulkWorkflowFilter({ createdAt: { gte: 1 } })).toBe(false);

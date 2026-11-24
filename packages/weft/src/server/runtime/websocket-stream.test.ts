@@ -1,10 +1,10 @@
 import type { ServerWebSocket } from 'bun';
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { minimalServerContext } from './server-context.test-support.ts';
 import {
@@ -15,6 +15,7 @@ import {
   getHighestStoredWatchSequence,
   publishWatchMessage,
   removeWatchSocket,
+  replayTokenStream,
   replayWatchEvents,
 } from './websocket-stream.ts';
 
@@ -22,9 +23,9 @@ describe('watch WebSocket delivery', () => {
   it('reads the highest durable stream and watch sequence from storage keys', async () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamChunk('wf-sequences', 'tokens', 3), encode({ token: 'a' }));
-    await storage.put(`${KEYS.eventPrefix('wf-sequences')}head`, encode({ ignored: true }));
+    await storage.put(`${KEYS.watchEventPrefix('wf-sequences')}head`, encode({ ignored: true }));
     await storage.put(
-      KEYS.event('wf-sequences', 4),
+      KEYS.watchEvent('wf-sequences', 4),
       encode({
         type: 'workflow:suspended',
         timestamp: 1,
@@ -41,7 +42,7 @@ describe('watch WebSocket delivery', () => {
 
   it('returns no durable watch sequence when only non-event keys share the prefix', async () => {
     const storage = new MemoryStorage();
-    await storage.put(`${KEYS.eventPrefix('wf-empty-watch')}head`, encode({ ignored: true }));
+    await storage.put(`${KEYS.watchEventPrefix('wf-empty-watch')}head`, encode({ ignored: true }));
     const engine = { storage } as unknown as Engine;
 
     expect(await getHighestStoredWatchSequence(engine, 'wf-empty-watch')).toBe(-1);
@@ -216,9 +217,9 @@ describe('watch WebSocket delivery', () => {
   it('skips malformed stored watch records and continues replaying later events', async () => {
     const context = minimalServerContext();
     const storage = new MemoryStorage();
-    await storage.put(KEYS.event('wf-watch', 1), new Uint8Array([0xc1]));
+    await storage.put(KEYS.watchEvent('wf-watch', 1), new Uint8Array([0xc1]));
     await storage.put(
-      KEYS.event('wf-watch', 2),
+      KEYS.watchEvent('wf-watch', 2),
       encode({
         type: 'workflow:suspended',
         timestamp: 2,
@@ -226,7 +227,7 @@ describe('watch WebSocket delivery', () => {
       }),
     );
     await storage.put(
-      KEYS.event('wf-watch', 3),
+      KEYS.watchEvent('wf-watch', 3),
       encode({
         type: 'workflow:failed',
         timestamp: Number.NaN,
@@ -265,7 +266,7 @@ describe('watch WebSocket delivery', () => {
     const storage = new MemoryStorage();
     for (let sequence = 0; sequence <= 1000; sequence += 1) {
       await storage.put(
-        KEYS.event('wf-watch', sequence),
+        KEYS.watchEvent('wf-watch', sequence),
         encode({
           type: 'workflow:suspended',
           timestamp: sequence,
@@ -303,5 +304,42 @@ describe('watch WebSocket delivery', () => {
     ]);
     expect(socket.data.pendingWatchMessages).toEqual([]);
     expect(socket.data.watchReplayInProgress).toBe(false);
+  });
+});
+
+describe('token stream replay', () => {
+  it('replays object chunks in order and skips chunks whose value is not an object', async () => {
+    const context = minimalServerContext();
+    const sentMessages: string[] = [];
+    const socket = {
+      data: {
+        pathname: '/v1/workflows/wf-tokens/stream',
+        connectionType: 'stream',
+        workflowId: 'wf-tokens',
+        streamReplayInProgress: true,
+        pendingStreamMessages: [],
+      },
+      send(message: string) {
+        sentMessages.push(message);
+      },
+      close() {},
+    } as unknown as ServerWebSocket<WebSocketData>;
+    const engine = {
+      getStreamChunks: async () => [
+        { sequence: 0, value: 'a bare string' },
+        { sequence: 1, value: { token: 'one' } },
+        { sequence: 2, value: null },
+        { sequence: 3, value: 42 },
+        { sequence: 4, value: { token: 'two' } },
+      ],
+    } as unknown as Engine;
+
+    await replayTokenStream(context, engine, socket, 'wf-tokens');
+
+    const delivered = sentMessages.map((message) => JSON.parse(message));
+    expect(delivered.map((message) => message.sequence)).toEqual([1, 4]);
+    expect(delivered.map((message) => message.data)).toEqual([{ token: 'one' }, { token: 'two' }]);
+    expect(socket.data.streamLastDeliveredSequence).toBe(4);
+    expect(socket.data.streamReplayInProgress).toBe(false);
   });
 });

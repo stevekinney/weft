@@ -9,24 +9,16 @@ import {
   runGenerateOperationClientCommand,
 } from './generate-operation-client.ts';
 
-import {
-  createCatalogSnapshot,
-  stringifyCatalogSnapshot,
-} from '../src/server/operation-catalog-snapshot.ts';
-import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
-import { throwingRejectionOf } from '../src/testing/promise-outcome.test-support.ts';
-import { assignAliasNames } from './operation-client-aliases.ts';
-import { canonicalKey, schemaToNode } from './operation-client-schema.ts';
+import { stringifyCatalogSnapshot } from "../src/embedded/backchannel/src/index.ts";
+import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from "../src/embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { createCatalogSnapshot } from '../src/server/weft-catalog-snapshot.ts';
 
 import {
   generatedSourcesText,
   snapshotOperation,
   snapshotTestOperation,
 } from './operation-client-test-support.ts';
-function compareAliasEntries(first: [string, string], second: [string, string]): number {
-  return first[0] < second[0] ? -1 : 1;
-}
-
 describe('createOperationClientSources — generated output', () => {
   it('carries raw storage operation caps in the catalog schemas', () => {
     expect(snapshotOperation('weft.storage.scan').inputSchema).toMatchObject({
@@ -107,47 +99,6 @@ describe('createOperationClientSources — generated output', () => {
     const first = await createOperationClientSources(snapshot);
     const second = await createOperationClientSources(snapshot);
     expect([...first]).toEqual([...second]);
-  });
-
-  it('canonical keys are independent of property insertion order', () => {
-    // Exercises the field-sort defense: two objects with the same fields in
-    // different declaration order must dedupe to one alias, never two.
-    const forward = schemaToNode({
-      type: 'object',
-      properties: { a: { type: 'string' }, b: { type: 'number' } },
-    });
-    const reverse = schemaToNode({
-      type: 'object',
-      properties: { b: { type: 'number' }, a: { type: 'string' } },
-    });
-    expect(canonicalKey(forward)).toBe(canonicalKey(reverse));
-  });
-
-  it('assigns alias names independent of candidate insertion order', () => {
-    const left = schemaToNode({
-      type: 'object',
-      properties: { gt: { type: 'number' }, lt: { type: 'number' }, eq: { type: 'number' } },
-    });
-    const right = schemaToNode({
-      type: 'object',
-      properties: { x: { type: 'string' }, y: { type: 'string' }, z: { type: 'string' } },
-    });
-    const forward = assignAliasNames(
-      new Map([
-        [canonicalKey(left), left],
-        [canonicalKey(right), right],
-      ]),
-    );
-    const reverse = assignAliasNames(
-      new Map([
-        [canonicalKey(right), right],
-        [canonicalKey(left), left],
-      ]),
-    );
-
-    expect([...forward.entries()].toSorted(compareAliasEntries)).toEqual(
-      [...reverse.entries()].toSorted(compareAliasEntries),
-    );
   });
 
   it('hoists the date-range shape into exactly one alias', async () => {

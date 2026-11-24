@@ -86,6 +86,17 @@ export type FieldDiff =
 /** Shape descriptor: maps field names to their type names (e.g., `"string"`, `"object"`). */
 export type ShapeDescriptor = Record<string, string>;
 
+function diffField(
+  field: string,
+  oldType: string | undefined,
+  newType: string | undefined,
+): FieldDiff | undefined {
+  if (oldType === undefined)
+    return newType === undefined ? undefined : { field, change: 'added', newType };
+  if (newType === undefined) return { field, change: 'removed', oldType };
+  return oldType === newType ? undefined : { field, change: 'type-changed', oldType, newType };
+}
+
 /**
  * Compare two checkpoint shape descriptors and return the field-level diffs.
  *
@@ -112,21 +123,11 @@ export function diffCheckpointShapes(
   const allKeys = new Set([...Object.keys(oldShape), ...Object.keys(newShape)]);
 
   for (const key of allKeys) {
-    const inOld = Object.hasOwn(oldShape, key);
-    const inNew = Object.hasOwn(newShape, key);
+    const oldType = Object.hasOwn(oldShape, key) ? oldShape[key] : undefined;
+    const newType = Object.hasOwn(newShape, key) ? newShape[key] : undefined;
 
-    if (inOld && !inNew) {
-      diffs.push({ field: key, change: 'removed', oldType: oldShape[key]! });
-    } else if (!inOld && inNew) {
-      diffs.push({ field: key, change: 'added', newType: newShape[key]! });
-    } else if (inOld && inNew && oldShape[key] !== newShape[key]) {
-      diffs.push({
-        field: key,
-        change: 'type-changed',
-        oldType: oldShape[key]!,
-        newType: newShape[key]!,
-      });
-    }
+    const diff = diffField(key, oldType, newType);
+    if (diff !== undefined) diffs.push(diff);
   }
 
   return diffs;
@@ -157,23 +158,25 @@ export function inferShape(value: unknown): ShapeDescriptor {
   return shape;
 }
 
+function describeTypeChange(diff: Extract<FieldDiff, { change: 'type-changed' }>): string {
+  return `  - field \`${diff.field}\` changed type: ${diff.oldType} → ${diff.newType}`;
+}
+
 /** Format field diffs into a human-readable summary. */
 function formatFieldDiffs(diffs: FieldDiff[]): string {
   if (diffs.length === 0) return '';
 
   const lines = diffs.map((diff) => {
-    switch (diff.change) {
-      case 'added':
-        return `  - field \`${diff.field}\` was added (type: ${diff.newType})`;
-      case 'removed':
-        return `  - field \`${diff.field}\` was removed (was: ${diff.oldType})`;
-      case 'type-changed':
-        return `  - field \`${diff.field}\` changed type: ${diff.oldType} → ${diff.newType}`;
-      default: {
-        const exhaustiveCheck: never = diff;
-        throw new Error(`Unknown field diff change: ${JSON.stringify(exhaustiveCheck)}`);
-      }
+    if (diff.change === 'added') {
+      return `  - field \`${diff.field}\` was added (type: ${diff.newType})`;
     }
+    if (diff.change === 'removed') {
+      return `  - field \`${diff.field}\` was removed (was: ${diff.oldType})`;
+    }
+    // Only a `type-changed` diff reaches here, and the parameter type makes the compiler reject
+    // this call the moment a `FieldDiff` change kind is added without a branch above. At runtime
+    // every diff comes from `diffCheckpointShapes`, which only produces the three kinds.
+    return describeTypeChange(diff);
   });
 
   return `\nCheckpoint shape changes:\n${lines.join('\n')}`;

@@ -17,9 +17,9 @@
  */
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { serve, type WeftServer } from '../../server/index.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { RemoteWorker } from '../../worker/index.ts';
 import type { RemoteTaskRecord } from '../task-ledger/task-ledger.ts';
 import { decodeRemoteTaskRecord } from '../task-ledger/task-ledger.ts';
@@ -75,7 +75,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
 
     await engine.cancel(handle.id);
@@ -110,7 +110,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
 
     await engine.cancel(handle.id);
@@ -121,7 +121,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'terminal' && record.disposition === 'cancelled';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'durable task to resolve as cancelled' },
+      { intervalMs: 10, label: 'durable task to resolve as cancelled' },
     );
     expect(localChargeCard).toHaveBeenCalledTimes(0);
   });
@@ -152,7 +152,6 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
     });
     await remoteWorker.connect();
     await waitForCondition(() => server?.registry.getWorker('cancel-leased-worker') !== undefined, {
-      timeoutMs: 5_000,
       intervalMs: 25,
       label: 'remote worker to register',
     });
@@ -179,7 +178,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'leased';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to be leased' },
+      { intervalMs: 10, label: 'task to be leased' },
     );
 
     await engine.cancel(handle.id);
@@ -200,7 +199,7 @@ describe('remote activity cancellation (COR-152, criterion 10)', () => {
             (record.state === 'terminal' && record.disposition === 'cancelled'))
         );
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'durable task to record cancellation intent' },
+      { intervalMs: 10, label: 'durable task to record cancellation intent' },
     );
     expect(localSlowActivity).toHaveBeenCalledTimes(0);
   });

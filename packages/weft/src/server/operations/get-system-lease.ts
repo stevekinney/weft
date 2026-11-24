@@ -11,9 +11,9 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { EngineLeaseHealth } from '../../core/engine.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const getSystemLeaseInput = z.object({});
@@ -54,7 +54,7 @@ export const getSystemLeaseOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine }): Promise<GetSystemLeaseOutput> => {
+  invoke: async ({ host: engine }): Promise<GetSystemLeaseOutput> => {
     assertOperationEngineMethods(engine, ['getLeaseHealth']);
     return engine.getLeaseHealth();
   },

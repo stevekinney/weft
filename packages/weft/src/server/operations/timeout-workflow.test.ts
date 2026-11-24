@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { timeoutWorkflowOperation, timeoutWorkflowRestBinding } from './timeout-workflow.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -75,6 +74,7 @@ describe('weft.workflows.timeout', () => {
       expect(await response.json()).toEqual({
         error: 'Workflow "missing-workflow" not found',
         data: { resource: 'workflow', identifier: 'missing-workflow' },
+        retryable: false,
       });
     } finally {
       engine.timeout = originalTimeout;
@@ -97,7 +97,7 @@ describe('weft.workflows.timeout', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
       expect(response.headers.get('Content-Type')).toContain('application/json');
     } finally {
       engine.timeout = originalTimeout;

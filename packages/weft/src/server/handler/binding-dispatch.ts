@@ -1,5 +1,4 @@
-import { bindingPathMatches } from '../rest-binding.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { type UnknownRestBinding, bindingPathMatches } from "../../embedded/backchannel/src/internals.ts";
 
 /**
  * Find a REST binding that matches the request's method and path.

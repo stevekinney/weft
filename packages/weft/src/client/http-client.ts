@@ -1,3 +1,4 @@
+import { createCatalogClient } from "../embedded/backchannel/src/client/index.ts";
 import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   AttributeFilterKey,
@@ -6,6 +7,7 @@ import type {
   BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
+  CancelWorkflowResult,
   CoordinatedUpdateResult,
   ForkOptions,
   ListFilter,
@@ -100,7 +102,6 @@ import type {
   WeftClientActivity,
 } from './interface.ts';
 import { openClientEventSubscription } from './open-event-subscription.ts';
-import { createCatalogWeftClient } from './operation-client-runtime.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildScheduleBody, buildStartBody, buildStartOrSignalBody } from './start-body.ts';
@@ -164,7 +165,7 @@ export class HttpClient implements WeftClient {
     const connection = resolveHttpClientConnection(options);
     this.baseUrl = connection.baseUrl;
     this.headers = connection.headers;
-    this.operations = createCatalogWeftClient<ClientOperationTypes>(
+    this.operations = createCatalogClient<ClientOperationTypes>(
       CLIENT_OPERATION_NAMES,
       httpClientOperationTransport(this.baseUrl, this.headers, CLIENT_REST_OPERATION_BINDINGS),
     );
@@ -180,6 +181,9 @@ export class HttpClient implements WeftClient {
       ...(options.webSocketFactory === undefined
         ? {}
         : { webSocketFactory: options.webSocketFactory }),
+      ...(options.webSocketCarriesHeaders === undefined
+        ? {}
+        : { webSocketCarriesHeaders: options.webSocketCarriesHeaders }),
     };
   }
 
@@ -316,7 +320,7 @@ export class HttpClient implements WeftClient {
     return request<PaginatedResult<ScheduleSummary>>(this.baseUrl, path, this.headers);
   }
 
-  async cancel(id: string): Promise<void> {
+  async cancel(id: string): Promise<CancelWorkflowResult> {
     return cancelWorkflowRequest(this, id);
   }
 

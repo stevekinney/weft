@@ -23,8 +23,8 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   workflow,
   type EngineOptions,
@@ -34,7 +34,7 @@ import {
 import { createScheduleCallbacks } from './callback-creators-schedule.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
-import { startScheduledRun } from './schedule-run.ts';
+import { SCHEDULE_ORIGIN_TAG, startScheduledRun } from './schedule-run.ts';
 
 const WORKFLOW_ID = 'batch-run';
 const SCHEDULE_ID = 'batch-schedule';
@@ -66,11 +66,13 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     status: 'paused',
     overlap: 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     createdAt: FIXED_NOW,
     updatedAt: FIXED_NOW,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     nextFireAt: null,
     queuedRuns: [],
     ...overrides,
@@ -81,6 +83,8 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
 const WORKFLOW_RECORD_OPERATIONS = [
   `put ${KEYS.workflow(WORKFLOW_ID)}`,
   `put ${KEYS.checkpoint(WORKFLOW_ID)}`,
+  // COR-1902: the run's `origin:schedule` tag is indexed in the same batch as the record.
+  `put ${KEYS.tagIndex(SCHEDULE_ORIGIN_TAG, WORKFLOW_ID)}`,
 ];
 
 /** The operations `buildScheduleRunOperations` produces for an occurrence with no folded-in extras. */
@@ -205,7 +209,9 @@ const EMPTY_VALUE_DIGEST = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495
  * writes the same bytes for every resolution, so one table serves them all.
  */
 const MAIN_VALUE_DIGESTS: Record<string, string> = {
-  [KEYS.workflow(WORKFLOW_ID)]: '608c116f6eff278b2e28f6a55cdb28d3edd00289778b3e61da8547180995afdb',
+  // The record gained its `tags` (COR-1902), so its digest is that of main's bytes plus the tag.
+  [KEYS.workflow(WORKFLOW_ID)]: '8f1fc11223401974f346de90c7883d0c3ce28390e38cf84956c56b6ed947398a',
+  [KEYS.tagIndex(SCHEDULE_ORIGIN_TAG, WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
   [KEYS.checkpoint(WORKFLOW_ID)]:
     '8cca8da6004d6233b1f51dcd774bd7d6f7e887f12d43ba952c376f336c2285c6',
   [KEYS.scheduleRun(WORKFLOW_ID)]:
@@ -215,7 +221,9 @@ const MAIN_VALUE_DIGESTS: Record<string, string> = {
   [KEYS.scheduleRunBySchedule(SCHEDULE_ID, WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
   [KEYS.terminalCleanupNeeded(WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
   [KEYS.workflowHasServices(WORKFLOW_ID)]: EMPTY_VALUE_DIGEST,
-  [KEYS.schedule(SCHEDULE_ID)]: 'eb320cee97dea7f255efc4ebdf98392157748fe5f676c2283a72b6822a061b6b',
+  // The schedule record gained `timeZone` (COR-1820), so its digest is that of main's bytes plus
+  // the one field; the rest of the batch is untouched.
+  [KEYS.schedule(SCHEDULE_ID)]: '41fd31ddfbca5cca3cb563e0259995691f68132a33f4656660a0e537ff5aa091',
   // Generation 1, as an 8-byte big-endian counter.
   [KEYS.workflowGeneration(WORKFLOW_ID)]:
     'cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50',

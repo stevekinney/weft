@@ -1,4 +1,4 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { ListFilter, SearchAttributeValue } from '../types.ts';
 
 import type { EngineInternals } from './internals.ts';

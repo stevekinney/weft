@@ -1,8 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import { UpdateCoordinator } from '../updates.ts';
@@ -101,6 +101,17 @@ describe('pending update helpers', () => {
         updateId,
       }),
     );
+    // The refusal is answered in the history too, at the entry the request wrote: one `failed`
+    // entry with the message, not a second entry beside a `pending` one.
+    const history = await harness.updateCoordinator.listHistory(workflowId);
+    expect(history.items).toEqual([
+      expect.objectContaining({
+        updateId,
+        name: 'approve',
+        outcome: 'failed',
+        error: 'Update "approve" rejected by validator: approval required',
+      }),
+    ]);
   });
 
   it('drains pending updates once, even when scheduled twice concurrently', async () => {
@@ -265,6 +276,10 @@ describe('pending update helpers', () => {
         updateId,
       }),
     );
+    const history = await harness.updateCoordinator.listHistory(workflowId);
+    expect(history.items.map((entry) => [entry.updateId, entry.outcome])).toEqual([
+      [updateId, 'failed'],
+    ]);
   });
 
   it('swallows scheduled drain failures after the timeout callback fires', async () => {
@@ -295,7 +310,6 @@ describe('pending update helpers', () => {
     } as never;
 
     schedulePendingInlineUpdateDrain(harness.internals, workflowId, harness.callbacks);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     await waitForCondition(async () => scheduledDrainAttempts === 1, {
       label: 'scheduled drain failure callback',
     });

@@ -11,16 +11,17 @@
  * @module service-worker/setup
  */
 
+import type { Storage as WeftStorage } from "../embedded/storage/src/index.ts";
+import { IndexedDBStorage } from "../embedded/storage-indexeddb/src/index.ts";
 import { Engine, type RegistryAgnosticEngine } from '../core/engine.ts';
 import type { HandlerOptions } from '../server/handler.ts';
 import { handleRequest } from '../server/handler.ts';
-import { IndexedDBStorage } from '../storage/indexeddb.ts';
-import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { ServiceWorkerScheduler } from './scheduler.ts';
 import {
   buildDelegatedRequest,
   DEFAULT_PERIODIC_SYNC_TAG,
   normalizePathPrefix,
+  resolveFetchHandlerOptions,
   type MinimalExtendableEvent,
   type MinimalFetchEvent,
   type MinimalPeriodicSyncEvent,
@@ -36,10 +37,11 @@ const DEFAULT_DATABASE_NAME = 'weft';
  *
  * @example
  * ```ts
- * import type { ServiceWorkerHandlerOptions } from '@lostgradient/weft';
+ * import { unauthenticatedLocalAuthContext } from '@lostgradient/backchannel';
+ * import { type ServiceWorkerHandlerOptions } from '@lostgradient/weft';
  *
  * const handlerOptions: ServiceWorkerHandlerOptions = {
- *   authContext: { method: 'public' },
+ *   authContext: unauthenticatedLocalAuthContext(),
  * };
  * void handlerOptions;
  * ```
@@ -94,7 +96,16 @@ export interface SetupServiceWorkerOptions {
    * engine's storage when both are provided.
    */
   storage?: WeftStorage;
-  /** Handler options supported by the Service Worker runtime. */
+  /**
+   * Handler options supported by the Service Worker runtime. When no
+   * `authContext` is given, requests run as the `unauthenticated-local`
+   * principal (`unauthenticatedLocalAuthContext()`): a same-origin Service
+   * Worker has one caller, so it holds every scope, as a `serve()` with no
+   * `auth` does. Pass an `authContext` to run requests as any other principal,
+   * or `handlerOptions: { authContext: { method: 'public' } }` to opt out of
+   * local trust and run them as an anonymous caller that reaches only
+   * `weft.system.principal`.
+   */
   handlerOptions?: ServiceWorkerHandlerOptions;
   /**
    * Register workflows on the engine before listeners do real work.
@@ -231,11 +242,18 @@ function buildFetchListener(
   // `createFetchHandler`. The setup-helper-specific addition is gating on
   // `registrationReady` and converting registration failures to a 503.
   return (event) => {
+    // Never answer a navigation: a cross-origin page can navigate to, or submit
+    // a form at, this origin's `pathPrefix`, and the handler below holds local
+    // trust (every scope) by default, so such a request must fall through to
+    // the network instead of reaching it.
+    if (event.request.mode === 'navigate') return;
     const delegatedRequest = buildDelegatedRequest(event, pathPrefix);
     if (delegatedRequest === null) return;
     event.respondWith(
       registrationReady
-        .then(() => handleRequest(delegatedRequest, engine, handlerOptions))
+        .then(() =>
+          handleRequest(delegatedRequest, engine, resolveFetchHandlerOptions(handlerOptions)),
+        )
         .catch((error: unknown) =>
           buildErrorResponse(error instanceof Error ? error : new Error(String(error))),
         ),
@@ -375,12 +393,24 @@ export function setupServiceWorker(
     (error: unknown) => {
       const wrapped = error instanceof Error ? error : new Error(String(error));
       setupRegistry.set(scope, { status: 'failed', error: wrapped });
+      // The failed setup never hands its engine to anyone, and the fallback listeners answer
+      // without it, so an engine created here would otherwise keep its cleanup interval alive for
+      // the life of the worker. A caller-supplied engine stays the caller's to dispose. Disposal is
+      // asynchronous because `register` may leave work in flight (a workflow refresh refuses
+      // synchronous disposal), and it is not awaited: a refresh source that ignores its abort
+      // signal would otherwise hold back the registration error, which the caller needs now.
+      if (options.engine === undefined) disposeInBackground(engine);
       throw wrapped;
     },
   );
 
   setupRegistry.set(scope, { status: 'initializing', resultPromise });
   return resultPromise;
+}
+
+/** Start disposing `engine` without waiting; a cleanup failure must not mask the error being reported. */
+function disposeInBackground(engine: Engine): void {
+  engine[Symbol.asyncDispose]().catch(() => {});
 }
 
 /**

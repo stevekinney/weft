@@ -19,12 +19,24 @@ import type {
   WorkflowRevisionRemovedEvent,
 } from './catalog-events.ts';
 import type {
+  LeaseHealthChangedEvent,
+  QueueDepthChangedEvent,
+  RealmStateChangedEvent,
+  StreamChunkEvent,
+  WorkerDeploymentChangedEvent,
+  WorkerRegistrationRejectedEvent,
+} from './fleet-state-events.ts';
+import type {
   ScheduleAttemptedEvent,
   ScheduleFiredEvent,
   ScheduleMissedFireEvent,
   ScheduleSkippedEvent,
 } from './schedule-events.ts';
-import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
+import type {
+  SignalDeliveredEvent,
+  SignalReceivedEvent,
+  SignalWaitingEvent,
+} from './signal-events.ts';
 import type {
   AlertFiredEvent,
   AlertResolvedEvent,
@@ -94,6 +106,7 @@ export type WeftEventMap = {
   'task:result-delivery': TaskResultDeliveryEvent;
   'task:attempt-transition': TaskAttemptTransitionEvent;
   'signal:received': SignalReceivedEvent;
+  'signal:waiting': SignalWaitingEvent;
   'signal:delivered': SignalDeliveredEvent;
   'schedule:fired': ScheduleFiredEvent;
   'human-review:requested': ReviewRequestedEvent;
@@ -122,6 +135,12 @@ export type WeftEventMap = {
   'workflow-source:load-ready': WorkflowSourceLoadReadyEvent;
   'workflow-source:load-failed': WorkflowSourceLoadFailedEvent;
   'workflow-source:load-cancelled': WorkflowSourceLoadCancelledEvent;
+  'realm:state-changed': RealmStateChangedEvent;
+  'lease:health-changed': LeaseHealthChangedEvent;
+  'worker:registration-rejected': WorkerRegistrationRejectedEvent;
+  'worker:deployment-changed': WorkerDeploymentChangedEvent;
+  'stream:chunk': StreamChunkEvent;
+  'queue:depth-changed': QueueDepthChangedEvent;
 };
 
 /**

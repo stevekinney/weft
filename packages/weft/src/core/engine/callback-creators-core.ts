@@ -13,13 +13,12 @@ import type { GuardCallbacks } from './guards.ts';
 import { createWorkflowHandleWithResultPromise } from './handle-result.ts';
 import type { Engine } from './index.ts';
 import {
-  hasLocalCheckpointOwnership,
-  isInlineWorkflowLocallyOwned,
   queueInlineWorkflowExecutionStart,
   type InlineLaunchQueueCallbacks,
 } from './inline-launch-queue.ts';
 import { getInternals } from './internals.ts';
 import { processPendingUpdatesAfterReplay, type LifecycleCallbacks } from './lifecycle.ts';
+import { hasLocalCheckpointOwnership, isInlineWorkflowLocallyOwned } from './local-execution.ts';
 import {
   processPendingUpdatesAfterInlineAdvance,
   processPendingUpdatesForHandlers,
@@ -152,14 +151,15 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
     handleCleanupError: (source, error, workflowId) =>
       createTerminationCallbacks(engine).handleCleanupError(source, error, workflowId),
     swallowPromiseRejection: (promise) => swallowPromiseRejection(promise),
-    enforceHistoryCircuitBreaker: (workflowId) =>
-      terminateWorkflow(
+    enforceHistoryCircuitBreaker: async (workflowId) => {
+      await terminateWorkflow(
         getInternals(engine),
         workflowId,
         'timed-out',
         createTerminationCallbacks(engine),
         HISTORY_CIRCUIT_BREAKER_REASON,
-      ),
+      );
+    },
     failWorkflowForUnavailableServices: failBeforeAdoption,
     failWorkflowForRecoveryHook: failBeforeAdoption,
     failWorkflowForCheckpointDecodeError: failBeforeAdoption,
@@ -244,16 +244,18 @@ export function createTerminationCallbacksWith<
 }
 
 /**
- * Schedule terminal hook resolver. This is overwritten by the schedule
- * callback module at import time to break the otherwise circular dependency
- * between termination and schedule callback factories. Defaults to a no-op
- * during very early initialization (which never happens in practice because
- * the schedule module is always imported before any engine is constructed).
+ * Schedule terminal hook resolver. The schedule callback module sets it at
+ * import time to break the otherwise circular dependency between termination
+ * and schedule callback factories. Until it does, which never happens in
+ * practice because the schedule module is always imported before any engine
+ * is constructed, a terminal workflow has no schedule hook to run.
  */
-let scheduledWorkflowTerminalHandler: <TW extends object, TA extends object>(
-  engine: Engine<TW, TA>,
-  workflowId: string,
-) => Promise<void> = async () => undefined;
+let scheduledWorkflowTerminalHandler:
+  | (<TW extends object, TA extends object>(
+      engine: Engine<TW, TA>,
+      workflowId: string,
+    ) => Promise<void>)
+  | undefined;
 
 export function registerScheduledWorkflowTerminalHandler(
   handler: <TW extends object, TA extends object>(
@@ -267,9 +269,9 @@ export function registerScheduledWorkflowTerminalHandler(
 export function createTerminationCallbacks<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
 ): TerminationCallbacks {
-  return createTerminationCallbacksWith(engine, (workflowId) =>
-    scheduledWorkflowTerminalHandler(engine, workflowId),
-  );
+  return createTerminationCallbacksWith(engine, async (workflowId) => {
+    await scheduledWorkflowTerminalHandler?.(engine, workflowId);
+  });
 }
 
 export function createRegistrationCallbacks<TWorkflows extends object, TActivities extends object>(
@@ -281,9 +283,8 @@ export function createRegistrationCallbacks<TWorkflows extends object, TActiviti
   };
 }
 
-let retentionSweepIntervalCallable: <TW extends object, TA extends object>(
-  engine: Engine<TW, TA>,
-) => void = () => undefined;
+let retentionSweepIntervalCallable:
+  (<TW extends object, TA extends object>(engine: Engine<TW, TA>) => void) | undefined;
 
 export function registerEnsureRetentionSweepInterval(
   fn: <TW extends object, TA extends object>(engine: Engine<TW, TA>) => void,
@@ -295,7 +296,7 @@ function ensureRetentionSweepIntervalCallable<
   TWorkflows extends object,
   TActivities extends object,
 >(engine: Engine<TWorkflows, TActivities>): void {
-  retentionSweepIntervalCallable(engine);
+  retentionSweepIntervalCallable?.(engine);
 }
 
 export function createBroadcastCallbacks<TWorkflows extends object, TActivities extends object>(

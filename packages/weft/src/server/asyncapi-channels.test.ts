@@ -2,15 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import { record } from './protocol.test-support.ts';
 
-import type { DefinitionSchemaDirection } from '../core/types/definition-schema-to-json.ts';
 import {
+  type ErasedOperation,
   buildOperationEntry,
   buildSseChannel,
   buildSseMessages,
   buildWebSocketChannel,
   buildWebSocketMessages,
-} from './asyncapi-channels.ts';
-import type { ErasedOperation } from './operation-catalog.ts';
+} from "../embedded/backchannel/src/internals.ts";
+import type { DefinitionSchemaDirection } from '../core/types/definition-schema-to-json.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 
 function definitionSchemaToJsonSchema(
@@ -82,8 +82,25 @@ describe('AsyncAPI channel builders', () => {
     ]);
     expect(messages['weft_workflows_events_sse_pingEvent']).toMatchObject({
       bindings: { http: { event: 'ping' } },
-      'x-weft-sse-frame': 'event: ping\\ndata: {"emittedAtMs":<timestamp>}\\n\\n',
+      'x-weft-sse-frame':
+        'event: ping\\ndata: {"emittedAtMs":<timestamp>[,"replayComplete":true]}\\n\\n',
     });
+  });
+
+  it('admits the replay-complete ping every SSE subscription sends', () => {
+    const messages = buildSseMessages(
+      operation('weft.workflows.events.sse'),
+      definitionSchemaToJsonSchema,
+    );
+    const payload = messages['weft_workflows_events_sse_pingEvent']?.['payload'] as {
+      additionalProperties: boolean;
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+
+    expect(payload.additionalProperties).toBe(false);
+    expect(payload.properties['replayComplete']).toEqual({ const: true, type: 'boolean' });
+    expect(payload.required).toEqual(['emittedAtMs']);
   });
 
   it('omits empty bindings from SSE channels', () => {

@@ -1,22 +1,23 @@
-import { readBoundedNdjsonResponse } from './bounded-ndjson-response.ts';
-import { decodeBase64ToBytes, encodeBytesToBase64, isRecord } from './byte-encoding.ts';
-import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
+  assertStorageBatchOperationCount,
+  decodeBase64ToBytes,
+  encodeBytesToBase64,
+  isRecord,
+  normalizeDeleteRangeOptions,
+  scopedStorage,
   storageCountCore,
   storageDeletePrefixCore,
   storageDeleteRangeCore,
   storageHasCore,
   storageKeysCore,
-} from './derived-operations.ts';
-import {
-  assertStorageBatchOperationCount,
   type BatchOperation,
   type ConditionalBatchCondition,
+  type DeleteRangeOptions,
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
-} from './interface.ts';
-import { scopedStorage } from './scoped-storage.ts';
+} from "../embedded/storage/src/index.ts";
+import { readBoundedNdjsonResponse } from './bounded-ndjson-response.ts';
 
 /**
  * Options for connecting {@link HTTPStorage} to a remote Weft storage API.

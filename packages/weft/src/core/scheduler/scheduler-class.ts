@@ -1,9 +1,11 @@
-import type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  Storage,
-} from '../../storage/interface.ts';
-import { KEYS, resolvePrefixRangeEnd, storageConditionalBatch } from '../../storage/interface.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+  storageConditionalBatch,
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { resolveNonEmptyPrefixRangeEnd } from '../../storage/non-empty-prefix-range-end.ts';
 import { decode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
 import { DEFAULT_POLL_INTERVAL_MS } from '../types/constants.ts';
@@ -18,9 +20,16 @@ import {
   shouldDeleteTimerIndexWithoutLookup,
 } from './timer-sources.ts';
 
+/**
+ * What a timer callback resolves. `'retain'` keeps the entry in storage, without a log, for the
+ * next scan to deliver again: the callback stood aside for another process that is still going,
+ * and nothing it left behind would wake the timer's owner if that process died (COR-1925).
+ */
+export type TimerFiredOutcome = void | 'retain';
+
 export interface SchedulerOptions {
   storage: Storage;
-  onTimerFired: (entry: TimerEntry) => void | Promise<void>;
+  onTimerFired: (entry: TimerEntry) => TimerFiredOutcome | Promise<TimerFiredOutcome>;
   pollIntervalMs?: number;
   getNow?: () => number;
   /**
@@ -42,7 +51,23 @@ type TimerScanIterators = {
   teardown: AsyncIterable<[string, Uint8Array]>;
 };
 
-type TimerProcessingResult = 'processed' | 'retry';
+/**
+ * `skipped`: another delivery of the same timer owner is still in flight in this process, so
+ * this one was not delivered and nothing about its entry was touched.
+ */
+type TimerProcessingResult = 'processed' | 'retry' | 'skipped';
+
+/**
+ * Who a timer delivery is on behalf of, for the in-flight guard. A schedule's callback is a tick
+ * that can run for as long as a backfilled run's turn, and it re-arms the schedule's next entry
+ * under another key while it is still going, so every entry of one schedule has one owner: the
+ * schedule. Every other timer kind is its own owner, by its entry key.
+ */
+function timerOwnerOf(timer: ScannedTimerEntry): string {
+  return timer.entry.kind === 'schedule'
+    ? `schedule:${timer.entry.workflowId}`
+    : `entry:${timer.key}`;
+}
 
 /**
  * Maximum expired timers read per timer source on one scheduler tick.
@@ -57,7 +82,7 @@ const EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE = 1_000;
  * @example
  * ```ts
  * import { Scheduler } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const scheduler = new Scheduler({
@@ -70,17 +95,30 @@ const EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE = 1_000;
  *
  * scheduler.start();
  * // ... use scheduler ...
- * scheduler.stop();
+ * await scheduler.stop();
  * ```
  */
 export class Scheduler implements Disposable {
   readonly #storage: Storage;
-  readonly #onTimerFired: (entry: TimerEntry) => void | Promise<void>;
-  readonly #pollIntervalMs: number;
+  readonly #onTimerFired: (entry: TimerEntry) => TimerFiredOutcome | Promise<TimerFiredOutcome>;
+  #pollIntervalMs: number;
   readonly #getNow: () => number;
   readonly #commitTimerCleanup: (operations: BatchOperation[]) => Promise<void>;
   #intervalHandle: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
+  /**
+   * The scans in flight (a tick or a flush), each as a promise that settles when the scan does and
+   * never rejects, so {@link Scheduler.stop} can wait on them without taking a failure over from
+   * the caller that owns the scan.
+   */
+  readonly #scansInFlight = new Set<Promise<void>>();
+  /**
+   * The owners whose timers this process is delivering, or has delivered and not yet cleaned up
+   * (COR-1482). A scan reads an expired entry again on every poll until the scan that delivered
+   * it has run its callback and committed its cleanup, so without this an overlapping scan hands
+   * the same entry to a second callback. Process-local, like the serialization it stands in for.
+   */
+  readonly #ownersInFlight = new Map<string, symbol>();
 
   constructor(options: SchedulerOptions) {
     this.#storage = options.storage;
@@ -95,19 +133,74 @@ export class Scheduler implements Disposable {
   start(): void {
     if (this.#intervalHandle !== null) return;
     this.#stopped = false;
+    this.#armPollInterval();
+  }
 
+  /**
+   * Change the poll interval. A running poller is cleared and re-armed, so the next poll lands
+   * one new interval from now; a poller that was never started, or was stopped, only remembers
+   * the interval for its next {@link Scheduler.start}. Setting the interval it already has
+   * leaves a running poller exactly as it is, so its phase is not reset.
+   *
+   * @throws {RangeError} When `pollIntervalMs` is not a positive safe integer.
+   */
+  setPollInterval(pollIntervalMs: number): void {
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 1) {
+      throw new RangeError('pollIntervalMs must be a positive safe integer');
+    }
+    if (pollIntervalMs === this.#pollIntervalMs) return;
+    this.#pollIntervalMs = pollIntervalMs;
+    if (this.#intervalHandle === null) return;
+    clearInterval(this.#intervalHandle);
+    this.#armPollInterval();
+  }
+
+  #armPollInterval(): void {
     this.#intervalHandle = setInterval(() => {
       void this.tick();
     }, this.#pollIntervalMs);
   }
 
-  /** Stop the polling loop. */
-  stop(): void {
+  /**
+   * Stop the polling loop, then wait for the scans already in flight to settle. No tick starts
+   * after this call, and a tick in flight delivers no further timer; once the returned promise
+   * resolves the scheduler makes no more storage calls, so a host can close its storage next. A
+   * scan that fails reports its failure to the caller of that scan, never here: this promise
+   * resolves either way. Concurrent calls wait for the same scans. It has no deadline of its own,
+   * so a scan that never settles keeps it pending.
+   *
+   * Do not await it from inside a timer callback: the callback belongs to the scan being waited
+   * for.
+   */
+  stop(): Promise<void> {
+    this.#halt();
+    return this.#settleScansInFlight();
+  }
+
+  /** Clear the poller and refuse further ticks, without waiting for anything. */
+  #halt(): void {
     this.#stopped = true;
     if (this.#intervalHandle !== null) {
       clearInterval(this.#intervalHandle);
       this.#intervalHandle = null;
     }
+  }
+
+  async #settleScansInFlight(): Promise<void> {
+    while (this.#scansInFlight.size > 0) {
+      await Promise.all(this.#scansInFlight);
+    }
+  }
+
+  /** Run one scan and register it for {@link Scheduler.stop} to wait on until it settles. */
+  #trackScan(scan: Promise<void>): Promise<void> {
+    const tracked = scan.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#scansInFlight.add(tracked);
+    void tracked.then(() => this.#scansInFlight.delete(tracked));
+    return scan;
   }
 
   /** Schedule a durable timer (writes to storage). */
@@ -157,7 +250,7 @@ export class Scheduler implements Disposable {
   /** Force an immediate scan for expired timers (for tests). */
   async tick(now?: number): Promise<void> {
     if (this.#stopped) return;
-    await this.#processExpiredTimers(now, { respectStopped: true });
+    await this.#trackScan(this.#processExpiredTimers(now, { respectStopped: true }));
   }
 
   /** Process all expired timers then stop.
@@ -167,8 +260,8 @@ export class Scheduler implements Disposable {
    *  ticks that might race with this drain.
    */
   async flush(now?: number): Promise<void> {
-    await this.#processExpiredTimers(now, { respectStopped: false });
-    this.stop();
+    await this.#trackScan(this.#processExpiredTimers(now, { respectStopped: false }));
+    this.#halt();
   }
 
   /** Scan storage for expired timers, fire callbacks, and clean up keys.
@@ -183,12 +276,29 @@ export class Scheduler implements Disposable {
     const currentTime = now ?? this.#getNow();
     const timerSources = this.#createTimerSources(this.#scanExpiredTimers(currentTime));
     const cleanupOperations: BatchOperation[] = [];
+    // What this scan claimed, released only once its cleanup has been committed: an entry whose
+    // callback has returned is still in storage until then. Its own claims never block it: it
+    // delivers its entries one after another.
+    const claim = { token: Symbol('timer scan'), owners: [] as string[] };
+    try {
+      await this.#deliverExpiredTimers(timerSources, cleanupOperations, claim, respectStopped);
+      await this.#deleteProcessedTimerKeys(cleanupOperations);
+    } finally {
+      for (const owner of claim.owners) this.#ownersInFlight.delete(owner);
+    }
+  }
 
+  async #deliverExpiredTimers(
+    timerSources: TimerSource[],
+    cleanupOperations: BatchOperation[],
+    claim: { token: symbol; owners: string[] },
+    respectStopped: boolean,
+  ): Promise<void> {
     for (const timerSource of timerSources) {
       await advanceTimerSource(timerSource, this.#storage);
     }
 
-    while (this.#hasPendingTimer(timerSources)) {
+    while (true) {
       const selectedSource = selectNextTimerSource(timerSources);
       const nextEntry = selectedSource?.next;
       if (!nextEntry || !selectedSource) {
@@ -200,38 +310,31 @@ export class Scheduler implements Disposable {
       // skips this check because its purpose is to drain remaining timers.
       if (respectStopped && this.#stopped) break;
 
-      const processingResult = await this.#processSelectedTimer(nextEntry, cleanupOperations);
-      if (processingResult === 'retry') {
-        await advanceTimerSource(selectedSource, this.#storage);
-        continue;
-      }
-
+      await this.#processSelectedTimer(nextEntry, cleanupOperations, claim);
       await advanceTimerSource(selectedSource, this.#storage);
     }
-
-    await this.#deleteProcessedTimerKeys(cleanupOperations);
   }
 
   #scanExpiredTimers(currentTime: number): TimerScanIterators {
     return {
       deadline: this.#storage.scan('wf-deadline:', {
-        lt: resolvePrefixRangeEnd(KEYS.deadline(currentTime, '')),
+        lt: resolveNonEmptyPrefixRangeEnd(KEYS.deadline(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       delayedStart: this.#storage.scan('wf-delayed:', {
-        lt: resolvePrefixRangeEnd(KEYS.delayedStart(currentTime, '')),
+        lt: resolveNonEmptyPrefixRangeEnd(KEYS.delayedStart(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       schedule: this.#storage.scan('schedule-due:', {
-        lt: resolvePrefixRangeEnd(KEYS.scheduleTick(currentTime, '')),
+        lt: resolveNonEmptyPrefixRangeEnd(KEYS.scheduleTick(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       terminalCleanup: this.#storage.scan('wf-cleanup:', {
-        lt: resolvePrefixRangeEnd(KEYS.terminalCleanup(currentTime, '')),
+        lt: resolveNonEmptyPrefixRangeEnd(KEYS.terminalCleanup(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       teardown: this.#storage.scan('wf-teardown:', {
-        lt: resolvePrefixRangeEnd(KEYS.teardownTimer(currentTime, '')),
+        lt: resolveNonEmptyPrefixRangeEnd(KEYS.teardownTimer(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
     };
@@ -267,16 +370,25 @@ export class Scheduler implements Disposable {
     ] satisfies TimerSource[];
   }
 
-  #hasPendingTimer(timerSources: TimerSource[]): boolean {
-    return timerSources.some((timerSource) => timerSource.next !== null);
-  }
-
   async #processSelectedTimer(
     nextEntry: ScannedTimerEntry,
     cleanupOperations: BatchOperation[],
+    claim: { token: symbol; owners: string[] },
   ): Promise<TimerProcessingResult> {
+    // A delivery whose owner is in flight is skipped, and its entry is left exactly as it is: no
+    // callback, no cleanup, no log. Cleaning it up would delete a timer the delivery in flight
+    // has re-armed under the same key, and failing it would log on every poll. The scan after the
+    // one in flight sees whatever that scan left.
+    const owner = timerOwnerOf(nextEntry);
+    const holder = this.#ownersInFlight.get(owner);
+    if (holder !== undefined && holder !== claim.token) return 'skipped';
+    if (holder === undefined) {
+      this.#ownersInFlight.set(owner, claim.token);
+      claim.owners.push(owner);
+    }
     try {
-      await this.#onTimerFired(nextEntry.entry);
+      const outcome = await this.#onTimerFired(nextEntry.entry);
+      if (outcome === 'retain') return 'retry';
     } catch (error) {
       // Callback failed — leave the timer in storage so it retries on the
       // next tick. Do not fall through to the delete below.
@@ -372,7 +484,11 @@ export class Scheduler implements Disposable {
       : null;
   }
 
+  /**
+   * Stop the poller without waiting: a synchronous dispose cannot. Use `await scheduler.stop()`
+   * where a scan in flight must settle before the storage closes.
+   */
   [Symbol.dispose](): void {
-    this.stop();
+    void this.stop();
   }
 }

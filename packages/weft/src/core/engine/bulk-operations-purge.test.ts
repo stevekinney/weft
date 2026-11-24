@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { type StorageCapabilities, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -57,6 +57,7 @@ function createInternals(
     },
     pendingAsyncActivities: new Map(),
     pendingAsyncActivityResolutions: new Map(),
+    pendingTerminalSettlements: new Set(),
     registrations: new Map(),
     resultResolvers: new Map(),
     storage,
@@ -114,6 +115,26 @@ describe('bulk purge helpers', () => {
     expect(await done.promise).toBe('done');
     expect(await throwingRejectionOf(failed.promise)).toThrow('boom');
     expect(internals.resultResolvers.size).toBe(0);
+  });
+
+  it('leaves a result waiter bound to a different run alone when it purges an older run', () => {
+    const internals = createInternals(new MemoryStorage()) as {
+      resultResolvers: Map<string, Record<string, unknown>>;
+    };
+    const waiter = {
+      ...Promise.withResolvers<unknown>(),
+      boundToRun: true,
+      workflowExecutionToken: 'replacement-run',
+    };
+    internals.resultResolvers.set('replaced-run', waiter);
+
+    clearPurgedWorkflowInMemoryState(
+      internals as never,
+      createWorkflowState('replaced-run', 1_000, { workflowExecutionToken: 'purged-run' }),
+      () => {},
+    );
+
+    expect(internals.resultResolvers.get('replaced-run')).toBe(waiter);
   });
 
   it('applies the smaller of the filter limit and fallback limit during purge', async () => {
@@ -324,5 +345,26 @@ describe('bulk purge helpers', () => {
     );
     // The concurrent purge's generation 2 must survive untouched.
     expect(decodeGeneration((await storage.get(generationKey))!)).toBe(2);
+  });
+});
+
+class NonConditionalMemoryStorage extends MemoryStorage {
+  override capabilities(): StorageCapabilities {
+    return { ...super.capabilities(), conditionalBatch: false };
+  }
+}
+
+describe('bulk purge on storage without conditional batches', () => {
+  it('purges a workflow without fencing on the observed record', async () => {
+    const storage = new NonConditionalMemoryStorage();
+    const internals = createInternals(storage);
+    const state = createWorkflowState('purge-unconditional', 3_000);
+    await storage.put(KEYS.signalSequence(state.id), new Uint8Array([1]));
+    await storage.put(KEYS.workflow(state.id), encode(state));
+
+    expect(await purgeWorkflow(internals, state, () => {})).toBe(true);
+
+    expect(await storage.get(KEYS.workflow(state.id))).toBeNull();
+    expect(await storage.get(KEYS.signalSequence(state.id))).toBeNull();
   });
 });

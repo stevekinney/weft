@@ -4,7 +4,6 @@
 
 import type { ActivityInterceptor } from '../core/interceptor.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../core/versioning.ts';
-import { detectRuntime, detectRuntimeVersion } from '../runtime/portable.ts';
 import { VERSION } from '../version.ts';
 import { declaredShapeDigest } from './manifest/declared-shape-digest.ts';
 import type {
@@ -19,6 +18,14 @@ import {
   type RemoteWorkerCapabilities,
 } from './protocol.ts';
 import type { RemoteWorkerWorkflowDefinition } from './workflow-activity-binding.ts';
+
+/**
+ * Runtime name and version a manifest reports when the caller declares none. Both must be
+ * non-empty: the durable task ledger refuses an execution identity whose runtime fields are
+ * empty strings, so a worker that reported `''` could never commit a task result.
+ */
+const UNSPECIFIED_RUNTIME_NAME = 'unknown';
+const UNSPECIFIED_RUNTIME_VERSION = 'unknown';
 
 /**
  * Options accepted by `new RemoteWorker(...)`.
@@ -63,7 +70,7 @@ export interface RemoteWorkerOptions {
    * workflow registry. When supplied, it is advertised verbatim at
    * registration instead of the `declared-shape:` placeholder this module
    * otherwise derives from `workflows`, and every other manifest-shaping
-   * option (`deploymentName`, `buildId`, `artifactDigest`, `runtimeVersion`,
+   * option (`deploymentName`, `buildId`, `artifactDigest`, `runtimeName`, `runtimeVersion`,
    * `capabilities`) is ignored.
    *
    * The constructor requires `manifest.workflows` to declare exactly the
@@ -72,7 +79,13 @@ export interface RemoteWorkerOptions {
    * ones it can) is rejected at construction rather than at registration.
    */
   manifest?: WorkerManifest;
-  /** Runtime version string. Defaults to `detectRuntimeVersion()`. */
+  /**
+   * Runtime name reported in the manifest (for example `'bun'` or `'node'`).
+   * The worker does not inspect its host, so the caller declares it. Defaults
+   * to `'unknown'`. Ignored when `manifest` is supplied.
+   */
+  runtimeName?: string;
+  /** Runtime version string. Defaults to `'unknown'`. */
   runtimeVersion?: string;
   startedAt?: number;
   capabilities?: RemoteWorkerCapabilities;
@@ -215,7 +228,10 @@ export function buildWorkerManifest(options: RemoteWorkerOptions): WorkerManifes
     manifestVersion: WORKER_MANIFEST_VERSION,
     protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
     sdkVersion: VERSION,
-    runtime: { name: detectRuntime(), version: options.runtimeVersion ?? detectRuntimeVersion() },
+    runtime: {
+      name: options.runtimeName ?? UNSPECIFIED_RUNTIME_NAME,
+      version: options.runtimeVersion ?? UNSPECIFIED_RUNTIME_VERSION,
+    },
     deployment: {
       name: options.deploymentName,
       buildId: options.buildId,

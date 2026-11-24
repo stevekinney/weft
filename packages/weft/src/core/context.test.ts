@@ -1401,6 +1401,34 @@ describe('Context', () => {
         branchNames: ['charge', 'notify'],
       });
     });
+
+    it('returns what the engine resumes a partial cached runAll entry with, without rewriting the cache', () => {
+      const partialEntry = {
+        __weftParallelOperationCache: true,
+        formatVersion: 2,
+        variant: 'run-all',
+        branchNames: ['charge', 'notify'],
+        branches: [
+          { status: 'fulfilled', value: 'paid', operationId: 'run-all:0:0' },
+          { status: 'pending', operationId: 'run-all:0:1' },
+        ],
+        subOperationCount: 2,
+      };
+      const accumulatedResults = new Map<number, unknown>([[0, partialEntry]]);
+      const context = createContext({ accumulatedResults });
+
+      const generator = context.runAll({
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
+      });
+      expectRequest(generator.next(), 'run-all');
+      const finished = generator.next({ charge: 'paid', notify: 'sent' });
+
+      expect(finished.done).toBe(true);
+      expect(finished.value).toEqual({ charge: 'paid', notify: 'sent' });
+      // The engine already wrote the completed entry, so the generator must not overwrite it.
+      expect(accumulatedResults.get(0)).toBe(partialEntry);
+    });
   });
 
   describe('ctx.speculate', () => {

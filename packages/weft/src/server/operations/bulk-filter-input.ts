@@ -11,7 +11,12 @@ import type {
 
 export const bulkListFilterInputSchema = listFilterObjectSchema.extend({
   // Bulk operations intentionally accept zero as a no-op limit.
-  limit: z.number().int().min(0).optional(),
+  limit: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Maximum number of matching workflows to act on; 0 acts on none.'),
 });
 
 export type BulkListFilterInput = z.infer<typeof bulkListFilterInputSchema>;
@@ -139,6 +144,12 @@ function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilter
   }
   if (input.failureCategory !== undefined) {
     filter.failureCategory = input.failureCategory;
+  }
+  if (input.failedStep !== undefined) {
+    filter.failedStep = input.failedStep;
+  }
+  if (input.retrying !== undefined) {
+    filter.retrying = input.retrying;
   }
 }
 

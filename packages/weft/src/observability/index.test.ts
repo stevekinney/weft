@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import {
   WorkflowCancelledEvent,
@@ -15,7 +16,6 @@ import type {
 } from '../core/interceptor.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { flush } from '../testing/storage-backends.test-support.ts';
 import { createObservabilityInterceptors } from './index.ts';
 import { MetricsCollector } from './metrics.ts';

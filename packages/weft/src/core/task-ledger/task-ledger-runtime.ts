@@ -22,7 +22,12 @@ import {
   type BatchOperation,
   type ConditionalBatchCondition,
   type Storage,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import {
+  removedTombstoneKey,
+  workerBuildBinding,
+  type WorkerBuildIdentity,
+} from '../../worker/deployment-records.ts';
 import type {
   TaskLedgerPreconditionResult,
   TaskLedgerTransitionResult,
@@ -35,10 +40,54 @@ import {
 } from './task-ledger.ts';
 
 export type TaskLedgerCommitResult<T extends RemoteTaskRecord> =
-  Readonly<{ ok: true; record: T }> | Readonly<{ ok: false; reason: string }>;
+  | Readonly<{ ok: true; record: T }>
+  | Readonly<{
+      ok: false;
+      reason: string;
+      /** Set when the create lost because the build its requirement names has been removed. */
+      removedBuild?: WorkerBuildIdentity;
+    }>;
 
 export type TaskLedgerDeleteResult =
   Readonly<{ ok: true }> | Readonly<{ ok: false; reason: string }>;
+
+/**
+ * What the create of an entry that requires a build adds to its batch: the build's tombstone must
+ * be absent, and its stamp moves with the entry (`deployment-records.ts`). An update of an entry
+ * that exists, or an entry that names no build or no deployment, binds nothing.
+ */
+function createdEntryBinding(
+  current: RemoteTaskRecord | null,
+  next: RemoteTaskRecord,
+): {
+  build: WorkerBuildIdentity | undefined;
+  conditions: ConditionalBatchCondition[];
+  operations: BatchOperation[];
+} {
+  const { deploymentName, buildId } = next.executionRequirement ?? {};
+  if (current !== null || deploymentName === undefined || buildId === undefined) {
+    return { build: undefined, conditions: [], operations: [] };
+  }
+  const build = { deploymentName, buildId };
+  const { condition, operation } = workerBuildBinding(build, next.operationId);
+  return { build, conditions: [condition], operations: [operation] };
+}
+
+/** The result for a create that lost to the removal of the build it requires, or `undefined` when it did not. */
+async function removedBuildAfterLoss(
+  storage: Pick<Storage, 'get'>,
+  build: WorkerBuildIdentity | undefined,
+): Promise<{ ok: false; reason: string; removedBuild: WorkerBuildIdentity } | undefined> {
+  if (build === undefined) return undefined;
+  const tombstone = await storage.get(removedTombstoneKey(build.deploymentName, build.buildId));
+  return tombstone === null
+    ? undefined
+    : {
+        ok: false,
+        reason: `build ${build.deploymentName}/${build.buildId} has been removed`,
+        removedBuild: build,
+      };
+}
 
 function assertTaskLedgerStorageCapabilities(
   storage: unknown,
@@ -67,7 +116,9 @@ function assertTaskLedgerStorageCapabilities(
  * the outcome.
  */
 export async function commitTaskLedgerTransition<T extends RemoteTaskRecord>(
-  storage: Storage,
+  storage: Pick<Storage, 'get' | 'capabilities'> & {
+    conditionalBatch?: Storage['conditionalBatch'];
+  },
   operationId: string,
   transitionFn: (current: RemoteTaskRecord | null, now: number) => TaskLedgerTransitionResult<T>,
   maxAttempts = 1,
@@ -121,12 +172,19 @@ export async function commitTaskLedgerTransition<T extends RemoteTaskRecord>(
         ? []
         : await buildAdditionalWrites(current, result.nextRecord, now);
 
+    const binding = createdEntryBinding(current, result.nextRecord);
     const committed = await storageConditionalBatch(
       storage,
-      [{ key, expectedValue: rawExisting }, ...additionalConditions],
-      [{ type: 'put', key, value: encodeRemoteTaskRecord(result.nextRecord) }, ...additionalWrites],
+      [{ key, expectedValue: rawExisting }, ...additionalConditions, ...binding.conditions],
+      [
+        { type: 'put', key, value: encodeRemoteTaskRecord(result.nextRecord) },
+        ...additionalWrites,
+        ...binding.operations,
+      ],
     );
     if (committed) return { ok: true, record: result.nextRecord };
+    const removed = await removedBuildAfterLoss(storage, binding.build);
+    if (removed !== undefined) return removed;
     // Lost the CAS — another writer changed the record (the ledger key
     // itself, or one of `additionalConditions`, such as the fenced workflow
     // revision moving). Retry against fresh state either way; a caller

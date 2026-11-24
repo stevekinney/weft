@@ -23,6 +23,27 @@ describe('DeadlineTracker', () => {
     expect(tracker.size).toBe(0);
   });
 
+  it('sifts the replacement root down the right subtree when the right child is smaller', () => {
+    const tracker = new DeadlineTracker();
+    for (const [operationId, deadline] of [
+      ['a', 1],
+      ['b', 5],
+      ['c', 2],
+      ['d', 6],
+      ['e', 7],
+    ] as const) {
+      tracker.add({ operationId, deadline });
+    }
+
+    // Popping 'a' moves 'e' (7) to the root; its children are 'b' (5) and 'c' (2), so the
+    // smaller right child must win the swap for the heap order to hold.
+    const order: string[] = [];
+    for (let entry = tracker.popMin(); entry !== undefined; entry = tracker.popMin()) {
+      order.push(entry.operationId);
+    }
+    expect(order).toEqual(['a', 'c', 'b', 'd', 'e']);
+  });
+
   it('drains only expired entries', () => {
     const tracker = new DeadlineTracker();
     tracker.add({ operationId: 'a', deadline: 100 });

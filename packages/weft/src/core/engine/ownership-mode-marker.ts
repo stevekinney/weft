@@ -23,11 +23,11 @@
  */
 
 import {
-  KEYS,
   requireStorageCapability,
   storageConditionalBatch,
   type Storage,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { OwnershipModeMismatchError } from './lease-errors.ts';
 import {
   decodeOwnershipModeMarker,

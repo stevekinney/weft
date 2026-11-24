@@ -10,9 +10,9 @@ import { describe, expect, it } from 'bun:test';
 
 import { collectKeys } from '../testing/storage-backends.test-support.ts';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import { ApplicationCommandValidationError } from './mailbox-validation.ts';
 import {
@@ -493,6 +493,89 @@ describe('Mailbox observation', () => {
     expect(listed2.length).toBe(1);
     const listed3 = await mailbox.list({ states: ['claimed'] });
     expect(listed3.length).toBe(0);
+    mailbox.dispose();
+  });
+
+  it('looks a receipt up by its idempotency key, and answers null once the key names nothing', async () => {
+    const { mailbox, clock } = createMailboxFixture({ terminalRetentionMs: 1_000 });
+    const commandId = await admitOne(mailbox, { idempotencyKey: 'steer-1' });
+    expect(await mailbox.receiptByIdempotencyKey('steer-1')).toEqual(
+      await mailbox.receipt(commandId),
+    );
+    expect(await mailbox.receiptByIdempotencyKey('steer-2')).toBeNull();
+    // Observing never advances work.
+    const observed = await mailbox.receipt(commandId);
+    expect(observed?.state).toBe('available');
+
+    // Retired past retention, the key names nothing again.
+    const claim = await claimOne(mailbox);
+    await mailbox.acknowledge({ commandId, attemptToken: claim.attemptToken });
+    clock.advance(1_001);
+    await mailbox.runMaintenance();
+    expect(await mailbox.receipt(commandId)).toBeNull();
+    expect(await mailbox.receiptByIdempotencyKey('steer-1')).toBeNull();
+    mailbox.dispose();
+  });
+
+  it('fails closed when a binding names a command that does not carry its key', async () => {
+    const { mailbox, storage } = createMailboxFixture();
+    await admitOne(mailbox, { idempotencyKey: 'k1' });
+    const otherId = await admitOne(mailbox, { idempotencyKey: 'k2', kind: 'route' });
+    await storage.put(
+      KEYS.applicationCommandIdempotency('bureau', 'agent-7', 'k1'),
+      encode({ recordVersion: 1, commandId: otherId, identityDigest: 'a'.repeat(64) }),
+    );
+    expect(await throwingRejectionOf(mailbox.receiptByIdempotencyKey('k1'))).toThrow(
+      PersistedDataCorruptError,
+    );
+    mailbox.dispose();
+  });
+
+  it('lists newest first on request, with the cursor resuming toward older receipts', async () => {
+    const { mailbox } = createMailboxFixture();
+    for (let index = 0; index < 5; index += 1) await admitOne(mailbox);
+    const newestFirst = await mailbox.list({ reverse: true });
+    expect(newestFirst.map((receipt) => receipt.sequence)).toEqual([4, 3, 2, 1, 0]);
+    const page = await mailbox.list({ reverse: true, limit: 2 });
+    expect(page.map((receipt) => receipt.sequence)).toEqual([4, 3]);
+    const older = await mailbox.list({ reverse: true, limit: 2, afterSequence: 3 });
+    expect(older.map((receipt) => receipt.sequence)).toEqual([2, 1]);
+    const oldest = await mailbox.list({ reverse: true, afterSequence: 1 });
+    expect(oldest.map((receipt) => receipt.sequence)).toEqual([0]);
+    expect(await mailbox.list({ reverse: true, afterSequence: 0 })).toEqual([]);
+    await claimOne(mailbox);
+    const available = await mailbox.list({ reverse: true, states: ['available'] });
+    expect(available.map((receipt) => receipt.sequence)).toEqual([4, 3, 2, 1]);
+    mailbox.dispose();
+  });
+
+  it('rejects an empty idempotency key on lookup', async () => {
+    const { mailbox } = createMailboxFixture();
+    expect(await throwingRejectionOf(mailbox.receiptByIdempotencyKey(''))).toThrow(
+      ApplicationCommandValidationError,
+    );
+    mailbox.dispose();
+  });
+
+  it('resumes a listing after a sequence, so a caller can walk the whole index page by page', async () => {
+    const { mailbox } = createMailboxFixture();
+    for (let index = 0; index < 5; index += 1) await admitOne(mailbox);
+    const first = await mailbox.list({ limit: 2 });
+    expect(first.map((receipt) => receipt.sequence)).toEqual([0, 1]);
+    const second = await mailbox.list({ limit: 2, afterSequence: first.at(-1)!.sequence });
+    expect(second.map((receipt) => receipt.sequence)).toEqual([2, 3]);
+    const third = await mailbox.list({ limit: 2, afterSequence: second.at(-1)!.sequence });
+    expect(third.map((receipt) => receipt.sequence)).toEqual([4]);
+    expect(await mailbox.list({ limit: 2, afterSequence: 4 })).toEqual([]);
+    // Combined with a state filter: the claimed head is sequence 0.
+    await claimOne(mailbox);
+    const available = await mailbox.list({ states: ['available'], afterSequence: 0 });
+    expect(available.map((receipt) => receipt.sequence)).toEqual([1, 2, 3, 4]);
+    const claimed = await mailbox.list({ states: ['claimed'] });
+    expect(claimed.map((receipt) => receipt.sequence)).toEqual([0]);
+    expect(await throwingRejectionOf(mailbox.list({ afterSequence: -1 }))).toThrow(
+      ApplicationCommandValidationError,
+    );
     mailbox.dispose();
   });
 

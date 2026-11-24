@@ -1,11 +1,12 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import type { BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { encode } from '../../codec.ts';
 import { WorkflowSuspendedEvent } from '../../events.ts';
 import { releaseSuspendedCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowSuspendNotSupportedError } from '../errors.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
+import { withoutSignalWaits } from '../signal-wait-state.ts';
 import {
   refreshWorkflowVisibilityMaintenance,
   visibilityIndexOperations,
@@ -153,7 +154,9 @@ export async function suspendWorkflow(
     evictSuspendedWorkflowWaiters(internals, workflowId, callbacks);
 
     const updatedAt = internals.options.getNow();
-    const updatedState = { ...state, status: 'suspended' as const, updatedAt };
+    // The waiters were just evicted; resume replays the run to its waits and
+    // records them again.
+    const updatedState = { ...withoutSignalWaits(state), status: 'suspended' as const, updatedAt };
 
     // Suspend is an EXTERNAL terminal-ish transition (ADR 0002): `engine.suspend`
     // is a public API any caller may invoke against an engine that is not the

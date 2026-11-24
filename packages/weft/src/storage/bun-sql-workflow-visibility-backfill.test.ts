@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+  type DiskBackedTestFixture,
+} from "../embedded/storage/src/testing/index.ts";
+import {
   runWorkflowVisibilityBackfill,
   runWorkflowVisibilityDrop,
 } from '../../scripts/lib/workflow-visibility-backfill.ts';
@@ -10,15 +15,10 @@ import {
   workflowVisibilityUpdatedBucket,
 } from '../core/engine/workflow-indexes.ts';
 import type { WorkflowState } from '../core/types.ts';
-import {
-  collectKeys,
-  createDiskBackedTestFixture,
-  sqliteDatabaseSidecarSuffixes,
-  type DiskBackedTestFixture,
-} from '../testing/storage-backends.test-support.ts';
-import { KEYS } from './interface.ts';
+import { collectKeys } from '../testing/storage-backends.test-support.ts';
+import { KEYS } from './keys.ts';
 
-import { BunSQLiteStorage } from './bun-sql.ts';
+import { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
 
 let currentStorage: BunSQLiteStorage | undefined;
 let currentFixture: DiskBackedTestFixture | undefined;

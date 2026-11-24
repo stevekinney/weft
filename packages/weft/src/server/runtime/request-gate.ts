@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 /**
  * Request admission gate: authentication then per-key rate limiting.
  *
@@ -15,15 +16,23 @@
  * @internal
  */
 
-import type { AuthContext } from '../authentication.ts';
-import { DEFAULT_PUBLIC_PATHS, normalizeRequestPathname } from '../authentication/types.ts';
+import { unauthenticatedLocalAuthContext } from "../../embedded/backchannel/src/index.ts";
+import {
+  type AuthContext,
+  authContextFromAuthResult,
+  DEFAULT_PUBLIC_PATHS,
+  normalizeRequestPathname,
+  unauthorizedResponse,
+} from "../../embedded/backchannel/src/internals.ts";
+import { shapeWeftRestFaultAsJson } from '../weft-operation-fault.ts';
 import type { ServerContext } from './context.ts';
 
 const DEFAULT_PUBLIC_PATH_SET = new Set(DEFAULT_PUBLIC_PATHS);
 
 /**
  * Outcome of {@link authenticateRequest}: the resolved auth context (absent for
- * public-path bypass and unauthenticated servers), a short-circuit `response`
+ * a public-path bypass on an authenticating server; the `unauthenticated-local`
+ * context on a server with no authentication), a short-circuit `response`
  * (a 401 on rejection, else `null`), and whether the request hit a public path.
  */
 export type AuthenticationOutcome = {
@@ -45,7 +54,14 @@ export async function authenticateRequest(
     // No authenticator is configured. Rate limiting still respects the default
     // public-path list so health, metrics, and discovery probes are exempt.
     const publicBypass = DEFAULT_PUBLIC_PATH_SET.has(normalizeRequestPathname(request));
-    return { response: null, publicBypass };
+    // The server identifies nobody, so every request is the one local user.
+    // `weft.system.principal` and the audit actor report it, and it holds
+    // every built-in scope so every built-in operation stays reachable.
+    return {
+      authContext: unauthenticatedLocalAuthContext(WEFT_SCOPE_VOCABULARY),
+      response: null,
+      publicBypass,
+    };
   }
 
   const authenticator = await context.authenticatorPromise;
@@ -56,26 +72,13 @@ export async function authenticateRequest(
     }
 
     return {
-      authContext: {
-        method: authResult.method,
-        ...(authResult.claims !== undefined ? { claims: authResult.claims } : {}),
-        ...(authResult.principal !== undefined ? { principal: authResult.principal } : {}),
-      },
+      authContext: authContextFromAuthResult(authResult),
       response: null,
       publicBypass: false,
     };
   }
 
-  return {
-    response: new Response(JSON.stringify({ error: authResult.error }), {
-      status: 401,
-      headers: {
-        'Content-Type': 'application/json',
-        'WWW-Authenticate': 'Bearer',
-      },
-    }),
-    publicBypass: false,
-  };
+  return { response: unauthorizedResponse(authResult.error), publicBypass: false };
 }
 
 /**
@@ -86,6 +89,10 @@ export async function authenticateRequest(
  * admissions.
  */
 function subjectFromAuthContext(authContext: AuthContext | undefined): string | undefined {
+  // Every request on a server with no authentication shares this one subject,
+  // so keying by it would put all clients in a single bucket. Fall through to
+  // the client address, as the limiter did before the local principal existed.
+  if (authContext?.method === 'unauthenticated-local') return undefined;
   if (authContext?.principal?.subject !== undefined) {
     return authContext.principal.subject;
   }
@@ -140,15 +147,18 @@ function enforceRateLimit(
   if (decision.allowed) {
     return null;
   }
-  return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
-    status: 429,
-    headers: {
-      'Content-Type': 'application/json',
-      'Retry-After': String(decision.retryAfterSeconds),
-      'X-RateLimit-Limit': String(decision.limit),
-      'X-RateLimit-Remaining': String(decision.remaining),
-    },
+  // Project the throttle through the `RateLimited` fault, so the middleware
+  // answers in the same shape as an operation that raises it: status 429, a
+  // `Retry-After` header, and `data.retryAfterSeconds` in the body. The limiter
+  // knows when the budget resets, so the delay is exact.
+  const response = shapeWeftRestFaultAsJson({
+    code: 'RateLimited',
+    message: 'Too Many Requests',
+    data: { retryAfterSeconds: decision.retryAfterSeconds },
   });
+  response.headers.set('X-RateLimit-Limit', String(decision.limit));
+  response.headers.set('X-RateLimit-Remaining', String(decision.remaining));
+  return response;
 }
 
 /**

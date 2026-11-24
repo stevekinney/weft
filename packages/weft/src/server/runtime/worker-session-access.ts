@@ -1,10 +1,17 @@
-import { isAuthenticated, type Principal } from '../principal.ts';
+import { type Principal } from "../../embedded/backchannel/src/index.ts";
+import { isAuthenticated } from "../../embedded/backchannel/src/internals.ts";
 import type { LongPollWorkerSession, ServerContext } from './context.ts';
 import { authorizeWorkerPrincipal } from './task-result-submission.ts';
 
 export const WORKER_SESSION_CREDENTIAL_HEADER = 'Weft-Worker-Session-Token';
 
-const WORKER_SESSION_LEASE_TIMEOUT_MS = 60_000;
+/**
+ * How long a long-poll worker session may go without a poll or heartbeat
+ * before the server expires it. Exported so `weft.workers.diagnostics` can
+ * report the instant a live session's lease runs out from the same constant
+ * that enforces it.
+ */
+export const WORKER_SESSION_LEASE_TIMEOUT_MS = 60_000;
 
 export type WorkerSessionAccess =
   { ok: true; session: LongPollWorkerSession } | { ok: false; response: Response };

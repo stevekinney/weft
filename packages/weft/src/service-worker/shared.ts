@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../authorization-scopes.ts';
 /**
  * Internal shared helpers for the Service Worker bootstrap surface. Extracted
  * here so `index.ts` (low-level factories) and `setup.ts` (one-call helper)
@@ -6,7 +7,32 @@
  * @module service-worker/shared
  */
 
+import { unauthenticatedLocalAuthContext } from "../embedded/backchannel/src/index.ts";
+import type { AuthContext } from "../embedded/backchannel/src/internals.ts";
+
 const DEFAULT_PATH_PREFIX = '/weft/';
+
+/**
+ * The handler options a Service Worker fetch listener passes to
+ * `handleRequest`: the caller's own, with `authContext` defaulting to
+ * {@link unauthenticatedLocalAuthContext} when it is `undefined`.
+ *
+ * A same-origin Service Worker has one caller, so, like a `serve()` with no
+ * `auth`, it runs requests as the local user, who holds every scope. An
+ * explicit `authContext` replaces the default; pass
+ * `{ authContext: { method: 'public' } }` to opt out and run requests as an
+ * anonymous caller that reaches only `weft.system.principal`. Both
+ * `setupServiceWorker()` and `createFetchHandler()` share this default.
+ */
+export function resolveFetchHandlerOptions<
+  Options extends { readonly authContext?: AuthContext | undefined },
+>(handlerOptions: Options | undefined): Options & { readonly authContext: AuthContext } {
+  return {
+    ...handlerOptions,
+    authContext:
+      handlerOptions?.authContext ?? unauthenticatedLocalAuthContext(WEFT_SCOPE_VOCABULARY),
+  } as Options & { readonly authContext: AuthContext };
+}
 
 /**
  * Default periodic-sync tag used when callers don't pass one explicitly.
@@ -30,7 +56,8 @@ export const DEFAULT_PERIODIC_SYNC_TAG = 'weft-timers';
  * @example
  * ```ts
  * import { createFetchHandler, type MinimalFetchEvent } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const handler = createFetchHandler({ engine });
  * declare const event: MinimalFetchEvent;

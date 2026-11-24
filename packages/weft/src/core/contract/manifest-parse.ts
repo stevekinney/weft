@@ -214,15 +214,17 @@ type ContractCollectionFields = {
   updates?: Readonly<Record<string, WorkflowMessageContract>>;
   queries?: Readonly<Record<string, WorkflowMessageContract>>;
   activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  usedActivities?: Readonly<Record<string, WorkflowActivityContract>>;
   finalizer?: WorkflowActivityContract;
 };
 
-/** `signals`/`updates`/`queries` accept any name; `activities` is grammar-validated, matching `checkContractKey`. */
+/** `signals`/`updates`/`queries` accept any name; `activities`/`usedActivities` are grammar-validated, matching `checkContractKey`. */
 const NAMED_RECORD_FIELDS = [
   ['signals', undefined],
   ['updates', undefined],
   ['queries', undefined],
   ['activities', 'activity'],
+  ['usedActivities', 'activity'],
 ] as const;
 
 function parseNamedRecordFields(
@@ -235,6 +237,29 @@ function parseNamedRecordFields(
     const parsed = parseContractRecord(value[field], `${path}.${field}`, keyKind);
     if (!parsed.ok) return parsed;
     collections[field] = parsed.value;
+  }
+  return undefined;
+}
+
+/**
+ * An activity is either scoped to the workflow or provided by the engine,
+ * never both. `contractHash` excludes `usedActivities`, so without this check a
+ * manifest could add a conflicting used entry without invalidating its hash.
+ */
+function checkActivityCollectionsDisjoint(
+  collections: ContractCollectionFields,
+  path: string,
+): WorkflowRevisionManifestValidationFailure | undefined {
+  const { activities, usedActivities } = collections;
+  if (activities === undefined || usedActivities === undefined) return undefined;
+  for (const name of Object.keys(usedActivities)) {
+    if (Object.hasOwn(activities, name)) {
+      return workflowRevisionManifestFailure(
+        'invalid-field',
+        `declares activity ${JSON.stringify(name)} in both activities and usedActivities`,
+        `${path}.usedActivities`,
+      );
+    }
   }
   return undefined;
 }
@@ -257,6 +282,8 @@ function parseContractCollections(
 
   const recordFailure = parseNamedRecordFields(value, path, collections);
   if (recordFailure !== undefined) return recordFailure;
+  const overlapFailure = checkActivityCollectionsDisjoint(collections, path);
+  if (overlapFailure !== undefined) return overlapFailure;
 
   if (value['finalizer'] !== undefined) {
     const finalizer = parseSchemaPair(value['finalizer'], `${path}.finalizer`);

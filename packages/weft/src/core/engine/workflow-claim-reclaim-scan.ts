@@ -72,7 +72,8 @@
  * @module core/engine/workflow-claim-reclaim-scan
  */
 
-import { KEYS, tryDecodeStorageKeyComponent, type Storage } from '../../storage/interface.ts';
+import { tryDecodeStorageKeyComponent, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decodeWorkflowState } from './validation.ts';
 
 const RUNNING_STATUS = 'running';

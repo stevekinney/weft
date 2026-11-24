@@ -23,14 +23,14 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  Storage,
-} from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   commitFencedEngineWrite,

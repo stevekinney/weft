@@ -15,8 +15,8 @@
  * @module core/engine/termination/finalizer-heartbeat
  */
 
-import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import type { BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { commitFencedEngineWriteAllowingPreconditionFailure } from '../fenced-write.ts';
 import type { EngineInternals } from '../internals.ts';
 import type { TeardownClaim } from '../state-utilities.ts';

@@ -139,7 +139,7 @@ export function translateOperationRequest(
       'child-workflow': 'child-workflow',
     };
 
-    const type = kindToType[kind] ?? kind;
+    const type = Object.hasOwn(kindToType, kind) ? kindToType[kind]! : kind;
 
     // Worker protocol omits `fn` — it is resolved from the activity registry later
     return {

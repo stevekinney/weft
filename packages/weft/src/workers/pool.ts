@@ -298,13 +298,10 @@ export class WorkerPool implements Disposable, AsyncDisposable {
       return;
     }
 
+    // A generic waiter is queued only while no worker is available, and `release` hands a worker
+    // to the queue before it shelves one, so the queue and the available list are never both
+    // non-empty and only a free slot can satisfy a waiter here.
     while (this.#queue.length > 0) {
-      const available = this.#available.shift();
-      if (available) {
-        this.#queue.shift()?.resolve(available);
-        continue;
-      }
-
       if (this.#workers.size < this.#concurrency) {
         this.#queue.shift()?.resolve(this.#createWorker());
         continue;

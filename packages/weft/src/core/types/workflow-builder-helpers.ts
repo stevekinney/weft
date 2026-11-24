@@ -10,6 +10,7 @@
  */
 
 import type { ActivityCallable, ActivityContext, ActivityDefinition } from './activity.ts';
+import type { DefinitionSchema } from './definition-schema.ts';
 import type { QueryDefinition, SignalDefinition, UpdateDefinition } from './message-handles.ts';
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,42 @@ export type ActivityEntryInput =
  * ```
  */
 export type ActivityMapInput = Record<string, ActivityEntryInput>;
+
+/**
+ * Schema metadata a workflow keeps for an activity it declares with
+ * `.uses({ ... })`: the engine-provided activity's name and its input/output
+ * schemas. Never an `execute` function, because dispatch resolves a used
+ * activity through the engine's registry by name.
+ *
+ * @example
+ * ```ts
+ * import type { UsedActivityDefinition } from '@lostgradient/weft';
+ *
+ * const greet: UsedActivityDefinition = { name: 'greet' };
+ * void greet;
+ * ```
+ */
+export type UsedActivityDefinition = Readonly<{
+  name: string;
+  inputSchema?: DefinitionSchema;
+  outputSchema?: DefinitionSchema;
+}>;
+
+/**
+ * The map shape `.uses({ ... })` accepts: activity definitions the engine
+ * registers, keyed by their own names. Each entry carries the `name` the
+ * engine resolves it by, which must equal its key.
+ *
+ * @example
+ * ```ts
+ * import { activity, type UsesMapInput } from '@lostgradient/weft';
+ *
+ * const greet = activity({ name: 'greet', execute: async (name: string) => `hello ${name}` });
+ * const map: UsesMapInput = { greet };
+ * void map;
+ * ```
+ */
+export type UsesMapInput = Record<string, ActivityEntryInput & { readonly name: string }>;
 
 // ---------------------------------------------------------------------------
 // Normalised activity map carried by the builder and the workflow definition
@@ -356,3 +393,64 @@ export type UpdateMap = Record<string, { readonly name: string }>;
  * ```
  */
 export type QueryMap = Record<string, { readonly name: string }>;
+
+// ---------------------------------------------------------------------------
+// Merging a workflow's own entries onto shared ones (`createWorkflowFactory`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The map a chain method produces when a builder already carries entries, as a
+ * builder from `createWorkflowFactory(...).workflow()` does: the builder's
+ * existing entries plus the ones the call adds. A fresh `workflow({ name })`
+ * builder carries `{}`, so `MergeMaps<{}, T>` is exactly `T`. When one side is
+ * a wide `Record<string, ...>` map, the two are intersected, so the other
+ * side's known entries keep their types. When both are wide, neither has known
+ * names, and the result is a wide map of either side's entry type.
+ *
+ * @example
+ * ```ts
+ * import type { MergeMaps } from '@lostgradient/weft';
+ *
+ * type Merged = MergeMaps<{ shared: 1 }, { own: 2 }>;
+ * const merged: Merged = { shared: 1, own: 2 };
+ * void merged;
+ * ```
+ */
+export type MergeMaps<TBase, TAdded> = string extends keyof TBase
+  ? string extends keyof TAdded
+    ? // Both wide: neither has known names, and intersecting the two index
+      // signatures would intersect unrelated entry types, so widen to either.
+      Record<string, TBase[keyof TBase] | TAdded[keyof TAdded]>
+    : TBase & TAdded
+  : string extends keyof TAdded
+    ? // One wide: intersect, so the other side's known entries keep their types.
+      TBase & TAdded
+    : {
+        [K in keyof TBase | keyof TAdded]: K extends keyof TAdded
+          ? TAdded[K]
+          : K extends keyof TBase
+            ? TBase[K]
+            : never;
+      };
+
+/**
+ * Constraint a chain method intersects with its argument so that an entry
+ * whose name the builder already carries fails to compile. Each taken name maps
+ * to a message type no activity, signal, update, or query satisfies, so the
+ * error names the conflict. Resolves to `{}` (no constraint) for a fresh
+ * builder and for one typed with a wide `Record<string, ...>` map.
+ *
+ * @example
+ * ```ts
+ * import type { DisjointFrom } from '@lostgradient/weft';
+ *
+ * type Taken = DisjointFrom<{ greet: unknown }>;
+ * const fine: Taken = {};
+ * void fine;
+ * ```
+ */
+export type DisjointFrom<TTaken> = string extends keyof TTaken
+  ? {}
+  : {
+      readonly [K in keyof TTaken & string]?: `"${K}" is already declared on this workflow`;
+    };

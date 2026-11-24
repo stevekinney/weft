@@ -57,6 +57,26 @@ describe('workflow argument parsing', () => {
     });
   });
 
+  it('parses workflow ls --failed-step and --retrying (COR-2530)', () => {
+    expect(
+      parseCliArguments(['workflow', 'ls', '--failed-step', 'charge-card', '--retrying']),
+    ).toMatchObject({
+      command: 'workflow',
+      action: 'ls',
+      failedStep: 'charge-card',
+      retrying: true,
+    });
+    const plain = parseCliArguments(['workflow', 'ls']);
+    expect(Object.hasOwn(plain, 'failedStep')).toBe(false);
+    expect(Object.hasOwn(plain, 'retrying')).toBe(false);
+    // The value of --failed-step is not mistaken for the subcommand.
+    expect(parseCliArguments(['--failed-step', 'charge-card', 'workflow', 'ls'])).toMatchObject({
+      command: 'workflow',
+      action: 'ls',
+      failedStep: 'charge-card',
+    });
+  });
+
   it('parses workflow get and events with a workflow id', () => {
     expect(parseCliArguments(['workflow', 'get', 'wf-1'])).toMatchObject({
       command: 'workflow',

@@ -1,3 +1,4 @@
+import type { CheckpointCommitFailedError } from './checkpoint-commit-failed-error.ts';
 import {
   WeftWorkflowCheckpointConflictWarning,
   WorkflowCheckpointConflictError,
@@ -6,8 +7,23 @@ import { abandonExecutionAttempt, currentExecutionAttempt } from './execution-at
 import type { EngineInternals } from './internals.ts';
 
 /**
- * Stop driving a workflow whose checkpoint commit lost its compare-and-swap
- * race to another engine over the same store, without writing anything durable.
+ * The reasons an engine stops driving a workflow generation without writing anything durable: its
+ * checkpoint commit lost its compare-and-swap race to another engine
+ * ({@link WorkflowCheckpointConflictError}), or its checkpoint or terminal writes were refused on
+ * every attempt and the failure write was refused too ({@link CheckpointCommitFailedError}).
+ */
+export type GenerationAbandonment = WorkflowCheckpointConflictError | CheckpointCommitFailedError;
+
+/**
+ * Stop driving a workflow generation without writing anything durable: its checkpoint commit lost
+ * its compare-and-swap race to another engine over the same store, or storage refused every write
+ * of the run, the failure write included.
+ *
+ * The rest of this comment describes the lost race, the case the function was written for. For a
+ * run storage refused, only `error` differs: it is the rejection stored on the abandoned attempt, so
+ * a pending and a later `result()` reject with the {@link CheckpointCommitFailedError}, and no
+ * conflict warning is emitted because no other engine is involved. The durable record stays
+ * `running`, so the next boot recovers the run from its last committed checkpoint.
  *
  * Under `ownership: 'none'` nothing fences the two engines, so the loser cannot
  * converge; it fails fast and loudly instead. Synchronously: mark the lost
@@ -39,10 +55,10 @@ import type { EngineInternals } from './internals.ts';
  */
 export function abandonWorkflowAfterCheckpointConflict(
   internals: EngineInternals,
-  error: WorkflowCheckpointConflictError,
+  error: GenerationAbandonment,
 ): void {
   const { workflowId, workflowExecutionToken } = error;
-  if (!abandonExecutionAttempt(internals, workflowId, workflowExecutionToken)) return;
+  if (!abandonExecutionAttempt(internals, workflowId, workflowExecutionToken, error)) return;
   try {
     internals.strategy.retireWorkflow(workflowId);
   } catch {
@@ -60,24 +76,30 @@ export function abandonWorkflowAfterCheckpointConflict(
     internals.handleCache.delete(workflowId);
   }
 
-  emitCheckpointConflictWarning(new WeftWorkflowCheckpointConflictWarning(workflowId));
+  if (error instanceof WorkflowCheckpointConflictError) {
+    emitCheckpointConflictWarning(new WeftWorkflowCheckpointConflictWarning(workflowId));
+  }
 }
 
 /**
- * The rejection a `result()` requested after a loss settles with: the conflict for the generation
- * this engine holds for the workflow and has abandoned, running or suspended, or `undefined` when
- * it holds no abandoned generation. Read from the execution attempt, which a suspension keeps and
- * the in-memory checkpoint does not.
+ * The rejection a `result()` requested after an abandonment settles with: the error the generation
+ * was abandoned with (the conflict, or the {@link CheckpointCommitFailedError} for a run storage
+ * refused) for the generation this engine holds for the workflow, running or suspended, or
+ * `undefined` when it holds no abandoned generation. Read from the execution attempt, which a
+ * suspension keeps and the in-memory checkpoint does not.
  */
-export function abandonedGenerationConflict(
+export function abandonedGenerationRejection(
   internals: EngineInternals,
   workflowId: string,
-): WorkflowCheckpointConflictError | undefined {
+): Error | undefined {
   const held = currentExecutionAttempt(internals, workflowId);
   if (held?.abandoned !== true) return undefined;
-  return new WorkflowCheckpointConflictError(workflowId, {
-    workflowExecutionToken: held.workflowExecutionToken,
-  });
+  return (
+    held.abandonmentError ??
+    new WorkflowCheckpointConflictError(workflowId, {
+      workflowExecutionToken: held.workflowExecutionToken,
+    })
+  );
 }
 
 type WarningProcess = { emitWarning?: (warning: Error) => void } | null | undefined;

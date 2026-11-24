@@ -1,14 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { IndexedDBStorage } from "../embedded/storage-indexeddb/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { quietFor } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { Engine } from '../core/engine.ts';
 import { WorkflowResumedEvent } from '../core/events.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { principalFromApiKey } from '../server/principal.ts';
 import type { EventEnvelope, WorkflowEventFeed } from '../server/workflow-event-feed.ts';
-import { IndexedDBStorage } from '../storage/indexeddb.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 import { resetSetupServiceWorkerRegistry, setupServiceWorker } from './setup.ts';
 
 interface FakeEvent {
@@ -135,6 +136,101 @@ describe('setupServiceWorker', () => {
         await throwingRejectionOf(setupServiceWorker({ storage: new MemoryStorage() })),
       ).toThrow(/already initialized/);
       first.engine[Symbol.dispose]();
+    });
+  });
+
+  it('disposes the engine it created when registration fails, but not a caller-supplied one', async () => {
+    const dispose = spyOn(Engine.prototype, Symbol.asyncDispose);
+    try {
+      await withFakeSelf(createFakeServiceWorkerScope(), async () => {
+        await throwingRejectionOf(
+          setupServiceWorker({
+            storage: new MemoryStorage(),
+            register: async () => {
+              throw new Error('register exploded');
+            },
+          }),
+        );
+      });
+      expect(dispose).toHaveBeenCalledTimes(1);
+
+      dispose.mockClear();
+      using supplied = new Engine({ storage: new MemoryStorage() });
+      await withFakeSelf(createFakeServiceWorkerScope(), async () => {
+        await throwingRejectionOf(
+          setupServiceWorker({
+            engine: supplied,
+            register: async () => {
+              throw new Error('register exploded');
+            },
+          }),
+        );
+      });
+      expect(dispose).not.toHaveBeenCalled();
+    } finally {
+      dispose.mockRestore();
+    }
+  });
+
+  it('keeps the registration error when disposing the engine it created fails too', async () => {
+    const realDispose = Engine.prototype[Symbol.asyncDispose];
+    let realDisposal: Promise<void> | undefined;
+    // Dispose for real, so no engine outlives the test, and then report the cleanup as failed.
+    const dispose = spyOn(Engine.prototype, Symbol.asyncDispose).mockImplementation(async function (
+      this: Engine,
+    ) {
+      realDisposal = realDispose.call(this);
+      await realDisposal;
+      throw new Error('dispose exploded');
+    });
+    try {
+      await withFakeSelf(createFakeServiceWorkerScope(), async () => {
+        expect(
+          await throwingRejectionOf(
+            setupServiceWorker({
+              storage: new MemoryStorage(),
+              register: async () => {
+                throw new Error('register exploded');
+              },
+            }),
+          ),
+        ).toThrow('register exploded');
+      });
+      expect(dispose).toHaveBeenCalledTimes(1);
+      await realDisposal;
+      // The background disposal's rejection is absorbed rather than surfacing unhandled.
+      // load-proof: negative window: asserts the background disposal's rejection is absorbed; load can only delay an unhandled rejection, never produce one earlier
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      dispose.mockRestore();
+    }
+  });
+
+  it('keeps the registration error when register leaves a workflow refresh in flight', async () => {
+    const fetchReleased = Promise.withResolvers<void>();
+    const source = {
+      fetch: async () => {
+        await fetchReleased.promise;
+        throw new Error('refresh source offline');
+      },
+      warm: async () => {
+        throw new Error('never warmed');
+      },
+      validateRuntime: () => {},
+    };
+    await withFakeSelf(createFakeServiceWorkerScope(), async () => {
+      const setup = setupServiceWorker({
+        storage: new MemoryStorage(),
+        register: async (engine) => {
+          await engine.workflows.registerRefreshSource('checkout', source);
+          void engine.workflows.refresh('checkout').catch(() => {});
+          throw new Error('register exploded');
+        },
+      });
+      // The refresh never settles on its own (this source ignores its abort signal), and the
+      // registration error still arrives without waiting for the disposal that refresh holds up.
+      expect(await throwingRejectionOf(setup)).toThrow('register exploded');
+      fetchReleased.resolve();
     });
   });
 
@@ -395,6 +491,26 @@ describe('setupServiceWorker', () => {
     });
   });
 
+  it('activates without claiming when the scope has no clients', async () => {
+    const scope = createFakeServiceWorkerScope();
+    Reflect.deleteProperty(scope, 'clients');
+    await withFakeSelf(scope, async () => {
+      const setup = await setupServiceWorker({ storage: new MemoryStorage() });
+      let activatePromise: Promise<unknown> | undefined;
+      listenerFor(
+        scope,
+        'activate',
+      )({
+        waitUntil(promise) {
+          activatePromise = promise;
+        },
+      });
+      await activatePromise;
+      expect(scope.claimCalls).toBe(0);
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
   it('holds fetches dispatched mid-registration until ready resolves', async () => {
     const scope = createFakeServiceWorkerScope();
     await withFakeSelf(scope, async () => {
@@ -426,11 +542,13 @@ describe('setupServiceWorker', () => {
       expect(respondedWith).toBeDefined();
       // The response promise should still be pending. Race it against a
       // very short timer to confirm.
-      const racedBefore = await Promise.race([
-        respondedWith!.then(() => 'response'),
-        new Promise<string>((resolve) => setTimeout(() => resolve('timer'), 10)),
-      ]);
-      expect(racedBefore).toBe('timer');
+      let settledBefore = false;
+      void respondedWith!.then(() => {
+        settledBefore = true;
+      });
+      // Load can only delay a settlement, never bring it forward.
+      await quietFor(10);
+      expect(settledBefore).toBe(false);
       // Release register; respondedWith should now settle.
       releaseRegister();
       const setup = await setupPromise;
@@ -493,7 +611,7 @@ describe('setupServiceWorker', () => {
 
 /** Drain the microtask queue so fire-and-forget engine work settles. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 const parkingWorkflow = workflow({ name: 'parking-workflow' }).execute(async function* (ctx) {
@@ -794,11 +912,13 @@ describe('setupServiceWorker recover option', () => {
       });
 
       // Response is still pending while scan (and thus recoverAll) is blocked.
-      const racedBefore = await Promise.race([
-        respondedWith!.then(() => 'response'),
-        new Promise<string>((resolve) => setTimeout(() => resolve('timer'), 10)),
-      ]);
-      expect(racedBefore).toBe('timer');
+      let settledBefore = false;
+      void respondedWith!.then(() => {
+        settledBefore = true;
+      });
+      // Load can only delay a settlement, never bring it forward.
+      await quietFor(10);
+      expect(settledBefore).toBe(false);
 
       // Release the scan latch; setup and response should now settle.
       releaseScan();
@@ -824,11 +944,13 @@ describe('setupServiceWorker recover option', () => {
       });
 
       // The waitUntil promise is still pending while scan is blocked.
-      const racedBefore = await Promise.race([
-        captured!.then(() => 'settled'),
-        new Promise<string>((resolve) => setTimeout(() => resolve('timer'), 10)),
-      ]);
-      expect(racedBefore).toBe('timer');
+      let settledBefore = false;
+      void captured!.then(() => {
+        settledBefore = true;
+      });
+      // Load can only delay a settlement, never bring it forward.
+      await quietFor(10);
+      expect(settledBefore).toBe(false);
 
       // Release the latch.
       releaseScan();
@@ -961,5 +1083,94 @@ describe('setupServiceWorker recover option', () => {
 
       setup.engine[Symbol.dispose]();
     });
+  });
+});
+
+describe('setupServiceWorker authorization', () => {
+  afterEach(() => {
+    resetSetupServiceWorkerRegistry();
+  });
+
+  async function dispatch(
+    handlerOptions: NonNullable<Parameters<typeof setupServiceWorker>[0]>['handlerOptions'],
+    path: string,
+  ): Promise<{ status: number; body: unknown }> {
+    const scope = createFakeServiceWorkerScope();
+    let response: Promise<Response> | undefined;
+    let result: { status: number; body: unknown } | undefined;
+    await withFakeSelf(scope, async () => {
+      const setup = await setupServiceWorker({
+        storage: new MemoryStorage(),
+        ...(handlerOptions === undefined ? {} : { handlerOptions }),
+      });
+      listenerFor(
+        scope,
+        'fetch',
+      )({
+        request: new Request(`https://example.com/weft${path}`),
+        respondWith(result) {
+          response = Promise.resolve(result);
+        },
+      });
+      if (response === undefined) throw new Error('the fetch listener did not respond');
+      const settled = await response;
+      result = { status: settled.status, body: await settled.json() };
+      setup.engine[Symbol.dispose]();
+    });
+    if (result === undefined) throw new Error('the fetch listener did not respond');
+    return result;
+  }
+
+  it('runs as the local user by default: workflows list without a 401', async () => {
+    const listed = await dispatch(undefined, '/v1/workflows');
+    expect(listed.status).toBe(200);
+    const principal = await dispatch(undefined, '/v1/principal');
+    expect(principal.body).toMatchObject({ method: 'unauthenticated-local' });
+  });
+
+  it('lets an explicit authContext replace the default', async () => {
+    const refused = await dispatch(
+      {
+        authContext: {
+          method: 'api-key',
+          principal: principalFromApiKey({ subject: 'narrow', scopes: ['system:read'] }),
+        },
+      },
+      '/v1/workflows',
+    );
+    expect(refused.status).toBe(403);
+  });
+
+  it('opts out of local trust with a public authContext', async () => {
+    const refused = await dispatch({ authContext: { method: 'public' } }, '/v1/workflows');
+    expect(refused.status).toBe(401);
+  });
+
+  it('never answers a navigation, and does not throw for one', async () => {
+    const scope = createFakeServiceWorkerScope();
+    let responded = false;
+    await withFakeSelf(scope, async () => {
+      const setup = await setupServiceWorker({ storage: new MemoryStorage() });
+      const navigation = {
+        mode: 'navigate',
+        url: 'https://example.com/weft/v1/principal',
+        clone() {
+          throw new TypeError('a navigation request cannot be cloned into a new Request');
+        },
+      };
+      expect(() =>
+        listenerFor(
+          scope,
+          'fetch',
+        )({
+          request: navigation as unknown as Request,
+          respondWith() {
+            responded = true;
+          },
+        }),
+      ).not.toThrow();
+      setup.engine[Symbol.dispose]();
+    });
+    expect(responded).toBe(false);
   });
 });

@@ -1,11 +1,11 @@
-import type { BatchOperation } from './interface.ts';
+import type { BatchOperation } from "../embedded/storage/src/index.ts";
 
+import type { BunSQLiteStorage } from "../embedded/storage-bun-sqlite/src/index.ts";
 import {
   isConstrainedCodexRunner,
   isGitHubActionsRunner,
 } from '../../scripts/benchmarks/benchmark-environment.ts';
 import { readEnvironmentVariable } from '../runtime/environment-configuration.ts';
-import type { BunSQLiteStorage } from './bun-sql.ts';
 
 /** Generate a realistic ~2KB value (typical checkpoint size). */
 export function generateCheckpointValue(): Uint8Array {
@@ -17,7 +17,7 @@ export function generateCheckpointValue(): Uint8Array {
 /**
  * The opt-in throughput target. Normal validation checks data integrity; set
  * WEFT_SQLITE_ARCHITECTURE_BENCHMARK=1 to enforce the median throughput gate on an isolated
- * machine, through `scripts/benchmarks/bun-sql.test.ts`.
+ * machine, through `scripts/benchmarks/bun-sql.bench.ts`.
  */
 export const TARGET_WRITES_PER_SECOND =
   isConstrainedCodexRunner() || isGitHubActionsRunner() ? 5_000 : 20_000;

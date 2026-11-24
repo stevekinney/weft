@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { buildCurrentAttemptDispositionWrites } from './task-attempt-runtime.ts';
 import type { RemoteTaskQueued } from './task-ledger-types.ts';
 

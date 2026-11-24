@@ -32,6 +32,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage, storageConditionalBatch } from "../embedded/storage/src/index.ts";
 import type { TaskResultDeadLetteredEvent } from '../core/events.ts';
 import { commitTaskLedgerTransition } from '../core/task-ledger/task-ledger-runtime.ts';
 import {
@@ -46,8 +47,6 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskQueued,
 } from '../core/task-ledger/task-ledger.ts';
-import { storageConditionalBatch } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { sha256Hex } from '../worker/manifest/content-digest.ts';
 import {
   FailingTerminalCommitStorage,

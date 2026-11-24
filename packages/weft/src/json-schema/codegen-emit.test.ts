@@ -568,3 +568,22 @@ describe('jsonSchemaToTypeScript $ref and ignored keywords', () => {
     ).toBe('number');
   });
 });
+
+describe('jsonSchemaToTypeScript type keywords and key order', () => {
+  it.each(['foo', 'constructor', '__proto__', 'toString'])(
+    'falls back to unknown for the unrecognized type keyword %p',
+    (typeKeyword) => {
+      expect(jsonSchemaToTypeScript({ type: typeKeyword })).toBe('unknown');
+    },
+  );
+
+  it('orders declared and required-only property keys together by code unit', () => {
+    expect(
+      jsonSchemaToTypeScript({
+        type: 'object',
+        properties: { b: { type: 'string' }, B: { type: 'number' } },
+        required: ['c', 'a', 'b'],
+      }),
+    ).toBe('{ "B"?: number; "a": unknown; "b": string; "c": unknown; [index: string]: unknown; }');
+  });
+});

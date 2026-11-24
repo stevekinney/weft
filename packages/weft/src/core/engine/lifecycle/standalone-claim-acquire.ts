@@ -42,7 +42,8 @@
  * @module core/engine/lifecycle/standalone-claim-acquire
  */
 
-import { KEYS, storageHas } from '../../../storage/interface.ts';
+import { storageHas } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import type { EngineInternals } from '../internals.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { wakeOwnershipCheck } from '../wake-ownership-check.ts';

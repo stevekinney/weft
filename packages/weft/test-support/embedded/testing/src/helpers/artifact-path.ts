@@ -1,0 +1,73 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { Theme, ViewportName } from './manifest.ts';
+
+/**
+ * Uniquely identifies a single captured artifact (screenshot, snapshot, axe report)
+ * for a component rendered with a specific theme, viewport, and fixture combination.
+ *
+ * - `slug`: the kebab-case component identifier from the manifest.
+ * - `theme`: the color-scheme variant (`'light'` or `'dark'`).
+ * - `viewport`: the named breakpoint (`'mobile'`, `'tablet'`, `'desktop'`).
+ * - `fixture`: the fixture name, or `'default'` when no explicit fixture was used.
+ */
+export type ArtifactKey = {
+  /** Component slug. */
+  slug: string;
+  /** Color theme. */
+  theme: Theme;
+  /** Viewport name. */
+  viewport: ViewportName;
+  /** Fixture name. */
+  fixture: string;
+};
+
+/** Resolves to the root of the `@lostgradient/testing` package (the directory containing `src/`). */
+function packageRoot(): string {
+  // src/helpers/artifact-path.ts → ../..
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}
+
+/**
+ * Returns the absolute path for the review screenshot of a given artifact key.
+ * Files are written to `testing/testing/screenshots/<slug>/<theme>-<viewport>-<fixture>.png`.
+ * This path is used in `'off'` mode (no diffing) and remains stable for human review.
+ */
+export function screenshotPath(key: ArtifactKey): string {
+  return resolve(
+    packageRoot(),
+    'screenshots',
+    key.slug,
+    `${key.theme}-${key.viewport}-${key.fixture}.png`,
+  );
+}
+
+/**
+ * Returns the absolute path for the screenshot metadata sidecar for a given
+ * artifact key. Files are written to
+ * `testing/testing/test-results/visual-metadata/<slug>/<theme>-<viewport>-<fixture>.json`.
+ */
+export function screenshotMetadataPath(key: ArtifactKey): string {
+  return resolve(
+    packageRoot(),
+    'test-results',
+    'visual-metadata',
+    key.slug,
+    `${key.theme}-${key.viewport}-${key.fixture}.json`,
+  );
+}
+
+/**
+ * Returns the absolute path for the axe accessibility JSON report for a given
+ * artifact key. Files are written to
+ * `testing/testing/test-results/axe/<slug>/<theme>-<viewport>-<fixture>.json`.
+ */
+export function axeJsonPath(key: ArtifactKey): string {
+  return resolve(
+    packageRoot(),
+    'test-results',
+    'axe',
+    key.slug,
+    `${key.theme}-${key.viewport}-${key.fixture}.json`,
+  );
+}

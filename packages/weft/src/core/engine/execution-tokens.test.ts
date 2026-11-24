@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
@@ -113,7 +113,6 @@ describe('workflow and activity execution tokens', () => {
       id: 'finalizer-token-workflow-1',
     });
     await waitForCondition(() => runToken !== undefined, {
-      timeoutMs: 2_000,
       label: 'workflow recorded run token',
     });
 
@@ -251,7 +250,6 @@ describe('workflow and activity execution tokens', () => {
     });
     await lateActivityStarted.promise;
     await waitForCondition(() => runToken !== undefined, {
-      timeoutMs: 2_000,
       label: 'workflow recorded external owner token',
     });
 
@@ -299,7 +297,6 @@ describe('workflow and activity execution tokens', () => {
     });
 
     await waitForCondition(() => requests.length > 0, {
-      timeoutMs: 2_000,
       label: 'broker.enqueue to be called',
     });
 

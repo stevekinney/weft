@@ -1,24 +1,26 @@
 import { z } from 'zod';
 
 import {
+  type OperationContext,
+  type OperationFault,
+  type TransportAvailability,
+  type UnarySchemaOperationDefinition,
+  type UnknownKeyPolicy,
+  defineOperation,
+  validateOperationName,
+} from "../../embedded/backchannel/src/index.ts";
+import {
+  type AccessPolicy,
+  type AuthorizationDecision,
+  invalidParamsFault,
+} from "../../embedded/backchannel/src/internals.ts";
+import {
   WorkflowAlreadyExistsError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import type { WorkflowDefinition } from '../../core/types.ts';
-import type { AccessPolicy } from '../authorization.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import type { UnarySchemaOperationDefinition } from '../operation-registry.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { invalidParamsFault } from '../operations/operation-helpers.ts';
-import type {
-  AuthorizationDecision,
-  OperationContext,
-  TransportAvailability,
-  UnknownKeyPolicy,
-} from './types.ts';
-import { validateOperationName } from './types.ts';
 
 const StartHandleSchema = z.object({
   workflowId: z.string(),
@@ -108,7 +110,7 @@ export function catalogWorkflow(
     transports: { ...options.transports },
     unknownKeyPolicy: { ...options.unknownKeyPolicy },
     ...(options.authorize === undefined ? {} : { authorize: options.authorize }),
-    invoke: async ({ input, engine }): Promise<StartHandle> => {
+    invoke: async ({ input, host: engine }): Promise<StartHandle> => {
       // Engine is supplied by the dispatch context, whose shared shape keeps
       // the engine slot unknown. The runtime view keeps workflow-type strings
       // validated by Engine.start() instead of by a module augmentation.

@@ -1,5 +1,6 @@
+import { storageHas } from "../../../embedded/storage/src/index.ts";
 import { sleep } from '../../../runtime/portable.ts';
-import { KEYS, storageHas } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/keys.ts';
 import { decode } from '../../codec.ts';
 import type { StartOrSignalSignal, WorkflowState } from '../../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';

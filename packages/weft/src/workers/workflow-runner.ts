@@ -1,4 +1,4 @@
-import { copyBytesToArrayBuffer } from '../core/byte-arrays.ts';
+import { copyBytesToArrayBuffer } from "../embedded/backchannel/src/internals.ts";
 import { advanceCheckpoint, serializeCheckpoint } from '../core/checkpoint.ts';
 import type { ContextOperationRequest } from '../core/context.ts';
 import { resolveWorkflowVersionPatch } from '../core/context/version-patching.ts';
@@ -10,10 +10,8 @@ import {
   attachTransientCheckpointReplayPayload,
   pruneCheckpointReplayState,
 } from '../core/engine/checkpoint-replay.ts';
-import {
-  classifyErrorAsFailureCategory,
-  errorFromFailedOperationOutcome,
-} from '../core/failure-categories.ts';
+import { failedMessageForError } from '../core/failed-message.ts';
+import { errorFromFailedOperationOutcome } from '../core/failure-categories.ts';
 import type {
   Checkpoint,
   FailureCategory,
@@ -292,14 +290,7 @@ export async function handleRunMessage(
     return await processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {
     cleanupWorkflowRunnerState(context, message.workflowId);
-    return {
-      type: 'failed',
-      workflowId: message.workflowId,
-      error: formatError(error),
-      failureCategory: classifyErrorAsFailureCategory(error, {
-        defaultErrorCategory: 'application',
-      }),
-    };
+    return failedMessageForError(message.workflowId, error, undefined);
   }
 }
 
@@ -342,14 +333,7 @@ export async function handleResumeMessage(
     return await processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {
     cleanupWorkflowRunnerState(context, message.workflowId);
-    return {
-      type: 'failed',
-      workflowId: message.workflowId,
-      error: formatError(error),
-      failureCategory:
-        operationFailureCategory ??
-        classifyErrorAsFailureCategory(error, { defaultErrorCategory: 'application' }),
-    };
+    return failedMessageForError(message.workflowId, error, operationFailureCategory);
   }
 }
 
@@ -519,6 +503,7 @@ async function processGeneratorStep(
       workflowId,
       checkpoint: copyBytesToArrayBuffer(serializeCheckpoint(replayState.checkpoint)),
       operationRequest,
+      pendingStepIndex: stepIndex,
     };
   }
 }
@@ -555,13 +540,23 @@ function pruneWorkerCheckpoint(
   pendingOperationStep: number,
 ): Checkpoint {
   const workerReplayFailures = [...replayState.failedOutcomes];
-  const { workerReplayFailures: _oldWorkerReplayFailures, ...checkpointWithoutFailures } =
-    checkpoint;
+  const {
+    workerReplayFailures: _oldWorkerReplayFailures,
+    forkCopiedSignatureSteps: copiedSignatureSteps,
+    ...checkpointWithoutFailures
+  } = checkpoint;
+  // Yielding this step's operation pins its signature as this run's own.
+  const forkCopiedSignatureSteps = copiedSignatureSteps?.filter(
+    (step) => step !== pendingOperationStep,
+  );
   const workerCheckpoint: Checkpoint = {
     ...checkpointWithoutFailures,
     accumulatedResults: [...replayState.accumulatedResults],
     workerReplaySignatures: [...replayState.signatures],
     ...(workerReplayFailures.length === 0 ? {} : { workerReplayFailures }),
+    ...(forkCopiedSignatureSteps === undefined || forkCopiedSignatureSteps.length === 0
+      ? {}
+      : { forkCopiedSignatureSteps }),
   };
   const pruned = pruneCheckpointReplayState(workerCheckpoint, pendingOperationStep);
   return attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload);
@@ -581,11 +576,4 @@ export function cleanupWorkflowRunnerState(
   // revision for the outbound `completed` message it is about to stamp and
   // send. The entry (`workflow-worker-entry.ts`) deletes the map entry
   // itself, AFTER stamping the terminal outbound message.
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }

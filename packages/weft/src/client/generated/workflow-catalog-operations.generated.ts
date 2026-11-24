@@ -19,6 +19,124 @@ export type WorkflowCatalogOperationTypes = {
     readonly output: unknown;
     readonly faults: 'InvalidParams' | 'NotFound';
   };
+  'weft.workflows.definitions.get': {
+    readonly input: { readonly name: unknown };
+    readonly output: {
+      readonly contract: Record<string, unknown> | null;
+      readonly contractHash: string | null;
+      readonly description: string | null;
+      readonly lastFailureCategory:
+        'application' | 'timeout' | 'cancellation' | 'resource' | 'system' | null;
+      readonly name: string;
+      readonly origin: 'code' | 'source';
+      readonly queries: ReadonlyArray<string> | null;
+      readonly revision: string | null;
+      readonly signals: ReadonlyArray<string> | null;
+      readonly state: 'ready' | 'idle' | 'loading' | 'failed' | 'cancelled';
+      readonly tags: ReadonlyArray<string> | null;
+      readonly updates: ReadonlyArray<string> | null;
+      readonly workflowVersion: string | null;
+    };
+    readonly faults: 'InvalidParams' | 'NotFound';
+  };
+  'weft.workflows.definitions.list': {
+    readonly input: { readonly limit?: number; readonly offset?: number };
+    readonly output: {
+      readonly definitions: ReadonlyArray<{
+        readonly description: string | null;
+        readonly lastFailureCategory:
+          'application' | 'timeout' | 'cancellation' | 'resource' | 'system' | null;
+        readonly name: string;
+        readonly origin: 'code' | 'source';
+        readonly queries: ReadonlyArray<string> | null;
+        readonly revision: string | null;
+        readonly signals: ReadonlyArray<string> | null;
+        readonly state: 'ready' | 'idle' | 'loading' | 'failed' | 'cancelled';
+        readonly tags: ReadonlyArray<string> | null;
+        readonly updates: ReadonlyArray<string> | null;
+        readonly workflowVersion: string | null;
+      }>;
+      readonly nextOffset?: number;
+    };
+    readonly faults: never;
+  };
+  'weft.workflows.refresh': {
+    readonly input: {
+      readonly activate?: unknown;
+      readonly expectedGeneration?: unknown;
+      readonly name: unknown;
+    };
+    readonly output: {
+      readonly activation?:
+        | {
+            readonly applied: true;
+            readonly pointer: {
+              readonly activatedAt: number;
+              readonly generation: number;
+              readonly revision: string;
+            };
+          }
+        | {
+            readonly applied: false;
+            readonly compatibilityReasons: ReadonlyArray<string>;
+            readonly reason: 'incompatible';
+          }
+        | {
+            readonly applied: false;
+            readonly currentGeneration: number;
+            readonly reason: 'stale-generation' | 'expected-generation-required';
+          }
+        | { readonly applied: false; readonly reason: 'conflict' };
+      readonly contractHash?: string;
+      readonly etag?: string;
+      readonly revision?: string;
+      readonly status: 'not-modified' | 'installed' | 'activated';
+    };
+    readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound' | 'Unavailable';
+  };
+  'weft.workflows.refresh.diagnostics': {
+    readonly input: { readonly name?: unknown };
+    readonly output: {
+      readonly polling?: {
+        readonly backoffMilliseconds: number;
+        readonly intervalMilliseconds: number;
+        readonly maxBackoffMilliseconds: number;
+        readonly nextCheckAt?: number;
+      };
+      readonly sources: ReadonlyArray<{
+        readonly candidate?: {
+          readonly contractHash: string;
+          readonly digest: string;
+          readonly revision: string;
+        };
+        readonly checkedAt?: number;
+        readonly current?: {
+          readonly contractHash?: string;
+          readonly digest?: string;
+          readonly generation: number;
+          readonly revision: string;
+        };
+        readonly etag?: string;
+        readonly generation?: number;
+        readonly name: string;
+        readonly reason?:
+          | 'not-registered'
+          | 'source'
+          | 'integrity'
+          | 'identity'
+          | 'contract'
+          | 'runtime'
+          | 'warming'
+          | 'conflict'
+          | 'cancelled'
+          | 'stopped'
+          | 'internal';
+        readonly state:
+          'idle' | 'checking' | 'not-modified' | 'warming' | 'activated' | 'installed' | 'failed';
+      }>;
+    };
+    readonly faults: 'InvalidParams';
+  };
   'weft.workflows.revisions.activate': {
     readonly input: {
       readonly expectedGeneration?: unknown;

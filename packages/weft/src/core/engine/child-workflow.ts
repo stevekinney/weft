@@ -12,7 +12,7 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { isReservedWorkflowIdLiteral } from '../workflow-identifiers.ts';
-import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { stageOperationSideEffects } from './checkpoint-side-effects.ts';
 import {
   buildChildCancellationOperations,
   registerChildCancellationHandler,
@@ -362,7 +362,7 @@ export async function executeChildWorkflow(
       return createChildWorkflowHandleReference(childHandle.id);
     }
     if (parentClosePolicy === 'request-cancel') {
-      stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+      stageOperationSideEffects(internals, workflowId, operation, {
         conditions: [],
         operations: buildChildCancellationOperations(internals, workflowId, childHandle.id),
       });

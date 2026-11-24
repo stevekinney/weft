@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import { UpdateCoordinator, UpdateTimeoutError } from './updates.ts';
 
@@ -78,9 +79,16 @@ describe('UpdateCoordinator', () => {
 
   describe('buildResponseOperations', () => {
     it('returns correct batch operations (DELETE request + PUT response)', () => {
-      const operations = coordinator.buildResponseOperations('upd-1', 'wf-1', { answer: 42 });
+      const operations = coordinator.buildResponseOperations(
+        'upd-1',
+        'wf-1',
+        { answer: 42 },
+        undefined,
+        undefined,
+        { name: 'myUpdate', receivedAt: 1_000 },
+      );
 
-      expect(operations).toHaveLength(2);
+      expect(operations).toHaveLength(3);
 
       const deleteOperation = operations.find((operation) => operation.type === 'delete');
       expect(deleteOperation).toBeDefined();
@@ -107,9 +115,10 @@ describe('UpdateCoordinator', () => {
         'result',
         undefined,
         'idem-key-1',
+        { name: 'myUpdate', receivedAt: 1_000 },
       );
 
-      expect(operations).toHaveLength(3);
+      expect(operations).toHaveLength(4);
 
       const idempotencyPut = operations.find(
         (operation) => operation.type === 'put' && operation.key === 'upk:wf-1:idem-key-1',
@@ -138,6 +147,28 @@ describe('UpdateCoordinator', () => {
     it('returns null for non-existent', async () => {
       const retrieved = await coordinator.getResponse('nonexistent');
       expect(retrieved).toBeNull();
+    });
+  });
+
+  describe('deleteRequestIfUnconsumed', () => {
+    it('keeps the request and returns the response when the workflow already consumed it', async () => {
+      const updateId = await coordinator.createRequest('wf-1', 'myUpdate', { value: 1 });
+      const response = { updateId, result: 'done', createdAt: Date.now() };
+      await storage.put(`upr:${updateId}`, encode(response));
+
+      const returned = await coordinator.deleteRequestIfUnconsumed('wf-1', updateId);
+
+      expect(returned).toEqual(response);
+      expect(await storage.get(`upd:wf-1:${updateId}`)).not.toBeNull();
+    });
+
+    it('deletes the request and returns null when no response exists', async () => {
+      const updateId = await coordinator.createRequest('wf-1', 'myUpdate', { value: 1 });
+
+      const returned = await coordinator.deleteRequestIfUnconsumed('wf-1', updateId);
+
+      expect(returned).toBeNull();
+      expect(await storage.get(`upd:wf-1:${updateId}`)).toBeNull();
     });
   });
 
@@ -184,6 +215,16 @@ describe('UpdateCoordinator', () => {
         expect((error as UpdateTimeoutError).updateId).toBe('upd-nonexistent');
         expect((error as UpdateTimeoutError).message).toContain('120');
       }
+    });
+  });
+
+  describe('waitForResponse with a signal', () => {
+    it('ends the wait with the timeout error as soon as the signal aborts, without waiting out the timeout', async () => {
+      const controller = new AbortController();
+      const waiting = coordinator.waitForResponse('upd-aborted', 600_000, controller.signal);
+      controller.abort();
+      // load-proof: the abort ends the wait directly; the 10-minute timeout is never waited out
+      expect(await rejectionOf(waiting)).toBeInstanceOf(UpdateTimeoutError);
     });
   });
 
@@ -300,7 +341,15 @@ describe('UpdateCoordinator', () => {
       expect(pending).toHaveLength(2);
 
       // Complete one update
-      const operations = coordinator.buildResponseOperations(id1, 'wf-1', 'result-a');
+      const first = pending.find((request) => request.updateId === id1)!;
+      const operations = coordinator.buildResponseOperations(
+        id1,
+        'wf-1',
+        'result-a',
+        undefined,
+        undefined,
+        { name: first.name, receivedAt: first.createdAt },
+      );
       await storage.batch(operations);
 
       // The other should still be pending

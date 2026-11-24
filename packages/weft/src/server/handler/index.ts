@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 /**
  * Platform-agnostic HTTP request handler for the workflow REST API.
  * Maps Request to Response with no Bun-specific dependencies.
@@ -10,11 +11,10 @@
  * @module server/handler
  */
 
+import { authContextToPrincipal } from "../../embedded/backchannel/src/index.ts";
+import { errorResponse, MalformedRouteParameterError } from "../../embedded/backchannel/src/internals.ts";
 import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
-import { MalformedRouteParameterError } from '../rest-binding.ts';
-import { authContextToPrincipal } from './auth-context-principal.ts';
 import { matchRestBinding } from './binding-dispatch.ts';
-import { errorResponse } from './response-helpers.ts';
 import {
   defaultOperationRegistry,
   defaultRestBindings,
@@ -25,7 +25,6 @@ import {
 import { matchDirectRoute } from './route-matching.ts';
 import type { LiveEventStreamContext } from './sse-route-dispatch.ts';
 
-export { authContextToPrincipal } from './auth-context-principal.ts';
 export { isOperationFaultLike, type HandlerOptions } from './route-dispatch.ts';
 export { extractRouteParameters, getRequiredRouteParameter } from './route-matching.ts';
 
@@ -49,9 +48,6 @@ export {
 } from '../fleet-event-feed.ts';
 export {
   createWorkflowEventFeed,
-  decodeCursor,
-  encodeCursor,
-  type Cursor,
   type EventEnvelope,
   type WorkflowEventFeed,
   type WorkflowEventFeedBackend,
@@ -93,7 +89,20 @@ function liveEventStreamContextFromOptions(
   if (options?.acquireWorkflowStreamConnection !== undefined) {
     context.acquireWorkflowStreamConnection = options.acquireWorkflowStreamConnection;
   }
+  addSubscriberLeases(context, options);
   return context;
+}
+
+function addSubscriberLeases(
+  context: LiveEventStreamContext,
+  options: HandlerOptions | undefined,
+): void {
+  if (options?.acquireFleetEventSubscriber !== undefined) {
+    context.acquireFleetEventSubscriber = options.acquireFleetEventSubscriber;
+  }
+  if (options?.acquireWorkflowEventSubscriber !== undefined) {
+    context.acquireWorkflowEventSubscriber = options.acquireWorkflowEventSubscriber;
+  }
 }
 
 async function dispatchRestBinding(
@@ -105,7 +114,7 @@ async function dispatchRestBinding(
   url: URL,
 ): Promise<Response> {
   try {
-    const principal = authContextToPrincipal(options?.authContext);
+    const principal = authContextToPrincipal(options?.authContext, WEFT_SCOPE_VOCABULARY);
     return await dispatchViaExecuteOperation(
       request,
       engine,
@@ -216,7 +225,8 @@ async function dispatchMatchedRouteBoundary(
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, handleRequest } from '@lostgradient/weft';
+ * import { workflow, Engine, handleRequest } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));

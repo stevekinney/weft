@@ -10,6 +10,7 @@ import {
   StartWorkflowValidationError,
 } from '../../core/start-workflow-validation.ts';
 import type {
+  SearchAttributeDefinition,
   SearchAttributeSchema,
   SearchAttributeValue,
   StartOptions,
@@ -216,6 +217,45 @@ export function coerceStartWorkflowSearchAttributes(
   return attributes;
 }
 
+/**
+ * Convert the ISO strings a transport carries for the attributes `schema` declares `date-time` to
+ * `Date`s, leaving every other entry as it arrived. This is the conversion the start operations
+ * apply, for an operation that goes on to let the engine validate the values (`attributes.set`):
+ * JSON has no date, so a date-time attribute arrives as a string and would otherwise always fail
+ * the engine's `Date` check. Throws {@link StartWorkflowValidationError} for a string that is not a
+ * valid date-time.
+ */
+export function normalizeDateTimeSearchAttributes(
+  attributes: Record<string, unknown>,
+  fieldName: string,
+  schema: SearchAttributeSchema | undefined,
+): Record<string, unknown> {
+  if (schema === undefined) return attributes;
+  const normalized = Object.create(null) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(attributes)) {
+    const definition = Object.hasOwn(schema, key) ? schema[key] : undefined;
+    normalized[key] =
+      definition === undefined
+        ? value
+        : normalizeDateTimeAttributeValue(key, value, fieldName, definition);
+  }
+  return normalized;
+}
+
+/** The one place a `date-time` attribute's ISO string becomes a `Date`; anything else is returned as it is. */
+function normalizeDateTimeAttributeValue(
+  key: string,
+  value: unknown,
+  fieldName: string,
+  definition: SearchAttributeDefinition,
+): unknown {
+  return definition.type === 'string' &&
+    definition.format === 'date-time' &&
+    typeof value === 'string'
+    ? coerceDateTimeSearchAttribute(key, value, fieldName)
+    : value;
+}
+
 function coerceStartWorkflowSearchAttributeValue(
   key: string,
   value: unknown,
@@ -232,17 +272,19 @@ function coerceStartWorkflowSearchAttributeValue(
     return value;
   }
 
-  const definition = schema[key];
+  const definition = Object.hasOwn(schema, key) ? schema[key] : undefined;
   if (definition === undefined) {
     throw new StartWorkflowValidationError(
       `Unknown search attribute "${key}". Registered attributes: ${Object.keys(schema).join(', ')}`,
     );
   }
 
-  const normalizedValue =
-    definition.type === 'string' && definition.format === 'date-time' && typeof value === 'string'
-      ? coerceDateTimeSearchAttribute(key, value, fieldName)
-      : value;
+  const normalizedValue = normalizeDateTimeAttributeValue(
+    key,
+    value,
+    fieldName,
+    definition,
+  ) as SearchAttributeValue;
 
   try {
     validateAttributeType(key, normalizedValue, definition);

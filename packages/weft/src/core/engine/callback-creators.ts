@@ -1,4 +1,4 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { createCheckpointPersistenceCallbacks } from './callback-checkpoint-persistence.ts';
 import {
@@ -68,8 +68,14 @@ export function createInlineParkingCallbacks<TWorkflows extends object, TActivit
         operation,
         createInlineParkingCallbacks(engine),
       ),
-    persistCheckpoint: (workflowId, operation, workerCheckpointBytes) =>
-      persistCheckpointForEngine(engine, workflowId, operation, workerCheckpointBytes),
+    persistCheckpoint: (workflowId, operation, workerCheckpointBytes, pendingStepIndex) =>
+      persistCheckpointForEngine(
+        engine,
+        workflowId,
+        operation,
+        workerCheckpointBytes,
+        pendingStepIndex,
+      ),
     processOperation: (workflowId, operation) =>
       processOperation(
         getInternals(engine),
@@ -103,6 +109,7 @@ export function persistCheckpointForEngine<TWorkflows extends object, TActivitie
   workflowId: string,
   operation: ContextOperationRequest,
   workerCheckpointBytes?: ArrayBuffer,
+  pendingStepIndex?: number,
 ): Promise<void> {
   const internals = getInternals(engine);
   return persistCheckpointAbandoningOnConflict(internals, workflowId, () =>
@@ -112,6 +119,7 @@ export function persistCheckpointForEngine<TWorkflows extends object, TActivitie
       operation,
       workerCheckpointBytes,
       createCheckpointPersistenceCallbacks(engine),
+      pendingStepIndex === undefined ? {} : { pendingStepIndex },
     ),
   );
 }

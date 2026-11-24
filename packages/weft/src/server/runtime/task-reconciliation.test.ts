@@ -8,6 +8,16 @@
 
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
+import {
+  restoreRealTimers,
+  useFakeTimers,
+  waitForCondition,
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { recordCancellationIntent } from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
   decodeRemoteTaskRecord,
@@ -18,13 +28,6 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskTerminalResolved,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import {
-  restoreRealTimers,
-  useFakeTimers,
-  waitForCondition,
-} from '../../testing/fake-timers.test-support.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import {
@@ -225,7 +228,6 @@ describe('reassignOrExpireTask', () => {
     );
 
     await waitForCondition(() => sent.length > 0, {
-      timeoutMs: 1000,
       intervalMs: 10,
       label: 'redispatched task message to be sent',
     });
@@ -274,7 +276,6 @@ describe('reconcileOrphanedRecords — queued redispatch', () => {
     await reconcileOrphanedRecords(context, options, NOOP_CLEANUP);
 
     await waitForCondition(() => context.taskQueue.isTracked(stored.operationId), {
-      timeoutMs: 1000,
       intervalMs: 10,
       label: 'orphaned queued task to reach the long-poll queue',
     });

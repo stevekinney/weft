@@ -1,12 +1,20 @@
 import {
   Engine,
+  LeaseHealthChangedEvent,
+  QueueDepthChangedEvent,
+  RealmStateChangedEvent,
+  StreamChunkEvent,
   TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
+  WorkerDeploymentChangedEvent,
+  WorkerRegistrationRejectedEvent,
   WorkflowRevisionActivatedEvent,
   WorkflowRevisionActivationRejectedEvent,
   WorkflowRevisionDrainingEvent,
   WorkflowRevisionInstalledEvent,
   WorkflowRevisionRemovedEvent,
+  type LeaseHealthStatus,
+  type WorkerDeploymentDrainState,
   type WorkerExecutionIdentity,
 } from '../index.ts';
 
@@ -65,4 +73,49 @@ engine.addEventListener('catalog:revision-removed', (event) => {
   const narrowed: WorkflowRevisionRemovedEvent = event;
   const revision: string = narrowed.revision;
   void revision;
+});
+
+engine.addEventListener('realm:state-changed', (event) => {
+  const narrowed: RealmStateChangedEvent = event;
+  const state: 'warming' | 'ready' | 'active' | 'draining' | 'terminated' | 'crashed' =
+    narrowed.state;
+  const restartCount: number = narrowed.restartCount;
+  void state;
+  void restartCount;
+});
+
+engine.addEventListener('lease:health-changed', (event) => {
+  const narrowed: LeaseHealthChangedEvent = event;
+  const status: LeaseHealthStatus = narrowed.status;
+  void status;
+});
+
+engine.addEventListener('worker:registration-rejected', (event) => {
+  const narrowed: WorkerRegistrationRejectedEvent = event;
+  const workerId: string | undefined = narrowed.workerId;
+  void workerId;
+});
+
+engine.addEventListener('worker:deployment-changed', (event) => {
+  const narrowed: WorkerDeploymentChangedEvent = event;
+  const drainState: WorkerDeploymentDrainState = narrowed.drainState;
+  const routingGeneration: number = narrowed.routingGeneration;
+  void drainState;
+  void routingGeneration;
+});
+
+engine.addEventListener('stream:chunk', (event) => {
+  const narrowed: StreamChunkEvent = event;
+  const key: string = narrowed.key;
+  const sequence: number = narrowed.sequence;
+  void key;
+  void sequence;
+});
+
+engine.addEventListener('queue:depth-changed', (event) => {
+  const narrowed: QueueDepthChangedEvent = event;
+  const queue: string = narrowed.queue;
+  const depth: number = narrowed.depth;
+  void queue;
+  void depth;
 });

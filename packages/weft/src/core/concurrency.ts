@@ -71,7 +71,7 @@ export type {
  * @example
  * ```ts
  * import { AtomicState, type CasSlot, type LockRecord } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * // AtomicState satisfies CasSlot structurally (its methods return promises).
  * const slot: CasSlot<LockRecord, Promise<LockRecord>, Promise<LockRecord | undefined>> =
@@ -161,7 +161,7 @@ const DEFAULT_LEASE_MS = 30_000;
  * ```ts
  * import { DurableSemaphore } from '@lostgradient/weft';
  * import { AtomicState } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const slot = new AtomicState<import('@lostgradient/weft').LockRecord>(
@@ -318,7 +318,8 @@ export class DurableMutex extends DurableSemaphore {
  *
  * @example
  * ```ts
- * import { DurableRateLimiter, AtomicState, MemoryStorage } from '@lostgradient/weft';
+ * import { DurableRateLimiter, AtomicState } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import type { TokenBucketRecord } from '@lostgradient/weft';
  *
  * const slot = new AtomicState<TokenBucketRecord>(new MemoryStorage(), 'state:api:bucket');

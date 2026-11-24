@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { buildInternalRealmManifest } from '../../worker/manifest/internal-realm.ts';
+import { WORKER_PROTOCOL_VERSION } from '../worker-protocol.ts';
 import { FakeRealm, type FakeRealmActivation } from './fake-realm.test-support.ts';
 import { RealmEnvelopeMismatchError, type RealmTurnEnvelope } from './realm-protocol.ts';
 
@@ -81,7 +82,7 @@ describe('FakeRealm', () => {
       const realm = fakeRealm({ expectedWorkflowTypes: ['order-workflow'] });
       await realm.sendReady({
         type: 'ready',
-        protocolVersion: 2,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
         realmGeneration: 'g1',
         manifest: buildInternalRealmManifest(['wrong-workflow']),
       });
@@ -155,6 +156,24 @@ describe('FakeRealm', () => {
       expect(accepted).toEqual({ accepted: true, result: 'the-result' });
       expect(await pending).toBe('the-result');
       expect(realm.pendingTurnCount).toBe(0);
+    });
+
+    it('refuses a result for a turn that was never dispatched, or already settled', async () => {
+      const realm = fakeRealm();
+      await readyAndActive(realm);
+
+      expect(realm.acceptResult(turn({ turnId: 7 }), 'stray')).toEqual({
+        accepted: false,
+        reason: 'unknown-turn',
+      });
+
+      const pending = realm.dispatchTurn(turn({ turnId: 1 }));
+      realm.acceptResult(turn({ turnId: 1 }), 'first');
+      expect(await pending).toBe('first');
+      expect(realm.acceptResult(turn({ turnId: 1 }), 'duplicate')).toEqual({
+        accepted: false,
+        reason: 'unknown-turn',
+      });
     });
 
     it('advances the expected turnId only after a turn is accepted for dispatch', async () => {
@@ -336,7 +355,7 @@ describe('FakeRealm', () => {
       const realm = fakeRealm({ isReferenced: () => true, maxRestarts: 2 });
       await realm.sendReady({
         type: 'ready',
-        protocolVersion: 2,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
         realmGeneration: 'g1',
         manifest: buildInternalRealmManifest(['wrong-workflow']),
       });
@@ -355,7 +374,7 @@ describe('FakeRealm', () => {
       const realm = fakeRealm({ isReferenced: () => false });
       await realm.sendReady({
         type: 'ready',
-        protocolVersion: 2,
+        protocolVersion: WORKER_PROTOCOL_VERSION,
         realmGeneration: 'g1',
         manifest: buildInternalRealmManifest(['wrong-workflow']),
       });

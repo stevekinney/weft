@@ -195,6 +195,11 @@ function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
+/** A record's own value for `key`, so a key like `constructor` that only the other side holds reads as missing. */
+function ownValue(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 /** Recursively records changed paths between two checkpoint-like values. */
 export function collectDiffLines(
   beforeValue: unknown,
@@ -218,7 +223,7 @@ export function collectDiffLines(
     const keys = new Set([...Object.keys(beforeValue), ...Object.keys(afterValue)]);
     for (const key of [...keys].toSorted()) {
       const childPath = path ? `${path}.${key}` : key;
-      collectDiffLines(beforeValue[key], afterValue[key], childPath, lines);
+      collectDiffLines(ownValue(beforeValue, key), ownValue(afterValue, key), childPath, lines);
     }
     return;
   }

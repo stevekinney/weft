@@ -1,3 +1,6 @@
+import type { ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import { ActivityStartedEvent } from '../../core/events.ts';
+import { tagWorkflowEventGeneration } from '../../core/events/workflow-event-generation.ts';
 import {
   buildClaimAttemptRecordWrite,
   buildTaskAttemptTransitionEvent,
@@ -19,7 +22,6 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskRecord,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { ConditionalBatchCondition } from '../../storage/interface.ts';
 import { buildWorkerExecutionIdentity } from '../../worker/manifest/execution-identity.ts';
 import type { RoutingOptions } from '../../worker/registry.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
@@ -124,11 +126,11 @@ function buildRoutingOptions(
   if (task.fairShareKey !== undefined) {
     routingOptions.fairShareKey = task.fairShareKey;
   }
-  // Skip workers currently in the reconnect grace window. Their socket is
-  // still in `workerSockets` but the peer has closed; if `findWorker`
-  // returned one of them we would either fail the dispatch (returning false
-  // and falling back to long-poll while peers were ready) or — without this
-  // exclusion — send the frame on a dead socket.
+  // Skip workers currently in the reconnect grace window. Their registry
+  // entry remains available for reconnect proof, but their socket has closed;
+  // if `findWorker` returned one of them we would either fail the dispatch
+  // (returning false and falling back to long-poll while peers were ready) or
+  // — without this exclusion — send the frame on a dead socket.
   if (context.pendingWorkerRequeues.size > 0) {
     routingOptions.excludeWorkerIds = new Set(context.pendingWorkerRequeues.keys());
   }
@@ -322,17 +324,33 @@ async function selectAndReserveWorker(
   // COR-198: attempt-by-attempt worker transition, fired only after the
   // durable claim above actually committed.
   options.engine.dispatchEvent(
-    await buildTaskAttemptTransitionEvent(options.engine.storage, {
-      operationId: task.operationId,
-      workflowId: task.workflowId,
-      activityName: task.activityName,
-      attempt: result.record.attempt,
-      attemptTokenDigest,
-      workerSessionId: worker.id,
-      executionIdentity,
-      executionRequirement: result.record.executionRequirement,
-    }),
+    tagWorkflowEventGeneration(
+      await buildTaskAttemptTransitionEvent(options.engine.storage, {
+        operationId: task.operationId,
+        workflowId: task.workflowId,
+        activityName: task.activityName,
+        attempt: result.record.attempt,
+        attemptTokenDigest,
+        workerSessionId: worker.id,
+        executionIdentity,
+        executionRequirement: result.record.executionRequirement,
+      }),
+      result.record.workflowExecutionToken,
+    ),
   );
+  if (task.workflowId !== undefined) {
+    options.engine.dispatchEvent(
+      tagWorkflowEventGeneration(
+        new ActivityStartedEvent(
+          result.record.operationId,
+          task.workflowId,
+          result.record.activityName,
+          result.record.attempt,
+        ),
+        result.record.workflowExecutionToken,
+      ),
+    );
+  }
 
   ws.send(
     JSON.stringify({

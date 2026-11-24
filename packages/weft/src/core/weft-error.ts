@@ -33,6 +33,7 @@ export type WeftErrorCode =
   | 'BulkOperationConfirmationError'
   | 'WorkflowTypeNotRegisteredForRecoveryError'
   | 'EngineCreateNameMismatchError'
+  | 'DefinitionSchemaRequiredError'
   | 'EngineDisposedError'
   | 'EngineDisposalError'
   | 'WorkflowNotFoundError'
@@ -65,6 +66,7 @@ export type WeftErrorCode =
   | 'ActivityPerAttemptTimeoutError'
   | 'PayloadSizeExceededError'
   | 'StartOrSignalConflictError'
+  | 'UndeclaredWorkflowMessageError'
   | 'WorkflowTeardownPendingError'
   | 'IdempotencyKeyPurgedError'
   | 'WorkerManifestBuildError'
@@ -82,7 +84,8 @@ export type WeftErrorCode =
   | 'WorkflowRevisionUnavailableError'
   | 'EagerRecoveryRevisionRefusedError'
   | 'ForkSourceReplacedError'
-  | 'WorkflowCheckpointConflictError';
+  | 'WorkflowCheckpointConflictError'
+  | 'ScheduleOccurrenceNotNextError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -123,6 +126,7 @@ const publicWeftErrorCodeMap = {
   BulkOperationConfirmationError: true,
   WorkflowTypeNotRegisteredForRecoveryError: true,
   EngineCreateNameMismatchError: true,
+  DefinitionSchemaRequiredError: true,
   EngineDisposedError: true,
   EngineDisposalError: true,
   WorkflowNotFoundError: true,
@@ -155,6 +159,7 @@ const publicWeftErrorCodeMap = {
   ActivityPerAttemptTimeoutError: true,
   PayloadSizeExceededError: true,
   StartOrSignalConflictError: true,
+  UndeclaredWorkflowMessageError: true,
   WorkflowTeardownPendingError: true,
   IdempotencyKeyPurgedError: true,
   WorkerManifestBuildError: true,
@@ -173,6 +178,7 @@ const publicWeftErrorCodeMap = {
   EagerRecoveryRevisionRefusedError: true,
   ForkSourceReplacedError: true,
   WorkflowCheckpointConflictError: true,
+  ScheduleOccurrenceNotNextError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));

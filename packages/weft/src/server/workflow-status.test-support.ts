@@ -10,24 +10,25 @@
 
 import type { Engine } from '../core/engine.ts';
 
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 
 /** Terminal and intermediate workflow statuses the tests wait on. */
 export type WaitableWorkflowStatus =
   'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
 
 /**
- * Poll `engine.get(workflowId)` until the workflow reports `status`, or throw
- * once `timeoutMilliseconds` elapses. Polls every 5ms via `sleepForTesting`.
+ * Poll `engine.get(workflowId)` until the workflow reports `status`. Polls every 5ms via
+ * `sleepForTesting` and gives up only on the awake-time hang guard, never on a count of
+ * milliseconds a loaded host can overrun.
  */
 export async function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: WaitableWorkflowStatus,
-  timeoutMilliseconds = 500,
+  options: { hangGuardMilliseconds?: number } = {},
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns(options)) {
     const state = await engine.get(workflowId);
     if (state?.status === status) {
       return;
@@ -35,5 +36,5 @@ export async function waitForStatus(
     await sleepForTesting(5);
   }
 
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
+  throw new Error(`Workflow ${workflowId} did not reach ${status} before the hang guard elapsed`);
 }

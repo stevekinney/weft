@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { type BatchOperation, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { completedReviewStorageKey } from './completed-review-storage.ts';
 import type { EngineInternals } from './internals.ts';

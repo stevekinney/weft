@@ -1,4 +1,5 @@
 import { createExpiredResponseCleanupTick } from '../engine-helpers.ts';
+import { StorageSizeReportedEvent } from '../events.ts';
 import type { AnyActivityDefinition } from '../types.ts';
 import { createLifecycleCallbacks, createTerminationCallbacks } from './callback-creators-core.ts';
 import {
@@ -7,6 +8,7 @@ import {
 } from './engine-leak-warnings.ts';
 import type { Engine } from './index.ts';
 import {
+  clearInlineFlushScheduled,
   drainQueuedInlineWorkflowStarts,
   flushQueuedInlineWorkflowStarts,
   flushQueuedInlineWorkflowStartsUntilDrained,
@@ -67,6 +69,13 @@ export function inlineLaunchQueueCallbacksForEngine<
   };
 }
 
+/**
+ * The handler for the flush message `queueInlineWorkflowExecutionStart` posts. It reaches the
+ * engine weakly so that the listening port, which stays reachable until it is closed, never keeps
+ * an abandoned engine alive. While a flush is scheduled the engine is held strongly by the inline
+ * launch queue instead (COR-1425), so an engine is missing here only when no flush was pending:
+ * a message that outlived a drain, with nothing left to run.
+ */
 export function createQueuedInlineWorkflowStartHandler<
   TWorkflows extends object,
   TActivities extends object,
@@ -79,7 +88,7 @@ export function createQueuedInlineWorkflowStartHandler<
       return;
     }
 
-    getInternals(engine).queuedInlineWorkflowStartFlushScheduled = false;
+    clearInlineFlushScheduled(getInternals(engine));
     void swallowPromiseRejection(
       flushQueuedInlineWorkflowStarts(
         getInternals(engine),
@@ -148,6 +157,32 @@ export function createCleanupIntervalTick<TWorkflows extends object, TActivities
     createExpiredResponseCleanupTick(internals.updateCoordinator, (source, error) =>
       createTerminationCallbacks(engine).handleCleanupError(source, error),
     )();
+  };
+}
+
+export function createStorageSizeReportTick<TWorkflows extends object, TActivities extends object>(
+  weakEngine: WeakRef<Engine<TWorkflows, TActivities>>,
+  tracker: EngineCleanupIntervalDisposalTracker,
+): () => void {
+  return () => {
+    const engine = weakEngine.deref();
+    if (engine === undefined) {
+      if (tracker.storageSizeReportInterval !== null) {
+        clearInterval(tracker.storageSizeReportInterval);
+        tracker.storageSizeReportInterval = null;
+      }
+      return;
+    }
+    const internals = getInternals(engine);
+    if (internals.disposed) return;
+    void internals.options.storage
+      .sizeBytes?.()
+      .then((sizeBytes) => {
+        if (!getInternals(engine).disposed)
+          engine.dispatchEvent(new StorageSizeReportedEvent(sizeBytes));
+        return sizeBytes;
+      })
+      .catch(() => {});
   };
 }
 

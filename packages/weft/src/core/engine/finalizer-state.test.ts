@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { PayloadSizeExceededError } from '../payload-size.ts';
@@ -193,7 +193,6 @@ describe('recordFinalizerState', () => {
         async () => (await storage.get(KEYS.finalizerState('finalizer-orphan-run'))) !== null,
         {
           label: 'finalizer state to be committed after the workflow parks',
-          timeoutMs: 400,
           intervalMs: 5,
         },
       );

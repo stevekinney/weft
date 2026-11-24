@@ -95,7 +95,7 @@ export async function snapshotWorkflowFeedTail(
   if (selector === 'events') {
     const head = internals.eventLogHeads.get(workflowId);
     if (head) return head.sequence;
-    const eventLog = new EventLog(internals.storage, workflowId);
+    const eventLog = new EventLog(internals.storage, workflowId, internals.options.getNow);
     const loaded = await eventLog.loadHead();
     return loaded.sequence;
   }
@@ -145,7 +145,7 @@ export async function* replayWorkflowEventLog(
   workflowId: string,
   afterSequence: number,
 ): AsyncIterable<WorkflowFeedRecord> {
-  const eventLog = new EventLog(internals.storage, workflowId);
+  const eventLog = new EventLog(internals.storage, workflowId, internals.options.getNow);
   let fromSequence = afterSequence < 0 ? 0 : afterSequence + 1;
 
   // If compaction truncated records below where this cursor wants to resume,
@@ -195,10 +195,9 @@ export async function* replayWorkflowTokens(
         })
       : await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY);
   // Stream chunks carry no persisted timestamp — the replay path
-  // stamps the wallclock at iteration time so consumers always see
-  // a populated `timestamp`. Live chunks stamp the same way at
-  // commit time for symmetry.
-  const timestamp = Date.now();
+  // stamps the engine's clock at iteration time so consumers always see
+  // a populated `timestamp` on the same clock as the run's events.
+  const timestamp = internals.options.getNow();
   for (const chunk of chunks) {
     yield {
       workflowId,

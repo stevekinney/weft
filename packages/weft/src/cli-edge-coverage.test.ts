@@ -4,15 +4,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { BunSQLiteStorage } from "./embedded/storage-bun-sqlite/src/index.ts";
 import { executeSchedule, executeTimeline, parseCliArguments } from './cli/index.ts';
-import {
-  advanceCheckpoint,
-  BunSQLiteStorage,
-  createCheckpoint,
-  encode,
-  KEYS,
-  serializeCheckpoint,
-} from './index.ts';
+import { advanceCheckpoint, createCheckpoint, encode, KEYS, serializeCheckpoint } from './index.ts';
 
 const databasesToDelete = new Set<string>();
 
@@ -131,7 +125,7 @@ describe('CLI edge coverage', () => {
     // Real-DB integration test (seed + two timeline executions); the budget is a
     // hang guard, not a perf assertion. 2s flaked under the full-suite parallel
     // run where in-process SQLite I/O contends for CPU.
-  }, 15_000);
+  });
 
   it('shows a friendly message when a workflow has no timeline entries', async () => {
     const databasePath = createTimelineDatabasePath();

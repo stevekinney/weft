@@ -8,6 +8,7 @@ import {
 } from '../types.ts';
 import {
   completeActivityRetryAttempt,
+  forgetActivityRetryName,
   readActivityRetryAttempt,
   readCompletedRetrySleepCount,
   readOrInitActivityDispatchedAt,
@@ -25,6 +26,7 @@ import type { Context } from './index.ts';
 import {
   getInternals,
   hasContextInternals,
+  stepStateKey,
   yieldOperation,
   type ContextInternals,
 } from './internals.ts';
@@ -274,8 +276,13 @@ export function createRunActivityRequest<TResult>(
   return createRunActivityRequestAtStep(context, activity, rest, step, {
     ...(explicitName === undefined ? {} : { explicitName }),
     advanceStepIndexForCachedRetryState: true,
-    retryStateKey: step,
+    retryStateKey: stepStateKey(internals, step),
     cacheResultStep: step,
+    // A branch of a parallel step counts its own steps, so its activity's heartbeat and
+    // async-completion identity is qualified by the branch; at the top level it stays the step.
+    ...(internals.branchNamespace === undefined
+      ? {}
+      : { activityStateKey: String(stepStateKey(internals, step)) }),
   });
 }
 
@@ -377,6 +384,21 @@ function* runPreparedActivityWithRetry<TResult>(
   prepared: RunActivityRequest<TResult>,
   retrySleep: ActivityRetrySleepGenerator,
 ): Generator<ContextOperationRequest, TResult, unknown> {
+  try {
+    return yield* runPreparedActivityAttempts(context, prepared, retrySleep);
+  } catch (error) {
+    // The activity's retries ended without a result (a non-retryable error, attempts or budget
+    // exhausted, or a failure while it backed off): it is no longer retrying (COR-2529).
+    forgetActivityRetryName(getInternals(context), prepared.retryStateKey);
+    throw error;
+  }
+}
+
+function* runPreparedActivityAttempts<TResult>(
+  context: Context,
+  prepared: RunActivityRequest<TResult>,
+  retrySleep: ActivityRetrySleepGenerator,
+): Generator<ContextOperationRequest, TResult, unknown> {
   const {
     request,
     retryStateKey,
@@ -452,7 +474,7 @@ function* runPreparedActivityWithRetry<TResult>(
       assertScheduleToCloseBudgetNotExhausted(budget, request.activityName, now, now + backoff);
 
       const nextAttempt = attempt + 1;
-      writeActivityRetryAttempt(internals, retryStateKey, nextAttempt);
+      writeActivityRetryAttempt(internals, retryStateKey, nextAttempt, request.activityName);
       yield* retrySleep(backoff, nextAttempt);
       attempt = nextAttempt;
     }

@@ -12,6 +12,7 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
 import type { WorkerInboundMessage, WorkerOutboundMessage } from '../core/types.ts';
 
 // ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ const testWorkerUrl = new URL('./test-browser-worker.ts', import.meta.url);
 function waitForMessage(
   messages: WorkerOutboundMessage[],
   predicate: (message: WorkerOutboundMessage) => boolean,
-  timeoutMilliseconds = 2000,
+  timeoutMilliseconds = HANG_GUARD_MILLISECONDS,
 ): Promise<WorkerOutboundMessage> {
   return new Promise((resolve, reject) => {
     const interval = setInterval(() => {

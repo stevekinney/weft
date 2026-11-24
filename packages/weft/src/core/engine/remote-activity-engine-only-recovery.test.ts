@@ -41,8 +41,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import { commitTaskLedgerTransition } from '../task-ledger/task-ledger-runtime.ts';
 import { beginCompletion, claimQueued } from '../task-ledger/task-ledger-transitions.ts';
@@ -117,7 +117,7 @@ async function dispatchAndReachQueued(
       operationId = record.operationId;
       return true;
     },
-    { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+    { intervalMs: 10, label: 'task to reach durable queued state' },
   );
   if (operationId === undefined) throw new Error('expected a queued operationId');
   return { operationId };
@@ -143,7 +143,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
 
     await dispatchAndReachQueued(engine, 'engine-only-recovery-queued-workflow', 'eor-queued-1');
     await waitForCondition(() => observed.completedCalls() >= 1, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'first enqueue() call to complete',
     });
@@ -169,7 +168,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
     // exercised by recovery, not a synthetic re-seed.
     await recoveredEngine.recoverAll();
     await waitForCondition(() => observed.completedCalls() >= 2, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'the replay-driven second enqueue() call to complete',
     });
@@ -211,7 +209,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
       'eor-leased-1',
     );
     await waitForCondition(() => observed.completedCalls() >= 1, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'first enqueue() call to complete',
     });
@@ -249,7 +246,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
 
     await recoveredEngine.recoverAll();
     await waitForCondition(() => observed.completedCalls() >= 2, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'the replay-driven second enqueue() call to complete',
     });
@@ -289,7 +285,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
       'eor-completing-1',
     );
     await waitForCondition(() => observed.completedCalls() >= 1, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'first enqueue() call to complete',
     });
@@ -339,7 +334,6 @@ describe('engine-only recovery of queued/leased/completing remote-activity recor
 
     await recoveredEngine.recoverAll();
     await waitForCondition(() => observed.completedCalls() >= 2, {
-      timeoutMs: 2_000,
       intervalMs: 10,
       label: 'the replay-driven second enqueue() call to complete',
     });

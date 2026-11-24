@@ -7,7 +7,7 @@ export async function executeDoctor(options: {
 }): Promise<CommandOutput> {
   const { collectDiagnostics } = await import('../index.ts');
   const { formatDiagnosticReport } = await import('../index.ts');
-  const { BunSQLiteStorage } = await import('../index.ts');
+  const { BunSQLiteStorage } = await import("../embedded/storage-bun-sqlite/src/index.ts");
 
   const storage = new BunSQLiteStorage(options.database);
 

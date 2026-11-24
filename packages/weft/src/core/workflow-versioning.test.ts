@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation, type ConditionalBatchCondition } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { waitForCondition } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { deserializeCheckpoint } from './checkpoint/serialization.ts';
 import { decode } from './codec.ts';
 import { Engine } from './engine.ts';

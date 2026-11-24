@@ -114,4 +114,10 @@ export type TaskQueueOptions = {
    * @default 'priority'
    */
   schedulingPolicy?: SchedulingPolicy;
+  /**
+   * Receives a `queue:depth-changed` event when a queue's pending count
+   * changes, coalesced to at most one per queue per second. `serve()` passes the
+   * engine's `dispatchEvent`. Omitted, the queue raises none.
+   */
+  dispatchEvent?: (event: Event) => void;
 };

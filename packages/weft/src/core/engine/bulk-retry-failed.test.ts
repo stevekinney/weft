@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { decode, encode } from '../codec.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';

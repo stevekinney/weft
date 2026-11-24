@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import ts from 'typescript';
 
 import {
   ActivityCompletedEvent,
@@ -10,6 +13,7 @@ import {
   ScheduleMissedFireEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,
+  SignalWaitingEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,
   WorkflowCancelledEvent,
@@ -240,6 +244,20 @@ describe('SignalDeliveredEvent', () => {
   });
 });
 
+describe('SignalWaitingEvent', () => {
+  it('sets all properties from constructor arguments', () => {
+    const event = new SignalWaitingEvent('wf-13', 'approve');
+    expect(event.workflowId).toBe('wf-13');
+    expect(event.signalName).toBe('approve');
+  });
+
+  it('has a matching static type and instance type', () => {
+    const event = new SignalWaitingEvent('wf-13', 'approve');
+    expect(event.type).toBe(SignalWaitingEvent.type);
+    expect(event.type).toBe('signal:waiting');
+  });
+});
+
 describe('AttributesChangedEvent', () => {
   it('sets all properties from constructor arguments', () => {
     const changes = { status: 'active', count: 5 };
@@ -263,21 +281,22 @@ describe('AttributesChangedEvent', () => {
 
 describe('ScheduleMissedFireEvent', () => {
   it('sets all properties from constructor arguments', () => {
-    const event = new ScheduleMissedFireEvent('schedule-1', 3, 1_000, 4_000);
+    const event = new ScheduleMissedFireEvent('schedule-1', 3, 1_000, 4_000, 'dst-gap');
     expect(event.scheduleId).toBe('schedule-1');
     expect(event.missedCount).toBe(3);
     expect(event.windowStart).toBe(1_000);
     expect(event.windowEnd).toBe(4_000);
+    expect(event.reason).toBe('dst-gap');
   });
 
   it('has a matching static type and instance type', () => {
-    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000);
+    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000, 'late');
     expect(event.type).toBe(ScheduleMissedFireEvent.type);
     expect(event.type).toBe('schedule:missed-fire');
   });
 
   it('is an instance of Event but not CustomEvent', () => {
-    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000);
+    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000, 'late');
     expect(event).toBeInstanceOf(Event);
     expect(event).not.toBeInstanceOf(CustomEvent);
   });
@@ -393,6 +412,7 @@ describe('WeftEventMap type coverage', () => {
     expect(ActivityFailedEvent.type).toBe('activity:failed');
     expect(SignalReceivedEvent.type).toBe('signal:received');
     expect(SignalDeliveredEvent.type).toBe('signal:delivered');
+    expect(SignalWaitingEvent.type).toBe('signal:waiting');
     expect(AttributesChangedEvent.type).toBe('attributes:changed');
     expect(UpdateReceivedEvent.type).toBe('update:received');
     expect(UpdateCompletedEvent.type).toBe('update:completed');
@@ -500,5 +520,42 @@ describe('Event properties are readonly', () => {
 
     const updateCompleted = new UpdateCompletedEvent('upd', 'wf', 'name', null);
     expect(updateCompleted.error satisfies string | undefined).toBeUndefined();
+  });
+});
+
+describe('event constructor coverage', () => {
+  it('constructs every exported Event subclass from production code', () => {
+    const eventDirectory = join(import.meta.dir, 'events');
+    const eventFiles = readdirSync(eventDirectory)
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => join(eventDirectory, file));
+    const program = ts.createProgram(eventFiles, { target: ts.ScriptTarget.ESNext });
+    const eventClasses: string[] = [];
+    for (const sourceFile of program.getSourceFiles()) {
+      if (!eventFiles.includes(sourceFile.fileName)) continue;
+      for (const statement of sourceFile.statements) {
+        if (!ts.isClassDeclaration(statement) || statement.name === undefined) continue;
+        const isExported = statement.modifiers?.some(
+          (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+        );
+        const extendsEvent = statement.heritageClauses?.some((clause) =>
+          clause.types.some((type) => type.expression.getText(sourceFile) === 'Event'),
+        );
+        if (isExported && extendsEvent) eventClasses.push(statement.name.text);
+      }
+    }
+
+    const productionFiles = new Bun.Glob('**/*.ts').scanSync({
+      cwd: join(import.meta.dir, '..'),
+      absolute: true,
+    });
+    const productionSource = Array.from(productionFiles)
+      .filter((file) => !file.endsWith('.test.ts') && !file.endsWith('.slow.test.ts'))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n');
+    const missing = eventClasses.filter(
+      (name) => !new RegExp(`\\bnew\\s+${name}\\s*\\(`).test(productionSource),
+    );
+    expect(missing).toEqual([]);
   });
 });

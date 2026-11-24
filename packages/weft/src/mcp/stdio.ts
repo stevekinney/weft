@@ -1,8 +1,11 @@
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { WEFT_SCOPE_VOCABULARY } from '../authorization-scopes.ts';
+
+import { principalFromStdioLocal } from "../embedded/backchannel/src/index.ts";
 import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
-import { principalFromStdioLocal } from '../server/principal.ts';
-import { dispatchMcpMessage } from './dispatcher.ts';
-import { parseMcpMessage } from './protocol.ts';
-import { McpSession, McpSessionManager, type McpSessionManagerOptions } from './session.ts';
+import { McpChangeFeed } from './change-feed.ts';
+import { createMcpServerFactory, type McpServerRegistrar } from './server.ts';
+import { StreamLineTransport } from './stream-line-transport.ts';
 
 /**
  * Admission modes for local MCP stdio sessions.
@@ -29,7 +32,8 @@ export type McpStdioAdmission =
  * @example
  * ```ts
  * import { type McpStdioSessionOptions } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -39,7 +43,7 @@ export type McpStdioAdmission =
  *   output: new WritableStream<Uint8Array>(),
  *   engine,
  *   admission: { kind: 'require-one' },
- *   sessionManagerOptions: { maximumSessions: 1 },
+ *   maxFrameBytes: 64 * 1024,
  * };
  * void options;
  * ```
@@ -55,7 +59,8 @@ export type McpStdioSessionOptions = {
   readonly engine: RegistryAgnosticEngine;
   readonly admission: McpStdioAdmission;
   readonly maxFrameBytes?: number;
-  readonly sessionManagerOptions?: McpSessionManagerOptions;
+  /** Registers further tools or prompts on the connection's server instance. */
+  readonly registrars?: ReadonlyArray<McpServerRegistrar>;
 };
 
 /**
@@ -77,12 +82,16 @@ export type McpStdioSessionResult = {
 const DEFAULT_MAX_FRAME_BYTES = 1_048_576;
 
 /**
- * Run a newline-delimited MCP JSON-RPC stdio session against a local engine.
+ * Run a newline-delimited MCP stdio session against a local engine. After the
+ * Weft admission step, the official MCP SDK serves the connection: the opening
+ * exchange selects the protocol era and one server instance is pinned for the
+ * rest of the connection.
  *
  * @example
  * ```ts
  * import { runMcpStdioSession } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -110,58 +119,33 @@ export async function runMcpStdioSession(
     return { exitCode: 2, reason: 'MCP stdio startup token must be non-empty' };
   }
 
-  const runtime = createStdioRuntime(options);
-  const pending = new Set<Promise<void>>();
-
-  try {
-    const admitted = await runAdmission(options, runtime);
-    if (!admitted.ok) {
-      await closeRuntime(runtime);
-      return admitted.result;
-    }
-    await runMainReadLoop(options, runtime, admitted.remainder, pending);
-    await Promise.all(pending);
-    await closeRuntime(runtime);
-    return { exitCode: 0 };
-  } catch (error) {
-    await closeRuntime(runtime, true);
-    return { exitCode: 1, reason: error instanceof Error ? error.message : String(error) };
-  } finally {
-    runtime.reader.releaseLock();
-  }
-}
-
-type StdioRuntime = {
-  readonly writer: WritableStreamDefaultWriter<Uint8Array>;
-  readonly write: SerializedWriter;
-  readonly manager: McpSessionManager;
-  readonly session: McpSession;
-  readonly reader: ReadableStreamDefaultReader<Uint8Array>;
-  readonly decoder: TextDecoder;
-};
-
-function createStdioRuntime(options: McpStdioSessionOptions): StdioRuntime {
   const writer = options.output.getWriter();
   const write = createSerializedWriter(writer);
-  const manager = new McpSessionManager(options.engine, options.sessionManagerOptions);
-  const session = manager.add(new McpSession('stdio-local', principalFromStdioLocal()));
-  session.addTarget((message) => {
-    manager.touch(session);
-    void write(JSON.stringify(message));
-  });
-  return {
-    writer,
-    write,
-    manager,
-    session,
-    reader: options.input.getReader(),
-    decoder: new TextDecoder(),
-  };
+  const reader = options.input.getReader();
+  const decoder = new TextDecoder();
+
+  try {
+    const admitted = await runAdmission(options, reader, decoder, write);
+    if (!admitted.ok) {
+      await closeWriter(writer, write);
+      return admitted.result;
+    }
+    await serveConnection(options, reader, decoder, write, admitted.remainder);
+    await closeWriter(writer, write);
+    return { exitCode: 0 };
+  } catch (error) {
+    await closeWriter(writer, write, true);
+    return { exitCode: 1, reason: error instanceof Error ? error.message : String(error) };
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function runAdmission(
   options: McpStdioSessionOptions,
-  runtime: StdioRuntime,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  write: SerializedWriter,
 ): Promise<
   | { readonly ok: true; readonly remainder: string }
   | { readonly ok: false; readonly result: McpStdioSessionResult }
@@ -170,78 +154,94 @@ async function runAdmission(
     return { ok: true, remainder: '' };
   }
   return runStartupTokenAdmission(
-    runtime.reader,
-    runtime.decoder,
+    reader,
+    decoder,
     options.admission.token,
-    runtime.write,
+    write,
     options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES,
   );
 }
 
-async function runMainReadLoop(
+/**
+ * Serve the admitted connection through the SDK until the input ends, then
+ * let every request already read finish before closing the connection.
+ */
+async function serveConnection(
   options: McpStdioSessionOptions,
-  runtime: StdioRuntime,
-  initialBuffer: string,
-  pending: Set<Promise<void>>,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  write: SerializedWriter,
+  remainder: string,
 ): Promise<void> {
-  let buffer = initialBuffer;
+  // Registry-erase the widened `McpStdioSessionOptions.engine` (#708).
+  const engine = options.engine as Engine;
+  await using feed = new McpChangeFeed(engine);
+  const transport = new StreamLineTransport(write);
+  const principal = principalFromStdioLocal(WEFT_SCOPE_VOCABULARY);
+  // Work a call starts and does not await (cancelling the workflow of a cancelled call) must
+  // finish before the session ends, or the process can exit with the workflow still running.
+  const pendingWork = new Set<Promise<unknown>>();
+  const trackPendingWork = (work: Promise<unknown>): void => {
+    pendingWork.add(work);
+    void work.finally(() => pendingWork.delete(work));
+  };
+  const connection = serveStdio(
+    createMcpServerFactory({
+      engine,
+      access: () => ({ principal, authRequired: false }),
+      lifetime: 'connection',
+      feed,
+      registrars: options.registrars ?? [],
+      trackPendingWork,
+    }),
+    { transport },
+  );
+  const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+  let buffer = remainder;
+  buffer = await deliverLines(buffer, transport, maxFrameBytes);
   while (true) {
-    const chunk = await runtime.reader.read();
+    const chunk = await reader.read();
     if (chunk.done) break;
-    buffer = await appendChunkAndDispatch(buffer, chunk.value, options, runtime, pending);
+    buffer = await deliverLines(
+      buffer + decoder.decode(chunk.value, { stream: true }),
+      transport,
+      maxFrameBytes,
+    );
   }
-  if (buffer.trim().length > 0) addPendingLine(buffer, options, runtime, pending);
+  if (buffer.trim().length > 0) transport.receive(buffer);
+  await transport.settled();
+  await Promise.allSettled(pendingWork);
+  await connection.close();
 }
 
-async function appendChunkAndDispatch(
+/** Hand every complete line to the transport and return the unterminated rest. */
+async function deliverLines(
   buffer: string,
-  chunk: Uint8Array,
-  options: McpStdioSessionOptions,
-  runtime: StdioRuntime,
-  pending: Set<Promise<void>>,
+  transport: StreamLineTransport,
+  maxFrameBytes: number,
 ): Promise<string> {
-  const nextBuffer = buffer + runtime.decoder.decode(chunk, { stream: true });
-  if (nextBuffer.length > (options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES)) {
-    await runtime.write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32600, message: 'frame exceeds maxFrameBytes' },
-      }),
-    );
+  if (buffer.length > maxFrameBytes) {
+    await transport.reject(null, -32600, 'frame exceeds maxFrameBytes');
     return '';
   }
-  const lines = nextBuffer.split('\n');
-  for (const line of lines.slice(0, -1)) addPendingLine(line, options, runtime, pending);
+  const lines = buffer.split('\n');
+  for (const line of lines.slice(0, -1)) {
+    if (line.trim().length > 0) transport.receive(line);
+  }
   return lines.at(-1) ?? '';
 }
 
-function addPendingLine(
-  line: string,
-  options: McpStdioSessionOptions,
-  runtime: StdioRuntime,
-  pending: Set<Promise<void>>,
-): void {
-  if (line.trim().length === 0) return;
-  runtime.manager.touch(runtime.session);
-  // Registry-erase the widened `McpStdioSessionOptions.engine` back to the
-  // plain default `Engine` `handleLine` expects — see this option's JSDoc / #708.
-  const task = handleLine(line, options.engine as Engine, runtime.session, runtime.write).finally(
-    () => {
-      pending.delete(task);
-    },
-  );
-  pending.add(task);
-}
-
-async function closeRuntime(runtime: StdioRuntime, ignoreWriterError = false): Promise<void> {
-  await runtime.manager[Symbol.asyncDispose]();
-  await runtime.write.drain();
+async function closeWriter(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  write: SerializedWriter,
+  ignoreWriterError = false,
+): Promise<void> {
+  await write.drain();
   if (ignoreWriterError) {
-    await runtime.writer.close().catch(() => undefined);
+    await writer.close().catch(() => undefined);
     return;
   }
-  await runtime.writer.close();
+  await writer.close();
 }
 
 async function runStartupTokenAdmission(
@@ -327,11 +327,14 @@ function parseAuthenticationLine(
 ):
   | { readonly ok: true; readonly record: Record<string, unknown>; readonly id: unknown }
   | { readonly ok: false } {
-  const parsed = parseMcpMessage(line);
-  if (!parsed.ok || parsed.value === null || typeof parsed.value !== 'object') {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
     return { ok: false };
   }
-  const record = parsed.value as Record<string, unknown>;
+  if (value === null || typeof value !== 'object') return { ok: false };
+  const record = value as Record<string, unknown>;
   return { ok: true, record, id: record['id'] ?? null };
 }
 
@@ -348,35 +351,6 @@ function authenticationError(id: unknown, message: string): Record<string, unkno
     id: typeof id === 'string' || typeof id === 'number' || id === null ? id : null,
     error: { code: -32010, message },
   };
-}
-
-async function handleLine(
-  line: string,
-  engine: Engine,
-  session: McpSession,
-  write: SerializedWriter,
-): Promise<void> {
-  const parsed = parseMcpMessage(line);
-  if (!parsed.ok) {
-    await write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32700, message: 'Parse error' },
-      }),
-    );
-    return;
-  }
-
-  const result = await dispatchMcpMessage(parsed.value, {
-    engine,
-    session,
-    principal: session.principal,
-    authRequired: false,
-  });
-  if (result.kind === 'response') {
-    await write(JSON.stringify(result.response));
-  }
 }
 
 type SerializedWriter = {

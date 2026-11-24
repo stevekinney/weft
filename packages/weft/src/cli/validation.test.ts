@@ -12,9 +12,9 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import type { ActivityDefinition, WorkflowDefinition } from '../index.ts';
 import { workflow } from '../index.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   formatValidationReport,
   loadRegistrationsFromModule,
@@ -253,6 +253,28 @@ describe('formatValidationReport', () => {
     expect(output).toContain('error');
     expect(output).toContain('unbounded-retry');
     expect(output).toContain('pay');
+  });
+
+  it('locates an issue by workflow type alone when it names no activity', () => {
+    const output = formatValidationReport(
+      {
+        workflowCount: 1,
+        valid: false,
+        issues: [
+          {
+            severity: 'warning',
+            code: 'non-serializable-input',
+            workflowType: 'checkout',
+            message: 'the input cannot be serialized',
+          },
+        ],
+      },
+      'entry.ts',
+    );
+
+    expect(output).toContain('  [warning] checkout\n');
+    expect(output).not.toContain('checkout /');
+    expect(output).toContain('non-serializable-input: the input cannot be serialized');
   });
 });
 

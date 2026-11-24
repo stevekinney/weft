@@ -1,9 +1,8 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
-import type { Storage as WeftStorage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { type Storage as WeftStorage, MemoryStorage } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import {
   cleanupPartialStreamChunks,
   createCleanupErrorReporter,

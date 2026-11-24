@@ -1,4 +1,5 @@
-import { KEYS, decodeStorageKeyComponent, type BatchOperation } from '../../storage/interface.ts';
+import { decodeStorageKeyComponent, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 
 import { registerCancelHandler } from './cancel-handlers.ts';
 import type { WorkflowHandle } from './handles.ts';
@@ -41,7 +42,9 @@ export function registerChildCancellationHandler(
   childWorkflowId: string,
   callbacks: ChildCancellationCallbacks,
 ): void {
-  registerCancelHandler(internals, workflowId, () => callbacks.getHandle(childWorkflowId).cancel());
+  registerCancelHandler(internals, workflowId, async () => {
+    await callbacks.getHandle(childWorkflowId).cancel();
+  });
 }
 
 export async function rehydrateChildCancellationHandlers(

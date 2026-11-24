@@ -36,7 +36,7 @@
  * @module core/task-ledger/task-result-delivery
  */
 
-import { encodeStorageKeyComponent } from '../../storage/interface.ts';
+import { encodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
 import { decode, encode } from '../codec.ts';
 import {
   isBoundedIdentifier,

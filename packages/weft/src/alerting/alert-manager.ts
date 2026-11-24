@@ -48,7 +48,8 @@ function snapshotAlertState(state: MutableAlertState): AlertStateSnapshot {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, AlertManager } from '@lostgradient/weft';
+ * import { Engine, AlertManager } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });

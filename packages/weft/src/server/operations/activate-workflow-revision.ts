@@ -12,9 +12,9 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowCatalogActivationResult } from '../../core/catalog/index.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   activationRefusalToFault,
@@ -66,7 +66,7 @@ export const activateWorkflowRevisionOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ActivateWorkflowRevisionOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ActivateWorkflowRevisionOutput> => {
     assertOperationWorkflowMethods(engine, ['activate']);
     const e = engine;
     const name = validateWorkflowNameField(input.name);

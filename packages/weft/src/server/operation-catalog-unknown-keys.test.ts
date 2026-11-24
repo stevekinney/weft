@@ -20,12 +20,12 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
-import { createOperationRegistry, executeOperation } from './operation-catalog.ts';
-import { anonymousPrincipal } from './principal.ts';
+import { anonymousPrincipal } from "../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../embedded/backchannel/src/internals.ts";
+import { makeOperation as makeOp } from "../embedded/backchannel/src/testing.ts";
 import { isRecord, record } from './protocol.test-support.ts';
 
-const fakeEngine: Parameters<typeof executeOperation>[2]['engine'] = {};
+const fakeEngine: Parameters<typeof executeOperation>[2]['host'] = {};
 
 function keysOfInput(input: unknown): string[] {
   if (!isRecord(input)) throw new Error('expected object input');
@@ -53,7 +53,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
-        engine: fakeEngine,
+        host: fakeEngine,
         transport: 'http-rest',
         registry: regWithPolicy('reject'),
       },
@@ -71,7 +71,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
-        engine: fakeEngine,
+        host: fakeEngine,
         transport: 'http-rest',
         registry: regWithPolicy('strip'),
       },
@@ -103,7 +103,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
     ]);
     const ctx = {
       principal: anonymousPrincipal(),
-      engine: fakeEngine,
+      host: fakeEngine,
       transport: 'http-rest' as const,
       registry,
     };
@@ -120,7 +120,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
-        engine: fakeEngine,
+        host: fakeEngine,
         transport: 'http-rest',
         registry: regWithPolicy('passthrough'),
       },
@@ -156,7 +156,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
-        engine: fakeEngine,
+        host: fakeEngine,
         transport: 'http-rest',
         registry,
       },
@@ -184,7 +184,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
     const arrayWithExtra = Object.assign([1, 2, 3], { snuckIn: 'extra' });
     const result = await executeOperation('weft.test.unknownkey', arrayWithExtra, {
       principal: anonymousPrincipal(),
-      engine: fakeEngine,
+      host: fakeEngine,
       transport: 'http-rest',
       registry: regWithPolicy('reject'),
     });
@@ -221,7 +221,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
-        engine: fakeEngine,
+        host: fakeEngine,
         transport: 'http-rest',
         registry,
       },

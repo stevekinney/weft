@@ -1,9 +1,13 @@
+import { authContextToPrincipal } from "../embedded/backchannel/src/index.ts";
+import {
+  type AuthContext,
+  type OperationRegistry,
+  handleJsonRpcHttpRequest,
+} from "../embedded/backchannel/src/internals.ts";
+import { WEFT_SCOPE_VOCABULARY } from '../authorization-scopes.ts';
 import type { Engine } from '../core/engine.ts';
-import type { AuthContext } from './authentication.ts';
-import { authContextToPrincipal } from './handler.ts';
-import { handleJsonRpcHttpRequest } from './json-rpc-http.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
-import type { OperationRegistry } from './operation-catalog.ts';
+import { createWeftDiscoverDocument } from './weft-documents.ts';
 
 type WebSocketUpgradeServer = {
   upgrade(request: Request, options: { data: WebSocketData }): boolean;
@@ -32,8 +36,9 @@ export async function handleJsonRpcHttpRequestSafely(args: {
   try {
     return await handleJsonRpcHttpRequest(args.request, {
       registry: args.registry,
-      engine: args.engine,
-      principal: authContextToPrincipal(args.authContext),
+      host: args.engine,
+      principal: authContextToPrincipal(args.authContext, WEFT_SCOPE_VOCABULARY),
+      discoverDocument: createWeftDiscoverDocument(args.registry, args.engine),
       ...(args.maxBodyBytes !== undefined ? { maxBodyBytes: args.maxBodyBytes } : {}),
     });
   } catch (error) {

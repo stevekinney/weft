@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, expectTypeOf, it } from 'bun:test';
 import { z } from 'zod';
 
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
-import { createOperationRegistry, executeOperation } from './index.ts';
+import { anonymousPrincipal, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
 import {
   catalogCheckoutWorkflow,
   catalogTransports,
@@ -57,7 +57,7 @@ describe('catalogWorkflow — execution', () => {
       { orderId: 'ord_1', amount: 42 },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'http-rest',
         registry,
       },
@@ -87,7 +87,7 @@ describe('catalogWorkflow — execution', () => {
       { orderId: 'ord_2', amount: 19 },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -115,7 +115,7 @@ describe('catalogWorkflow — execution', () => {
       { orderId: 'ord_3' },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -152,7 +152,7 @@ describe('catalogWorkflow — execution', () => {
       { orderId: 'ord_4', amount: 25 },
       {
         principal: principalFromApiKey({ subject: 'test-key', scopes: [] }),
-        engine,
+        host: engine,
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -182,7 +182,7 @@ describe('catalogWorkflow — execution', () => {
       { arbitrary: true, count: 2 },
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcHttp',
         registry,
       },

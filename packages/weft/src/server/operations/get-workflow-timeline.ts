@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowTimelineEntry } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getWorkflowTimelineInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow whose timeline is read.'),
 });
 const getWorkflowTimelineOutput = z.unknown();
 
@@ -19,11 +18,15 @@ export const getWorkflowTimelineOperation = defineOperation({
   name: 'weft.workflows.timeline.get',
   mcpExposable: false,
   summary: 'Get the structured execution timeline for a workflow',
+  description:
+    'Read the structured execution timeline of a workflow: one chronological entry per operation the run performed (activity call, sleep, signal wait, and so on). Read-only. Faults with NotFound when the workflow is ' +
+    'not visible.',
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getWorkflowTimelineInput,
   outputSchema: getWorkflowTimelineOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
@@ -31,7 +34,7 @@ export const getWorkflowTimelineOperation = defineOperation({
   // timeline entries directly. Accept-header negotiation between
   // json and msgpack is REST-specific and lives in the binding's
   // `shapeSuccess`, not on the operation output type.
-  invoke: async ({ input, engine }): Promise<GetWorkflowTimelineOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetWorkflowTimelineOutput> => {
     assertOperationEngineMethods(engine, ['get', 'getTimeline']);
     const e = engine;
     const state = await e.get(input.workflowId);

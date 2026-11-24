@@ -18,7 +18,6 @@ export {
   WorkflowTeardownEvent,
   WorkflowTimedOutEvent,
 } from '../core/events/workflow-events.ts';
-export { isFaultCode, type FaultCode } from '../core/fault-code.ts';
 export type {
   PendingAsyncActivityInfo,
   PendingAsyncActivityListOptions,
@@ -30,14 +29,13 @@ export {
   isWeftErrorCode,
   isWeftErrorLike,
   isWeftFault,
+  type WeftErrorCode,
 } from '../core/weft-error.ts';
-export type { WeftErrorCode } from '../core/weft-error.ts';
 export type { WeftClientStorage } from './client-storage.ts';
 export type { WorkflowEventStreamOptions, WorkflowEventTransport } from './event-stream-options.ts';
 export type { WorkflowEventTail } from './event-tail.ts';
 export { HttpClient } from './http-client.ts';
-export { HttpClientError } from './http-request.ts';
-export type { HttpClientOptions } from './http-request.ts';
+export { HttpClientError, type HttpClientOptions } from './http-request.ts';
 export type {
   ClientHandle,
   ClientScheduleHandle,

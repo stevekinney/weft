@@ -15,7 +15,7 @@
  * @module core/mailbox
  */
 
-import type { Storage } from '../storage/interface.ts';
+import type { Storage } from "../embedded/storage/src/index.ts";
 import {
   attemptControllerRegistry,
   releaseAttemptControllerRegistry,
@@ -39,13 +39,14 @@ import type {
   MailboxWaitOptions,
 } from './mailbox-contract.ts';
 import { claimNextCommand } from './mailbox-delivery.ts';
-import { decodeApplicationReadyEntry } from './mailbox-index-codec.ts';
 import {
   MAILBOX_PRIMITIVE,
   toApplicationCommandReceipt,
   type MailboxRuntime,
 } from './mailbox-internals.ts';
+import { listCommandReceipts, loadReceiptByIdempotencyKey } from './mailbox-listing.ts';
 import { runMailboxMaintenance } from './mailbox-maintenance.ts';
+import { purgeMailbox } from './mailbox-purge.ts';
 import {
   acknowledgeClaim,
   readCleanupState,
@@ -64,30 +65,18 @@ import {
   validateCommandIdentifier,
   validateDurableJSONValue,
   validateFailure,
+  validateIdempotencyKey,
+  validateListAfterSequence,
 } from './mailbox-validation.ts';
 import { waitForAvailableWork, waitForCleanup } from './mailbox-waits.ts';
-import { PersistedDataCorruptError } from './persisted-data-incompatible-error.ts';
-
-/** How many listing-index entries one page of `list()` reads. */
-const MAILBOX_LIST_PAGE_SIZE = 200;
-
-/**
- * How many index entries one `list()` call may examine before giving up.
- *
- * `limit` bounds the work only when enough records match. A narrow filter such as
- * `{ limit: 1, states: ['claimed'] }` against a mailbox full of terminal records
- * would otherwise walk every entry and load every record to return an empty
- * array. Listing is documented as a bounded query, not an exhaustive one: it
- * returns what it found within this ceiling.
- */
-const MAILBOX_LIST_SCAN_CEILING = 5_000;
 
 /**
  * A durable, strictly FIFO application command mailbox.
  *
  * @example
  * ```ts
- * import { Mailbox, MemoryStorage } from '@lostgradient/weft';
+ * import { Mailbox } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * using mailbox = new Mailbox({ storage, namespace: 'bureau', resourceId: 'agent-7' });
@@ -219,79 +208,39 @@ export class Mailbox {
   }
 
   /**
+   * Read the receipt of the command admitted under `idempotencyKey`, or `null`
+   * when no command the mailbox still holds was admitted under it: the key was
+   * never used, or its command has been retired by retention. A direct lookup
+   * through the key's binding, never a walk of the listing index, so it answers
+   * the same however many records sit ahead of the command.
+   *
+   * @throws {PersistedDataCorruptError} When the binding names a command that
+   * does not carry the key.
+   */
+  async receiptByIdempotencyKey(idempotencyKey: string): Promise<ApplicationCommandReceipt | null> {
+    this.#assertLive();
+    return loadReceiptByIdempotencyKey(this.#runtime, validateIdempotencyKey(idempotencyKey));
+  }
+
+  /**
    * List receipts in this mailbox, bounded and non-consuming.
    *
    * Listing never claims, starts, or advances work, so any number of observers
-   * can call it concurrently without interfering with delivery.
+   * can call it concurrently without interfering with delivery. One call
+   * examines a bounded number of index entries; `afterSequence` resumes a
+   * listing after a receipt, which is how a caller walks the whole index.
    */
   async list(options?: MailboxListOptions): Promise<ApplicationCommandReceipt[]> {
     this.#assertLive();
-    const limit = clampListLimit(options?.limit);
-    const states = options?.states === undefined ? null : new Set<string>(options.states);
-    const receipts: ApplicationCommandReceipt[] = [];
-    // Walk the sequence index, not the command records. Records are keyed by
-    // minted id and so scan in arbitrary order, which would force reading and
-    // sorting the whole mailbox to answer even `limit: 1`. The index is already
-    // in FIFO order, so `limit` bounds the storage reads and the allocation
-    // rather than only the returned slice.
-    let cursor: string | undefined;
-    let examined = 0;
-    while (receipts.length < limit && examined < MAILBOX_LIST_SCAN_CEILING) {
-      const page = await this.#readListingPage(cursor, limit - receipts.length, states);
-      receipts.push(...page.receipts);
-      examined += page.examined;
-      cursor = page.cursor;
-      if (page.exhausted) break;
-    }
-    return receipts;
-  }
-
-  /** One bounded page of the sequence-ordered listing index. */
-  async #readListingPage(
-    cursor: string | undefined,
-    remaining: number,
-    states: ReadonlySet<string> | null,
-  ): Promise<{
-    receipts: ApplicationCommandReceipt[];
-    cursor: string | undefined;
-    exhausted: boolean;
-    examined: number;
-  }> {
-    const receipts: ApplicationCommandReceipt[] = [];
-    const scanOptions =
-      cursor === undefined
-        ? { limit: MAILBOX_LIST_PAGE_SIZE }
-        : { limit: MAILBOX_LIST_PAGE_SIZE, gt: cursor };
-    let seen = 0;
-    let nextCursor = cursor;
-    for await (const [indexKey, indexValue] of this.#runtime.storage.scan(
-      this.#runtime.keys.bySequencePrefix,
-      scanOptions,
-    )) {
-      seen += 1;
-      nextCursor = indexKey;
-      const commandId = decodeApplicationReadyEntry(indexValue, indexKey);
-      const loaded = await loadCommand(this.#runtime.storage, this.#runtime.keys, commandId);
-      // An index entry whose record is already gone is a retention race, not
-      // corruption: the sweep deletes the record and the entry together, and a
-      // concurrent listing can observe the moment between.
-      if (loaded === null) continue;
-      // The entry must be the one the record's own sequence names; a stale or
-      // corrupted entry elsewhere would list the command at the wrong position
-      // and again at its real one.
-      if (indexKey !== this.#runtime.keys.bySequence(loaded.record.sequence)) {
-        throw new PersistedDataCorruptError(indexKey);
-      }
-      if (states !== null && !states.has(loaded.record.state)) continue;
-      receipts.push(toApplicationCommandReceipt(loaded.record));
-      if (receipts.length >= remaining) break;
-    }
-    return {
-      receipts,
-      cursor: nextCursor,
-      exhausted: seen < MAILBOX_LIST_PAGE_SIZE,
-      examined: seen,
-    };
+    return listCommandReceipts(this.#runtime, {
+      limit: clampListLimit(options?.limit),
+      states: options?.states === undefined ? null : new Set<string>(options.states),
+      afterCursor:
+        options?.afterSequence === undefined
+          ? undefined
+          : this.#runtime.keys.bySequence(validateListAfterSequence(options.afterSequence)),
+      reverse: options?.reverse === true,
+    });
   }
 
   /** Current backlog accounting. Deliberately low-cardinality: counts only. */
@@ -439,6 +388,25 @@ export class Mailbox {
   async runMaintenance(now = this.#runtime.now()): Promise<MailboxMaintenanceReport> {
     this.#assertLive();
     return runMailboxMaintenance(this.#runtime, requireMaintenanceInstant(now));
+  }
+
+  /**
+   * Permanently delete every durable record of this mailbox: its commands (and the payloads they
+   * carry), receipts and indexes. For a host that has retired the resource and must forget what
+   * was sent to it rather than wait for terminal retention.
+   *
+   * The header stays, sealed with `purgedAt`: every later `admit()` is refused as `rejected` with
+   * reason `purged`, and an admission that raced the purge (it read the header the seal replaced)
+   * loses its compare-and-swap and is refused the same way, so nothing can recreate the mailbox
+   * behind the purge. It does not cancel work: a command a consumer has claimed is deleted under
+   * it, so call it only once the resource has no consumer. Safe to repeat: a second call finishes
+   * what a failed one stopped, and answers `0` when nothing is left.
+   *
+   * @returns How many keys were deleted; the seal is not counted.
+   */
+  async purge(): Promise<number> {
+    this.#assertLive();
+    return purgeMailbox(this.#runtime);
   }
 
   /**

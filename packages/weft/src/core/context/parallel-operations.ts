@@ -6,6 +6,7 @@ import {
   assertValidParallelOperationCacheEntry,
   BranchTopologyChangedError,
   createParallelOperationCacheEntry,
+  durableRejectionReason,
   isParallelOperationCacheEntry,
   type ParallelBranchSlot,
   type ParallelOperationCacheEntry,
@@ -43,15 +44,40 @@ function reconstructRunAllResult(entry: ParallelOperationCacheEntry): Record<str
   return result;
 }
 
-/** True iff every slot in the entry is fulfilled (full success). */
 function isEntryFullyFulfilled(entry: ParallelOperationCacheEntry): boolean {
   return entry.branches.every((slot) => slot.status === 'fulfilled');
 }
+function primeCachedBranches(
+  operations: Generator<ContextOperationRequest, unknown, unknown>[],
+  expectedCount: number,
+): void {
+  const primed = primeParallelOperations(operations);
+  if (primed.length !== expectedCount) {
+    throw new BranchTopologyChangedError(
+      `ctx.all branch topology changed across retry: expected ${expectedCount} yielded branches, got ${primed.length}.`,
+    );
+  }
+}
 
+function reconstructSettledResult(entry: ParallelOperationCacheEntry): unknown[] {
+  return entry.branches.map((slot) =>
+    slot.status === 'fulfilled'
+      ? { status: 'fulfilled', value: slot.value }
+      : slot.status === 'rejected'
+        ? { status: 'rejected', reason: slot.reason }
+        : {
+            status: 'rejected',
+            reason: { name: 'PendingBranch', message: 'Branch did not settle' },
+          },
+  );
+}
+
+// oxlint-disable-next-line complexity -- one durable primitive handles normal and settled cache replay paths.
 export function* all(
   context: Context,
   internals: ContextInternals,
   operations: Generator<ContextOperationRequest, unknown, unknown>[],
+  settle: 'all' | 'settled' = 'all',
 ): Generator<ContextOperationRequest, unknown[], unknown> {
   const step = internals.stepIndex++;
 
@@ -59,25 +85,26 @@ export function* all(
     const cached = internals.accumulatedResults.get(step);
     assertValidParallelOperationCacheEntry(cached);
     if (isParallelOperationCacheEntry(cached)) {
-      // Variant guard: a workflow that swapped ctx.all <-> ctx.race at the
-      // same step would otherwise reconstruct the wrong shape. Treat as a
-      // topology change.
-      if (cached.variant !== 'all') {
+      const expectedVariant = settle === 'settled' ? 'all-settled' : 'all';
+      if (cached.variant !== expectedVariant) {
         throw new BranchTopologyChangedError(
           `ctx.all step ${step} found a cached entry of variant '${cached.variant}'. The same step must use the same parallel primitive across retries.`,
         );
       }
-      // Topology guard: branch count must be deterministic across retries
-      // even on the fully-fulfilled fast path. If the user changed
-      // operations.length between attempts, returning the cached array
-      // would silently feed wrong-position values into the workflow.
       if (operations.length !== cached.subOperationCount) {
         throw new BranchTopologyChangedError(
           `ctx.all branch count changed across retry: expected ${cached.subOperationCount}, got ${operations.length}. Branch count must be deterministic.`,
         );
       }
+      // A settled cache holds every outcome unless a branch had not settled when it was committed
+      // (a slot committed before its siblings): then the branches that did settle are reused and
+      // the rest dispatch again, as in a partial `ctx.all` cache.
+      if (settle === 'settled' && !cached.branches.some((slot) => slot.status === 'pending')) {
+        primeCachedBranches(operations, cached.subOperationCount);
+        return reconstructSettledResult(cached);
+      }
       if (isEntryFullyFulfilled(cached)) {
-        internals.stepIndex += cached.subOperationCount;
+        primeCachedBranches(operations, cached.subOperationCount);
         return reconstructAllResult(cached);
       }
       // Partial cache: re-yield with the cached entry so the engine reuses
@@ -90,6 +117,7 @@ export function* all(
       const callerStack = captureCallerStack();
       const result = yield* yieldOperation(internals, {
         type: 'parallel',
+        ...(settle !== 'all' ? { settle: 'settled' as const } : {}),
         operationId: `parallel:${step}`,
         operations: subOperations,
         step,
@@ -109,6 +137,7 @@ export function* all(
   const callerStack = captureCallerStack();
   const result = yield* yieldOperation(internals, {
     type: 'parallel',
+    ...(settle !== 'all' ? { settle: 'settled' as const } : {}),
     operationId,
     operations: subOperations,
     step,
@@ -121,9 +150,28 @@ export function* all(
   const values = result as unknown[];
   context.accumulatedResults.set(
     step,
-    buildFulfilledAllEntry(values, operationId, subOperations.length),
+    settle === 'settled'
+      ? buildSettledEntry(values, operationId)
+      : buildFulfilledAllEntry(values, operationId, subOperations.length, settle),
   );
   return values;
+}
+
+function buildSettledEntry(values: unknown[], operationId: string): ParallelOperationCacheEntry {
+  return createParallelOperationCacheEntry(
+    'all-settled',
+    values.map((value, index) => {
+      const outcome = value as { status?: string; value?: unknown; reason?: unknown };
+      return outcome.status === 'fulfilled'
+        ? { status: 'fulfilled', value: outcome.value, operationId: `${operationId}:${index}` }
+        : {
+            status: 'rejected',
+            reason: durableRejectionReason(outcome.reason),
+            operationId: `${operationId}:${index}`,
+          };
+    }),
+    values.length,
+  );
 }
 
 /** Build a v2 cache entry from a fully-fulfilled `ctx.all` result. */
@@ -131,9 +179,10 @@ function buildFulfilledAllEntry(
   values: unknown[],
   operationId: string,
   subOperationCount: number,
+  settle: 'all' | 'settled',
 ): ParallelOperationCacheEntry {
   return createParallelOperationCacheEntry(
-    'all',
+    settle === 'settled' ? 'all-settled' : 'all',
     values.map((value, i): ParallelBranchSlot => ({
       status: 'fulfilled',
       value,
@@ -141,6 +190,14 @@ function buildFulfilledAllEntry(
     })),
     subOperationCount,
   );
+}
+
+export function* allSettled(
+  context: Context,
+  internals: ContextInternals,
+  operations: Generator<ContextOperationRequest, unknown, unknown>[],
+): Generator<ContextOperationRequest, unknown[], unknown> {
+  return yield* all(context, internals, operations, 'settled');
 }
 
 export function* race(
@@ -197,6 +254,7 @@ export function* race(
     type: 'race',
     operationId,
     operations: subOperations,
+    step,
     ...(branchNames !== undefined ? { branchNames } : {}),
     callerStack,
   });

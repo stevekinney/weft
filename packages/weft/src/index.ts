@@ -10,11 +10,12 @@ export type {
 } from './alerting/types.ts';
 export type { WeftClientStorage } from './client/client-storage.ts';
 export type { WorkflowEventTail } from './client/event-tail.ts';
-export { HttpClient, HttpClientError } from './client/index.ts';
-export type {
-  HttpClientOptions,
-  WorkflowEventStreamOptions,
-  WorkflowEventTransport,
+export {
+  HttpClient,
+  HttpClientError,
+  type HttpClientOptions,
+  type WorkflowEventStreamOptions,
+  type WorkflowEventTransport,
 } from './client/index.ts';
 export type {
   ClientHandle,
@@ -35,8 +36,9 @@ export {
   ConnectionConfigurationError,
   DEFAULT_WEFT_ADDRESS,
   resolveConnection,
+  type ConnectionOptions,
+  type ResolvedConnection,
 } from './connection.ts';
-export type { ConnectionOptions, ResolvedConnection } from './connection.ts';
 export * from './core/index.ts';
 export * from './core/messaging.ts';
 export * from './core/public-types.ts';
@@ -45,8 +47,11 @@ export * from './diagnostics/index.ts';
 export * from './json-schema.ts';
 export * from './mcp/index.ts';
 export * from './observability/index.ts';
-export { createObservabilityInterceptors } from './observability/index.ts';
-export type { InterceptionContext, ObservabilityOptions } from './observability/index.ts';
+export {
+  createObservabilityInterceptors,
+  type InterceptionContext,
+  type ObservabilityOptions,
+} from './observability/index.ts';
 export {
   METRICS,
   createMetricsCollectorExporter,
@@ -59,187 +64,34 @@ export {
   generateTraceId,
   parseTraceParent,
 } from './observability/propagation.ts';
-export {
-  detectRuntime,
-  detectRuntimeVersion,
-  hashBytes,
-  hashString,
-  sleep,
-} from './runtime/portable.ts';
-export type { RuntimeKind } from './runtime/portable.ts';
-export { createAuthenticator, validateAuthConfig } from './server/authentication.ts';
-export type {
-  AuthConfig,
-  AuthMethod,
-  AuthResult,
-  Authenticator,
-  CreateAuthenticatorOptions,
-  JWTAlgorithm,
-  JWTConfig,
-  JWTPayload,
-  MTLSConfig,
-} from './server/authentication.ts';
-export {
-  AUTHORIZATION_SCOPES,
-  PACKAGE_AUTHORIZATION_SCOPE_PATTERN,
-  isAuthorizationScope,
-  isPackageAuthorizationScope,
-} from './server/authorization-scope.ts';
-export type {
-  AuthorizationScope,
-  BuiltInAuthorizationScope,
-  PackageAuthorizationScope,
-} from './server/authorization-scope.ts';
-export { dashboard, type DashboardOptions } from './server/dashboard.ts';
+export { hashBytes, hashString, sleep } from './runtime/portable.ts';
 export * from './server/handler.ts';
 export { handleRequest } from './server/handler.ts';
-/*
- * The operation catalog, as a public contract.
- *
- * `defineOperation` was internal while Weft was its own catalog's only
- * author. It is exported now because it is not: `@lostgradient/operative` and
- * `@lostgradient/bureau` already depend on this package, and a gateway serving
- * all three wants one dispatch pipeline, one transport matrix
- * (`http`/`jsonRpcHttp`/`jsonRpcWebSocket`/`jsonRpcStdio`), and one AsyncAPI
- * document rather than a second RPC dialect beside them.
- *
- * Exporting the definition surface rather than moving it keeps the 194
- * operations already registered here, and their tests, exactly where they
- * are. See `OPERATION_NAME_PATTERN` for the namespace change that makes a
- * shared catalog expressible.
- */
 export * from './server/index.ts';
 export { serve } from './server/index.ts';
-export {
-  OPERATION_NAME_PATTERN,
-  isValidOperationName,
-  validateOperationName,
-} from './server/operation-catalog/types.ts';
-export type {
-  OperationContext,
-  OperationKind,
-  StreamOperationInvocation,
-  SubscriptionOperationInvocation,
-  TransportAvailability,
-  UnknownKeyPolicy,
-} from './server/operation-catalog/types.ts';
-export { defineOperation } from './server/operation-registry.ts';
-export type {
-  OperationDefinitionInput,
-  SchemaOperationDefinition,
-  StreamSchemaOperationDefinition,
-  SubscriptionSchemaOperationDefinition,
-  UnarySchemaOperationDefinition,
-} from './server/operation-registry.ts';
+export { weftFaultPolicy } from './server/weft-fault-policy.ts';
 /*
- * The replay-plus-live feed and its subscription plumbing, as public
- * contracts.
- *
- * `createReplayLiveFeed` is generic over its envelope and its backend, and
- * Weft already instantiates it twice (workflow events, fleet events). A third
- * consumer — an agent run in `@lostgradient/operative`, a bureau in
- * `@lostgradient/bureau` — needs the same cursors, the same replay-then-live
- * join, and the same resume semantics, so it takes them from here rather than
- * growing a parallel set. `createReplayAwareClosableIterable` goes with them:
- * a subscription operation outside this package cannot be written without it.
- *
- * `createInMemoryReplayLiveBackend` is the live-only backend. Choosing it
- * first is deliberate and reversible: a durable backend replaces that one
- * argument and changes nothing above it.
- *
- * These exports are grouped by subject in this comment but sorted by module
- * below, because the formatter orders export statements alphabetically.
+ * The operation layer (`defineOperation`, `createOperationHandler`, the fault model, principals, the
+ * replay-and-live feed and the document generators) is `@lostgradient/backchannel`. Weft exports
+ * none of it.
  */
-export { bindFeedLifetime } from './server/bind-feed-lifetime.ts';
-export { createInMemoryReplayLiveBackend } from './server/in-memory-replay-live-backend.ts';
-export type {
-  InMemoryReplayLiveBackend,
-  InMemoryReplayLiveBackendOptions,
-} from './server/in-memory-replay-live-backend.ts';
-export {
-  createReplayAwareClosableIterable,
-  type ClosableAsyncIterable,
-  type ReplayAwareClosableIterable,
-} from './server/operations/event-stream-contracts.ts';
 export type { SchedulingPolicy } from './server/task-queue-types.ts';
-export { createReplayLiveFeed, decodeCursor, encodeCursor } from './server/workflow-event-feed.ts';
-export type {
-  Cursor,
-  ReplayLiveFeed,
-  ReplayLiveFeedBackend,
-  ReplayLiveSubscribeOptions,
-  SequencedEventEnvelope,
-} from './server/workflow-event-feed.ts';
 export * from './service-worker/index.ts';
-export * from './storage/auto.ts';
-export { BunSQLiteStorage } from './storage/bun-sql.ts';
-export * from './storage/cloudflare.ts';
 export { CompressedStorage } from './storage/compressed-storage.ts';
-export { storageDeleteRange } from './storage/delete-range.ts';
-export type { DeleteRangeOptions } from './storage/delete-range.ts';
 export * from './storage/http.ts';
-export * from './storage/indexeddb.ts';
+export { DEFAULT_SCOPE, KEYS, WEFT_RESERVED_KEY_PREFIXES } from './storage/keys.ts';
 export {
-  DEFAULT_SCOPE,
-  KEYS,
-  MAX_BATCH_OPERATIONS,
-  MAX_SCAN_LIMIT,
-  StorageBatchOperationLimitExceededError,
-  WEFT_RESERVED_KEY_PREFIXES,
-  assertDurableStorageForRecovery,
-  assertStorageBatchOperationCount,
-  matchesScanOptions,
-  requireStorageCapability,
-  resolvePrefixRangeEnd,
-  storageBatch,
-  storageConditionalBatch,
-  storageCount,
-  storageDeletePrefix,
-  storageHas,
-  storageKeys,
-  storageValuesEqual,
-} from './storage/interface.ts';
-export type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  GatedStorageCapabilityKey,
-  ScanOptions,
-  Storage,
-  StorageBatchOperationLimitTarget,
-  StorageCapabilities,
-} from './storage/interface.ts';
-export {
-  decodeStorageKeyComponent,
-  encodeStorageKeyComponent,
-  formatSortableStorageTimestamp,
-  tryDecodeStorageKeyComponent,
-} from './storage/key-encoding.ts';
-export * from './storage/lmdb.ts';
-export { MemoryStorage } from './storage/memory.ts';
-export * from './storage/neon.ts';
-export { NodeSQLiteStorage } from './storage/node-sqlite.ts';
-export * from './storage/postgres.ts';
-export * from './storage/resolve.ts';
-export { ScopedStorage, scopedStorage } from './storage/scoped-storage.ts';
-export { copyTextKeyValueRowsToStorage } from './storage/text-value-import.ts';
-export type {
-  CopyTextKeyValueRowsToStorageOptions,
-  CopyTextKeyValueRowsToStorageResult,
-  TextKeyValueRow,
-} from './storage/text-value-import.ts';
-export * from './storage/text-value-store.ts';
-export * from './storage/turso.ts';
-export { jsonCodec, msgpackCodec, withCodec } from './storage/typed-storage.ts';
-export type {
-  CodecStorageOptions,
-  MessagePackValue,
-  StorageCodec,
-  StorageValueParser,
-  TypedBatchOperation,
-  TypedConditionalBatchCondition,
-  TypedStorage,
+  jsonCodec,
+  msgpackCodec,
+  withCodec,
+  type CodecStorageOptions,
+  type MessagePackValue,
+  type StorageCodec,
+  type StorageValueParser,
+  type TypedBatchOperation,
+  type TypedConditionalBatchCondition,
+  type TypedStorage,
 } from './storage/typed-storage.ts';
-export * from './storage/web-extension.ts';
 export * from './worker/index.ts';
 // The portable testing primitives, named rather than `export *`: the testing barrel also exports
 // the subprocess engine (`spawnServerSubprocess`, `withSubprocessServer`, `killAndReboot`), which
@@ -247,17 +99,26 @@ export * from './worker/index.ts';
 // barrel put `Bun.spawn` into the root's browser bundle, which the published package's
 // portability gate refused at the 0.26.0 release (COR-1192).
 export {
+  UPGRADE_REFUSAL_REASON_PREFIX,
+  WORKER_CONFLICT_REASONS,
+  type WorkerConflictReason,
+} from './server/operations/worker-conflict-reasons.ts';
+export {
   ChaosNonRetryableError,
   ChaosTimeoutError,
   ChaosTransientError,
   withChaos,
+  type ChaosScenario,
+  type FaultClass,
 } from './testing/chaos.ts';
-export type { ChaosScenario, FaultClass } from './testing/chaos.ts';
 export { flushPortableMicrotasks, yieldToPortableEventLoop } from './testing/event-loop.ts';
-export { ActivityMockRegistry } from './testing/mocks.ts';
-export type { MockCall, MockHandle, MockedActivity } from './testing/mocks.ts';
-export { TestEngine } from './testing/test-engine.ts';
-export type { RunNOptions, RunNResult } from './testing/test-engine.ts';
+export {
+  ActivityMockRegistry,
+  type MockCall,
+  type MockHandle,
+  type MockedActivity,
+} from './testing/mocks.ts';
+export { TestEngine, type RunNOptions, type RunNResult } from './testing/test-engine.ts';
 export { TimeControl } from './testing/time-control.ts';
 export { VERSION } from './version.ts';
 export {
@@ -269,17 +130,20 @@ export {
 export {
   WORKER_DEPLOYMENT_ROUTING_PREFIX,
   WORKER_DEPLOYMENT_VERSION_PREFIX,
+} from './worker/deployment-records.ts';
+export {
   WorkerDeploymentCatalog,
   selectWorkerDeployment,
-} from './worker/deployment-routing.ts';
-export type {
-  DeploymentRoutingCandidate,
-  DeploymentSelection,
-  DeploymentSelectionFailure,
-  DeploymentSelectionResult,
-  WorkerDeploymentRouting,
-  WorkerDeploymentVersion,
-  WorkerDeploymentVersionState,
+  type DeploymentRoutingCandidate,
+  type DeploymentSelection,
+  type DeploymentSelectionFailure,
+  type DeploymentSelectionResult,
+  type WorkerDeploymentRemovalOutcome,
+  type WorkerDeploymentRouting,
+  type WorkerDeploymentRoutingWrite,
+  type WorkerDeploymentVersion,
+  type WorkerDeploymentVersionReport,
+  type WorkerDeploymentVersionState,
 } from './worker/deployment-routing.ts';
 export { HeartbeatManager } from './worker/heartbeat.ts';
 export { RemoteWorker } from './worker/index.ts';
@@ -304,30 +168,27 @@ export {
   normalizeWorkerManifest,
   parseWorkerManifest,
   parseWorkerManifestJson,
-} from './worker/manifest/index.ts';
-export type {
-  ManifestValidationFailure,
-  WorkerActivityContract,
-  WorkerDeploymentIdentity,
-  WorkerExecutionIdentity,
-  WorkerExecutionRequirement,
-  WorkerManifest,
-  WorkerManifestFromRegistryOptions,
-  WorkerManifestParseResult,
-  WorkerManifestParseSuccess,
-  WorkerManifestRejectionReason,
-  WorkerRuntimeIdentity,
-  WorkerWorkflowContract,
+  type ManifestValidationFailure,
+  type WorkerActivityContract,
+  type WorkerDeploymentIdentity,
+  type WorkerExecutionIdentity,
+  type WorkerExecutionRequirement,
+  type WorkerManifest,
+  type WorkerManifestFromRegistryOptions,
+  type WorkerManifestParseResult,
+  type WorkerManifestParseSuccess,
+  type WorkerManifestRejectionReason,
+  type WorkerRuntimeIdentity,
+  type WorkerWorkflowContract,
 } from './worker/manifest/index.ts';
 export * from './worker/protocol.ts';
-export { WorkerRegistry } from './worker/registry.ts';
-export type { RoutingPolicy } from './worker/registry.ts';
+export { WorkerRegistry, type RoutingPolicy } from './worker/registry.ts';
 export {
   consumeWorkflowWorkerStartOverridePreview,
   issueWorkflowWorkerStartOverridePreview,
   verifyWorkflowWorkerStartOverridePreview,
+  type WorkerStartOverridePreview,
 } from './worker/start-override-preview.ts';
-export type { WorkerStartOverridePreview } from './worker/start-override-preview.ts';
 export {
   DEFAULT_WORKFLOW_WORKER_VERSIONING_POLICY,
   bindWorkflowWorkerAtStart,
@@ -335,51 +196,58 @@ export {
   evaluateWorkflowWorkerUpgrade,
   readWorkflowWorkerBinding,
   recordWorkflowWorkerUpgrade,
-} from './worker/versioning-policy.ts';
-export type {
-  WorkerUpgradeBlockedReason,
-  WorkerUpgradeEvaluation,
-  WorkflowWorkerBinding,
-  WorkflowWorkerBindingRecord,
+  type WorkerUpgradeBlockedReason,
+  type WorkerUpgradeEvaluation,
+  type WorkflowWorkerBinding,
+  type WorkflowWorkerBindingRecord,
 } from './worker/versioning-policy.ts';
 export {
   WorkerProtocolIncompatibleError,
   workerProtocolIncompatibleMessage,
 } from './worker/worker-protocol-incompatible-error.ts';
-export { buildQualifiedActivityTable } from './worker/workflow-activity-binding.ts';
-export type {
-  RemoteWorkerActivityFunction,
-  RemoteWorkerActivityImplementation,
-  RemoteWorkerWorkflowDefinition,
+export {
+  buildQualifiedActivityTable,
+  type RemoteWorkerActivityFunction,
+  type RemoteWorkerActivityImplementation,
+  type RemoteWorkerWorkflowDefinition,
 } from './worker/workflow-activity-binding.ts';
-export { executeActivity } from './workers/activity-runner.ts';
-export type {
-  ActivityExecutionRequest,
-  ActivityExecutionResult,
+export {
+  executeActivity,
+  type ActivityExecutionRequest,
+  type ActivityExecutionResult,
 } from './workers/activity-runner.ts';
-export { ActivityWorkerDispatcher } from './workers/activity-worker-dispatcher.ts';
-export type { ActivityWorkerDispatcherOptions } from './workers/activity-worker-dispatcher.ts';
+export {
+  ActivityWorkerDispatcher,
+  type ActivityWorkerDispatcherOptions,
+} from './workers/activity-worker-dispatcher.ts';
 export {
   createActivityWorkerEntryUrl,
   initializeActivityWorkerMessageLoop,
   revokeActivityWorkerEntryUrl,
+  type ActivityHandlerLookup,
 } from './workers/activity-worker-entry.ts';
-export type { ActivityHandlerLookup } from './workers/activity-worker-entry.ts';
-export { WorkerPool } from './workers/pool.ts';
-export type { WorkerPoolOptions } from './workers/pool.ts';
+export { WorkerPool, type WorkerPoolOptions } from './workers/pool.ts';
 
 export * from './client/generated/operation-client.generated.ts';
-export type { JsonRpcCallResult, JsonRpcErrorObject } from './client/json-rpc-request.ts';
-export * from './client/operation-client-runtime.ts';
+export type { WeftClientConnection } from './client/weft-connection-transport.ts';
 export { CodegenEmitError, jsonSchemaToTypeScript } from './json-schema/codegen-emit.ts';
-export * from './server/operation-catalog-snapshot.ts';
+export { createCatalogSnapshot } from './server/weft-catalog-snapshot.ts';
 
-export { REGISTRY_VERSION } from './core/registry-snapshot.ts';
-export type { RegistryActivityEntry } from './core/registry-snapshot.ts';
+export { REGISTRY_VERSION, type RegistryActivityEntry } from './core/registry-snapshot.ts';
 export {
   isRemoteTaskTerminalCancelled,
   isRemoteTaskTerminalResolved,
   taskLedgerKey,
 } from './core/task-ledger/task-ledger.ts';
-export { createLiveOperationRegistry } from './server/rest-bindings.ts';
-export type { LiveOperationRegistryOptions } from './server/rest-bindings.ts';
+export {
+  createLiveOperationRegistry,
+  type LiveOperationRegistryOptions,
+} from './server/rest-bindings.ts';
+
+export * from './document-workflow/index.ts';
+
+export {
+  AUTHORIZATION_SCOPES,
+  WEFT_SCOPE_VOCABULARY,
+  type BuiltInAuthorizationScope,
+} from './authorization-scopes.ts';

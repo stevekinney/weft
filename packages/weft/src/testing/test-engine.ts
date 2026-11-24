@@ -8,17 +8,18 @@
  * @module testing/test-engine
  */
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import type {
   ActivityMetadata,
   ActivityRegistrationOptions,
   RegisteredActivityFunction,
 } from '../core/activity-registry.ts';
 import { Engine } from '../core/engine.ts';
+import { isAnyEngineAwaitingScheduledInlineFlushForTesting } from '../core/engine/inline-launch-queue.ts';
 import { runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
 import { parseDuration } from '../core/scheduler.ts';
 import type { Duration } from '../core/types.ts';
 import { activity as defineActivity } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import type { ChaosScenario, FailureCategory } from './chaos.ts';
 import { withChaos } from './chaos.ts';
 import { yieldToPortableEventLoop } from './event-loop.ts';
@@ -175,8 +176,11 @@ export class TestEngine extends Engine {
 
     // Inline starts can be intentionally queued onto the next event-loop turn.
     // Let them schedule durable timers at the advanced virtual time before
-    // the scheduler scans for due timers.
-    await yieldToPortableEventLoop();
+    // the scheduler scans for due timers: wait until no start is still queued,
+    // not for one turn that a loaded host may not have spent on the flush.
+    while (isAnyEngineAwaitingScheduledInlineFlushForTesting()) {
+      await yieldToPortableEventLoop();
+    }
 
     // The queued inline start async chain (MessageChannel delivery →
     // loadWorkflowState → persistCheckpoint → evaluateConstraints →

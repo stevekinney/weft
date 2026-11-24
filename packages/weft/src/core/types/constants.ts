@@ -70,6 +70,28 @@ export const DEFAULT_POLL_INTERVAL_MS = 1000;
  */
 export const DEFAULT_VISIBILITY_TIMEOUT_MS = 30_000;
 
+/**
+ * How often the engine's retention sweep runs, in milliseconds, when
+ * {@link EngineOptions.retentionSweepInterval} is not given: every 5 minutes.
+ */
 export const DEFAULT_RETENTION_SWEEP_INTERVAL_MS = 300_000;
 
+/**
+ * The most workflows one retention sweep removes when
+ * {@link EngineOptions.retentionSweepBatchSize} is not given.
+ */
 export const DEFAULT_RETENTION_SWEEP_BATCH_SIZE = 1000;
+
+/**
+ * How many checkpoints the engine keeps per workflow when
+ * {@link EngineOptions.checkpointHistory} is not given.
+ *
+ * @example
+ * ```ts
+ * import { Engine, DEFAULT_CHECKPOINT_HISTORY } from '@lostgradient/weft';
+ *
+ * const engine = new Engine({ checkpointHistory: DEFAULT_CHECKPOINT_HISTORY * 2 });
+ * void engine;
+ * ```
+ */
+export const DEFAULT_CHECKPOINT_HISTORY = 10;

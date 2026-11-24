@@ -1,6 +1,9 @@
-import type { RestInputContext } from '../rest-binding.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
+import {
+  type RestInputContext,
+  invalidParamsFault,
+  isOperationFault,
+  readRestJsonBody,
+} from "../../embedded/backchannel/src/internals.ts";
 
 export type SharedStartWorkflowRestFields = {
   readonly type: unknown;

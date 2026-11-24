@@ -20,16 +20,22 @@ describe('CLI argument parsing', () => {
         'echo',
         '0 * * * *',
         '--storage',
-        'lmdb',
+        'sqlite',
       ]);
       if (createResult.command !== 'schedule' || createResult.action !== 'create')
         throw new Error('Unexpected command variant');
-      expect(createResult.storage).toBe('lmdb');
+      expect(createResult.storage).toBe('sqlite');
+    });
+
+    it('rejects the removed lmdb backend for schedule commands', () => {
+      expect(() => parseCliArguments(['schedule', 'list', '--storage', 'lmdb'])).toThrow(
+        "Invalid storage backend 'lmdb'. Must be one of: sqlite, memory",
+      );
     });
 
     it('rejects non-persistent memory storage for schedule commands', () => {
       expect(() => parseCliArguments(['schedule', 'list', '--storage', 'memory'])).toThrow(
-        "Invalid storage backend 'memory'. Schedule commands support only sqlite and lmdb because data must persist across CLI invocations",
+        "Invalid storage backend 'memory'. Schedule commands support only sqlite because data must persist across CLI invocations",
       );
     });
 

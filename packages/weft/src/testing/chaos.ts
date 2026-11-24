@@ -189,10 +189,8 @@ const TIMEOUT_FAULT_MS = 25;
 async function raiseTimeoutFault(timeoutMilliseconds: number): Promise<never> {
   const signal = AbortSignal.timeout(timeoutMilliseconds);
   return new Promise<never>((_resolve, reject) => {
-    if (signal.aborted) {
-      reject(new ChaosTimeoutError(timeoutMilliseconds));
-      return;
-    }
+    // `AbortSignal.timeout` aborts from a later timer task, never during creation, so the signal
+    // is still pending here and the listener below cannot miss the abort.
     signal.addEventListener('abort', () => reject(new ChaosTimeoutError(timeoutMilliseconds)), {
       once: true,
     });

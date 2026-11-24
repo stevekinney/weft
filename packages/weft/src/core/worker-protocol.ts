@@ -1,4 +1,4 @@
-import { copyBytesToArrayBuffer } from './byte-arrays.ts';
+import { copyBytesToArrayBuffer } from "../embedded/backchannel/src/internals.ts";
 import { encode, validateCloneable } from './codec.ts';
 import type { ContextOperationRequest } from './context.ts';
 import type { FailureCategory, OperationRequest, WorkerOutboundMessage } from './types.ts';
@@ -20,8 +20,13 @@ export {
  * always built from the same package version — there is no independent peer
  * to stay backward compatible with — so this is a clean-break bump, the same
  * reasoning the RemoteWorker protocol v2 -> v3 bump used.
+ *
+ * Bumped 2 -> 3 when the `checkpoint` message gained a required
+ * `pendingStepIndex` field (COR-1988): a v2 worker would pass the `ready`
+ * handshake and then fail every workflow at its first checkpoint, so the
+ * version moves and a stale worker is refused at the handshake instead.
  */
-export const WORKER_PROTOCOL_VERSION = 2;
+export const WORKER_PROTOCOL_VERSION = 3;
 export const DEFAULT_WORKER_TURN_TIMEOUT_MS = 1_000;
 export const DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES = 1_048_576;
 export const MIN_WORKER_PROTOCOL_MESSAGE_BYTES = 4_096;
@@ -217,6 +222,12 @@ function assertWorkerCheckpointOutbound(record: Record<string, unknown>): void {
   if (typeof record['operationRequest'] !== 'object' || record['operationRequest'] === null) {
     throw new WorkerProtocolError('Worker checkpoint message must include operationRequest');
   }
+  const pendingStepIndex = record['pendingStepIndex'];
+  if (!Number.isSafeInteger(pendingStepIndex) || (pendingStepIndex as number) < 0) {
+    throw new WorkerProtocolError(
+      'Worker checkpoint message pendingStepIndex must be a non-negative integer',
+    );
+  }
 }
 
 function assertWorkerFailedOutbound(record: Record<string, unknown>): void {
@@ -290,22 +301,25 @@ function stableWorkerOperationFields(
     throw new WorkerProtocolError(`Unsupported Worker replay operation type: ${operationType}`);
   }
 
-  return toSortedStableRecord(operation as Record<string, unknown>);
+  return toSortedStableRecord(operation as Record<string, unknown>, []);
 }
 
 function isSupportedWorkerOperationType(operationType: string): boolean {
   return WORKER_SIGNATURE_OPERATION_TYPES.has(operationType);
 }
 
-function toSortedStableRecord(record: Record<string, unknown>): Record<string, unknown> {
+function toSortedStableRecord(
+  record: Record<string, unknown>,
+  stack: object[],
+): Record<string, unknown> {
   const stable: Record<string, unknown> = {};
   for (const key of Object.keys(record).toSorted()) {
     if (WORKER_SIGNATURE_EXCLUDED_FIELDS.has(key)) continue;
     if (record['type'] === 'run-all' && key === 'branches') {
-      stable[key] = toStableRunAllBranches(record[key], []);
+      stable[key] = toStableRunAllBranches(record[key], stack);
       continue;
     }
-    stable[key] = toSignatureValue(record[key], []);
+    stable[key] = toSignatureValue(record[key], stack);
   }
   return stable;
 }
@@ -354,7 +368,7 @@ function toSignatureValue(value: unknown, stack: object[]): unknown {
 
   stack.push(value as object);
   try {
-    return toSortedStableRecord(value as Record<string, unknown>);
+    return toSortedStableRecord(value as Record<string, unknown>, stack);
   } finally {
     stack.pop();
   }

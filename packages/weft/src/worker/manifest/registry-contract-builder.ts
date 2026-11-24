@@ -205,7 +205,16 @@ async function buildWorkflowContract(
   const manifest = await findWorkflowManifest(engine, workflowType);
   const workflowVersion = manifest.contract.workflowVersion;
 
-  const sortedActivityNames = [...activityNames].toSorted();
+  const baseContract = manifest.contract;
+  // An engine-provided activity the workflow declares with `.uses()` is already
+  // in `usedActivities`, which `contractHash` excludes, and this worker does not
+  // implement it for the workflow. It stays out of both the hashed scoped
+  // `activities` and the worker's activity table, matching the registry identity
+  // and the activity table `weft codegen` and `weft worker verify` expect.
+  const usedActivities = baseContract.usedActivities ?? {};
+  const sortedActivityNames = [...activityNames]
+    .filter((activityName) => !Object.hasOwn(usedActivities, activityName))
+    .toSorted();
   // Null-prototype: an activity literally named `__proto__` is a
   // grammar-valid name (see name-grammar.ts) that a plain `{}` object would
   // silently swallow into the prototype chain instead of storing as an own
@@ -220,7 +229,6 @@ async function buildWorkflowContract(
     );
   }
 
-  const baseContract = manifest.contract;
   const contractForHash: WorkflowContract =
     Object.keys(activities).length > 0 ? { ...baseContract, activities } : baseContract;
 

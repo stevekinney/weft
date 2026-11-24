@@ -8,8 +8,8 @@
  * @module server/operations/revision-unavailable-fault
  */
 
+import type { OperationFault } from "../../embedded/backchannel/src/index.ts";
 import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
-import type { OperationFault } from '../operation-fault.ts';
 
 /**
  * A commit lost its revision-availability fence (an explicit revision was

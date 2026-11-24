@@ -10,9 +10,11 @@
  *   6. offset
  *   7. idPrefix
  *   8. failureCategory
- *   9. createdAt
- *  10. updatedAt
- *  11. executionDeadline
+ *   9. failedStep
+ *  10. retrying
+ *  11. createdAt
+ *  12. updatedAt
+ *  13. executionDeadline
  *
  * Adjacent-pair tests assert that when two consecutive fields are invalid, the
  * error for the earlier-listed field surfaces first. The all-bad test passes
@@ -41,6 +43,34 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
       parentWorkflowId: 'parent-id',
       parentWorkflowExecutionToken: 'parent-token',
     });
+  });
+
+  // COR-2530: a bulk filter must carry failedStep and retrying to the engine, never drop them,
+  // because a bulk cancel of `{ status: 'failed', failedStep }` that lost the step would act on
+  // every failed run.
+  it('carries failedStep and retrying through the body parser and the typed input mapper', () => {
+    expect(
+      parseBulkListFilterFromBody(wrap({ status: 'failed', failedStep: 'charge-card' })),
+    ).toEqual({ status: 'failed', failedStep: 'charge-card' });
+    expect(parseBulkListFilterFromBody(wrap({ status: 'running', retrying: false }))).toEqual({
+      status: 'running',
+      retrying: false,
+    });
+    expect(
+      listFilterFromBulkInput(
+        bulkListFilterInputSchema.parse({ status: 'running', failedStep: 'a', retrying: true }),
+      ),
+    ).toEqual({ status: 'running', failedStep: 'a', retrying: true });
+    expect(() => parseBulkListFilterFromBody(wrap({ failedStep: 3 }))).toThrow(
+      'Field "filter.failedStep" must be a string',
+    );
+    expect(() => parseBulkListFilterFromBody(wrap({ retrying: 'yes' }))).toThrow(
+      'Field "filter.retrying" must be a boolean',
+    );
+    // An empty step is refused here as the list schema refuses it, never read as a filter.
+    expect(() => parseBulkListFilterFromBody(wrap({ failedStep: '' }))).toThrow(
+      'Field "filter.failedStep" must be a non-empty string',
+    );
   });
 
   // --- adjacent pair: status before type ---

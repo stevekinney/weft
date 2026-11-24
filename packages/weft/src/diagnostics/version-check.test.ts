@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { encode } from '../core/codec.ts';
 import type { WorkflowDefinition, WorkflowState } from '../core/types.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { KEYS } from '../storage/keys.ts';
 import { runVersionCheck } from './version-check.ts';
 
 function makeWorkflowState(

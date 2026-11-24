@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import {
-  FAULT_CODE_TO_FAILURE_CATEGORY,
-  failureCategoryForFaultCode,
-  isFaultCode,
-  type FaultCode,
-} from './fault-code.ts';
+import { isFaultCode, type FaultCode } from "../embedded/backchannel/src/index.ts";
+import { FAULT_CODE_TO_FAILURE_CATEGORY, failureCategoryForFaultCode } from './fault-code.ts';
 
 const ALL_FAULT_CODES: readonly FaultCode[] = [
   'Unauthorized',
@@ -20,6 +16,10 @@ const ALL_FAULT_CODES: readonly FaultCode[] = [
   'SubscriptionOverflow',
   'InvalidParams',
   'MethodNotFound',
+  'StaleRevision',
+  'RateLimited',
+  'Unavailable',
+  'UnsupportedCapability',
   'EngineFailure',
 ];
 
@@ -54,6 +54,10 @@ describe('FAULT_CODE_TO_FAILURE_CATEGORY', () => {
       Unprocessable: 'application',
       InvalidParams: 'application',
       MethodNotFound: 'application',
+      StaleRevision: 'application',
+      RateLimited: 'resource',
+      Unavailable: 'system',
+      UnsupportedCapability: 'system',
       Timeout: 'timeout',
       PayloadTooLarge: 'resource',
       SubscriptionOverflow: 'resource',

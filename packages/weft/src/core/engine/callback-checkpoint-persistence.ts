@@ -7,6 +7,7 @@ import {
   appendTimelineBatchOperations,
   persistCheckpoint,
   pruneCheckpointHistory,
+  type MidOperationCommitReport,
   type PersistCheckpointCallbacks,
 } from './checkpoint-io.ts';
 import type { Engine } from './index.ts';
@@ -19,12 +20,20 @@ export function createCheckpointPersistenceCallbacks<
   TActivities extends object,
 >(engine: Engine<TWorkflows, TActivities>): PersistCheckpointCallbacks {
   return {
-    appendTimelineBatchOperations: (id, checkpointOperation, step, timestamp, operations) =>
+    appendTimelineBatchOperations: (
+      id,
+      checkpointOperation,
+      step,
+      stepIndex,
+      timestamp,
+      operations,
+    ) =>
       appendTimelineBatchOperations(
         getInternals(engine),
         id,
         checkpointOperation,
         step,
+        stepIndex,
         timestamp,
         operations,
       ),
@@ -36,17 +45,22 @@ export function createCheckpointPersistenceCallbacks<
     dispatchEvent: (event) => {
       engine.dispatchEvent(event);
     },
-    enforceHistoryCircuitBreaker: (id) =>
-      terminateWorkflow(
+    enforceHistoryCircuitBreaker: async (id) => {
+      await terminateWorkflow(
         getInternals(engine),
         id,
         'timed-out',
         createTerminationCallbacks(engine),
         HISTORY_CIRCUIT_BREAKER_REASON,
-      ),
+      );
+    },
   };
 }
 
+/**
+ * Commit a checkpoint for an operation that is still running, keeping its pending timeline entry:
+ * a memo's durable retry sleep, or a `ctx.all` branch that settled before its siblings.
+ */
 export function persistCheckpointForDataOperation<
   TWorkflows extends object,
   TActivities extends object,
@@ -54,6 +68,7 @@ export function persistCheckpointForDataOperation<
   engine: Engine<TWorkflows, TActivities>,
   workflowId: string,
   operation: ContextOperationRequest,
+  report: MidOperationCommitReport = {},
 ): Promise<void> {
   const internals = getInternals(engine);
   return persistCheckpointAbandoningOnConflict(internals, workflowId, () =>
@@ -63,7 +78,7 @@ export function persistCheckpointForDataOperation<
       operation,
       undefined,
       createCheckpointPersistenceCallbacks(engine),
-      { timeline: 'preserve-pending' },
+      { timeline: 'preserve-pending', ...report },
     ),
   );
 }

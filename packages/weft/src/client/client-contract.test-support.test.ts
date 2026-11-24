@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../core/engine.ts';
 import { nextAsyncPendingToken } from '../testing/async-activity.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
@@ -33,7 +33,12 @@ describe('client contract test support', () => {
     };
 
     expect(
-      await throwingRejectionOf(waitForQueryReadyForTesting(client as never, 'workflow-stuck')),
+      await throwingRejectionOf(
+        // hang-guard-self-test: the query never reports ready, so no load can satisfy it in time
+        waitForQueryReadyForTesting(client as never, 'workflow-stuck', {
+          hangGuardMilliseconds: 20,
+        }),
+      ),
     ).toThrow('Workflow workflow-stuck did not expose query handlers');
   });
 
@@ -43,7 +48,10 @@ describe('client contract test support', () => {
     };
 
     expect(
-      await throwingRejectionOf(waitForHandleEventForTesting(handle, 'workflow:completed', 1)),
+      await throwingRejectionOf(
+        // hang-guard-self-test: the event never arrives, so no load can deliver it before the wait gives up
+        waitForHandleEventForTesting(handle, 'workflow:completed', 1),
+      ),
     ).toThrow('workflow event "workflow:completed" did not arrive within 1ms');
   });
 
@@ -55,7 +63,7 @@ describe('client contract test support', () => {
       },
     };
 
-    const eventPromise = waitForHandleEventForTesting(handle, 'workflow:completed', 50);
+    const eventPromise = waitForHandleEventForTesting(handle, 'workflow:completed');
     listener?.(new Event('workflow:completed'));
 
     expect(await eventPromise).toBeInstanceOf(Event);

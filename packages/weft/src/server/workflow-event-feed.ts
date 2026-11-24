@@ -1,6 +1,12 @@
+import {
+  type Cursor,
+  type ReplayLiveFeed,
+  type ReplayLiveSubscribeOptions,
+  createReplayLiveFeed,
+} from "../embedded/backchannel/src/index.ts";
+import type { EventSelector } from "../embedded/backchannel/src/internals.ts";
+import type { BatchOperation, ConditionalBatchCondition } from "../embedded/storage/src/index.ts";
 import type { WeftEventMap } from '../core/events.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { drainLive, replayUpTo, shouldDeliverEnvelope } from './replay-live-feed-internals.ts';
 
 /** Discriminator string carried on every feed envelope. */
 export type FeedEventKind =
@@ -14,66 +20,15 @@ export type FeedEventKind =
   | (string & {});
 
 // ---------------------------------------------------------------------------
-// Cursor (opaque)
-// ---------------------------------------------------------------------------
-
-/**
- * Opaque cursor into a workflow or fleet event feed. Only `encodeCursor` /
- * `decodeCursor` know the format — treat it as an opaque string, pass it back
- * as `fromCursor` to resume a feed, and never parse it.
- *
- * @example
- * ```ts
- * import type { Cursor, EventEnvelope } from '@lostgradient/weft';
- *
- * declare const envelope: EventEnvelope;
- * const lastCursor: Cursor = envelope.cursor;
- * void lastCursor;
- * ```
- */
-export type Cursor = string;
-
-const CURSOR_PATTERN = /^(?:-1|\d+)$/;
-
-/** Encode a non-negative integer sequence as an opaque cursor. */
-export function encodeCursor(sequence: number): Cursor {
-  if (!Number.isInteger(sequence) || sequence < 0) {
-    throw new Error(`encodeCursor: sequence must be a non-negative integer, got ${sequence}`);
-  }
-  return String(sequence);
-}
-
-/**
- * Decode an opaque cursor back to its sequence. `-1` is the initial
- * sentinel for "before the first event"; malformed input returns null.
- */
-export function decodeCursor(cursor: Cursor): number | null {
-  if (!CURSOR_PATTERN.test(cursor)) return null;
-  const value = Number(cursor);
-  if (!Number.isSafeInteger(value) || value < -1) return null;
-  return value;
-}
-
-function decodeCursorOrThrow(cursor: Cursor): number {
-  const sequence = decodeCursor(cursor);
-  if (sequence === null) throw new Error('Invalid cursor');
-  return sequence;
-}
-
-export function compareCursor(a: Cursor, b: Cursor): 'before' | 'at' | 'after' {
-  const delta = decodeCursorOrThrow(a) - decodeCursorOrThrow(b);
-  return delta === 0 ? 'at' : delta < 0 ? 'before' : 'after';
-}
-// ---------------------------------------------------------------------------
 // Envelope
 // ---------------------------------------------------------------------------
 
-export type EventSelector = 'events' | 'tokens';
-
 /**
  * A single committed record from a workflow's event feed — the `events`
- * (durable log entries, e.g. `workflow:checkpoint`) or `tokens` (streamed
- * output chunks) selector, distinguished by `selector`. Returned by
+ * (durable log entries such as `workflow:checkpoint` from the engine's own
+ * feed; the REST SSE route under `serve()` serves the lifecycle events
+ * `/watch` clients receive instead, e.g. `workflow:started`) or `tokens`
+ * (streamed output chunks) selector, distinguished by `selector`. Returned by
  * `WorkflowEventFeed.replay()` / `WorkflowEventFeed.subscribe()`, and
  * consumed directly by the `/v1/workflows/:id/events/sse` REST route.
  *
@@ -109,7 +64,8 @@ export type EventEnvelope = {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import {
  *   createEngineEventFeedBackend,
  *   type WorkflowEventFeedBackend,
@@ -149,7 +105,8 @@ export type WorkflowEventFeedBackend = {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import {
  *   createEngineEventFeedBackend,
  *   createWorkflowEventFeed,
@@ -273,136 +230,6 @@ export type FleetEventFeedOptions = {
   readonly livePollIntervalMs?: number;
 };
 
-export type SequencedEventEnvelope = {
-  readonly sequence: number;
-  readonly cursor: Cursor;
-};
-
-export type ReplayLiveFeedBackend<TEnvelope extends SequencedEventEnvelope> = {
-  replay(options: { afterSequence: number; requestedCursor?: Cursor }): AsyncIterable<TEnvelope>;
-  snapshotTailSequence(): Promise<number>;
-  subscribeLive(listener: (envelope: TEnvelope) => void): () => void;
-};
-
-export type ReplayLiveFeed<TEnvelope extends SequencedEventEnvelope> = {
-  replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<TEnvelope>;
-  subscribe(options?: ReplayLiveSubscribeOptions<TEnvelope>): AsyncIterable<TEnvelope>;
-  dispose(): void;
-};
-
-export type ReplayLiveSubscribeOptions<TEnvelope extends SequencedEventEnvelope> = {
-  fromCursor?: Cursor;
-  signal?: AbortSignal;
-  replayLimit?: number;
-  filterEnvelope?: (envelope: TEnvelope) => boolean;
-  countReplayEnvelope?: (envelope: TEnvelope) => boolean;
-  createReplayLimitError?: (count: number, limit: number) => unknown;
-  onReplayComplete?: () => void;
-};
-
-const DEFAULT_LIVE_BUFFER_SIZE = 1000;
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
-
-export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
-  backend: ReplayLiveFeedBackend<TEnvelope>,
-  options?: WorkflowEventFeedOptions,
-): ReplayLiveFeed<TEnvelope> {
-  const bufferSize = options?.liveBufferSize ?? DEFAULT_LIVE_BUFFER_SIZE;
-
-  async function* replay(args?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<TEnvelope> {
-    const afterSequence =
-      args?.fromCursor !== undefined ? decodeCursorOrThrow(args.fromCursor) : -1;
-    let yielded = 0;
-    for await (const envelope of backend.replay({
-      afterSequence,
-      ...(args?.fromCursor === undefined ? {} : { requestedCursor: args.fromCursor }),
-    })) {
-      if (args?.limit !== undefined && yielded >= args.limit) return;
-      yield envelope;
-      yielded += 1;
-    }
-  }
-
-  function subscribe(args?: ReplayLiveSubscribeOptions<TEnvelope>): AsyncIterable<TEnvelope> {
-    const buffer: TEnvelope[] = [];
-    let bufferOverflowed = false;
-    let waker: (() => void) | null = null;
-    let cleanedUp = false;
-    const signal = args?.signal;
-    const fromCursor = args?.fromCursor;
-    const requestedAfter = fromCursor !== undefined ? decodeCursorOrThrow(fromCursor) : -1;
-
-    const unsubscribe = backend.subscribeLive((envelope) => {
-      if (!shouldDeliverEnvelope(envelope, args)) return;
-      if (buffer.length >= bufferSize) {
-        bufferOverflowed = true;
-      } else {
-        buffer.push(envelope);
-      }
-      if (waker) {
-        const fire = waker;
-        waker = null;
-        fire();
-      }
-    });
-
-    const wake = () => {
-      if (waker) {
-        const fire = waker;
-        waker = null;
-        fire();
-      }
-    };
-
-    const cleanup = () => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      signal?.removeEventListener('abort', onAbort);
-      unsubscribe();
-      wake();
-    };
-
-    const onAbort = () => cleanup();
-    signal?.addEventListener('abort', onAbort, { once: true });
-    if (signal?.aborted) cleanup();
-
-    async function* generator(): AsyncIterable<TEnvelope> {
-      try {
-        if (signal?.aborted) return;
-
-        const snapshot = await backend.snapshotTailSequence();
-        yield* replayUpTo(backend, requestedAfter, snapshot, signal, args);
-        if (signal?.aborted) return;
-        args?.onReplayComplete?.();
-        yield* drainLive(
-          buffer,
-          snapshot,
-          signal,
-          () => bufferOverflowed,
-          (w) => {
-            waker = w;
-          },
-        );
-      } finally {
-        cleanup();
-      }
-    }
-
-    return generator();
-  }
-
-  return {
-    replay,
-    subscribe,
-    dispose() {
-      /* in-memory feed holds no feed-level state; no-op. */
-    },
-  };
-}
-
 /**
  * Build a `WorkflowEventFeed` over the given backend. Pass the result as
  * `HandlerOptions.workflowEventFeed` to drive `/v1/workflows/:id/events/sse`
@@ -412,7 +239,8 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import {
  *   createEngineEventFeedBackend,
  *   createWorkflowEventFeed,

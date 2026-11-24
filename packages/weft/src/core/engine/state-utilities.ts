@@ -18,6 +18,7 @@ import type {
 import { searchAttributeName } from '../types.ts';
 import { matchesWorkflowTagFilter } from '../workflow-tags.ts';
 import { stripInternalCheckpointReplayPayload } from './checkpoint-replay.ts';
+import { truncateLabel } from './failure-record.ts';
 import { isPlainObjectRecord, isSanitizedSearchAttributeValue } from './validation.ts';
 
 const PERSISTED_WORKFLOW_START_HEADER_NAMES = new Set(['traceparent', 'tracestate']);
@@ -155,6 +156,11 @@ const KEY_LABELED_OPERATIONS = new Set<ContextOperationRequest['type']>([
   'state-commit',
 ]);
 
+/** A key a caller built, as the text a label needs; the type says string, the caller may not. */
+function describeKey(key: unknown): string {
+  return String(key);
+}
+
 export function getTimelineOperationLabel(operation: ContextOperationRequest): string {
   if (KEY_LABELED_OPERATIONS.has(operation.type)) {
     return (operation as Extract<ContextOperationRequest, { key: string }>).key;
@@ -171,7 +177,10 @@ export function getTimelineOperationLabel(operation: ContextOperationRequest): s
     case 'child-workflow':
       return operation.workflowType;
     case 'load':
-      return operation.reference.key;
+      // A reference is caller-built, so its key can be any value until `processLoadOperation`
+      // refuses it. The label is read before that, by the timeline entry and by the failure
+      // record's failed step, and both need a string.
+      return describeKey(operation.reference.key);
     default:
       return operation.type;
   }
@@ -417,6 +426,12 @@ function matchesListFilterFailureCategory(state: WorkflowState, filter: ListFilt
   );
 }
 
+function matchesListFilterFailedStep(state: WorkflowState, filter: ListFilter): boolean {
+  if (filter.failedStep === undefined) return true;
+  // The engine stores the label cut to 200 characters, so a longer filter label matches that cut.
+  return state.failedStep?.label === truncateLabel(filter.failedStep);
+}
+
 export function listFilterHasAttributeFilters(filter: ListFilter | undefined): boolean {
   return (filter?.attributes?.length ?? 0) > 0;
 }
@@ -516,7 +531,10 @@ function matchesAttributeFilter(
   searchAttributes: Readonly<Record<string, SearchAttributeValue>>,
   filter: AttributeFilter,
 ): boolean {
-  const attributeValue = searchAttributes[searchAttributeName(filter.key)];
+  const attributeName = searchAttributeName(filter.key);
+  const attributeValue = Object.hasOwn(searchAttributes, attributeName)
+    ? searchAttributes[attributeName]
+    : undefined;
   if (attributeValue === undefined) return false;
 
   const exactValues = attributeFilterExactValues(filter);
@@ -552,6 +570,7 @@ export function matchesListFilter(
   if (!matchesListFilterIdentity(state, filter)) return false;
   if (!matchesListFilterTimeRanges(state, filter)) return false;
   if (!matchesListFilterFailureCategory(state, filter)) return false;
+  if (!matchesListFilterFailedStep(state, filter)) return false;
   if (!matchesListFilterAttributes(searchAttributes, filter)) return false;
   return true;
 }

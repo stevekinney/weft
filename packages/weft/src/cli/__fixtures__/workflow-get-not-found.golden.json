@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "NotFound",
+    "message": "Workflow \"missing-workflow\" not found",
+    "retryable": false
+  }
+}

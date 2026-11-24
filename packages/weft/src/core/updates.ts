@@ -7,11 +7,18 @@
  * @module updates
  */
 
+import type { BatchOperation, Storage } from "../embedded/storage/src/index.ts";
 import { sleep } from '../runtime/portable.ts';
-import type { BatchOperation, Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import type { WorkflowStatus } from './types.ts';
+import {
+  answeredHistoryOperation,
+  listUpdateHistory,
+  pendingHistoryOperation,
+  type UpdateHistoryContext,
+  type UpdateHistoryPage,
+} from './update-history.ts';
 import { WeftError } from './weft-error.ts';
 
 // ---------------------------------------------------------------------------
@@ -188,7 +195,7 @@ const DEFAULT_CLEANUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * @example
  * ```ts
  * import { UpdateCoordinator } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const coordinator = new UpdateCoordinator(storage);
@@ -198,9 +205,15 @@ const DEFAULT_CLEANUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
  */
 export class UpdateCoordinator {
   #storage: Storage;
+  #getNow: () => number;
 
-  constructor(storage: Storage) {
+  /**
+   * @param getNow The clock a request's and a response's `createdAt` are read from, and that the
+   *   expired-response clean-up measures against: the engine's `getNow`. Defaults to `Date.now`.
+   */
+  constructor(storage: Storage, getNow: () => number = Date.now) {
     this.#storage = storage;
+    this.#getNow = getNow;
   }
 
   /** Create and persist an update request. Returns the update ID. */
@@ -210,6 +223,22 @@ export class UpdateCoordinator {
     payload: unknown,
     options?: UpdateRequestOptions,
   ): Promise<string> {
+    const request = await this.submitRequest(workflowId, name, payload, options);
+    return request.updateId;
+  }
+
+  /**
+   * Create and persist an update request, with its `pending` history entry in
+   * the same batch, and return the request as persisted. Its `createdAt` is the
+   * entry's `receivedAt`, so a caller that goes on to answer the request must
+   * use this object rather than minting a timestamp of its own.
+   */
+  async submitRequest(
+    workflowId: string,
+    name: string,
+    payload: unknown,
+    options?: UpdateRequestOptions,
+  ): Promise<UpdateRequest> {
     const updateId = crypto.randomUUID();
 
     const request: UpdateRequest = {
@@ -217,17 +246,19 @@ export class UpdateCoordinator {
       workflowId,
       name,
       payload,
-      createdAt: Date.now(),
+      createdAt: this.#getNow(),
     };
 
     if (options?.idempotencyKey !== undefined) {
       request.idempotencyKey = options.idempotencyKey;
     }
 
-    const key = KEYS.update(workflowId, updateId);
-    await this.#storage.put(key, encode(request));
+    await this.#storage.batch([
+      { type: 'put', key: KEYS.update(workflowId, updateId), value: encode(request) },
+      pendingHistoryOperation(request),
+    ]);
 
-    return updateId;
+    return request;
   }
 
   /** Check idempotency: if this key was already processed, return the existing response. */
@@ -259,18 +290,25 @@ export class UpdateCoordinator {
     );
   }
 
-  /** Build batch operations for persisting an update response (to be included in checkpoint batch). */
+  /**
+   * Build batch operations for persisting an update response (to be included in
+   * checkpoint batch). The batch also replaces the request's `pending` history
+   * entry with the outcome, so `history` must name the request's own `name` and
+   * `createdAt`.
+   */
   buildResponseOperations(
     updateId: string,
     workflowId: string,
     result: unknown,
-    error?: string,
-    idempotencyKey?: string,
+    error: string | undefined,
+    idempotencyKey: string | undefined,
+    history: UpdateHistoryContext,
   ): BatchOperation[] {
+    const completedAt = this.#getNow();
     const response: UpdateResponse = {
       updateId,
       result,
-      createdAt: Date.now(),
+      createdAt: completedAt,
     };
 
     if (error !== undefined) {
@@ -280,6 +318,7 @@ export class UpdateCoordinator {
     const operations: BatchOperation[] = [
       { type: 'delete', key: KEYS.update(workflowId, updateId) },
       { type: 'put', key: KEYS.updateResponse(updateId), value: encode(response) },
+      answeredHistoryOperation(workflowId, updateId, history, completedAt, error),
     ];
 
     if (idempotencyKey !== undefined) {
@@ -291,6 +330,18 @@ export class UpdateCoordinator {
     }
 
     return operations;
+  }
+
+  /**
+   * List a workflow's update history, newest first. `cursor` is the previous
+   * page's `nextCursor`; a malformed one is the caller's to reject first
+   * (`isUpdateHistoryCursor`).
+   */
+  async listHistory(
+    workflowId: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<UpdateHistoryPage> {
+    return listUpdateHistory(this.#storage, workflowId, options);
   }
 
   /** Delete a pending update request that will never be observed. */
@@ -326,18 +377,26 @@ export class UpdateCoordinator {
     return decode(raw) as UpdateResponse;
   }
 
-  /** Wait for an update response with timeout. Uses polling. */
-  async waitForResponse(updateId: string, timeout: number): Promise<UpdateResponse> {
+  /**
+   * Wait for an update response with timeout. Uses polling. An aborted `signal` (the engine
+   * disposing) ends the wait early with the same timeout error, so no poll timer outlives it.
+   */
+  async waitForResponse(
+    updateId: string,
+    timeout: number,
+    signal?: AbortSignal,
+  ): Promise<UpdateResponse> {
     const deadline = Date.now() + timeout;
 
     while (Date.now() < deadline) {
       const response = await this.getResponse(updateId);
       if (response) return response;
+      if (signal?.aborted === true) break;
 
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
 
-      await sleep(Math.min(POLL_INTERVAL_MS, remaining));
+      await sleep(Math.min(POLL_INTERVAL_MS, remaining), signal);
     }
 
     throw new UpdateTimeoutError(updateId, timeout);
@@ -346,7 +405,7 @@ export class UpdateCoordinator {
   /** Clean up expired responses and their orphaned idempotency mappings. */
   async cleanupExpiredResponses(ttlMs?: number): Promise<number> {
     const effectiveTtl = ttlMs ?? DEFAULT_CLEANUP_TTL_MS;
-    const cutoff = Date.now() - effectiveTtl;
+    const cutoff = this.#getNow() - effectiveTtl;
 
     const expiredResponseKeys: string[] = [];
     const expiredUpdateIds = new Set<string>();

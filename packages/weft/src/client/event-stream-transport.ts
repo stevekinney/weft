@@ -1,7 +1,7 @@
 /**
  * Transport plumbing for the {@link WorkflowEventSubscription}: the minimal
  * socket surface it drives, the watch-channel URL builder, the default
- * `WebSocket` factory (Bun vs. browser), and the frame parsing / overlap-dedup
+ * `WebSocket` factories (header-less vs. header-carrying), and the frame parsing / overlap-dedup
  * helpers. Kept separate from the subscription state machine so each file stays
  * small and the pure helpers are independently testable.
  *
@@ -9,7 +9,6 @@
  */
 
 import type { WorkflowEvent } from '../core/types.ts';
-import { detectRuntime } from '../runtime/portable.ts';
 
 /** Minimal socket surface the subscription drives. Matches `WebSocket`. */
 export type StreamSocket = {
@@ -52,25 +51,7 @@ export function workflowWatchWebSocketUrl(baseUrl: string, workflowId: string): 
   return `${wsOrigin}${trimmed}${path}`;
 }
 
-/**
- * The default factory. Under Bun the second `WebSocket` argument is an options
- * bag that accepts custom upgrade headers, so auth headers ride the handshake.
- * Elsewhere the second argument is `protocols` (a string or string array) and
- * the platform `WebSocket` cannot send custom headers at all, so we construct
- * with the URL alone:
- *
- *   - In a browser / service worker that is expected — cross-origin auth rides a
- *     cookie or query param the server accepts, not a WebSocket header.
- *   - In Node/edge the global `WebSocket` (Node 22+, undici) also cannot send
- *     headers, so silently dropping a configured `Authorization`/`token` would
- *     produce an unauthenticated socket that fails or reconnects forever against
- *     an auth-enabled server. That is surfaced as an explicit configuration
- *     error pointing at `HttpClientOptions.webSocketFactory` (e.g. backed by the
- *     `ws` package, which supports headers) rather than failing silently.
- *
- * Tests that replace the factory bypass this entirely.
- */
-export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
+function assertGlobalWebSocket(): void {
   if (typeof WebSocket === 'undefined') {
     // No global `WebSocket` (e.g. older Node without the experimental flag).
     // Fail with an actionable message instead of a cryptic `ReferenceError` or
@@ -79,28 +60,64 @@ export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
       'No global WebSocket is available for live event streaming. Provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package) or run on a runtime with a built-in WebSocket (Bun, modern browsers, Node 22+).',
     );
   }
-  const runtime = detectRuntime();
-  if (runtime !== 'bun') {
-    if (runtime !== 'browser' && Object.keys(headers).length > 0) {
-      // Node / edge with auth headers configured: the platform WebSocket
-      // constructor cannot carry them, so connecting here would silently drop
-      // credentials. Fail loudly with the fix instead of producing an
-      // unauthenticated socket that reconnects to exhaustion.
-      throw new Error(
-        'Live event streaming on this runtime cannot send the configured auth headers over WebSocket: the platform WebSocket constructor has no header support. Provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package, which supports headers) or authenticate the watch socket with a cookie or query parameter the server accepts.',
-      );
-    }
-    // Browser / service worker (or a non-Bun runtime with no auth headers):
-    // header-less constructor. Cross-origin auth rides a cookie or query param.
-    return new WebSocket(url);
+}
+
+/**
+ * The default factory. It assumes the platform `WebSocket` cannot send custom
+ * upgrade headers, which is true of browsers, service workers, and Node's
+ * global `WebSocket` (undici); the second constructor argument there is
+ * `protocols`, not an options bag. With no headers configured it constructs
+ * with the URL alone. With headers configured, silently dropping a configured
+ * `Authorization`/`token` would produce an unauthenticated socket that fails or
+ * reconnects forever against an auth-enabled server, so it throws an explicit
+ * configuration error pointing at `HttpClientOptions.webSocketFactory` (for
+ * example backed by the `ws` package, which supports headers) and at
+ * `HttpClientOptions.webSocketCarriesHeaders` for a global `WebSocket` that does
+ * carry them. Under `eventTransport: 'auto'` that error is what routes a
+ * header-carrying connection to the SSE fallback.
+ *
+ * Tests that replace the factory bypass this entirely.
+ */
+export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
+  assertGlobalWebSocket();
+  if (Object.keys(headers).length > 0) {
+    throw new Error(
+      'Live event streaming cannot send the configured auth headers over WebSocket: the platform WebSocket constructor has no header support. Declare HttpClientOptions.webSocketCarriesHeaders when the global WebSocket accepts an options bag with headers (Bun does), provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package, which supports headers), or authenticate the watch socket with a cookie or query parameter the server accepts.',
+    );
   }
-  // Bun's two-arg overload is not in the DOM lib types, so narrow to it at
-  // construction time. The cast is confined to the Bun branch.
+  return new WebSocket(url);
+};
+
+/**
+ * The factory used when the caller declares
+ * `HttpClientOptions.webSocketCarriesHeaders`: the global `WebSocket` accepts an
+ * options bag as its second argument (Bun's extension), so auth headers ride the
+ * upgrade handshake.
+ */
+export const headerCarryingWebSocketFactory: WebSocketFactory = (url, headers) => {
+  assertGlobalWebSocket();
+  // The two-arg options-bag overload is not in the DOM lib types, so narrow to it
+  // at construction time. The cast is confined to this declared-header branch.
   const Constructor = WebSocket as unknown as {
     new (url: string, options: { headers: Record<string, string> }): WebSocket;
   };
   return new Constructor(url, { headers });
 };
+
+/**
+ * Pick the factory a subscription constructs its socket with: the caller's own
+ * `webSocketFactory`, else the header-carrying factory when the caller declared
+ * `webSocketCarriesHeaders`, else the header-less {@link defaultWebSocketFactory}.
+ */
+export function selectWebSocketFactory(options?: {
+  readonly webSocketFactory?: WebSocketFactory;
+  readonly webSocketCarriesHeaders?: boolean;
+}): WebSocketFactory {
+  if (options?.webSocketFactory !== undefined) return options.webSocketFactory;
+  return options?.webSocketCarriesHeaders === true
+    ? headerCarryingWebSocketFactory
+    : defaultWebSocketFactory;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

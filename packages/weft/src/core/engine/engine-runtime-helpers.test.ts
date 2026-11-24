@@ -1,13 +1,15 @@
+import { waitUntil } from "../../../test-support/embedded/testing/src/wait-until.ts";
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { Engine } from '../engine.ts';
-import { CleanupWarningEvent } from '../events.ts';
+import { CleanupWarningEvent, StorageSizeReportedEvent } from '../events.ts';
 import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
   createSecondInstanceDetectorResolver,
+  createStorageSizeReportTick,
 } from './engine-runtime-helpers.ts';
 import { getInternals } from './internals.ts';
 
@@ -36,6 +38,7 @@ describe('engine runtime helpers', () => {
       disposed: false,
       cleanupInterval,
       secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
       testToken: undefined,
     };
 
@@ -48,12 +51,101 @@ describe('engine runtime helpers', () => {
     expect(tracker.cleanupInterval).toBeNull();
   });
 
+  it('clears the storage size report interval when the engine has been collected', () => {
+    const storageSizeReportInterval = setInterval(() => {}, 1_000);
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      storageSizeReportInterval,
+      testToken: undefined,
+    };
+
+    const tick = createStorageSizeReportTick(
+      { deref: () => undefined } as WeakRef<Engine<object, object>>,
+      tracker,
+    );
+    tick();
+
+    expect(tracker.storageSizeReportInterval).toBeNull();
+  });
+
+  it('returns quietly when a collected engine has no storage size report interval', () => {
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
+      testToken: undefined,
+    };
+
+    const tick = createStorageSizeReportTick(
+      { deref: () => undefined } as WeakRef<Engine<object, object>>,
+      tracker,
+    );
+
+    expect(() => tick()).not.toThrow();
+    expect(tracker.storageSizeReportInterval).toBeNull();
+  });
+
+  it('reports the storage size when a live engine ticks', async () => {
+    const storage = Object.assign(new MemoryStorage(), {
+      sizeBytes: () => Promise.resolve(42),
+    });
+    await using engine = new Engine({ storage });
+    const reported: number[] = [];
+    engine.addEventListener(StorageSizeReportedEvent.type, (event) => {
+      reported.push(event.sizeBytes);
+    });
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
+      testToken: undefined,
+    };
+
+    createStorageSizeReportTick(new WeakRef(engine), tracker)();
+    await waitUntil(() => reported.length > 0, { message: 'a storage size report' });
+
+    expect(reported).toEqual([42]);
+  });
+
+  it('swallows a failed storage size read from a live engine', async () => {
+    let settled = false;
+    const storage = Object.assign(new MemoryStorage(), {
+      sizeBytes: () => {
+        const failure = Promise.reject(new Error('size unavailable'));
+        void failure
+          .then(undefined, () => {})
+          .then(() => {})
+          .then(() => {})
+          .then(() => {
+            settled = true;
+          });
+        return failure;
+      },
+    });
+    await using engine = new Engine({ storage });
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
+      testToken: undefined,
+    };
+
+    createStorageSizeReportTick(new WeakRef(engine), tracker)();
+    await waitUntil(() => settled, { message: 'the size read to settle' });
+  });
+
   it('routes cleanup tick failures through the engine cleanup warning path', async () => {
     await using engine = new Engine({ storage: new MemoryStorage() });
     const tracker = {
       disposed: false,
       cleanupInterval: null,
       secondInstanceDetectionInterval: null,
+      storageSizeReportInterval: null,
       testToken: undefined,
     };
     const cleanupExpiredResponses = mock(async () => {

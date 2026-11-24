@@ -1,3 +1,4 @@
+import { OBSERVABLE_SYMBOL } from '../atomic-state-events.ts';
 import {
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
@@ -6,6 +7,7 @@ import {
 } from '../events.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
 import type {
+  CancelWorkflowResult,
   LaunchMetadata,
   MessageName,
   QueryDefinition,
@@ -94,7 +96,7 @@ export type WorkflowClaimHandle = { readonly id: string };
 
 export interface WorkflowHandleEngine extends EventTarget {
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown>;
-  cancel(workflowId: string): Promise<void>;
+  cancel(workflowId: string): Promise<CancelWorkflowResult>;
   suspend(workflowId: string): Promise<void>;
   resume(workflowId: string): Promise<WorkflowHandle>;
   signal(
@@ -188,6 +190,12 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     return this.#resultPromise;
   }
 
+  /**
+   * The workflow's final value, or the rejection that ended it. A run that a cancel, a timeout,
+   * or the history circuit breaker ends while its top-level activity is in flight rejects only
+   * after that activity has settled, so whatever the activity wrote is visible to the caller.
+   * Any other termination rejects as soon as its terminal state is committed.
+   */
   async result(): Promise<TResult> {
     // The engine stores persisted workflow results as unknown. The typed
     // handle is created from the registry-backed `Engine.start` overload that
@@ -196,7 +204,7 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     return this.#resultPromise;
   }
 
-  async cancel(): Promise<void> {
+  async cancel(): Promise<CancelWorkflowResult> {
     return this.#engine.cancel(this.id);
   }
 
@@ -386,7 +394,8 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     );
   }
 
-  [Symbol.observable](): {
+  /** Observe workflow events until completion, cancellation, or failure, including an already settled run. */
+  [OBSERVABLE_SYMBOL](): {
     subscribe: (observer: {
       next?: (event: Event) => void;
       complete?: () => void;

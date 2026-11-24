@@ -1,5 +1,5 @@
-import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { assertScopedBulkWorkflowFilter } from '../bulk-workflow-filter.ts';
 import { decode, encode } from '../codec.ts';
 import {
@@ -119,6 +119,11 @@ export async function mutateWorkflowTags(
   workflowId: string,
   tags: string[],
   mode: 'add' | 'remove',
+  /**
+   * The run a confirmed bulk operation scanned. A run stored under the id with another execution
+   * token (a `start-new` replacement) was never scanned, and is left as it is.
+   */
+  expectedRun?: { readonly workflowExecutionToken: string | undefined },
 ): Promise<boolean> {
   return await runSerializedWorkflowStateWrite(internals, workflowId, async () => {
     const bytes = await internals.storage.get(KEYS.workflow(workflowId));
@@ -127,6 +132,12 @@ export async function mutateWorkflowTags(
     }
 
     const state = decodeWorkflowState(bytes);
+    if (
+      expectedRun !== undefined &&
+      state.workflowExecutionToken !== expectedRun.workflowExecutionToken
+    ) {
+      return false;
+    }
     const currentTags = normalizeWorkflowTags(state.tags) ?? [];
     const requestedTags = normalizeStartWorkflowTags(tags, 'Workflow tags') ?? [];
     if (requestedTags.length === 0) {
@@ -199,6 +210,8 @@ export async function bulkMutateWorkflowTags(
   tags: string[],
   mode: 'add' | 'remove',
   workflowIds?: readonly string[],
+  /** The run each of `workflowIds` held when a confirmed operation scanned it. */
+  scannedRuns?: ReadonlyMap<string, string | undefined>,
 ): Promise<BulkTagResult> {
   assertScopedBulkWorkflowFilter(filter);
   const workflowIdsToMutate = workflowIds ?? (await snapshotMatchingWorkflowIds(internals, filter));
@@ -207,7 +220,15 @@ export async function bulkMutateWorkflowTags(
   for (const workflowId of workflowIdsToMutate) {
     let changed = false;
     try {
-      changed = await mutateWorkflowTags(internals, workflowId, tags, mode);
+      changed = await mutateWorkflowTags(
+        internals,
+        workflowId,
+        tags,
+        mode,
+        scannedRuns?.has(workflowId)
+          ? { workflowExecutionToken: scannedRuns.get(workflowId) }
+          : undefined,
+      );
     } catch (error) {
       if (!(error instanceof WorkflowNotFoundError)) {
         throw error;

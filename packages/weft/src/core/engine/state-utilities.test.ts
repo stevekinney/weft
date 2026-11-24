@@ -198,6 +198,18 @@ describe('engine state utilities', () => {
     ).toBe(true);
   });
 
+  it('does not match an attribute filter on a key the workflow only inherits, such as constructor', () => {
+    expect(
+      matchesListFilter(
+        createWorkflowState({}),
+        { attributes: [{ key: 'constructor', value: 'x' }] },
+        null,
+        undefined,
+        { region: 'eu' },
+      ),
+    ).toBe(false);
+  });
+
   it('matches date-valued attribute filters only when the timestamp actually satisfies the predicate', () => {
     const exactTimestamp = new Date('2026-06-16T12:00:00.000Z');
     const searchAttributes = {
@@ -295,6 +307,15 @@ describe('engine state utilities', () => {
     for (const [operation, expected] of cases) {
       expect(getTimelineOperationLabel(operation)).toBe(expected);
     }
+  });
+
+  it('getTimelineOperationLabel returns a string for a load reference whose key is not one', () => {
+    const operation = {
+      type: 'load',
+      reference: { workflowId: 'w', key: 123, sizeBytes: 1 },
+    } as unknown as ContextOperationRequest;
+
+    expect(getTimelineOperationLabel(operation)).toBe('123');
   });
 
   it('getTimelineBasicInputSummary returns a summary for every ContextOperationRequest kind', () => {

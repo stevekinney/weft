@@ -77,7 +77,7 @@ export class AttemptControllerTable {
   /**
    * Attach the attempt's automatic per-attempt heartbeat interval (armed by
    * both {@link RemoteWorker} and {@link LongPollWorker} right after `set()`)
-   * so {@link delete} and {@link abortAll} clear it too. Aborting the
+   * so {@link cancel}, {@link delete} and {@link abortAll} clear it too. Aborting the
    * controller only asks the activity function to stop — an activity that
    * doesn't check its signal keeps running, and without this, its heartbeat
    * interval would keep firing real timers until the activity's promise is
@@ -94,6 +94,26 @@ export class AttemptControllerTable {
     const entry = this.#entries.get(attemptKey(operationId, attemptToken));
     if (entry === undefined) return;
     entry.heartbeatTimer = timer;
+  }
+
+  /**
+   * Cancel exactly this `(operationId, attemptToken)` attempt (COR-2295):
+   * clear its automatic heartbeat interval and abort its controller with
+   * `reason`. The entry stays in the table, so the attempt's late settlement
+   * still reports through its controller and its own `finally` block still
+   * deletes it. A cancellation for an attempt the table does not hold (a
+   * stale `attemptToken`, or an attempt that already settled) touches
+   * nothing, and a repeated cancellation of an already-aborted attempt keeps
+   * the first reason.
+   */
+  cancel(operationId: string, attemptToken: string, reason: unknown): void {
+    const entry = this.#entries.get(attemptKey(operationId, attemptToken));
+    if (entry === undefined) return;
+    if (entry.heartbeatTimer !== null) {
+      clearInterval(entry.heartbeatTimer);
+      entry.heartbeatTimer = null;
+    }
+    if (!entry.controller.signal.aborted) entry.controller.abort(reason);
   }
 
   /**

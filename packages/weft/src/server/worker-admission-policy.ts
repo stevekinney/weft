@@ -11,8 +11,8 @@
  * @module server/worker-admission-policy
  */
 
+import type { Principal } from "../embedded/backchannel/src/index.ts";
 import type { WorkerManifest } from '../worker/manifest/types.ts';
-import type { Principal } from './principal.ts';
 
 /**
  * Everything a {@link WorkerAdmissionPolicy} needs to decide on one

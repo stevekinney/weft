@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
 import { buildWorkflowRevisionManifest, type WorkflowContract } from '../index.ts';
 import { executeCodegen } from './codegen.ts';
 
@@ -30,10 +31,28 @@ describe('executeCodegen end-to-end', () => {
   it('fails when the parent directory does not exist', async () => {
     const dir = makeTempDir();
     const out = join(dir, 'no-such-subdir', 'weft.d.ts');
-    const result = await executeCodegen({ from: REGISTRY_FIXTURE, out, timeoutMs: 30_000 });
+    const result = await executeCodegen({
+      from: REGISTRY_FIXTURE,
+      out,
+      timeoutMs: HANG_GUARD_MILLISECONDS,
+    });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('does not exist');
     expect(existsSync(out)).toBe(false);
+  });
+
+  it('fails when the parent path is a file rather than a directory', async () => {
+    const dir = makeTempDir();
+    const parent = join(dir, 'not-a-directory');
+    writeFileSync(parent, 'a file');
+    const out = join(parent, 'weft.d.ts');
+    const result = await executeCodegen({
+      from: REGISTRY_FIXTURE,
+      out,
+      timeoutMs: HANG_GUARD_MILLISECONDS,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(`codegen: parent path '${parent}' is not a directory`);
   });
 
   it('fails when the output directory is not writable', async () => {
@@ -41,7 +60,11 @@ describe('executeCodegen end-to-end', () => {
     chmodSync(dir, 0o555);
     const out = join(dir, 'weft.d.ts');
     try {
-      const result = await executeCodegen({ from: REGISTRY_FIXTURE, out, timeoutMs: 30_000 });
+      const result = await executeCodegen({
+        from: REGISTRY_FIXTURE,
+        out,
+        timeoutMs: HANG_GUARD_MILLISECONDS,
+      });
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toMatch(/failed to write|EACCES|permission/i);
       expect(existsSync(out)).toBe(false);
@@ -66,7 +89,7 @@ describe('executeCodegen end-to-end', () => {
         activities: { broken: { outputSchema: { type: 'string' } } },
       }),
     );
-    const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
+    const result = await executeCodegen({ from: bad, out, timeoutMs: HANG_GUARD_MILLISECONDS });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('invalid registry snapshot');
     expect(existsSync(out)).toBe(false);
@@ -112,7 +135,7 @@ describe('executeCodegen end-to-end', () => {
         activities: {},
       }),
     );
-    const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
+    const result = await executeCodegen({ from: bad, out, timeoutMs: HANG_GUARD_MILLISECONDS });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/schema depth|nests deeper/i);
     expect(existsSync(out)).toBe(false);
@@ -136,7 +159,7 @@ describe('executeCodegen end-to-end', () => {
         activities: { wild: { queue: 'q', inputSchema: true, outputSchema: true } },
       }),
     );
-    const result = await executeCodegen({ from: bool, out, timeoutMs: 30_000 });
+    const result = await executeCodegen({ from: bool, out, timeoutMs: HANG_GUARD_MILLISECONDS });
     expect(result.exitCode).toBe(0);
     const written = await Bun.file(out).text();
     // Activity names are never emitted globally — they live on
@@ -175,7 +198,7 @@ describe('executeCodegen end-to-end', () => {
         activities: {},
       }),
     );
-    const result = await executeCodegen({ from: bad, out, timeoutMs: 30_000 });
+    const result = await executeCodegen({ from: bad, out, timeoutMs: HANG_GUARD_MILLISECONDS });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('must be a JSON object');
     expect(existsSync(out)).toBe(false);
@@ -225,7 +248,12 @@ describe('executeCodegen end-to-end', () => {
       }),
     );
 
-    const result = await executeCodegen({ from: file, out, timeoutMs: 30_000, json: true });
+    const result = await executeCodegen({
+      from: file,
+      out,
+      timeoutMs: HANG_GUARD_MILLISECONDS,
+      json: true,
+    });
     expect(result.exitCode).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(result.stdout);
     expect(parsed['workflows']).toBe(1);

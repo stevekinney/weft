@@ -1,9 +1,9 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { SignalReceivedInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -41,6 +41,7 @@ function createSignalInternals(storage = new MemoryStorage()) {
     deliveredPendingUpdateIds: new Map<string, Set<string>>(),
     storage,
     workflowsNeedingTerminalCleanup: new Set<string>(),
+    pendingTimelineEntries: new Map(),
   };
 }
 
@@ -65,6 +66,40 @@ class NoConditionalBatchMemoryStorage extends MemoryStorage {
 }
 
 describe('engine signals', () => {
+  it('keeps a parked workflow waiting when a buffered signal has the wrong name', async () => {
+    const internals = createSignalInternals();
+    internals.parkedInlineWorkflows.add('parked-wrong');
+    internals.pendingTimelineEntries.set('parked-wrong', {
+      entry: { operationType: 'wait-signal', operationLabel: 'approve' },
+    });
+    const resume = mock(async () => {});
+    const dispatchEvent = mock((_event: Event) => true);
+    const callbacks = createSignalCallbacks({ resumeParkedInlineWorkflow: resume, dispatchEvent });
+
+    await signal(internals as never, 'parked-wrong', 'reject', 'payload', callbacks);
+
+    expect(resume).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'signal:delivered' }),
+    );
+  });
+
+  it('resumes and reports one matching parked signal delivery', async () => {
+    const internals = createSignalInternals();
+    internals.parkedInlineWorkflows.add('parked-matching');
+    internals.pendingTimelineEntries.set('parked-matching', {
+      entry: { operationType: 'wait-signal', operationLabel: 'approve' },
+    });
+    const resume = mock(async () => {});
+    const dispatchEvent = mock((_event: Event) => true);
+    const callbacks = createSignalCallbacks({ resumeParkedInlineWorkflow: resume, dispatchEvent });
+
+    await signal(internals as never, 'parked-matching', 'approve', 'payload', callbacks);
+
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    expect(dispatchEvent.mock.calls[1]?.[0]).toMatchObject({ type: 'signal:delivered' });
+  });
   it('lets a signalReceived interceptor block delivery by omitting next', async () => {
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);
@@ -326,6 +361,7 @@ describe('engine signals', () => {
     class SlowSequenceStorage extends NoConditionalBatchMemoryStorage {
       override async get(key: string): Promise<Uint8Array | null> {
         if (key === KEYS.signalSequence('workflow-anonymous-concurrent')) {
+          // load-proof: storage double that stretches a race window; the yield is the injected latency itself and every assertion awaits the real results
           await sleepForTesting(5);
         }
 

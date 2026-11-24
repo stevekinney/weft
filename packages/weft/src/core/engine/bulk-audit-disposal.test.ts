@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { Engine } from '../engine.ts';
 import { workflow } from '../types.ts';
 import { EngineDisposedError } from './errors.ts';
@@ -107,6 +110,7 @@ describe('bulk-operation audit write and engine disposal', () => {
     });
     // The held audit write is the only thing disposal can be waiting on, so
     // nothing but the release below can let it finish.
+    // load-proof: negative window: disposal waits on a held audit write that only the release below can free, so load can only delay it, never complete it
     await Bun.sleep(0);
     expect(disposalSettled).toBe(false);
 

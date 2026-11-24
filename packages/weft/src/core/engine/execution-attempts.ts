@@ -1,6 +1,7 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { WorkflowState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
+import { holdsWorkflowExecution } from './local-execution.ts';
 
 /**
  * The execution attempt registry: the single answer to "which generation does this engine
@@ -71,8 +72,26 @@ import type { EngineInternals } from './internals.ts';
 export type ExecutionAttempt = {
   /** Token of the generation this attempt launched; `undefined` for a pre-token run. */
   readonly workflowExecutionToken: string | undefined;
-  /** This engine lost the generation's checkpoint compare-and-swap race, so it is the winner's. */
+  /**
+   * This engine stopped driving the generation: its checkpoint commit lost a compare-and-swap race
+   * to another engine (so it is the winner's), or its checkpoint or terminal writes were refused on
+   * every attempt and no failure could be written (see `CheckpointCommitFailedError`).
+   */
   readonly abandoned: boolean;
+  /**
+   * The error a `result()` requested later rejects with for an abandoned generation, when one was
+   * given at the abandonment; `undefined` otherwise, which stands for the conflict.
+   */
+  readonly abandonmentError?: Error | undefined;
+  /**
+   * The epoch of the workflow claim this engine held when it created the generation's generator or
+   * handed it to a worker, or `null` until then, and when no per-workflow claim is held. An attempt
+   * begins when the engine adopts the checkpoint, and a launch can still stop short of the
+   * generator after that (a start's queued launch, say), leaving an attempt with nothing driving
+   * it; the stamp is taken at the generator, not at adoption or enqueue, so such an attempt carries
+   * `null`. A start's claim commits after its adoption too, in the create batch that folds it.
+   */
+  readonly claimEpoch: number | null;
   /** What the engine knows of the run's durable identity; `undefined` until it is known. */
   readonly identity?: RunIdentity | undefined;
   /**
@@ -102,6 +121,8 @@ export type RunIdentity = {
 type ExecutionAttemptRecord = {
   readonly workflowExecutionToken: string | undefined;
   abandoned: boolean;
+  abandonmentError: Error | undefined;
+  claimEpoch: number | null;
   identity: RunIdentity | undefined;
   pendingIdentity: Promise<RunIdentity | undefined> | undefined;
 };
@@ -136,6 +157,8 @@ export function beginExecutionAttempt(
   attempts.set(workflowId, {
     workflowExecutionToken,
     abandoned: false,
+    abandonmentError: undefined,
+    claimEpoch: null,
     identity,
     pendingIdentity: undefined,
   });
@@ -202,8 +225,60 @@ export function currentExecutionAttempt(
 }
 
 /**
+ * Record that the generation named by `workflowExecutionToken` now has its generator, or was
+ * handed to a worker, under whatever claim the engine holds now. Called once per launch, in the
+ * same synchronous turn as the strategy call that creates the generator or sends the worker its
+ * run (`startWorkflowExecution`, the fork launch, and the two resume relaunches), so the epoch it
+ * stamps is the claim the drive runs under; never at adoption or at enqueue, where nothing drives
+ * yet. Does nothing when the engine holds no attempt, or the attempt is another generation's.
+ */
+export function completeExecutionAttemptLaunch(
+  internals: EngineInternals,
+  workflowId: string,
+  workflowExecutionToken: string | undefined,
+): void {
+  const attempt = attemptsByEngine.get(internals)?.get(workflowId);
+  if (attempt === undefined || attempt.workflowExecutionToken !== workflowExecutionToken) return;
+  attempt.claimEpoch = internals.workflowClaimRegistry?.currentEpoch(workflowId) ?? null;
+}
+
+/**
+ * Whether this engine drives the workflow under the claim it holds at `claimEpoch`: the generator
+ * or worker of the generation it holds was created under that claim, the engine has not lost that
+ * generation since, and the strategy still holds the run ({@link holdsWorkflowExecution}).
+ * `workflowExecutionToken` narrows the answer to one generation when the caller knows which it is
+ * resuming; omit it to ask about whatever generation the claim covers.
+ *
+ * A reclaim's replay asks this before it evicts or restarts the workflow. The replay exists to
+ * restart a run the engine drove under an *earlier* claim, one it lost and later took back, whose
+ * in-memory drive no longer has the claim behind it. A launch under this very claim is not that
+ * run: it started after the engine took the claim, so replaying it would drive the generation a
+ * second time. An attempt whose launch stopped short of the generator or worker, or whose launch is
+ * still queued, carries no epoch and drives nothing, so it does not count: the replay joins a queued
+ * launch (`queuedInlineWorkflowStartSettlement`) and restarts a run nothing drives.
+ */
+export function isLaunchedUnderClaim(
+  internals: EngineInternals,
+  workflowId: string,
+  claimEpoch: number,
+  workflowExecutionToken?: string,
+): boolean {
+  const attempt = attemptsByEngine.get(internals)?.get(workflowId);
+  return (
+    attempt !== undefined &&
+    !attempt.abandoned &&
+    attempt.claimEpoch === claimEpoch &&
+    (workflowExecutionToken === undefined ||
+      attempt.workflowExecutionToken === workflowExecutionToken) &&
+    holdsWorkflowExecution(internals, workflowId)
+  );
+}
+
+/**
  * Mark the generation this engine holds for the workflow as lost to another engine, when the
- * attempt launched exactly the generation named by `workflowExecutionToken`. Returns whether
+ * attempt launched exactly the generation named by `workflowExecutionToken`. `abandonmentError`, when
+ * given, is the rejection a later `result()` settles with instead of the conflict (see
+ * `CheckpointCommitFailedError`). Returns whether
  * it newly did: `false` when the engine holds no attempt (the run finished, was purged, or the
  * engine was disposed), the attempt launched a different generation (a replacement installed
  * while the loss was classified is healthy), or the generation was already abandoned.
@@ -217,6 +292,7 @@ export function abandonExecutionAttempt(
   internals: EngineInternals,
   workflowId: string,
   workflowExecutionToken: string | undefined,
+  abandonmentError?: Error,
 ): boolean {
   const attempt = attemptsByEngine.get(internals)?.get(workflowId);
   if (
@@ -227,7 +303,29 @@ export function abandonExecutionAttempt(
     return false;
   }
   attempt.abandoned = true;
+  attempt.abandonmentError = abandonmentError;
   return true;
+}
+
+/**
+ * Capture whether the generation named by `workflowExecutionToken` is abandoned now, with the error
+ * it was abandoned with, and return the function that abandons it again. A relaunch ends the
+ * abandoned attempt as soon as it adopts the checkpoint, so a caller whose relaunch can still fail
+ * restores the abandonment through it. Does nothing when the generation is not abandoned.
+ */
+export function captureAbandonment(
+  internals: EngineInternals,
+  workflowId: string,
+  workflowExecutionToken: string | undefined,
+): () => void {
+  const attempt = attemptsByEngine.get(internals)?.get(workflowId);
+  if (attempt?.abandoned !== true || attempt.workflowExecutionToken !== workflowExecutionToken) {
+    return () => {};
+  }
+  const abandonmentError = attempt.abandonmentError;
+  return () => {
+    abandonExecutionAttempt(internals, workflowId, workflowExecutionToken, abandonmentError);
+  };
 }
 
 /**

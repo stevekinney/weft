@@ -9,13 +9,14 @@
  * @module core/mailbox-index-codec
  */
 
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import {
   fail,
   isRecordObject,
   ownKey,
   readIdentifier,
   readInteger,
+  readOptionalInteger,
   readString,
   readVersion,
 } from './application-primitive-codec.ts';
@@ -51,6 +52,7 @@ export function decodeMailboxRecord(bytes: Uint8Array, key: string): MailboxReco
   // header that breaks either relation is damage — a lowered allocator would
   // let the next admission overwrite an index entry at a reused position.
   if (nextSequence !== admittedCount || openCount > admittedCount) fail(key);
+  const purgedAt = readOptionalInteger(decoded, 'purgedAt', key);
   return {
     recordVersion: MAILBOX_RECORD_VERSION,
     namespace,
@@ -58,6 +60,7 @@ export function decodeMailboxRecord(bytes: Uint8Array, key: string): MailboxReco
     nextSequence,
     openCount,
     admittedCount,
+    ...(purgedAt === undefined ? {} : { purgedAt }),
   };
 }
 

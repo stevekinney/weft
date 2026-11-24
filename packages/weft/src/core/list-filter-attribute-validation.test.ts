@@ -52,6 +52,25 @@ describe('normalizeAttributeFilter — defensive runtime validation', () => {
     ]);
   });
 
+  it('accepts a string-keyed value that is an array of numbers, booleans or dates', () => {
+    const when = new Date('2026-01-01T00:00:00.000Z');
+    for (const value of [[1, 2], [true, false], [when], ['a', 2, true, when]]) {
+      const normalized = normalizeAttributeFilter({ key: 'customerId', value }, 0);
+      expect(normalized).toEqual({ key: 'customerId', value });
+    }
+  });
+
+  it('rejects a string-keyed value array holding an element that is not a scalar', () => {
+    const error = normalizeAndCaptureError({ key: 'customerId', value: [1, { nested: true }] }, 5);
+    expect(error.issues).toEqual([
+      {
+        path: ['attributes', 5, 'value'],
+        message: 'Invalid search attribute value',
+        code: 'custom',
+      },
+    ]);
+  });
+
   it('rejects a string-keyed range value that is an array instead of a scalar', () => {
     const error = normalizeAndCaptureError({ key: 'customerId', gt: ['a', 'b'] }, 1);
     expect(error.issues).toEqual([

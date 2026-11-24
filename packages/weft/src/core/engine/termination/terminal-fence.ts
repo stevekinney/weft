@@ -1,9 +1,9 @@
 import {
-  KEYS,
   storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../../storage/interface.ts';
+} from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { currentExecutionAttempt, type RunIdentity } from '../execution-attempts.ts';
 import type { EngineInternals } from '../internals.ts';
 
@@ -51,6 +51,15 @@ export function captureOrReadTerminalFence(
  * default retry budget.
  */
 export const FENCED_RETRY_BUDGET = 10;
+
+/**
+ * The waits, in milliseconds, between the attempts of an engine-owned write that storage refused: a
+ * checkpoint batch, a completion write, or a failure write. The write is attempted once, then once
+ * more after each wait, so it makes at most `STORAGE_WRITE_RETRY_DELAYS_MS.length + 1` attempts
+ * (five) and waits 750 ms in all. The waits double and carry no jitter. The workflow's turn blocks
+ * while it waits, which is why the bound stays under a second.
+ */
+export const STORAGE_WRITE_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400];
 
 /** Report that a terminal teardown had no run identity to fence on and skipped its fenced writes. */
 export function warnUnknownRunIdentity(

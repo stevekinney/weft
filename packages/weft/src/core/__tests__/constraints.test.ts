@@ -8,7 +8,7 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import type { ConstraintCheckState } from '../constraint.ts';
 import { constraint } from '../constraint.ts';

@@ -5,14 +5,15 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
-} from '../storage/interface.ts';
+} from "../embedded/storage/src/index.ts";
 
 /**
  * Byte-oriented raw storage surface shared by local and HTTP clients.
  *
  * @example
  * ```ts
- * import { Engine, LocalClient, MemoryStorage, type WeftClientStorage } from '@lostgradient/weft';
+ * import { Engine, LocalClient, type WeftClientStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * const client = new LocalClient(engine);

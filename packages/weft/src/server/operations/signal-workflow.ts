@@ -1,23 +1,30 @@
 import { z } from 'zod';
 
+import {
+  type UnknownRestBinding,
+  isOperationFault,
+  readRestJsonBody,
+} from "../../embedded/backchannel/src/internals.ts";
 import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { isOperationFault } from './operation-helpers.ts';
+import { standardSchemaValidationFault } from '../standard-schema-validation-fault.ts';
+import { undeclaredMessageFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
 } from './single-workflow-control-operation.ts';
 
 const signalWorkflowInput = z.object({
-  workflowId: z.string().min(1),
-  signalName: z.string().min(1),
-  payload: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow to signal.'),
+  signalName: z.string().min(1).describe('Name of the signal to deliver.'),
+  payload: z.unknown().optional().describe('Payload delivered with the signal.'),
   signalId: z
     .string()
     .min(1)
     .refine(isSignalIdWithinByteLimit, 'signalId must be at most 128 bytes')
-    .optional(),
+    .optional()
+    .describe(
+      'Id that makes delivery idempotent: sending the same id again delivers the signal once. At most 128 bytes.',
+    ),
 });
 const signalWorkflowOutput = z.object({
   ok: z.literal(true),
@@ -33,13 +40,17 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation({
     'Deliver a named signal with an optional payload to a running workflow. Requires the ' +
     'workflow `id` and the signal `name`; `payload` is optional. Signals are fire-and-forget ' +
     'from the caller perspective and do not return a handler result. Faults with NotFound when ' +
-    'the workflow is not visible and InvalidParams when the payload exceeds the size limit.',
+    'the workflow is not visible, InvalidParams when the payload exceeds the size limit, and ' +
+    'Unprocessable when the workflow declares its signals and this name is not one of them.',
   destructive: true,
+  scope: 'signals:write',
   tags: ['Signals'],
   inputSchema: signalWorkflowInput,
   outputSchema: signalWorkflowOutput,
-  producibleFaults: ['NotFound'],
+  producibleFaults: ['NotFound', 'Unprocessable'],
   requiredEngineMethods: ['signal'],
+  mapErrorToFault: ({ error }) =>
+    undeclaredMessageFault(error) ?? standardSchemaValidationFault(error),
   invoke: async ({ input, engine }): Promise<SignalWorkflowOutput> => {
     await engine.signal(
       input.workflowId,

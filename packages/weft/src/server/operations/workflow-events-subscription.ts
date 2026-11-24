@@ -1,32 +1,39 @@
 import { z } from 'zod';
 
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { isAuthenticated } from '../principal.ts';
-import {
-  decodeCursor,
-  type Cursor,
-  type EventEnvelope,
-  type ReplayLiveSubscribeOptions,
-  type WorkflowEventFeed,
-} from '../workflow-event-feed.ts';
 import {
   createReplayAwareClosableIterable,
+  decodeCursor,
+  defineOperation,
+  type AuthorizationScope,
+  type Cursor,
+  type ReplayLiveSubscribeOptions,
+} from "../../embedded/backchannel/src/index.ts";
+import { invalidParamsFault, isAuthenticated } from "../../embedded/backchannel/src/internals.ts";
+import { type EventEnvelope, type WorkflowEventFeed } from '../workflow-event-feed.ts';
+import {
   workflowEventEnvelopeSchema,
   workflowEventParameterizedAccess,
 } from './event-stream-contracts.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
 const MAX_WORKFLOW_SUBSCRIPTION_REPLAY_EVENTS = 1_000;
 
 const workflowEventsSubscriptionInput = z.object({
-  workflowId: z.string().min(1),
-  selector: z.enum(['events', 'tokens']).optional().default('events'),
+  workflowId: z.string().min(1).describe('Id of the workflow to subscribe to.'),
+  selector: z
+    .enum(['events', 'tokens'])
+    .optional()
+    .default('events')
+    .describe(
+      'What to deliver: "events" for workflow events (default) or "tokens" for the workflow\'s token stream.',
+    ),
   fromCursor: z
     .string()
     .refine((cursor) => decodeCursor(cursor) !== null, { message: 'Invalid cursor' })
-    .optional(),
+    .optional()
+    .describe(
+      'Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.',
+    ),
 });
 
 const workflowEventsSubscriptionEnvelope = z.object({
@@ -94,7 +101,7 @@ export const workflowEventsSubscriptionOperation = defineOperation({
   discoverable: true,
   transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
+  invoke: async ({ input, host: engine }) => {
     // The WebSocket subscription session is the only caller and passes
     // `{ feed }` as the engine value for this catalog operation.
     const feed = (engine as { feed: WorkflowEventFeed }).feed;
@@ -119,8 +126,10 @@ export const workflowEventsSubscriptionOperation = defineOperation({
       { close: () => controller.abort() },
     );
 
+    const subscriptionId = `sub_${crypto.randomUUID()}`;
     return {
-      envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },
+      subscriptionId,
+      envelope: { subscriptionId, cursor: startingCursor },
       iterable,
       close: () => iterable.close(),
     };

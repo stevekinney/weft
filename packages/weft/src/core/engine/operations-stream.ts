@@ -1,4 +1,4 @@
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type {
   ContextOperationRequest,
@@ -8,6 +8,7 @@ import type {
 } from '../context.ts';
 import { cleanupPartialStreamChunks, createCleanupErrorReporter } from '../engine-helpers.ts';
 import type { EngineInternals } from './internals.ts';
+import { workflowExecutionTokenForWorkflow } from './strategy-helpers.ts';
 import { encodeStoredStreamTailSequence, loadStoredStreamChunks } from './stream-chunk-loading.ts';
 import { STREAM_CHUNK_KIND, TOKENS_STREAM_KEY, notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
@@ -55,6 +56,9 @@ export async function createStreamReferenceFromInternals(
   };
 
   const writtenKeys: string[] = [];
+  // Read before the producer runs: cancellation does not await a stream operation, so a producer
+  // that outlives a `start-new` replacement must still be judged by the run that started it.
+  const workflowExecutionToken = workflowExecutionTokenForWorkflow(internals, workflowId);
   try {
     const streamSummary = await writeStreamChunksFromInternals(
       internals,
@@ -62,6 +66,7 @@ export async function createStreamReferenceFromInternals(
       operation,
       operation.fn(sink),
       writtenKeys,
+      workflowExecutionToken,
     );
     const reference: StreamReference = {
       key: operation.key,
@@ -70,8 +75,12 @@ export async function createStreamReferenceFromInternals(
       totalSizeBytes: streamSummary.totalSizeBytes,
     };
     await internals.storage.put(KEYS.streamMetadata(workflowId, operation.key), encode(reference));
+    // The stream is complete: announce its last chunk now rather than at the end of the window.
+    internals.streamChunkAnnouncer.settle(workflowId, operation.key, workflowExecutionToken);
     return reference;
   } catch (error) {
+    // Its chunks are about to be removed, so a pending trailing event must not name one.
+    internals.streamChunkAnnouncer.discard(workflowId, operation.key, workflowExecutionToken);
     await cleanupStreamChunksFromInternals(
       internals,
       workflowId,
@@ -89,6 +98,7 @@ export async function writeStreamChunksFromInternals(
   operation: StreamOperation,
   asyncGenerator: AsyncGenerator<unknown, void, unknown>,
   writtenKeys: string[],
+  workflowExecutionToken?: string,
 ): Promise<{ chunkCount: number; totalSizeBytes: number }> {
   let chunkCount = 0;
   let totalSizeBytes = 0;
@@ -133,6 +143,16 @@ export async function writeStreamChunksFromInternals(
         timestamp: Date.now(),
         payload: chunk,
       });
+    } else {
+      // Announce the stored chunk by key and sequence only, never its body. The `tokens` key is
+      // skipped: it already reaches subscribers through the workflow feed and `stream:token`.
+      // Coalesced per key: a burst of chunks costs one immediate and at most one trailing event.
+      internals.streamChunkAnnouncer.stored(
+        workflowId,
+        operation.key,
+        sequence,
+        workflowExecutionToken,
+      );
     }
   }
 

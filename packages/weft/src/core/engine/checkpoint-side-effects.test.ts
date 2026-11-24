@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
+  MemoryStorage,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -49,6 +49,33 @@ class FailingConditionalBatchStorage extends MemoryStorage {
   }
 }
 
+/**
+ * Throws, as a storage adapter refusing the write, on `throwCount` consecutive `conditionalBatch`
+ * calls starting at call `firstThrowingCall`, and passes every other call through.
+ */
+class ThrowingConditionalBatchStorage extends MemoryStorage {
+  conditionalBatchCallCount = 0;
+
+  constructor(
+    readonly firstThrowingCall: number,
+    readonly throwCount: number,
+  ) {
+    super();
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.conditionalBatchCallCount++;
+    const offset = this.conditionalBatchCallCount - this.firstThrowingCall;
+    if (offset >= 0 && offset < this.throwCount) {
+      throw new Error('This storage write is refused.');
+    }
+    return await super.conditionalBatch(conditions, operations);
+  }
+}
+
 const checkpointOperation: ContextOperationRequest = {
   type: 'sleep',
   operationId: 'checkpoint-side-effect',
@@ -64,6 +91,8 @@ function createEngineInternals(storage: MemoryStorage, checkpoint: Checkpoint): 
     activityWorkerDispatcher: null,
     checkpoints: new Map([[checkpoint.workflowId, checkpoint]]),
     conditionWaiters: new Map(),
+    disposed: false,
+    storageWriteRetryDelaysForTesting: [0, 0, 0, 0],
     deliveredPendingUpdateIds: new Map(),
     eventLogHeads: new Map([[checkpoint.workflowId, EMPTY_EVENT_HEAD]]),
     heartbeatDetails: new Map(),
@@ -93,6 +122,7 @@ function createPersistCallbacks() {
       workflowId: string,
       _operation: ContextOperationRequest,
       step: number,
+      _stepIndex: number,
       timestamp: number,
       operations: BatchOperation[],
     ) => {
@@ -142,6 +172,7 @@ async function expectCheckpointCommitFailure(
       checkpointOperation,
       buffer,
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     ),
   );
   expect((reason as Error).message).toContain('lost its CAS race');
@@ -149,6 +180,28 @@ async function expectCheckpointCommitFailure(
   // holds the bytes this commit was conditioned on: another writer did not
   // advance the workflow, so this is not a checkpoint conflict.
   expect(reason).not.toBeInstanceOf(WorkflowCheckpointConflictError);
+}
+
+/** Commit the checkpoint after the one a test seeded, and return once it has committed. */
+async function commitNextCheckpoint(
+  internals: EngineInternals,
+  checkpoint: Checkpoint,
+): Promise<void> {
+  const bytes = serializeCheckpoint({
+    ...checkpoint,
+    step: checkpoint.step + 1,
+    createdAt: checkpoint.createdAt + 1_000,
+  });
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  await persistCheckpoint(
+    internals,
+    checkpoint.workflowId,
+    checkpointOperation,
+    buffer,
+    createPersistCallbacks(),
+    { pendingStepIndex: 0 },
+  );
 }
 
 function createSubOperationCallbacks() {
@@ -274,6 +327,7 @@ describe('atomic workflow commit side effects', () => {
       checkpointOperation,
       checkpointBuffer,
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     expect(await storage.get(oldKey)).toEqual(encode('old'));
@@ -380,6 +434,7 @@ describe('atomic workflow commit side effects', () => {
       {
         type: 'race',
         operationId: 'race-release',
+        step: 0,
         operations: [{ type: 'wait-signal', operationId: 'race-release:0', signalName: 'release' }],
       },
       {
@@ -478,5 +533,68 @@ describe('atomic workflow commit side effects', () => {
     expect(recordBytes).not.toBeNull();
     const record = decode(recordBytes!) as ActivityReconciliationRecord;
     expect(record.status).toBe('started');
+  });
+  describe('across the retries of a refused checkpoint batch', () => {
+    it('applies a buffered signal that was staged for the commit once it succeeds on its third attempt', async () => {
+      const storage = new ThrowingConditionalBatchStorage(1, 2);
+      const checkpoint = createCheckpoint('retry-top-level-signal', '1', 1_000);
+      const internals = createEngineInternals(storage, checkpoint);
+      await seedRecoveredCheckpoint(storage, internals, checkpoint);
+      const signalKey = KEYS.signal(checkpoint.workflowId, 'release', 'signal-1');
+      await storage.put(signalKey, encode('payload'));
+      await processWaitSignalOperation(
+        internals,
+        checkpoint.workflowId,
+        { type: 'wait-signal', operationId: 'wait-release', signalName: 'release' },
+        { completeOperation: () => {}, failOperation: () => {} },
+      );
+      // The consumption is staged for the next commit, not yet applied.
+      expect(await storage.get(signalKey)).toEqual(encode('payload'));
+
+      await commitNextCheckpoint(internals, checkpoint);
+
+      expect(storage.conditionalBatchCallCount).toBe(3);
+      // The retried batch is the one the first attempt built: it still carries the staged
+      // consumption, so the signal record was consumed with the checkpoint, not dropped from it.
+      expect(await storage.get(signalKey)).toBeNull();
+    });
+
+    it('applies an activity reconciliation record that was staged for the commit once it succeeds on its third attempt', async () => {
+      // Call 1 starts the reconciliation record; calls 2 and 3 are the refused checkpoint batch.
+      const storage = new ThrowingConditionalBatchStorage(2, 2);
+      const checkpoint = createCheckpoint('retry-activity-reconciliation', '1', 1_000);
+      const internals = createEngineInternals(storage, checkpoint);
+      await seedRecoveredCheckpoint(storage, internals, checkpoint);
+      const operation = {
+        type: 'activity',
+        operationId: 'activity-step',
+        activityName: 'charge-card',
+        fn: async () => 'charged',
+        input: { amount: 100 },
+        options: { idempotencyKey: 'charge-123' },
+      } satisfies Extract<ContextOperationRequest, { type: 'activity' }>;
+      expect(
+        await executeActivityOperationResult(internals, checkpoint.workflowId, operation, {
+          getComposedActivityInterceptor: () => null,
+          getComposedWorkflowInterceptor: () => null,
+          finalizePendingTimelineEntry: () => {},
+          feedOperationResult: () => {},
+          runOperationWithResult: async () => {},
+        }),
+      ).toBe('charged');
+      const reference = await buildActivityReconciliationReference(
+        checkpoint.workflowId,
+        operation.activityName,
+        operation.options.idempotencyKey,
+      );
+      const before = decode((await storage.get(reference.key))!) as ActivityReconciliationRecord;
+      expect(before.status).toBe('started');
+
+      await commitNextCheckpoint(internals, checkpoint);
+
+      expect(storage.conditionalBatchCallCount).toBe(4);
+      const after = decode((await storage.get(reference.key))!) as ActivityReconciliationRecord;
+      expect(after.status).not.toBe('started');
+    });
   });
 });

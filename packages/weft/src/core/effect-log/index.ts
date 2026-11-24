@@ -29,8 +29,8 @@ import { WeftError } from '../weft-error.ts';
  * @module core/effect-log
  */
 
-import type { Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { isJSONValue, normalizeJSONValue, type JSONValue } from '../json.ts';
 
@@ -227,7 +227,7 @@ function isEffectRecord(value: unknown): value is EffectRecord {
  * @example Create and use an EffectLog for durable deduplication
  * ```ts
  * import { EffectLog, computeSemanticHash } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const log = new EffectLog(storage, 'workflow-abc', 'operation-1');

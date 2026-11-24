@@ -4,6 +4,10 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { buildWorkflowContract } from '../../core/contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../../core/contract/manifest.ts';
 import { Engine } from '../../core/engine.ts';
@@ -11,12 +15,8 @@ import { activateCatalogRevisionCandidate } from '../../core/engine/catalog-acti
 import { ensureWorkflowCatalogReady } from '../../core/engine/catalog-readiness.ts';
 import { getWorkflowCatalog } from '../../core/engine/index.ts';
 import { workflow, type WorkflowContext } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
@@ -192,7 +192,7 @@ describe('weft.catalog.diagnostics — REST GET /v1/catalog/:name/revisions/:rev
       { name: '', revision: 'r1' },
       {
         principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry,
       },
@@ -229,7 +229,7 @@ describe('weft.catalog.diagnostics — REST GET /v1/catalog/:name/revisions/:rev
     expect(
       await throwingRejectionOf(
         getCatalogDiagnosticsOperation.invoke({
-          engine: {},
+          host: {},
           principal: { method: 'unauthenticated' },
           transport: 'jsonRpcStdio',
           input: { name: 'anything', revision: 'anything' },

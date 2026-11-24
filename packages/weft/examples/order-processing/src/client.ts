@@ -1,9 +1,5 @@
-import {
-  BunSQLiteStorage,
-  Engine,
-  WorkflowAlreadyExistsError,
-  type WorkflowHandle,
-} from '@lostgradient/weft';
+import { BunSQLiteStorage } from "../../../src/embedded/storage-bun-sqlite/src/index.ts";
+import { Engine, WorkflowAlreadyExistsError, type WorkflowHandle } from '@lostgradient/weft';
 import { resolveExampleEnvironment } from '../../environment-configuration.ts';
 
 import { addItemUpdate, cancelOrderSignal, orderStatusQuery } from './messages';

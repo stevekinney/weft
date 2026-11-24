@@ -14,6 +14,7 @@ import {
   MAX_WORKFLOW_TAG_BYTES,
   parseStartWorkflowDuration,
   StartWorkflowValidationError,
+  WorkerStartOverrideRejectedError,
 } from './start-workflow-validation.ts';
 
 function captureValidationError(action: () => void): StartWorkflowValidationError {
@@ -267,5 +268,15 @@ describe('assertOnTerminalConflictUnsupported', () => {
       assertOnTerminalConflictUnsupported({ onTerminalConflict: 'error' }, 'ctx.startChild'),
     );
     expect(error.message).toContain('ctx.startChild does not support options.onTerminalConflict');
+  });
+});
+
+describe('WorkerStartOverrideRejectedError', () => {
+  it('is a start validation error that keeps its parent’s code and carries the message', () => {
+    const rejected = new WorkerStartOverrideRejectedError('the preview is expired');
+    expect(rejected).toBeInstanceOf(StartWorkflowValidationError);
+    expect(rejected.message).toBe('the preview is expired');
+    expect(rejected.code).toBe(new StartWorkflowValidationError('x').code);
+    expect(rejected.rejection).toBe('worker-start-override');
   });
 });

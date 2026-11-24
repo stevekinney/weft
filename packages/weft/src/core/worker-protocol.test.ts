@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import type { ContextOperationRequest } from './context.ts';
 import { isValidWorkerLogRecord, isWorkerLogMessage } from './worker-protocol-log.ts';
 import {
@@ -60,6 +60,7 @@ describe('Worker protocol message accounting', () => {
   it('counts binary payload bytes without requiring JSON-shaped messages', () => {
     const message = {
       type: 'checkpoint',
+      pendingStepIndex: 0,
       workflowId: 'wf-binary',
       checkpoint: new Uint8Array(256),
       nested: {
@@ -118,6 +119,7 @@ describe('Worker protocol message accounting', () => {
     expect(() =>
       assertWorkerOutboundMessageShape({
         type: 'checkpoint',
+        pendingStepIndex: 0,
         workflowId: 'wf-malformed',
         checkpoint: 'not-bytes',
         operationRequest: { type: 'wait-signal' },
@@ -206,6 +208,7 @@ describe('Worker replay operation signatures', () => {
     const operation = {
       type: 'race' as const,
       operationId: 'race-keyed',
+      step: 0,
       operations: [
         {
           type: 'sleep' as const,
@@ -315,6 +318,7 @@ describe('Worker replay operation signatures', () => {
       {
         type: 'race',
         operationId: 'race-1',
+        step: 0,
         operations: [
           {
             type: 'sleep',
@@ -523,6 +527,21 @@ describe('Worker log message validation (#529)', () => {
       expect(isValidWorkerLogRecord({ ...validRecord, level: 'trace' })).toBe(false);
     });
 
+    it('accepts an absent or non-negative integer step and rejects any other', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, step: 0 })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, step: 4 })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, step: -1 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, step: 1.5 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, step: '1' })).toBe(false);
+    });
+
+    it('accepts an absent or boolean replayed mark and rejects any other', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, replayed: true })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, replayed: false })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, replayed: 'yes' })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, replayed: 1 })).toBe(false);
+    });
+
     it('rejects a record missing required envelope fields', () => {
       // The full-shape validator requires every engine-owned envelope field, because a
       // host sink is typed to receive a complete WorkflowLogRecord.
@@ -616,5 +635,254 @@ describe('Worker log message validation (#529)', () => {
         }),
       ).toThrow(WorkerProtocolError);
     });
+  });
+});
+
+describe('Worker outbound message shape rejections', () => {
+  const rejects = (message: unknown, expected: string) => {
+    expect(() => assertWorkerOutboundMessageShape(message)).toThrow(expected);
+  };
+
+  it('rejects anything that is not an object with a workflow id', () => {
+    rejects(null, 'Worker outbound message must be an object');
+    rejects('completed', 'Worker outbound message must be an object');
+    rejects({ type: 'completed' }, 'Worker outbound message must include workflowId');
+    rejects(
+      { type: 'completed', workflowId: 7 },
+      'Worker outbound message must include workflowId',
+    );
+  });
+
+  it('rejects a protocol version or turn id that is not an integer', () => {
+    rejects(
+      { type: 'completed', workflowId: 'wf', protocolVersion: 1.5 },
+      'Worker outbound message protocolVersion must be an integer',
+    );
+    rejects(
+      { type: 'completed', workflowId: 'wf', turnId: '3' },
+      'Worker outbound message turnId must be an integer',
+    );
+  });
+
+  it('rejects a message type the host does not know', () => {
+    rejects(
+      { type: 'shutdown', workflowId: 'wf' },
+      'Worker outbound message has an unsupported type',
+    );
+  });
+
+  it('rejects a checkpoint whose pending step index is missing or is not a non-negative integer', () => {
+    const base = {
+      type: 'checkpoint',
+      workflowId: 'wf',
+      checkpoint: new ArrayBuffer(0),
+      operationRequest: { type: 'sleep' },
+    };
+    for (const pendingStepIndex of [undefined, -1, 1.5, '2', Number.NaN, null]) {
+      rejects(
+        { ...base, pendingStepIndex },
+        'Worker checkpoint message pendingStepIndex must be a non-negative integer',
+      );
+    }
+  });
+
+  it('rejects a checkpoint without an operation request and a failure without an error string', () => {
+    rejects(
+      { type: 'checkpoint', workflowId: 'wf', checkpoint: new ArrayBuffer(0) },
+      'Worker checkpoint message must include operationRequest',
+    );
+    rejects(
+      {
+        type: 'checkpoint',
+        pendingStepIndex: 0,
+        workflowId: 'wf',
+        checkpoint: new ArrayBuffer(0),
+        operationRequest: null,
+      },
+      'Worker checkpoint message must include operationRequest',
+    );
+    rejects(
+      { type: 'failed', workflowId: 'wf' },
+      'Worker failed message must include an error string',
+    );
+  });
+});
+
+describe('Worker protocol message size accounting for every value kind', () => {
+  it('counts array members, errors, dates and sets inside a message', () => {
+    const baseline = estimateWorkerProtocolMessageBytes({ type: 'completed', workflowId: 'wf' });
+    const withValues = estimateWorkerProtocolMessageBytes({
+      type: 'completed',
+      workflowId: 'wf',
+      result: [new Error('boom'), new Date('2026-01-01T00:00:00.000Z'), new Set(['a'])],
+    });
+    const withLongerError = estimateWorkerProtocolMessageBytes({
+      type: 'completed',
+      workflowId: 'wf',
+      result: [new Error('boom'.repeat(100)), new Date('2026-01-01T00:00:00.000Z'), new Set(['a'])],
+    });
+
+    expect(withValues).toBeGreaterThan(baseline);
+    expect(withLongerError).toBeGreaterThan(withValues);
+  });
+
+  it('counts an error that is a Map key but not its stack', () => {
+    const first = new Error('same message');
+    const second = new Error('same message');
+    second.stack = 'a very long stack '.repeat(100);
+
+    expect(estimateWorkerProtocolMessageBytes({ cache: new Map([[first, 1]]) })).toBe(
+      estimateWorkerProtocolMessageBytes({ cache: new Map([[second, 1]]) }),
+    );
+  });
+
+  it('rejects a function or symbol that only appears as a Map key', () => {
+    expect(() => estimateWorkerProtocolMessageBytes({ cache: new Map([[() => {}, 1]]) })).toThrow(
+      'Worker protocol message cannot include functions or symbols',
+    );
+    expect(() =>
+      estimateWorkerProtocolMessageBytes({ cache: new Map([[Symbol('key'), 1]]) }),
+    ).toThrow('Worker protocol message cannot include functions or symbols');
+  });
+
+  it('rejects a cycle that runs through a Map key, which the cloneability check does not walk', () => {
+    const owner: Record<string, unknown> = {};
+    owner['cache'] = new Map([[owner, 1]]);
+
+    expect(() => estimateWorkerProtocolMessageBytes(owner)).toThrow(
+      'Worker protocol message cannot include cyclic values',
+    );
+  });
+});
+
+describe('Worker replay signature input handling', () => {
+  const digestOf = async (input: unknown): Promise<string> => {
+    const signature = await createWorkerReplayOperationSignature(
+      { type: 'activity', operationId: 'activity-1', activityName: 'work', input } as never,
+      MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+    );
+    return signature.stableFieldsDigest;
+  };
+
+  it('hashes binary content by bytes, ignoring the buffer it sits in', async () => {
+    const wide = new Uint8Array([9, 1, 2, 3, 9]);
+
+    expect(await digestOf(new Uint8Array(wide.buffer, 1, 3))).toBe(
+      await digestOf(new Uint8Array([1, 2, 3])),
+    );
+    expect(await digestOf(new Uint8Array([1, 2, 3]).buffer)).toBe(
+      await digestOf(new Uint8Array([1, 2, 3])),
+    );
+    expect(await digestOf(new Uint8Array([1, 2, 4]))).not.toBe(
+      await digestOf(new Uint8Array([1, 2, 3])),
+    );
+  });
+
+  it('hashes dates by instant and errors by name and message', async () => {
+    expect(await digestOf(new Date('2026-01-01T00:00:00.000Z'))).toBe(
+      await digestOf(new Date('2026-01-01T00:00:00.000Z')),
+    );
+    expect(await digestOf(new Date('2026-01-01T00:00:00.000Z'))).not.toBe(
+      await digestOf(new Date('2026-01-02T00:00:00.000Z')),
+    );
+
+    const first = new Error('boom');
+    const second = new Error('boom');
+    second.stack = 'a different stack';
+    expect(await digestOf(first)).toBe(await digestOf(second));
+    expect(await digestOf(first)).not.toBe(await digestOf(new TypeError('boom')));
+    expect(await digestOf(first)).not.toBe(await digestOf(new Error('bang')));
+  });
+
+  it('hashes sets by their members', async () => {
+    expect(await digestOf(new Set(['a', 'b']))).toBe(await digestOf(new Set(['a', 'b'])));
+    expect(await digestOf(new Set(['a', 'b']))).not.toBe(await digestOf(new Set(['a', 'c'])));
+  });
+
+  it('rejects functions and symbols nested in an operation', async () => {
+    expect(await throwingRejectionOf(digestOf({ callback: () => {} }))).toThrow(
+      'Worker replay signature cannot include functions or symbols',
+    );
+    expect(await throwingRejectionOf(digestOf({ tag: Symbol('tag') }))).toThrow(
+      'Worker replay signature cannot include functions or symbols',
+    );
+  });
+
+  it('rejects an operation with neither a type nor a kind', async () => {
+    expect(
+      await throwingRejectionOf(
+        createWorkerReplayOperationSignature({ operationId: 'anonymous' } as never, 1024),
+      ),
+    ).toThrow('Worker operation has no type or kind');
+  });
+
+  it('reports a cyclic operation as a protocol error instead of overflowing the stack', async () => {
+    const self: Record<string, unknown> = { label: 'self' };
+    self['again'] = self;
+    const throughMap: Record<string, unknown> = {};
+    throughMap['cache'] = new Map([['key', throughMap]]);
+    const throughSet: Record<string, unknown> = {};
+    throughSet['members'] = new Set([throughSet]);
+
+    for (const cyclic of [self, throughMap, throughSet]) {
+      expect(await throwingRejectionOf(digestOf(cyclic))).toThrow(WorkerProtocolError);
+      expect(await throwingRejectionOf(digestOf(cyclic))).toThrow(
+        'Worker replay signature cannot include cyclic values',
+      );
+    }
+  });
+
+  it('hashes a value shared by two fields, which is a repeat and not a cycle', async () => {
+    const shared = { id: 'shared' };
+
+    expect(await digestOf({ left: shared, right: shared })).toBe(
+      await digestOf({ left: { id: 'shared' }, right: { id: 'shared' } }),
+    );
+  });
+});
+
+describe('Worker run-all replay signature branches', () => {
+  const digestOfRunAll = async (branches: unknown): Promise<string> => {
+    const signature = await createWorkerReplayOperationSignature(
+      { type: 'run-all', operationId: 'run-all-1', branches } as never,
+      MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+    );
+    return signature.stableFieldsDigest;
+  };
+
+  it('hashes branches by arity and input, not by the function they run', async () => {
+    expect(await digestOfRunAll({ first: [() => 1], second: [() => 2, { amount: 1 }] })).toBe(
+      await digestOfRunAll({ first: [() => 'other'], second: [() => 'other', { amount: 1 }] }),
+    );
+    expect(await digestOfRunAll({ first: [() => 1], second: [() => 2, { amount: 1 }] })).not.toBe(
+      await digestOfRunAll({ first: [() => 1], second: [() => 2, { amount: 2 }] }),
+    );
+  });
+
+  it('hashes branches that are not a keyed record, and branch entries that are not arrays', async () => {
+    expect(await digestOfRunAll(['a', 'b'])).not.toBe(await digestOfRunAll(['a', 'c']));
+    expect(await digestOfRunAll({ first: 'literal' })).not.toBe(
+      await digestOfRunAll({ first: 'other' }),
+    );
+  });
+
+  it('reports branches that contain themselves as a protocol error', async () => {
+    const branches: Record<string, unknown> = {};
+    branches['again'] = branches;
+    const operation: Record<string, unknown> = { type: 'run-all' };
+    operation['branches'] = operation;
+
+    expect(await throwingRejectionOf(digestOfRunAll(branches))).toThrow(
+      'Worker replay signature cannot include cyclic values',
+    );
+    // A record that is both an ancestor and the `branches` of a nested run-all record.
+    expect(
+      await throwingRejectionOf(
+        createWorkerReplayOperationSignature(
+          { type: 'activity', operationId: 'a-1', activityName: 'work', input: operation } as never,
+          MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
+        ),
+      ),
+    ).toThrow('Worker replay signature cannot include cyclic values');
   });
 });

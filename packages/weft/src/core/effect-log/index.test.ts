@@ -14,7 +14,9 @@
 
 import { beforeEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { encode } from '../codec.ts';
 import { computeSemanticHash, EffectLog, EffectReplayConflictError } from './index.ts';
 
 // ---------------------------------------------------------------------------
@@ -145,6 +147,24 @@ describe('EffectLog', () => {
   it('lookup returns null for an unknown hash', async () => {
     const result = await log.lookup('unknown-hash');
     expect(result).toBeNull();
+  });
+
+  it('lookup treats a stored record with an unrecognised status as absent', async () => {
+    await storage.put(
+      KEYS.toolEffect('wf-1', 'operation-1', 'hash-odd'),
+      encode({ status: 'half-done', effectName: 'my-effect' }),
+    );
+
+    expect(await log.lookup('hash-odd')).toBeNull();
+  });
+
+  it('lookup treats a stored record with the wrong fields for its status as absent', async () => {
+    await storage.put(
+      KEYS.toolEffect('wf-1', 'operation-1', 'hash-in-flight'),
+      encode({ status: 'in-flight', effectName: 'my-effect' }),
+    );
+
+    expect(await log.lookup('hash-in-flight')).toBeNull();
   });
 
   it('record marks the call as in-flight', async () => {

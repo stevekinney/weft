@@ -22,7 +22,7 @@ const MAX_CAPTURED_OUTPUT_LENGTH = 32_768;
 
 export type RunningSubprocess = Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
 
-export function normalizeSignalCode(value: string | null): SubprocessSignal | null {
+export function normalizeSignalCode(value: string | number | null): SubprocessSignal | null {
   if (value === 'SIGINT' || value === 'SIGKILL' || value === 'SIGTERM') return value;
   return null;
 }

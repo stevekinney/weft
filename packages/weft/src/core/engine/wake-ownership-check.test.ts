@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { EmitWorkflowLeaseWarning, WorkflowWakeKind } from './lease-deposition.ts';
 import { WeftWorkflowWakeDiscardedWarning } from './lease-deposition.ts';
 import { wakeOwnershipCheck } from './wake-ownership-check.ts';

@@ -14,10 +14,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { type Storage, type StorageCapabilities, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
   PERSISTED_DATA_SCHEMA_VERSION_KEY,

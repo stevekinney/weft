@@ -52,3 +52,68 @@ describe('AttemptControllerTable heartbeat timer tracking', () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
   });
 });
+
+// Regression (COR-2295): a server `cancel` control (RemoteWorker) or a
+// long-poll heartbeat answering `cancelled` (LongPollWorker) used to abort the
+// matching controller and nothing else, so an activity that ignores its signal
+// kept its automatic heartbeat interval firing until the attempt settled.
+// `cancel` clears exactly that attempt's interval and keeps its entry for the
+// late result and the attempt's own `finally` cleanup.
+describe('AttemptControllerTable cancellation', () => {
+  it("cancel clears only the matching attempt's heartbeat timer and keeps its entry", () => {
+    using clearIntervalSpy = spyOn(globalThis, 'clearInterval');
+    const table = new AttemptControllerTable();
+    const canceled = new AbortController();
+    const live = new AbortController();
+    table.set('op-1', 'attempt-1', canceled);
+    table.set('op-2', 'attempt-2', live);
+    const canceledTimer = setInterval(() => {}, 5);
+    const liveTimer = setInterval(() => {}, 5);
+    table.setHeartbeatTimer('op-1', 'attempt-1', canceledTimer);
+    table.setHeartbeatTimer('op-2', 'attempt-2', liveTimer);
+
+    try {
+      clearIntervalSpy.mockClear();
+      table.cancel('op-1', 'attempt-1', 'operator stop');
+
+      expect(canceled.signal.aborted).toBe(true);
+      expect(canceled.signal.reason).toBe('operator stop');
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(canceledTimer);
+      expect(table.get('op-1', 'attempt-1')).toBe(canceled);
+      expect(live.signal.aborted).toBe(false);
+      expect(table.get('op-2', 'attempt-2')).toBe(live);
+    } finally {
+      clearInterval(canceledTimer);
+      clearInterval(liveTimer);
+    }
+  });
+
+  it('ignores a stale attempt token and keeps the first reason on a repeated cancellation', () => {
+    using clearIntervalSpy = spyOn(globalThis, 'clearInterval');
+    const table = new AttemptControllerTable();
+    const current = new AbortController();
+    table.set('op-1', 'attempt-2', current);
+    const timer = setInterval(() => {}, 5);
+    table.setHeartbeatTimer('op-1', 'attempt-2', timer);
+
+    try {
+      clearIntervalSpy.mockClear();
+      table.cancel('op-1', 'attempt-1', 'stale');
+      expect(current.signal.aborted).toBe(false);
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+      table.cancel('op-1', 'attempt-2', 'first');
+      table.cancel('op-1', 'attempt-2', 'second');
+      expect(current.signal.reason).toBe('first');
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+
+      clearIntervalSpy.mockClear();
+      table.delete('op-1', 'attempt-2');
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+      expect(table.get('op-1', 'attempt-2')).toBeUndefined();
+    } finally {
+      clearInterval(timer);
+    }
+  });
+});

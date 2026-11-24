@@ -1,9 +1,9 @@
-import type { ScanOptions } from '../../storage/interface.ts';
 import {
-  KEYS,
+  type ScanOptions,
   encodeStorageKeyComponent,
   tryDecodeStorageKeyComponent,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { failureCategorySearchValues, isFailureCategory } from '../failure-categories.ts';
 import { encodeAttributeValue, searchAttributeName } from '../search-attributes.ts';
 import type {
@@ -16,12 +16,12 @@ import type {
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
 import type { EngineInternals } from './internals.ts';
+import { matchesListFilterAndRecords } from './list-filter-match.ts';
 import {
   attributeFilterExactValues,
   decodeSearchAttributeRecord,
   intersectIdentifierSets,
   listFilterHasAttributeFilters,
-  matchesListFilter,
 } from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
 import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
@@ -65,7 +65,16 @@ export async function* streamMatchingWorkflowStates(
 
     const state = decodeWorkflowState(value);
     const searchAttributes = await readSearchAttributesForFilter(internals, state.id, filter);
-    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters, searchAttributes)) {
+    if (
+      !(await matchesListFilterAndRecords(
+        internals,
+        state,
+        filter,
+        constrainedIds,
+        normalizedTagFilters,
+        searchAttributes,
+      ))
+    ) {
       continue;
     }
     yield state;
@@ -84,7 +93,16 @@ async function loadMatchingWorkflowState(
 
   const state = decodeWorkflowState(stateBytes);
   const searchAttributes = await readSearchAttributesForFilter(internals, workflowId, filter);
-  if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters, searchAttributes)) {
+  if (
+    !(await matchesListFilterAndRecords(
+      internals,
+      state,
+      filter,
+      constrainedIds,
+      normalizedTagFilters,
+      searchAttributes,
+    ))
+  ) {
     return null;
   }
   return state;

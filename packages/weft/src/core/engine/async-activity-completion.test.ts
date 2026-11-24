@@ -10,8 +10,8 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { OperationOutcome } from '../types.ts';
 import { AsyncActivityDeferral, parkDeferredAsyncActivity } from './async-activity-completion.ts';
 import {

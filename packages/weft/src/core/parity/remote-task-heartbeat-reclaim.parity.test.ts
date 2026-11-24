@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
-import type { Storage } from '../../storage/interface.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { Engine } from '../engine.ts';

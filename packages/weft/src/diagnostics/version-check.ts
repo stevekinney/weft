@@ -8,11 +8,11 @@
  * @module diagnostics/version-check
  */
 
+import type { Storage } from "../embedded/storage/src/index.ts";
 import { decodeWorkflowState } from '../core/engine/validation.ts';
 import { isTopLevelWorkflowStateKey } from '../core/engine/workflow-state-stream.ts';
 import type { WorkflowDefinition } from '../core/types.ts';
 import { DEFAULT_WORKFLOW_VERSION, checkVersionCompatibility } from '../core/versioning.ts';
-import type { Storage } from '../storage/interface.ts';
 import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
 
 interface WorkflowTypeGroup {
@@ -78,7 +78,7 @@ function buildWorkflowTypeReports(
 ): WorkflowTypeReport[] {
   const reports: WorkflowTypeReport[] = [];
   for (const [type, group] of groups) {
-    const registration = registrations[type];
+    const registration = Object.hasOwn(registrations, type) ? registrations[type] : undefined;
     if (!registration) continue;
 
     const storedVersion = findMostCommonVersion(group.versionCounts);
@@ -118,7 +118,8 @@ function computeOverallVerdict(
  *
  * @example
  * ```ts
- * import { MemoryStorage, runVersionCheck, workflow } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { runVersionCheck, workflow } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  *

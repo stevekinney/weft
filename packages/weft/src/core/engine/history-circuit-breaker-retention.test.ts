@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext, WorkflowState } from '../types.ts';
@@ -11,7 +11,7 @@ import { getInternals } from './internals.ts';
 import { runRetentionSweep } from './retention.ts';
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 const noop = async () => null;

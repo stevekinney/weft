@@ -20,10 +20,14 @@ import type { SearchAttributeSchema } from './search-attributes.ts';
 import type {
   ActivityMap,
   ActivityMapInput,
+  DisjointFrom,
+  MergeMaps,
   NormalizeActivities,
   QueryMap,
   SignalMap,
   UpdateMap,
+  UsedActivityDefinition,
+  UsesMapInput,
 } from './workflow-builder-helpers.ts';
 import type { WorkflowContext } from './workflow-context.ts';
 import type { WorkflowDefinition, WorkflowOperation } from './workflow-function.ts';
@@ -128,6 +132,7 @@ export interface BuilderState {
   readonly queries: boolean;
   readonly searchAttributes: boolean;
   readonly services?: boolean | undefined;
+  readonly uses?: boolean | undefined;
 }
 
 /**
@@ -150,6 +155,7 @@ export interface InitialBuilderState {
   readonly queries: false;
   readonly searchAttributes: false;
   readonly services?: false | undefined;
+  readonly uses?: false | undefined;
 }
 
 /**
@@ -167,11 +173,9 @@ export interface InitialBuilderState {
  * void _check;
  * ```
  */
-export type MarkBuilderState<
-  S extends BuilderState,
-  K extends keyof BuilderState,
-> = K extends 'services'
-  ? Omit<S, 'services'> & { readonly services: true }
+export type MarkBuilderState<S extends BuilderState, K extends keyof BuilderState> = K extends
+  'services' | 'uses'
+  ? Omit<S, K> & { readonly [P in K]: true }
   : {
       readonly [P in keyof S]: P extends K ? true : S[P];
     };
@@ -258,6 +262,9 @@ export interface WorkflowBuilder<
    * or an `{ execute, retry?, timeout?, ... }` options object. Calling
    * `.activities` twice before `.execute()` is a type error and throws
    * `WorkflowBuilderError` at runtime.
+   * A name the builder already declares with `.uses()`, including an activity
+   * shared by `createWorkflowFactory`, is a type error here and throws
+   * `WorkflowBuilderError`.
    *
    * @example
    * ```ts
@@ -272,11 +279,11 @@ export interface WorkflowBuilder<
    */
   activities: TState['activities'] extends true
     ? never
-    : <TInput extends ActivityMapInput>(
+    : <TInput extends ActivityMapInput & DisjointFrom<TActivities>>(
         map: TInput,
       ) => WorkflowBuilder<
         TName,
-        NormalizeActivities<TInput>,
+        MergeMaps<TActivities, NormalizeActivities<TInput>>,
         TSignals,
         TUpdates,
         TQueries,
@@ -286,11 +293,58 @@ export interface WorkflowBuilder<
       >;
 
   /**
+   * Declare the engine-provided activities this workflow calls with
+   * `ctx.run('name', input)`: activities registered on the engine through
+   * `Engine.create({ activities })` or `engine.register(activity)` rather than
+   * scoped to this workflow by `.activities()`. Each key must equal the
+   * activity's own `name`. The declaration puts the activity's schemas in the
+   * workflow's contract and links the workflow to the activity in the registry
+   * snapshot; dispatch still resolves the engine's registered implementation.
+   * A name declared in both `.activities()` and `.uses()` is a type error and
+   * throws at `.execute()`. On a builder from `createWorkflowFactory`, these
+   * entries merge with the factory's shared activities, and redeclaring one
+   * throws `WorkflowBuilderError`. Calling `.uses` twice before `.execute()` is a type error and
+   * throws `WorkflowBuilderError` at runtime.
+   *
+   * @example
+   * ```ts
+   * import { activity, workflow } from '@lostgradient/weft';
+   * const greet = activity({ name: 'greet', execute: async (name: string) => `Hello, ${name}` });
+   * const welcome = workflow({ name: 'welcome' })
+   *   .uses({ greet })
+   *   .execute(async function* (ctx, input: string) {
+   *     return yield* ctx.run('greet', input);
+   *   });
+   * void welcome;
+   * ```
+   */
+  uses: TState['uses'] extends true
+    ? never
+    : <TInput extends UsesMapInput & DisjointFrom<TActivities>>(
+        map: TInput,
+      ) => WorkflowBuilder<
+        TName,
+        MergeMaps<TActivities, NormalizeActivities<TInput>>,
+        TSignals,
+        TUpdates,
+        TQueries,
+        TSearchAttributes,
+        MarkBuilderState<TState, 'uses'>,
+        TServices
+      >;
+
+  /**
    * Declare the signals this workflow accepts so `ctx.waitForSignal('name')`
-   * autocompletes and types the payload. Type-safety and introspection
-   * metadata only — `.signals` does not introduce new runtime gating on top
-   * of the existing dispatch path. Calling `.signals` twice before
-   * `.execute()` is a type error and throws `WorkflowBuilderError` at runtime.
+   * autocompletes and types the payload. Declaring signals closes the set:
+   * the engine rejects a signal under any other name with
+   * `UndeclaredWorkflowMessageError` before buffering it, while a workflow
+   * that declares no signals accepts any name. Calling `.signals` twice
+   * before `.execute()` is a type error and throws `WorkflowBuilderError` at
+   * runtime.
+   * On a builder from `createWorkflowFactory`, these entries merge with the
+   * factory's shared signals, whose declaration closes the set for every
+   * workflow the factory builds; redeclaring a shared name is a type error and
+   * throws `WorkflowBuilderError` at runtime.
    *
    * @example
    * ```ts
@@ -305,12 +359,12 @@ export interface WorkflowBuilder<
    */
   signals: TState['signals'] extends true
     ? never
-    : <TInput extends SignalMap>(
+    : <TInput extends SignalMap & DisjointFrom<TSignals>>(
         map: TInput,
       ) => WorkflowBuilder<
         TName,
         TActivities,
-        TInput,
+        MergeMaps<TSignals, TInput>,
         TUpdates,
         TQueries,
         TSearchAttributes,
@@ -320,9 +374,15 @@ export interface WorkflowBuilder<
 
   /**
    * Declare the request-response update handlers this workflow accepts.
-   * Type-safety and introspection metadata only — the update-dispatch path
-   * is unchanged. Calling `.updates` twice before `.execute()` is a type
-   * error and throws `WorkflowBuilderError` at runtime.
+   * Declaring updates closes the set: the engine rejects an update under any
+   * other name with `UndeclaredWorkflowMessageError` before dispatching or
+   * persisting it, while a workflow that declares no updates accepts any
+   * name. Calling `.updates` twice before `.execute()` is a type error and
+   * throws `WorkflowBuilderError` at runtime.
+   * On a builder from `createWorkflowFactory`, these entries merge with the
+   * factory's shared updates, whose declaration closes the set for every
+   * workflow the factory builds; redeclaring a shared name is a type error and
+   * throws `WorkflowBuilderError` at runtime.
    *
    * @example
    * ```ts
@@ -335,13 +395,13 @@ export interface WorkflowBuilder<
    */
   updates: TState['updates'] extends true
     ? never
-    : <TInput extends UpdateMap>(
+    : <TInput extends UpdateMap & DisjointFrom<TUpdates>>(
         map: TInput,
       ) => WorkflowBuilder<
         TName,
         TActivities,
         TSignals,
-        TInput,
+        MergeMaps<TUpdates, TInput>,
         TQueries,
         TSearchAttributes,
         MarkBuilderState<TState, 'updates'>,
@@ -349,10 +409,16 @@ export interface WorkflowBuilder<
       >;
 
   /**
-   * Declare the read-only query handlers this workflow accepts. Type-safety
-   * and introspection metadata only — `.queries` does not introduce new
-   * runtime gating. Calling `.queries` twice before `.execute()` is a type
-   * error and throws `WorkflowBuilderError` at runtime.
+   * Declare the read-only query handlers this workflow accepts. Declaring
+   * queries closes the set: the engine running the workflow rejects a query
+   * under any other name with `UndeclaredWorkflowMessageError` (the built-in
+   * `activityProgress` query always answers), while a workflow that declares
+   * no queries accepts any name. Calling `.queries` twice before `.execute()`
+   * is a type error and throws `WorkflowBuilderError` at runtime.
+   * On a builder from `createWorkflowFactory`, these entries merge with the
+   * factory's shared queries, whose declaration closes the set for every
+   * workflow the factory builds; redeclaring a shared name is a type error and
+   * throws `WorkflowBuilderError` at runtime.
    *
    * @example
    * ```ts
@@ -365,14 +431,14 @@ export interface WorkflowBuilder<
    */
   queries: TState['queries'] extends true
     ? never
-    : <TInput extends QueryMap>(
+    : <TInput extends QueryMap & DisjointFrom<TQueries>>(
         map: TInput,
       ) => WorkflowBuilder<
         TName,
         TActivities,
         TSignals,
         TUpdates,
-        TInput,
+        MergeMaps<TQueries, TInput>,
         TSearchAttributes,
         MarkBuilderState<TState, 'queries'>,
         TServices
@@ -534,6 +600,8 @@ export interface BuiltWorkflowDefinition<
   TServices = unknown,
 > extends WorkflowDefinition<TInput, TOutput, TName, TServices> {
   readonly activities: Readonly<Record<string, Readonly<ActivityDefinition>>>;
+  /** Engine-provided activities declared with `.uses()`; present only when that map is non-empty. */
+  readonly uses?: Readonly<Record<string, UsedActivityDefinition>>;
   readonly signals: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
   readonly updates: Readonly<Record<string, Readonly<UpdateDefinition>>>;
   readonly queries: Readonly<Record<string, Readonly<QueryDefinition>>>;

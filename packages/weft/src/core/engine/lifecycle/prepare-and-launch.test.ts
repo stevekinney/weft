@@ -13,12 +13,13 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
+  MemoryStorage,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../../testing/promise-outcome.test-support.ts';
+} from "../../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../../../test-support/embedded/testing/src/wait-until.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { encode } from '../../codec.ts';
 import { PayloadSizeExceededError } from '../../payload-size.ts';
 import {
@@ -127,6 +128,24 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     expect(recordAfterCompletion?.status).toBe('completed');
   });
 
+  it('prepares and launches a workflow under a generated id when none is given', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'cor-75-generated-id' }).execute(async function* () {
+        return 'ok';
+      }),
+    );
+
+    const prepared = await engine.prepare('cor-75-generated-id', null);
+    expect(prepared.id).toMatch(/\S/);
+    const record = await engine.get(prepared.id);
+    expect(record?.status).toBe('pending');
+
+    const handle = await prepared.launch();
+    expect(handle.id).toBe(prepared.id);
+    expect(await handle.result()).toBe('ok');
+  });
+
   it('primes the checkpoint compare-and-swap baseline from the checkpoint launch() loaded', async () => {
     const storage = new MemoryStorage();
     await using engine = new Engine({ storage });
@@ -147,7 +166,7 @@ describe('engine.prepare() / handle.launch() / handle.abandon() (COR-75)', () =>
     // in-memory baseline for it; launch() must prime one from storage.
     forgetCommittedCheckpointBytes(internals, prepared.id);
     await prepared.launch();
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for await (const _turn of awakeTurns()) {
       if (internals.parkedInlineWorkflows.has(prepared.id)) break;
       await new Promise((resolve) => setImmediate(resolve));
     }

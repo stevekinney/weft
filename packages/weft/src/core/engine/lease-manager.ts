@@ -44,7 +44,8 @@
  * @module core/engine/lease-manager
  */
 
-import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import { storageConditionalBatch, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   decodeEpoch,
   decodeHolder,
@@ -89,6 +90,8 @@ export type LeaseManagerOptions = {
    * renewal timer — it reports through this seam instead.
    */
   onLeaseLost?: (reason: LeaseLostReason) => void;
+  /** Called after every renewal attempt settles (committed, transient failure, or loss), so a holder can re-read {@link LeaseManager.health}. */
+  onRenewalSettled?: () => void;
 };
 
 /**
@@ -378,6 +381,12 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
       .catch(() => {})
       .finally(() => {
         inFlightRenewal = null;
+        // A throwing observer must not make the stored `inFlightRenewal` reject.
+        try {
+          options.onRenewalSettled?.();
+        } catch {
+          // Observers are advisory; the renewal itself already settled.
+        }
       });
   }
 

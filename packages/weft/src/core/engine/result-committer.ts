@@ -17,6 +17,24 @@ import type { WorkflowResultWaiter } from './engine-internal-types.ts';
 import { HANDLE_RESULT_SETTLEMENT, type WorkflowClaimHandle } from './handles.ts';
 
 const committerByResultPromise = new WeakMap<Promise<unknown>, string>();
+const replacedResultPromises = new WeakSet<Promise<unknown>>();
+
+/**
+ * Record that `waiter`'s run was replaced by a newer run under the same workflow id before this
+ * engine observed its outcome. The replacement purged the original outcome, so its committer
+ * cannot be read back; only another engine can have terminated a run this engine never settled.
+ */
+export function markResultReplaced(waiter: WorkflowResultWaiter): void {
+  replacedResultPromises.add(waiter.promise);
+}
+
+/** Whether `handle`'s result rejected because a newer run replaced the run it awaited. */
+export function readHandleResultReplaced(handle: WorkflowClaimHandle): boolean {
+  const settlement = (
+    handle as { readonly [HANDLE_RESULT_SETTLEMENT]?: () => Promise<unknown> | undefined }
+  )[HANDLE_RESULT_SETTLEMENT]?.();
+  return settlement !== undefined && replacedResultPromises.has(settlement);
+}
 
 /**
  * Record `committedBy` for `waiter`'s result, unless it already has one. A no-op for anything but

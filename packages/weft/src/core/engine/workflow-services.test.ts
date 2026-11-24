@@ -10,16 +10,13 @@
  * registries.
  */
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import {
-  sleepForTesting,
-  waitForCondition,
-  yieldToEventLoop,
-} from '../../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { DevelopmentWarningEvent, ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleOverlapPolicy, WorkflowContext } from '../types.ts';
@@ -32,7 +29,7 @@ import { cleanupWorkflowStorage } from './termination/cleanup.ts';
 
 /** Drain microtasks so fire-and-forget inline work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 /** Advance engine clock and scheduler then drain pending inline work. */
@@ -43,14 +40,13 @@ async function tickEngine<TWorkflows extends object, TActivities extends object>
 ): Promise<void> {
   clock.now = nextNow;
   await engine.scheduler.tick(clock.now);
-  await yieldToEventLoop();
-  await yieldToEventLoop();
+  await settleInlineLaunches();
 }
 
 describe('ctx.services — launch path (inline)', () => {
   it('exposes the services object passed at start to the workflow body', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const greet = (name: string): string => `hello, ${name}`;
 
@@ -66,7 +62,7 @@ describe('ctx.services — launch path (inline)', () => {
 
   it('defaults ctx.services to undefined when none is provided', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const wf = workflow({ name: 'no-services' }).execute(async function* (ctx: WorkflowContext) {
       return ctx.services === undefined ? 'absent' : 'present';
@@ -79,7 +75,7 @@ describe('ctx.services — launch path (inline)', () => {
 
   it('does not leak one run’s services into another run', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
 
     const wf = workflow({ name: 'leak-check' }).execute(async function* (ctx: WorkflowContext) {
       return (ctx.services as { tag: string } | undefined)?.tag ?? 'none';

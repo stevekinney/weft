@@ -1,5 +1,5 @@
-import type { BatchOperation } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import type { BatchOperation } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import type { SearchAttributeDefinition, SearchAttributeValue } from './types.ts';
 
 export { searchAttribute, searchAttributeName } from './types.ts';
@@ -282,10 +282,10 @@ function buildAttributeIndexOperations(
   previous: Record<string, SearchAttributeValue>,
   current: Record<string, SearchAttributeValue>,
 ): BatchOperation[] {
-  const oldValue = previous[attributeName];
-  const newValue = current[attributeName];
-  const hadOld = attributeName in previous;
-  const hasNew = attributeName in current;
+  const hadOld = Object.hasOwn(previous, attributeName);
+  const hasNew = Object.hasOwn(current, attributeName);
+  const oldValue = Object.hasOwn(previous, attributeName) ? previous[attributeName] : undefined;
+  const newValue = Object.hasOwn(current, attributeName) ? current[attributeName] : undefined;
 
   if (Array.isArray(oldValue) || Array.isArray(newValue)) {
     return buildArrayTransitionOperations({

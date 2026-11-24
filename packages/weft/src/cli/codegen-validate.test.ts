@@ -131,6 +131,28 @@ describe('validateRegistrySnapshot', () => {
     expect(Object.keys(result.value.activities)).toEqual(['ping']);
   });
 
+  it('projects only workflow-scoped activities into the worker activity table', async () => {
+    const manifest = await fixtureManifest({
+      name: 'welcome',
+      workflowVersion: '1.0.0',
+      activities: { local: { inputSchema: { type: 'number' } } },
+      usedActivities: { greet: { outputSchema: { type: 'string' } } },
+    });
+    const result = await validateRegistrySnapshot({
+      registryVersion: 2,
+      generatedAt: new Date(0).toISOString(),
+      workflows: [manifest],
+      activeRevisions: { welcome: manifest.revision },
+      activities: { greet: { queue: 'default', usedBy: ['welcome'] } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    // `greet` is engine-provided: a generated worker for `welcome` does not implement it.
+    expect(result.value.workflows['welcome']?.activities).toEqual({
+      local: { inputSchema: { type: 'number' } },
+    });
+  });
+
   it('rejects a workflows array over the maximum manifest count before parsing or hashing any element', async () => {
     // Every element here is `{}` — not even a well-formed placeholder —
     // proving the count bound rejects the payload before a single element
@@ -228,4 +250,17 @@ describe('validateRegistrySnapshot', () => {
       'codegen: invalid registry snapshot: workflows contains more than one manifest for name "welcome", revision "shared-revision"',
     );
   });
+});
+
+describe('validateRegistrySnapshot with a non-object snapshot', () => {
+  it.each([null, 42, 'a string', undefined])(
+    'rejects %p without reading a workflows count',
+    async (value) => {
+      const result = await validateRegistrySnapshot(value);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected rejection');
+      expect(result.error).toStartWith('codegen: invalid registry snapshot');
+      expect(result.error).not.toContain('exceeding the maximum');
+    },
+  );
 });

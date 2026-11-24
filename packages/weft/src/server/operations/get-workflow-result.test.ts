@@ -4,16 +4,14 @@
 
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { getWorkflowResultOperation, getWorkflowResultRestBinding } from './get-workflow-result.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -107,6 +105,7 @@ describe('weft.workflows.result.get', () => {
     expect(await response.json()).toEqual({
       error: 'Workflow "does-not-exist" not found',
       data: { resource: 'workflow', identifier: 'does-not-exist' },
+      retryable: false,
     });
   });
 
@@ -127,7 +126,7 @@ describe('weft.workflows.result.get', () => {
 
     expect(response.status).toBe(422);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'workflow failed' });
+    expect(await response.json()).toEqual({ error: 'workflow failed', retryable: false });
   });
 
   it('returns 422 with the default failure message when a failed workflow has no error text', async () => {
@@ -154,7 +153,7 @@ describe('weft.workflows.result.get', () => {
 
     expect(response.status).toBe(422);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Workflow failed' });
+    expect(await response.json()).toEqual({ error: 'Workflow failed', retryable: false });
   });
 
   it('returns 422 when the workflow was cancelled', async () => {
@@ -177,10 +176,10 @@ describe('weft.workflows.result.get', () => {
 
     expect(response.status).toBe(422);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Workflow cancelled' });
+    expect(await response.json()).toEqual({ error: 'Workflow cancelled', retryable: false });
   });
 
-  it('returns 408 when waiting for a running workflow result times out', async () => {
+  it('returns 504 when waiting for a running workflow result times out', async () => {
     const { engine } = createEngineWithStorage();
     const handle = await engine.start('hold', null, { id: 'workflow-result-timeout' });
     await waitForWorkflowStatus(engine, handle.id, 'running');
@@ -204,10 +203,59 @@ describe('weft.workflows.result.get', () => {
         },
       );
 
-      expect(response.status).toBe(408);
+      expect(response.status).toBe(504);
       expect(response.headers.get('content-type')).toBe('application/json');
-      expect(await response.json()).toEqual({ error: 'Timeout waiting for workflow result' });
+      expect(await response.json()).toEqual({
+        error: 'Timeout waiting for workflow result',
+        retryable: true,
+      });
     } finally {
+      engine.getHandle = originalGetHandle;
+    }
+  });
+
+  it('returns 504 when the 30 second wait budget elapses before the result settles', async () => {
+    const { engine } = createEngineWithStorage();
+    const handle = await engine.start('hold', null, { id: 'workflow-result-budget' });
+    await waitForWorkflowStatus(engine, handle.id, 'running');
+
+    const originalGetHandle = engine.getHandle.bind(engine);
+    engine.getHandle = (workflowId: string) => {
+      const workflowHandle = originalGetHandle(workflowId);
+      workflowHandle.result = () => new Promise<never>(() => undefined);
+      return workflowHandle;
+    };
+
+    // Run the 30 second race timer on the next tick instead of waiting it out.
+    const realSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: () => void,
+      milliseconds?: number,
+      ...rest: unknown[]
+    ) =>
+      realSetTimeout(
+        callback,
+        milliseconds === 30_000 ? 0 : milliseconds,
+        ...rest,
+      )) as unknown as typeof setTimeout);
+
+    try {
+      const response = await handleRequest(
+        new Request(`http://localhost/v1/workflows/${handle.id}/result`, { method: 'GET' }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(504);
+      expect(await response.json()).toEqual({
+        error: 'Timeout waiting for workflow result',
+        retryable: true,
+      });
+      expect(setTimeoutSpy.mock.calls.some(([, milliseconds]) => milliseconds === 30_000)).toBe(
+        true,
+      );
+    } finally {
+      setTimeoutSpy.mockRestore();
       engine.getHandle = originalGetHandle;
     }
   });
@@ -242,7 +290,7 @@ describe('weft.workflows.result.get', () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('clears the race timer on the result win path', async () => {

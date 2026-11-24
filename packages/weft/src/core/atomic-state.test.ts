@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { createCoreStorageAdapter } from "../embedded/storage/src/testing/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { DEFAULT_SCOPE, KEYS } from '../index.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { createCoreStorageAdapter } from '../storage/storage-adapter.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   AtomicState,
   AtomicStateChangeEvent,
@@ -318,5 +318,82 @@ describe('workflow-scoped state default-scope invariant', () => {
     );
     expect(executionKey).toBe('state:execution:wf-1:cursor');
     expect(executionKey.startsWith('state:workflow-scope:')).toBe(false);
+  });
+});
+
+describe('AtomicState key and scope validation', () => {
+  it('rejects a scope type the key builder does not know', () => {
+    expect(() => atomicStateDataKey({ type: 'tenant' } as never, 'cursor')).toThrow(
+      'Unknown atomic state scope type: {"type":"tenant"}',
+    );
+  });
+
+  it('rejects an empty key and a key longer than 256 characters', () => {
+    const scope = { type: 'execution', ownerWorkflowId: 'wf-1' } as const;
+    expect(() => atomicStateDataKey(scope, '')).toThrow(
+      'AtomicState key must be 1-256 characters long.',
+    );
+    expect(() => atomicStateDataKey(scope, 'k'.repeat(257))).toThrow(
+      'AtomicState key must be 1-256 characters long.',
+    );
+    expect(atomicStateDataKey(scope, 'k'.repeat(256))).toBe(
+      `state:execution:wf-1:${'k'.repeat(256)}`,
+    );
+  });
+
+  it('rejects keys that would collide with object prototype members', () => {
+    const scope = { type: 'workflow', workflowType: 'invoice' } as const;
+    for (const reserved of ['__proto__', 'constructor', 'prototype']) {
+      expect(() => atomicStateDataKey(scope, reserved)).toThrow(
+        `AtomicState key "${reserved}" is reserved.`,
+      );
+    }
+  });
+});
+
+describe('AtomicState persisted version integrity', () => {
+  it('reports a corrupt persisted version instead of treating it as a number', async () => {
+    const storage = createStorage();
+    const dataKey = KEYS.stateExecution('wf-1', 'counter');
+    await storage.put(dataKey, encode(1));
+    for (const corrupt of ['not-a-number', 1.5, -1]) {
+      await storage.put(atomicStateVersionKey(dataKey), encode(corrupt));
+      const state = new AtomicState<number>(storage, dataKey);
+
+      expect(await throwingRejectionOf(state.get())).toThrow(
+        `AtomicState version for "${dataKey}" is corrupt.`,
+      );
+    }
+  });
+});
+
+describe('AtomicState observable subscription', () => {
+  it('delivers events to an observer object that only implements next', async () => {
+    const storage = createStorage();
+    const state = new AtomicState<number>(storage, KEYS.stateExecution('wf-1', 'counter'), {
+      initial: 0,
+    });
+    const received: unknown[] = [];
+    const subscription = state[OBSERVABLE_SYMBOL]().subscribe({
+      next: (event) => received.push(event),
+    });
+
+    await state.increment();
+    subscription.unsubscribe();
+    await state.increment();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toBeInstanceOf(AtomicStateChangeEvent);
+  });
+
+  it('tolerates an observer object with no next handler', async () => {
+    const storage = createStorage();
+    const state = new AtomicState<number>(storage, KEYS.stateExecution('wf-1', 'counter'), {
+      initial: 0,
+    });
+    const subscription = state[OBSERVABLE_SYMBOL]().subscribe({});
+
+    expect(await state.increment()).toBe(1);
+    subscription.unsubscribe();
   });
 });

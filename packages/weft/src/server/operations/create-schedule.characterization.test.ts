@@ -17,12 +17,11 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
 import { jsonRequest } from './operation-test-helpers.test-support.ts';
 
@@ -59,7 +58,10 @@ describe('create-schedule — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 
   // --- adjacent pair: cronExpression before id ---
@@ -73,6 +75,7 @@ describe('create-schedule — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required field: cronExpression or every',
+      retryable: false,
     });
   });
 
@@ -90,7 +93,10 @@ describe('create-schedule — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Field "id" must be a non-empty string' });
+    expect(await response.json()).toEqual({
+      error: 'Field "id" must be a non-empty string',
+      retryable: false,
+    });
   });
 
   // --- adjacent pair: overlap before backfill ---
@@ -109,6 +115,7 @@ describe('create-schedule — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "overlap" must be one of skip, queue, cancel-running, allow',
+      retryable: false,
     });
   });
 
@@ -126,7 +133,10 @@ describe('create-schedule — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Field "backfill" must be a boolean' });
+    expect(await response.json()).toEqual({
+      error: 'Field "backfill" must be a boolean',
+      retryable: false,
+    });
   });
 
   // --- engine-level interval validation reaches the REST boundary as 400 ---
@@ -162,6 +172,9 @@ describe('create-schedule — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 });
