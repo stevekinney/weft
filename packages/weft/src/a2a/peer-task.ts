@@ -5,7 +5,7 @@
  * @module a2a/peer-task
  */
 
-import { type Message, type SendMessageRequest, type Task } from '@a2a-js/sdk';
+import { Role, type Message, type SendMessageRequest, type Task } from '@a2a-js/sdk';
 import type { Client, RequestOptions } from '@a2a-js/sdk/client';
 
 import type {
@@ -85,14 +85,7 @@ export class PeerTaskRun implements A2APeerTask {
   /** The first request: a streaming peer opens its stream here, a polling peer answers at once. */
   async open(request: SendMessageRequest): Promise<void> {
     try {
-      const priorTaskId = request.message?.taskId;
-      if (priorTaskId) {
-        const before = await this.withRetry(
-          () => this.boundedGetTask(priorTaskId),
-          this.follow.signal,
-        );
-        this.tracker.rememberBeforeContinuation(before);
-      }
+      if (await this.resumeContinuation(request.message)) return;
       if (this.context.streaming) {
         const first = await this.withRetry(async () => {
           const opening = new AbortController();
@@ -124,6 +117,26 @@ export class PeerTaskRun implements A2APeerTask {
       this.closeStream();
       throw error;
     }
+  }
+
+  private async resumeContinuation(message: Message | undefined): Promise<boolean> {
+    if (!message?.taskId) return false;
+    // A response can be lost after the peer has committed the answer and its next question.
+    const before = await this.withRetry(
+      () => this.boundedGetTask(message.taskId, 2),
+      this.follow.signal,
+    );
+    const applied = before.history
+      .slice(-2)
+      .some((entry) => entry.role === Role.ROLE_USER && entry.messageId === message.messageId);
+    if (applied) {
+      this.tracker.applyTask(before);
+      this.tracker.markHeadSeen(true);
+      this.opened = true;
+      return true;
+    }
+    this.tracker.rememberBeforeContinuation(before);
+    return false;
   }
 
   /**
@@ -179,8 +192,11 @@ export class PeerTaskRun implements A2APeerTask {
   }
 
   /** The opening `GetTask` of an attach, bounded the same way as {@link boundedSend}. */
-  private boundedGetTask(taskId: string): Promise<Task> {
-    return this.bounded((options) => this.getTask(options, taskId), this.follow.signal);
+  private boundedGetTask(taskId: string, historyLength?: number): Promise<Task> {
+    return this.bounded(
+      (options) => this.getTask(options, taskId, historyLength),
+      this.follow.signal,
+    );
   }
 
   private async bounded<T>(
@@ -331,11 +347,12 @@ export class PeerTaskRun implements A2APeerTask {
     this.tracker.applyTask(task);
   }
 
-  private getTask(options: RequestOptions, taskId: string = this.taskId): Promise<Task> {
-    return this.context.client.getTask(
-      { tenant: '', id: taskId, historyLength: undefined },
-      options,
-    );
+  private getTask(
+    options: RequestOptions,
+    taskId: string = this.taskId,
+    historyLength?: number,
+  ): Promise<Task> {
+    return this.context.client.getTask({ tenant: '', id: taskId, historyLength }, options);
   }
 
   /** A broken stream is replaced; anything else ends the wait. */

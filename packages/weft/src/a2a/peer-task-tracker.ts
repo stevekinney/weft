@@ -128,10 +128,13 @@ export class PeerTaskTracker {
   }
 
   /** Records that the first response has been applied. */
-  markHeadSeen(): void {
+  markHeadSeen(acknowledged = false): void {
     this.headSeen = true;
     this.headStamp = this.stamp;
-    if (this.beforeContinuationStamp !== undefined && this.stamp !== this.beforeContinuationStamp) {
+    if (
+      acknowledged ||
+      (this.beforeContinuationStamp !== undefined && this.stamp !== this.beforeContinuationStamp)
+    ) {
       this.fresh = true;
     }
   }

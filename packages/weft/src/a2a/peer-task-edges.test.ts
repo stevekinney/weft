@@ -129,7 +129,7 @@ test('accepts a continuation whose first response already contains its next ques
       card: nonStreaming,
       intercept: (request, method) => {
         if (method === 'GetTask') {
-          return answer(request, { task: question(receivedContinuation ? 'second' : 'first') });
+          return answer(request, question(receivedContinuation ? 'second' : 'first'));
         }
         if (method !== 'SendMessage') return undefined;
         receivedContinuation = true;
@@ -146,6 +146,35 @@ test('accepts a continuation whose first response already contains its next ques
     message: 'second',
   });
   expect(peer.methods().filter((method) => method === 'GetTask')).toHaveLength(1);
+});
+
+test('returns the next question when reopening an already applied continuation', async () => {
+  const messageId = 'sent-before-response-was-lost';
+  const task = {
+    id: 'task-1',
+    contextId: 'context-1',
+    status: { state: 'TASK_STATE_INPUT_REQUIRED' },
+    history: [
+      { messageId, role: 'ROLE_USER', parts: [{ text: 'answer' }] },
+      { messageId: 'next-question', role: 'ROLE_AGENT', parts: [{ text: 'confirm?' }] },
+    ],
+  };
+  const { client, peer } = connect(
+    {
+      card: nonStreaming,
+      intercept: (request, method) => {
+        if (method === 'GetTask') return answer(request, task);
+        return method === 'SendMessage' ? answer(request, { task }) : undefined;
+      },
+    },
+    { taskTimeoutMs: 100 },
+  );
+
+  const replay = await client.send({ text: 'answer', taskId: task.id, messageId });
+
+  expect(await replay.result()).toMatchObject({ state: 'input-required', taskId: task.id });
+  expect(peer.methods()).not.toContain('SendMessage');
+  expect(peer.methods()).not.toContain('CancelTask');
 });
 
 describe('a polling peer that answers with a message instead of a task', () => {
