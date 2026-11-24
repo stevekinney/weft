@@ -107,7 +107,8 @@ test('aborts an opening stream when its first task fails validation', async () =
     },
   });
 
-  expect((await failureOf(client.send({ text: 'hi' }))).code).toBe('protocol');
+  const failure = await failureOf(client.send({ text: 'hi' }));
+  expect(failure.code).toBe('protocol');
   expect(openingSignal?.aborted).toBe(true);
 });
 

@@ -25,7 +25,7 @@
  * @module a2a/task-event-log
  */
 
-import { StreamResponse, Task } from '@a2a-js/sdk';
+import { Message, StreamResponse, Task } from '@a2a-js/sdk';
 
 import type { BatchOperation, ConditionalBatchCondition, Storage } from "../embedded/storage/src/index.ts";
 import type { A2AStreamTimerScheduler } from './sse-response.ts';
@@ -47,10 +47,18 @@ export type TaskEventEntry = {
   readonly event: StreamResponse;
 };
 
+/** The durable binding of a continuation message to the wait it answered. */
+export type PendingContinuation = {
+  readonly message: Message;
+  readonly signalName: string;
+  readonly sequence: number;
+};
+
 /** A task record and the sequence of the last event it reflects. */
 export type StoredWorkflowTask = {
   readonly task: Task;
   readonly sequence: number;
+  readonly pendingContinuations: readonly PendingContinuation[];
 };
 
 /** The identity a task's owner record keeps, enough to rebuild its caller scope. */
@@ -64,6 +72,7 @@ export type TaskOwner = {
 export type TaskMutation = {
   readonly task: Task;
   readonly events: readonly StreamResponse[];
+  readonly pendingContinuations?: readonly PendingContinuation[];
 };
 
 /** The outcome of a commit: the task as stored afterwards and the events it appended. */
@@ -131,11 +140,37 @@ export function taskEventCursor(sequence: number): string {
   return String(sequence);
 }
 
+function readPendingContinuation(entry: unknown): PendingContinuation {
+  if (
+    entry === null ||
+    typeof entry !== 'object' ||
+    !('signalName' in entry) ||
+    typeof entry.signalName !== 'string' ||
+    !('sequence' in entry) ||
+    typeof entry.sequence !== 'number' ||
+    !('message' in entry) ||
+    typeof entry.message !== 'object' ||
+    entry.message === null
+  ) {
+    throw new Error('Invalid stored workflow continuation');
+  }
+  return {
+    message: Message.fromJSON(entry.message),
+    signalName: entry.signalName,
+    sequence: entry.sequence,
+  };
+}
+
 function readStored(record: Record<string, unknown>): StoredWorkflowTask {
   const sequence = record['sequence'];
+  const pending = record['pendingContinuations'];
+  if (pending !== undefined && !Array.isArray(pending)) {
+    throw new Error('Invalid stored workflow continuations');
+  }
   return {
     task: Task.fromJSON(record['task']),
     sequence: typeof sequence === 'number' ? sequence : -1,
+    pendingContinuations: pending?.map(readPendingContinuation) ?? [],
   };
 }
 
@@ -208,6 +243,7 @@ export function createTaskEventLog(options: {
     key: string,
     sequence: number,
     mutation: TaskMutation,
+    previousContinuations: readonly PendingContinuation[] = [],
   ): { operations: BatchOperation[]; commit: TaskCommit } {
     const operations: BatchOperation[] = [];
     const appended: TaskEventEntry[] = [];
@@ -221,12 +257,28 @@ export function createTaskEventLog(options: {
         value: encodeRecord({ sequence: next, event: StreamResponse.toJSON(event) }),
       });
     }
+    const pendingContinuations = mutation.pendingContinuations ?? previousContinuations;
     operations.push({
       type: 'put',
       key,
-      value: encodeRecord({ task: Task.toJSON(mutation.task), savedAt: now(), sequence: next }),
+      value: encodeRecord({
+        task: Task.toJSON(mutation.task),
+        savedAt: now(),
+        sequence: next,
+        ...(pendingContinuations.length === 0
+          ? {}
+          : {
+              pendingContinuations: pendingContinuations.map((entry) => ({
+                ...entry,
+                message: Message.toJSON(entry.message),
+              })),
+            }),
+      }),
     });
-    return { operations, commit: { stored: { task: mutation.task, sequence: next }, appended } };
+    return {
+      operations,
+      commit: { stored: { task: mutation.task, sequence: next, pendingContinuations }, appended },
+    };
   }
 
   async function* replay(key: string, afterSequence: number): AsyncGenerator<TaskEventEntry> {
@@ -362,7 +414,12 @@ export function createTaskEventLog(options: {
         const stored = readStored(decodeRecord(key, current));
         const mutation = mutate(stored);
         if (mutation === undefined) return { result: { stored, appended: [] } };
-        const { operations, commit } = writeMutation(key, stored.sequence, mutation);
+        const { operations, commit } = writeMutation(
+          key,
+          stored.sequence,
+          mutation,
+          stored.pendingContinuations,
+        );
         return { conditions: [{ key, expectedValue: current }], operations, result: commit };
       });
       if (committed !== undefined) notify(key, committed.appended);

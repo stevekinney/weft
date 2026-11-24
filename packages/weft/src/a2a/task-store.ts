@@ -184,10 +184,12 @@ export function createWeftA2ATaskStore(options: WeftA2ATaskStoreOptions): WeftA2
         const previous = current === null ? undefined : decodeRecord(key, current);
         // A workflow agent's task keeps the sequence of its last durable event.
         const sequence = previous?.['sequence'];
+        const pendingContinuations = previous?.['pendingContinuations'];
         const value = encodeRecord({
           task: Task.toJSON(task),
           savedAt: now(),
           ...(typeof sequence === 'number' ? { sequence } : {}),
+          ...(pendingContinuations === undefined ? {} : { pendingContinuations }),
         });
         return {
           conditions: [{ key, expectedValue: current }],

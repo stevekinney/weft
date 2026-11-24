@@ -177,9 +177,29 @@ export function createA2APeerClient(options: A2APeerClientOptions): A2APeerClien
     requestTimeoutMs: limits.requestTimeoutMs,
   });
 
-  async function readCard(resolver: DefaultAgentCardResolver): Promise<AgentCard> {
+  async function readCard(): Promise<AgentCard> {
     try {
-      return await retryRequest(retryPolicy, () => resolver.resolve(baseUrl));
+      return await retryRequest(retryPolicy, async () => {
+        const deadline = new AbortController();
+        const timer = setTimeout(() => deadline.abort(), limits.requestTimeoutMs);
+        const resolver = new DefaultAgentCardResolver({
+          path: CARD_PATH,
+          fetchImpl: ((input, init) =>
+            peerFetch(input, { ...init, signal: deadline.signal })) as typeof fetch,
+        });
+        try {
+          return await resolver.resolve(baseUrl);
+        } catch (error) {
+          if (!deadline.signal.aborted) throw error;
+          throw new A2APeerError(
+            'unreachable',
+            `The Agent Card did not finish within ${limits.requestTimeoutMs} ms.`,
+            { cause: error, retryable: true },
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      });
     } catch (error) {
       const classified = classifyPeerError(error);
       if (classified.code !== 'protocol') throw classified;
@@ -193,7 +213,7 @@ export function createA2APeerClient(options: A2APeerClientOptions): A2APeerClien
 
   async function loadCard(): Promise<Loaded> {
     const resolver = new DefaultAgentCardResolver({ fetchImpl: peerFetch, path: CARD_PATH });
-    const raw = ingestCard(await readCard(resolver));
+    const raw = ingestCard(await readCard());
     const { selected, streaming, activeExtensions } = validatePeerCard(
       raw,
       supported,

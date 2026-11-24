@@ -27,11 +27,15 @@ import {
   UnsupportedOperationError,
 } from '@a2a-js/sdk/errors';
 import type { PushNotificationStore, ServerCallContext } from '@a2a-js/sdk/server';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 import type { Engine } from '../core/engine.ts';
+import { KEYS } from '../storage/keys.ts';
 import { pushConfigurationCreatePlannerOf } from './push-notification-store.ts';
 import { requestSignalOf } from './sse-response.ts';
+import type { A2ACallerScope } from './store-support.ts';
 import { withStreamEventCursor } from './stream-cursors.ts';
 import { type StoredWorkflowTask, taskEventCursor, type TaskEventLog } from './task-event-log.ts';
 import type { WorkflowAgentInputMode } from './workflow-agent-card.ts';
@@ -178,6 +182,12 @@ function replyTo(message: Message, parts: readonly Part[]): Message {
   };
 }
 
+function containsContinuation(task: Task, messageId: string): boolean {
+  return task.history.some(
+    (message) => message.role === Role.ROLE_USER && message.messageId === messageId,
+  );
+}
+
 /** What a message gets: a bare reply, or the task it started or continued. */
 type Accepted =
   | { readonly kind: 'reply'; readonly message: Message }
@@ -302,6 +312,43 @@ export function createWorkflowAgentMessaging(options: {
     return stored;
   }
 
+  async function claimContinuation(
+    current: StoredWorkflowTask,
+    message: Message,
+    scope: A2ACallerScope,
+  ): Promise<StoredWorkflowTask> {
+    const { messageId, taskId } = message;
+    if (current.pendingContinuations.some((entry) => entry.message.messageId === messageId))
+      return current;
+    const { task, sequence } = current;
+    if (isTerminalTaskState(task.status?.state)) {
+      throw new UnsupportedOperationError(
+        `Task ${taskId} is in a terminal state and accepts no more messages.`,
+      );
+    }
+    const state = await engine.get(taskId);
+    const signalName = signalFor(message, state === null ? [] : runtime.liveWaits(state));
+    const receipt = {
+      message: { ...message, taskId, contextId: task.contextId },
+      signalName,
+      sequence,
+    };
+    const claimed = await log.commit(scope, taskId, (stored) => {
+      if (
+        containsContinuation(stored.task, messageId) ||
+        stored.pendingContinuations.some((entry) => entry.message.messageId === messageId)
+      )
+        return undefined;
+      return {
+        task: stored.task,
+        events: [],
+        pendingContinuations: [...stored.pendingContinuations, receipt],
+      };
+    });
+    if (claimed === undefined) throw new TaskNotFoundError(`Task not found: ${taskId}`);
+    return claimed.stored;
+  }
+
   /** Check a continuation and deliver it to the signal the workflow waits for. */
   async function continueTask(
     message: Message,
@@ -311,49 +358,60 @@ export function createWorkflowAgentMessaging(options: {
     const taskId = message.taskId;
     const current = await runtime.reconcile(taskId, context);
     if (current === undefined) throw new TaskNotFoundError(`Task not found: ${taskId}`);
-    const { task, sequence } = current;
+    const { task } = current;
     if (message.contextId !== '' && message.contextId !== task.contextId) {
       throw new RequestMalformedError(
         `contextId '${message.contextId}' does not match task '${taskId}' context '${task.contextId}'.`,
       );
     }
-    if (isTerminalTaskState(task.status?.state)) {
-      throw new UnsupportedOperationError(
-        `Task ${taskId} is in a terminal state and accepts no more messages.`,
-      );
-    }
-    const state = await engine.get(taskId);
-    const signalName = signalFor(message, state === null ? [] : runtime.liveWaits(state));
-    const payload = toInput(payloadOf(message, inputMode), message);
-    // Saved once the continuation is accepted, and before its signal, so the status
-    // changes the signal causes reach the configuration too.
-    await installPushConfiguration(params, taskId, context);
-
+    const scope = runtime.scopeOf(context);
+    const { messageId } = message;
+    if (containsContinuation(task, messageId)) return current;
+    const claimed = await claimContinuation(current, message, scope);
+    if (containsContinuation(claimed.task, messageId)) return claimed;
+    const pending = claimed.pendingContinuations.find(
+      (entry) => entry.message.messageId === messageId,
+    );
+    if (pending === undefined) throw new Error('The continuation receipt was not stored');
+    const { message: userMessage, signalName } = pending;
+    const acceptedSequence = pending.sequence;
+    const signalId = `a2a:${bytesToHex(sha256(new TextEncoder().encode(messageId)))}`;
+    const marker = KEYS.signalAcceptedResponse(taskId, signalName, signalId);
     const generation = runtime.beginDelivery(taskId);
+    let delivered = false;
     try {
-      await engine.signal(taskId, signalName, payload);
-    } catch (error) {
-      runtime.abandonDelivery(taskId);
-      throw error;
+      // A crash after the signal commits but before the A2A history is saved can
+      // be retried against the same wait, using the engine's durable signal receipt.
+      if ((await engine.storage.get(marker)) === null) {
+        const payload = toInput(payloadOf(userMessage, inputMode), userMessage);
+        await installPushConfiguration(params, taskId, context);
+        await engine.signal(taskId, signalName, payload, { signalId });
+        delivered = true;
+      }
+    } finally {
+      if (delivered) runtime.recordDelivery(taskId, signalName, generation);
+      else runtime.abandonDelivery(taskId);
     }
-    runtime.recordDelivery(taskId, signalName, generation);
-    const userMessage: Message = { ...message, taskId, contextId: task.contextId };
     const timestamp = new Date(now()).toISOString();
-    const commit = await log.commit(runtime.scopeOf(context), taskId, (stored) => {
+    const commit = await log.commit(scope, taskId, (stored) => {
+      if (containsContinuation(stored.task, messageId)) return undefined;
+      const pendingContinuations = stored.pendingContinuations.filter(
+        (entry) => entry.message.messageId !== messageId,
+      );
       const history = [...stored.task.history, userMessage];
       const withMessage = { ...stored.task, history };
       // Only the wait this message answered moves to WORKING. Once anything was
       // committed since it was read, reconciliation already owns the status, and it may
       // be a new wait the workflow announced after taking this answer.
       if (
-        stored.sequence !== sequence ||
+        stored.sequence !== acceptedSequence ||
         stored.task.status?.state !== TaskState.TASK_STATE_INPUT_REQUIRED
       ) {
-        return { task: withMessage, events: [] };
+        return { task: withMessage, events: [], pendingContinuations };
       }
       const status = { state: TaskState.TASK_STATE_WORKING, message: undefined, timestamp };
       const next = withStatus(withMessage, status);
-      return { task: next, events: [statusUpdateEvent(next, status)] };
+      return { task: next, events: [statusUpdateEvent(next, status)], pendingContinuations };
     });
     await runtime.publish(commit, context);
     const stored = await runtime.reconcile(taskId, context);
