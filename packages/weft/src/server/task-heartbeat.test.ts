@@ -18,6 +18,12 @@
 
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import {
+  restoreRealTimers,
+  useFakeTimers,
+  waitForCondition,
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
 import {
   ATTEMPT_DEADLINE_MULTIPLIER,
   beginCompletion,
@@ -33,12 +39,6 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskQueued,
 } from '../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import {
-  restoreRealTimers,
-  useFakeTimers,
-  waitForCondition,
-} from '../testing/fake-timers.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
@@ -1089,5 +1089,59 @@ describe('Long-poll activity heartbeat — same shared seam as WebSocket (COR-23
     const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey('op-lp-1')));
     if (record?.state !== 'leased') throw new Error('Expected a leased record');
     expect(record.leaseDeadline).toBe(claimed.nextRecord.leaseDeadline);
+  });
+
+  it('reports the cancellation reason when a concurrent cancellation wins the lease renewal race', async () => {
+    let cancellingBytes: Uint8Array | undefined;
+    class CancellationWinsStorage extends MemoryStorage {
+      override async conditionalBatch(): Promise<boolean> {
+        // The cancellation commits between the heartbeat's read and its renewal write.
+        await this.put(taskLedgerKey('op-lp-1'), cancellingBytes!);
+        return false;
+      }
+    }
+    const storage = new CancellationWinsStorage();
+    const context = minimalServerContext({ registry: null as never });
+    const queued = freshQueued(Date.now(), 10_000);
+    const claimed = claimQueued(
+      queued,
+      {
+        expectedGeneration: queued.generation,
+        attemptToken: 'lp-attempt-1',
+        workerSessionId: 'longpoll-w1',
+        leaseDurationMilliseconds: 10_000,
+      },
+      Date.now(),
+    );
+    if (!claimed.ok) throw new Error(`Expected claimQueued to succeed: ${claimed.reason}`);
+    const cancelling = recordCancellationIntent(
+      claimed.nextRecord,
+      {
+        expectedGeneration: claimed.nextRecord.generation,
+        expectedAttempt: claimed.nextRecord.attempt,
+        cancellationReason: 'operator requested',
+        cancellationToken: 'cancel-token-race',
+        cancellationGracePeriodMilliseconds: 5_000,
+      },
+      Date.now(),
+    );
+    if (!cancelling.ok) throw new Error(`Expected recordCancellationIntent: ${cancelling.reason}`);
+    cancellingBytes = encodeRemoteTaskRecord(cancelling.nextRecord);
+    await storage.put(taskLedgerKey('op-lp-1'), encodeRemoteTaskRecord(claimed.nextRecord));
+    const options = minimalServeOptions(storage);
+
+    const { request, url } = heartbeatRequest({
+      operationId: 'op-lp-1',
+      workerId: 'longpoll-w1',
+      attemptToken: 'lp-attempt-1',
+    });
+    const response = await handleTaskHeartbeatRequest(context, options, request, url);
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({
+      ok: true,
+      cancelled: true,
+      reason: 'operator requested',
+    });
   });
 });

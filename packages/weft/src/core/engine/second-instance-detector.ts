@@ -36,7 +36,8 @@
  * @module core/engine/second-instance-detector
  */
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
+import { type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { EngineCleanupIntervalDisposalTracker } from './engine-leak-warnings.ts';
 
 /** A single engine's liveness heartbeat, JSON-encoded as the stored value. */

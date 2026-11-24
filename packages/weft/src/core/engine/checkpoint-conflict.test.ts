@@ -11,10 +11,10 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { createDeferred, waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage, type BatchOperation, type Storage } from "../../embedded/storage/src/index.ts";
+import { createDeferred, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec/api.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
@@ -229,7 +229,7 @@ describe('checkpoint compare-and-swap loss under ownership none', () => {
   });
 
   it('settles the loser with a typed error and writes nothing (BunSQLiteStorage)', async () => {
-    const { BunSQLiteStorage } = await import('../../storage/bun-sql.ts');
+    const { BunSQLiteStorage } = await import("../../embedded/storage-bun-sqlite/src/index.ts");
     using storage = new BunSQLiteStorage(':memory:');
     await runRace(storage);
   });

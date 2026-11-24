@@ -34,6 +34,7 @@
  */
 
 import type { ChildProcessRealm, ChildProcessRealmOptions } from './child-process-realm.ts';
+import type { RealmLifecycleState } from './realm-lifecycle.ts';
 import type { RevisionRealmDiagnosticsEntry } from './revision-realm-diagnostics.ts';
 import type { RevisionRealm } from './revision-realm.ts';
 import { WorkerRealm, type WorkerRealmOptions } from './worker-realm.ts';
@@ -67,8 +68,19 @@ function loadChildProcessRealmConstructor(): Promise<typeof ChildProcessRealm> {
 /** Which real transport a `RevisionRealmPool` spawns realms over. Omitted (or `'worker'`) is the unchanged default — see the module doc. */
 export type RevisionRealmTransport = 'worker' | 'child-process';
 
+/** One lifecycle transition of one pooled realm, as reported to {@link RevisionRealmPoolOptions.onRealmStateChanged}. */
+export interface RevisionRealmStateChange {
+  /** Minted once per realm by its pool; unique for the life of the process. */
+  readonly realmId: string;
+  readonly revision: string;
+  readonly state: RealmLifecycleState;
+  readonly restartCount: number;
+}
+
 export interface RevisionRealmPoolOptions {
   readonly workflowRevision: string;
+  /** Called synchronously after each lifecycle transition of every realm this pool warms. Not called for a realm's initial `warming` state. */
+  readonly onRealmStateChanged?: (change: RevisionRealmStateChange) => void;
   readonly workerUrl: string | URL;
   readonly expectedWorkflowTypes: readonly string[];
   readonly expectedArtifactDigest?: string;
@@ -331,6 +343,7 @@ export class RevisionRealmPool {
     }
     const realm = new WorkerRealm(this.#buildWorkerRealmOptions());
     this.#realms.add(realm);
+    this.#reportTransitions(realm);
     return realm;
   }
 
@@ -344,10 +357,26 @@ export class RevisionRealmPool {
       const ChildProcessRealmConstructor = await loadChildProcessRealmConstructor();
       const realm = new ChildProcessRealmConstructor(this.#buildChildProcessRealmOptions());
       this.#realms.add(realm);
+      this.#reportTransitions(realm);
       return realm;
     } finally {
       this.#warmingReservations -= 1;
     }
+  }
+
+  /** Forward every lifecycle transition of `realm` to {@link RevisionRealmPoolOptions.onRealmStateChanged} under one stable id minted here. */
+  #reportTransitions(realm: RevisionRealm): void {
+    const report = this.#options.onRealmStateChanged;
+    if (report === undefined) return;
+    const realmId = crypto.randomUUID();
+    realm.lifecycle.onTransition(({ to }) => {
+      report({
+        realmId,
+        revision: this.#options.workflowRevision,
+        state: to,
+        restartCount: realm.lifecycle.restartCount,
+      });
+    });
   }
 
   #sharedRealmOptions(): {

@@ -120,12 +120,6 @@ export type ServerToWorkerMessage =
   | ShutdownMessage
   | TaskResultAckMessage;
 
-const WORKER_TO_SERVER_TYPES = new Set([
-  'register',
-  'heartbeat',
-  'activityHeartbeat',
-  'taskResult',
-]);
 const SERVER_TO_WORKER_TYPES = new Set([
   'registerAck',
   'registerError',
@@ -483,10 +477,6 @@ export function parseWorkerToServerMessage(
   if (typeof type !== 'string') {
     return protocolFailure('invalid_message', 'Worker protocol message.type must be a string');
   }
-  if (!WORKER_TO_SERVER_TYPES.has(type)) {
-    return protocolFailure('unknown_message_type', `Unknown worker message type: ${type}`);
-  }
-
   switch (type) {
     case 'register':
       return parseRegisterMessage(value);

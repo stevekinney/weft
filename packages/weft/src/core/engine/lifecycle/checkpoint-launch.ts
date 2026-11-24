@@ -14,8 +14,10 @@ import { WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { createWorkflowScopedContextCallbacks, resetCancelHandlers } from '../cancel-handlers.ts';
 import { adoptLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
+import { completeExecutionAttemptLaunch } from '../execution-attempts.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
+import { takeRunSlot } from '../run-concurrency.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { createWorkflowVersionTuple } from './persist.ts';
 import { createWorkflowHandle, type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
@@ -136,6 +138,8 @@ export function launchWorkflowFromCheckpoint(
     type: state.type,
     revision: resolvedRevision,
   });
+  // A launch from a checkpoint is never held; it takes its slot as it starts (`runConcurrency`).
+  takeRunSlot(internals, workflowId, state.type, state.parentWorkflowId === undefined);
   // Prime the checkpoint-bytes CAS baseline (WFT-21, Codex review round 10,
   // P1) — `fork()` is this function's only caller, and its own initial
   // checkpoint commit already landed durably before this launch runs (see
@@ -174,6 +178,7 @@ export function launchWorkflowFromCheckpoint(
   } else {
     launchWorkerWorkflowFromCheckpoint(internals, workflowId, state, checkpoint);
   }
+  completeExecutionAttemptLaunch(internals, workflowId, checkpoint.workflowExecutionToken);
 
   return handle;
 }

@@ -1,8 +1,8 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
-import { inheritWorkflowWorkerBinding } from '../../../worker/binding-helpers.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { deserializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
+import { withoutRetryingActivityNames } from '../../context/activity-retry-state.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
 import type { Checkpoint, ForkLineage, SearchAttributeValue, WorkflowState } from '../../types.ts';
 import type { ForkOptions } from '../../types/options.ts';
@@ -176,9 +176,11 @@ export async function buildForkCatalogEntryCondition(
 /**
  * Build the error a lost `fork()` commit-time CAS race throws (WFT-21,
  * Codex review round 4, P2). A lost race on that commit is ALWAYS the
- * catalog-entry precondition (`forkCatalogEntryCondition`) — the only other
- * possible cause, a deposition, throws `EngineDeposedError` directly inside
- * `commitFencedEngineWrite` before ever reaching this factory — so whenever
+ * catalog-entry precondition (`forkCatalogEntryCondition`) — the other
+ * possible causes never reach this factory: a deposition throws
+ * `EngineDeposedError` inside `commitFencedEngineWrite`, and under
+ * `workflow-lease` a lost claim fold throws `WorkflowClaimUnavailableError`
+ * in `commitForkWrite` (COR-2635) — so whenever
  * `forkCatalogEntryCondition` was non-empty, this throws the SAME typed
  * `WorkflowRevisionUnavailableError('not-installed')` the pre-commit check
  * in `buildForkCatalogEntryCondition()` throws for the identical class of
@@ -271,13 +273,16 @@ export function reserveLegacyForkTargetRevision(
 
 export function createForkLineage(
   _internals: EngineInternals,
-  sourceWorkflowId: string,
+  sourceState: WorkflowState,
   checkpoint: Checkpoint,
   _callbacks: LifecycleCallbacks,
 ): ForkLineage {
   return {
-    workflowId: sourceWorkflowId,
+    workflowId: sourceState.id,
     step: checkpoint.step,
+    ...(sourceState.workflowExecutionToken === undefined
+      ? {}
+      : { workflowExecutionToken: sourceState.workflowExecutionToken }),
   };
 }
 
@@ -343,36 +348,6 @@ export function createForkedWorkflowState(
     startedAt: forkedAt,
     updatedAt: forkedAt,
     forkedFrom: lineage,
-  };
-}
-
-export function applyForkWorkerBindingInheritance(
-  state: WorkflowState,
-  sourceState: WorkflowState,
-  options: Readonly<{
-    persistedRevision: string | undefined;
-    forkedAt: number;
-    checkpointId: string;
-  }>,
-): void {
-  if (sourceState.workerBinding === undefined || sourceState.workerVersioningPolicy === undefined) {
-    return;
-  }
-  const currentBinding = sourceState.workerBinding.current;
-  if (
-    options.persistedRevision !== undefined &&
-    options.persistedRevision !== currentBinding.workflowRevision
-  ) {
-    return;
-  }
-  state.workerVersioningPolicy = sourceState.workerVersioningPolicy;
-  state.workerBinding = {
-    current: inheritWorkflowWorkerBinding(currentBinding, {
-      workflowId: state.id,
-      boundAt: options.forkedAt,
-      checkpointId: options.checkpointId,
-    }),
-    history: sourceState.workerBinding.history,
   };
 }
 
@@ -442,10 +417,25 @@ export function buildForkCheckpoint(
   lineage: ForkLineage,
   callbacks: LifecycleCallbacks,
 ): Checkpoint {
-  const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
-    sourceCheckpoint;
+  const {
+    accumulatedResultReplayWatermark: _sourceReplayWatermark,
+    forkCopiedSignatureSteps: _sourceCopiedSignatureSteps,
+    ...sourceCheckpointForFork
+  } = sourceCheckpoint;
+  const settledSteps = new Set(
+    [...sourceCheckpoint.accumulatedResults, ...(sourceCheckpoint.workerReplayFailures ?? [])].map(
+      ([step]) => step,
+    ),
+  );
+  const copiedSignatureSteps = (sourceCheckpoint.workerReplaySignatures ?? [])
+    .map(([step]) => step)
+    .filter((step) => !settledSteps.has(step));
   return {
     ...sourceCheckpointForFork,
+    // A fork reports nothing as retrying until it retries something itself (COR-2529).
+    locals: withoutRetryingActivityNames(sourceCheckpointForFork.locals),
+    // The signatures the source had no outcome for are evidence about the source's execution.
+    ...(copiedSignatureSteps.length > 0 && { forkCopiedSignatureSteps: copiedSignatureSteps }),
     createdAt: forkedAt,
     workflowId,
     // The fork's own fresh token, never the source's.

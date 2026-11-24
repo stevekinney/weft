@@ -9,17 +9,17 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { faultToHttpResponse } from './fault-to-http.ts';
-import { defaultShapeSuccess } from './handler/response-helpers.ts';
-import { defineOperation } from './operation-registry.ts';
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
 import {
   bindingPathMatches,
+  faultToHttpResponse,
   isRestBindingCompatibleWithOperation,
   MalformedRouteParameterError,
   type ParamSource,
   type ResponseShape,
   type RestBinding,
-} from './rest-binding.ts';
+} from "../embedded/backchannel/src/internals.ts";
+import { defaultShapeSuccess } from './handler/response-helpers.ts';
 
 // A minimal operation used as the lookup target for most binding tests.
 const startWorkflowOperation = defineOperation({
@@ -94,7 +94,7 @@ describe('RestBinding structural shape', () => {
     });
     expect(fault.status).toBe(500);
     expect(fault.headers.get('Content-Type')).toBe('application/json');
-    expect(await fault.text()).toBe('{"error":"Internal server error"}');
+    expect(await fault.text()).toBe('{"error":"Internal server error","retryable":false}');
   });
 
   it('is generic over Input and Output and carries extractInput + shapeSuccess', () => {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types/workflow-context.ts';
 import { workflow } from './types/workflow-function.ts';
@@ -19,7 +19,7 @@ import { workflow } from './types/workflow-function.ts';
  */
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 describe('ctx.waitUntil', () => {

@@ -2,16 +2,27 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { listWorkflowSources } from '../../core/engine/source-listing.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 import { assertOperationEngineObject } from './operation-helpers.ts';
 
 const listCatalogSourcesInput = z
   .object({
-    limit: z.number().int().min(1).max(1000).optional(),
-    offset: z.number().int().min(0).optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe('Maximum number of entries to return, 1 to 1000; defaults to 100.'),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Number of entries to skip before the first returned; defaults to 0.'),
   })
   .strict();
 const sourceSchema = z
@@ -52,7 +63,7 @@ export const listCatalogSourcesOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine, input }): Promise<ListCatalogSourcesOutput> => {
+  invoke: async ({ host: engine, input }): Promise<ListCatalogSourcesOutput> => {
     assertOperationEngineObject(engine);
     const entries = listWorkflowSources(engine);
     const limit = input.limit ?? 100;
@@ -82,5 +93,5 @@ export const listCatalogSourcesRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };

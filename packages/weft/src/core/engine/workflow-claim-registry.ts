@@ -49,7 +49,8 @@
  * @module core/engine/workflow-claim-registry
  */
 
-import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import { storageConditionalBatch, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { emitWorkflowClaimLostWarning, type EmitWorkflowLeaseWarning } from './lease-deposition.ts';
 import { decodeEpoch, decodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
 import { WorkflowClaimTakeoverCooldown } from './workflow-claim-cooldown.ts';

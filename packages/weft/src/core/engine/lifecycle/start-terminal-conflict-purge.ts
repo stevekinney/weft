@@ -1,5 +1,9 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
-import { KEYS, storageHas } from '../../../storage/interface.ts';
+import {
+  storageHas,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type { StartWorkflowOptions, WorkflowState } from '../../types.ts';
 import {

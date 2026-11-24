@@ -5,24 +5,29 @@
  * @module server
  */
 
+import type {
+  AuthConfig,
+  CorsOptions,
+  DiscoveryInfo,
+  PackageAuthorizationScope,
+  RateLimitConfig,
+} from "../embedded/backchannel/src/index.ts";
+import {
+  type RegistrableOperation,
+  overlapsReservedRoute,
+} from "../embedded/backchannel/src/internals.ts";
+import { requireStorageCapability } from "../embedded/storage/src/index.ts";
 import type { ConformanceTargetRunner } from '../conformance/targets.ts';
 import type { Engine, RegistryAgnosticEngine } from '../core/engine.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
-import { requireStorageCapability } from '../storage/interface.ts';
-import type { RoutingPolicy } from '../worker/registry.ts';
-import { WorkerRegistry } from '../worker/registry.ts';
-import type { AuthConfig, RateLimitConfig } from './authentication.ts';
-import type { PackageAuthorizationScope } from './authorization-scope.ts';
-import type { DiscoveryInfo } from './discovery-info.ts';
+import { type RoutingPolicy, WorkerRegistry } from '../worker/registry.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
-import type { RegistrableOperation } from './operation-catalog.ts';
-import { overlapsReservedRoute } from './route-model.ts';
+import type { WorkflowReadAuthorizer } from './operations/compare-workflow.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
-import type { CorsOptions } from './runtime/cors.ts';
 import {
-  wireEventBroadcasting,
   type EventBroadcastingHandle,
+  wireEventBroadcasting,
 } from './runtime/event-broadcasting.ts';
 import {
   shutdownAllWorkers as shutdownAllWorkersImpl,
@@ -30,8 +35,11 @@ import {
 } from './runtime/shutdown.ts';
 import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
-import type { TaskResultView } from './runtime/task-result-view.ts';
-import { adoptTaskResultImpl, getTaskResultViewImpl } from './runtime/task-result-view.ts';
+import {
+  type TaskResultView,
+  adoptTaskResultImpl,
+  getTaskResultViewImpl,
+} from './runtime/task-result-view.ts';
 import { publishTokenMessage, publishWatchMessage } from './runtime/websocket-stream.ts';
 import {
   buildBunServeConfig,
@@ -45,47 +53,27 @@ import type { SchedulingPolicy } from './task-queue-types.ts';
 import { TaskQueue } from './task-queue.ts';
 import type { WorkerAdmissionPolicy } from './worker-admission-policy.ts';
 
+export type { WorkflowReadAuthorizer } from './operations/compare-workflow.ts';
+
+/** Point-in-time counts of active server transport subscribers and workers. */
+export type WeftServerConnections = {
+  readonly fleetSse: number;
+  readonly fleetWebSocket: number;
+  readonly workflowSse: number;
+  readonly workflowWebSocket: number;
+  readonly workers: number;
+};
+
 export {
   wireEventBroadcasting,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 
-export type { CorsOptions } from './runtime/cors.ts';
 export type {
   WorkerAdmissionDecision,
   WorkerAdmissionPolicy,
   WorkerAdmissionRequest,
 } from './worker-admission-policy.ts';
-
-export {
-  AUTHORIZATION_SCOPES,
-  isAuthorizationScope,
-  isPackageAuthorizationScope,
-  PACKAGE_AUTHORIZATION_SCOPE_PATTERN,
-  type AuthorizationScope,
-  type BuiltInAuthorizationScope,
-  type PackageAuthorizationScope,
-} from './authorization-scope.ts';
-
-export type { GetPrincipalOutput } from './operations/get-principal.ts';
-
-export {
-  createRateLimiter,
-  createRotatingApiKeyStore,
-  defaultAuthAuditSink,
-  isSensitiveHeader,
-  redactCredential,
-  redactHeaders,
-  validateRateLimitConfig,
-  type ApiKeyRegistration,
-  type AuthAuditEvent,
-  type AuthAuditSink,
-  type AuthConfig,
-  type RateLimitConfig,
-  type RateLimitDecision,
-  type RateLimiter,
-  type RotatingApiKeyStore,
-} from './authentication.ts';
 
 // Re-export every option/handle *type* named in ServeOptions / WeftServer /
 // TaskDispatch so a consumer of `@lostgradient/weft` can name them all
@@ -103,9 +91,7 @@ export type {
 } from '../conformance/targets.ts';
 export type { RetryPolicy } from '../core/types.ts';
 export type { PrometheusExporter } from '../observability/metrics.ts';
-export { WorkerRegistry } from '../worker/registry.ts';
-export type { RoutingPolicy } from '../worker/registry.ts';
-export type { DiscoveryInfo } from './discovery-info.ts';
+export { WorkerRegistry, type RoutingPolicy } from '../worker/registry.ts';
 export type { TaskResultView } from './runtime/task-result-view.ts';
 export type { SchedulingPolicy } from './task-queue-types.ts';
 export { TaskQueue } from './task-queue.ts';
@@ -153,7 +139,8 @@ export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
  * @example
  * ```ts
  * import { serve, type ServeOptions } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -161,7 +148,7 @@ export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
  * const options: ServeOptions = {
  *   engine,
  *   port: 3000,
- *   auth: { apiKeys: ['secret'] },
+ *   auth: { apiKeys: ['secret'], defaultApiKeyScopes: ['workflows:read'] },
  * };
  * await using server = serve(options);
  * console.log(server.url); // http://localhost:3000
@@ -191,8 +178,13 @@ export interface ServeOptions {
    *
    * A duplicate name fails registry construction — synchronously, before a
    * port is bound — so a foreign operation cannot shadow one of Weft's.
+   *
+   * `serve()` hands each operation its `Engine` as `host`, so an operation
+   * that needs more than an engine provides (a `bureauFeeds` registry, say)
+   * is a type error here rather than a runtime failure. Serve those through
+   * `createOperationHandler`, which delivers the host they declare.
    */
-  operations?: ReadonlyArray<RegistrableOperation>;
+  operations?: ReadonlyArray<RegistrableOperation<RegistryAgnosticEngine>>;
   /**
    * Package scopes this server recognizes beyond Weft's built-in vocabulary,
    * such as `bureau.tasks:read`, for the packages whose `operations` require
@@ -232,7 +224,8 @@ export interface ServeOptions {
    *
    * @example
    * ```ts
-   * import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+   * import { Engine, serve } from '@lostgradient/weft';
+   * import { MemoryStorage } from '@lostgradient/storage';
    * import { createConformanceTargets } from '@lostgradient/weft/testing';
    *
    * const engine = new Engine({ storage: new MemoryStorage() });
@@ -262,7 +255,14 @@ export interface ServeOptions {
    * fall through to Weft.
    */
   routes?: ServeRoutes;
-  /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
+  /**
+   * Authentication configuration. When provided, all non-public endpoints require valid credentials.
+   *
+   * Every catalog operation except `weft.system.principal` requires a scope, so
+   * static `apiKeys` need `defaultApiKeyScopes` (the scopes each key holds), or
+   * a `resolveApiKeyPrincipal` resolver: `serve()` throws before binding when
+   * `apiKeys` is non-empty and neither is configured.
+   */
   auth?: AuthConfig;
   /**
    * In-process request rate limiting. When provided, the server throttles
@@ -296,6 +296,13 @@ export interface ServeOptions {
    * the server and logs a loud warning. Set `'reject'` for production
    * deployments so an omitted auth configuration fails closed before binding.
    * Set `'allow'` only for explicitly trusted local process boundaries.
+   *
+   * With `'warn'` or `'allow'`, the server identifies nobody: every request
+   * runs as the `unauthenticated-local` principal, which holds every built-in
+   * scope, so every built-in operation is reachable by any caller that can reach
+   * the port. An operation registered through `operations` that needs a package
+   * scope (`additionalScopes`) is not: the local principal holds no package scope,
+   * so it needs a credential that does.
    */
   unauthenticatedAccess?: UnauthenticatedAccessPolicy;
   /**
@@ -374,6 +381,17 @@ export interface ServeOptions {
    * existed.
    */
   workerAdmissionPolicy?: WorkerAdmissionPolicy;
+  /**
+   * Per-run read gate, evaluated after the `workflows:read` scope check, for
+   * the operations that read a run other than the one the caller named.
+   * `weft.workflows.compare` calls it for the fork and for its source, and
+   * answers `NotFound` (the fault a missing fork gets, naming only the fork)
+   * when either is denied, so a caller cleared for a fork cannot read its
+   * source through it. Return `false` to deny; a throw is an internal error,
+   * never a denial. Defaults to `undefined`, which leaves the scope alone to
+   * decide.
+   */
+  authorizeWorkflowRead?: WorkflowReadAuthorizer;
   /**
    * Scheduling policy used by the {@link TaskQueue} when ordering pending tasks
    * within a queue. Defaults to `'priority'`.
@@ -501,7 +519,8 @@ export interface TaskDispatch {
  * @example
  * ```ts
  * import { serve, type WeftServer } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -518,6 +537,8 @@ export interface WeftServer extends AsyncDisposable {
   readonly url: string;
   readonly registry: WorkerRegistry;
   readonly taskQueue: TaskQueue;
+  /** All registered operation names for in-process composition, including hidden operations. */
+  readonly operationNames: readonly string[];
   /**
    * Resolves once startup task-ledger recovery (WFT-23) has reconstructed
    * every non-terminal task's in-memory indexes from durable storage;
@@ -528,6 +549,8 @@ export interface WeftServer extends AsyncDisposable {
    * want to observe readiness without dispatching a probe task.
    */
   readonly ready: Promise<void>;
+  /** Return a point-in-time snapshot of active transport subscribers/connections. */
+  connections(): WeftServerConnections;
   /**
    * Drain connected remote workers, then stop the underlying Bun server.
    *
@@ -620,7 +643,8 @@ function resolveServeRoutes(routes: ServeRoutes | undefined): ServeRoutes {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, workflow } from '@lostgradient/weft';
+ * import { Engine, workflow } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import { serve } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
@@ -691,6 +715,8 @@ export function serve(options: ServeOptions): WeftServer {
       },
       publishWatchMessage: (workflowId, sequence, message) => {
         publishWatchMessage(context, workflowId, sequence, message);
+        // The event is stored by now, so a feed subscriber may replay it.
+        context.watchEventFeed.notify(workflowId, sequence, message);
       },
       fleetEventFeed: context.fleetEventFeed,
     });
@@ -722,7 +748,9 @@ export function serve(options: ServeOptions): WeftServer {
     url: `${scheme}://${resolvedHostname}:${resolvedPort}`,
     registry: context.registry,
     taskQueue: context.taskQueue,
+    operationNames: Object.freeze(context.liveOperationRegistry.list().map(({ name }) => name)),
     ready: context.taskLedgerRecovery.ready,
+    connections: () => ({ ...context.connectionCounts }),
     async stop() {
       await stack[Symbol.asyncDispose]();
     },

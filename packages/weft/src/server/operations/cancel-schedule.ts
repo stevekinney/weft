@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const cancelScheduleInput = z.object({
-  scheduleId: z.string().min(1),
+  scheduleId: z.string().min(1).describe('Id of the schedule to cancel.'),
 });
 const cancelScheduleOutput = z.undefined();
 
@@ -25,11 +25,12 @@ export const cancelScheduleOperation = defineOperation({
   tags: ['Schedules'],
   inputSchema: cancelScheduleInput,
   outputSchema: cancelScheduleOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['schedules:write'] } },
+  discoverable: true,
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<CancelScheduleOutput> => {
+  invoke: async ({ input, host: engine }): Promise<CancelScheduleOutput> => {
     assertOperationEngineMethods(engine, ['cancelSchedule']);
     const typedEngine = engine;
 

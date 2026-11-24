@@ -12,6 +12,7 @@
  */
 
 import type { ConnectionOptions } from '../index.ts';
+import { cliFault, renderFault, type CliFault } from './cli-fault.ts';
 import { loadJsonInput } from './json-input.ts';
 import {
   confirmDestructive,
@@ -20,7 +21,7 @@ import {
   prettyJson,
   truncateToWidth,
 } from './output.ts';
-import { callCatalogOperation, failureExitCode } from './server-client.ts';
+import { NOT_FOUND_EXIT_CODE, callCatalogOperation, failureExitCode } from './server-client.ts';
 import type { CommandOutput, WorkflowCommand } from './types.ts';
 
 type WorkflowSummaryRow = {
@@ -92,9 +93,11 @@ async function executeWorkflowList(
   const result = await callCatalogOperation(connection, 'weft.workflows.list', {
     ...(command.type === undefined ? {} : { type: command.type }),
     ...(command.status === undefined ? {} : { status: command.status }),
+    ...(command.failedStep === undefined ? {} : { failedStep: command.failedStep }),
+    ...(command.retrying === true ? { retrying: true } : {}),
     ...(command.limit === undefined ? {} : { limit: command.limit }),
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
 
   const items = extractItems(result.value);
 
@@ -137,7 +140,7 @@ async function executeWorkflowGet(
   const result = await callCatalogOperation(connection, 'weft.workflows.get', {
     workflowId: command.workflowId,
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
   return { stdout: prettyJson(result.value), exitCode: 0 };
 }
 
@@ -148,7 +151,7 @@ async function executeWorkflowEvents(
   const result = await callCatalogOperation(connection, 'weft.workflows.events.list', {
     workflowId: command.workflowId,
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
 
   const events = Array.isArray(result.value)
     ? result.value
@@ -173,16 +176,14 @@ async function executeWorkflowStart(
   connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const parsed = await loadJsonInput(command.input, command.inputFile);
-  if (!parsed.ok) {
-    return { stdout: '', stderr: `workflow start: ${parsed.error.message}`, exitCode: 3 };
-  }
+  if (!parsed.ok) return inputFailure('workflow start', parsed.error.message, command.json);
 
   const result = await callCatalogOperation(connection, 'weft.workflows.start', {
     type: command.workflowType,
     ...(parsed.value === undefined ? {} : { input: parsed.value }),
     ...(command.id === undefined ? {} : { id: command.id }),
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
 
   if (command.json) return { stdout: prettyJson(result.value), exitCode: 0 };
   const id =
@@ -196,32 +197,37 @@ async function executeWorkflowCancel(
   command: Extract<WorkflowCommand, { action: 'cancel' }>,
   connection: ConnectionOptions,
 ): Promise<CommandOutput> {
-  if (command.dryRun) {
-    const stdout = command.json
-      ? prettyJson({ affected: 1, workflowId: command.workflowId })
-      : `Would cancel 1 workflow: ${command.workflowId}`;
-    return { stdout, exitCode: 0 };
-  }
+  if (command.dryRun) return executeWorkflowCancelDryRun(command, connection);
 
   const decision = await confirmDestructive({
     prompt: `Cancel workflow ${command.workflowId}?`,
     assumeYes: command.yes,
   });
   if (decision === 'non-interactive') {
-    return {
-      stdout: '',
-      stderr: `workflow cancel: refusing to cancel ${command.workflowId} without confirmation; pass --yes to proceed in a non-interactive shell`,
-      exitCode: 1,
-    };
+    return renderFault(
+      cliFault(
+        'InvalidParams',
+        `workflow cancel: refusing to cancel ${command.workflowId} without confirmation`,
+        'Pass --yes to proceed in a non-interactive shell',
+      ),
+      { json: command.json, exitCode: 1 },
+    );
   }
   if (decision === 'denied') {
-    return { stdout: 'Cancelled (no action taken).', exitCode: 1 };
+    // The operator declined the prompt: the text output is the answer, and `--json` reports it as
+    // a `Conflict` (the request contradicts what the operator just said), the closest code.
+    return command.json
+      ? renderFault(cliFault('Conflict', 'Cancelled (no action taken).'), {
+          json: true,
+          exitCode: 1,
+        })
+      : { stdout: 'Cancelled (no action taken).', exitCode: 1 };
   }
 
   const result = await callCatalogOperation(connection, 'weft.workflows.cancel', {
     workflowId: command.workflowId,
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
 
   if (command.json) return { stdout: prettyJson(result.value), exitCode: 0 };
   return {
@@ -230,21 +236,58 @@ async function executeWorkflowCancel(
   };
 }
 
+/**
+ * `weft workflow cancel <id> --dry-run`: asks the server what a cancel would do (the run's status,
+ * and whether it can be cancelled) and prints the answer. Nothing is cancelled and no confirmation
+ * is asked for. An id the server has no run for exits with {@link NOT_FOUND_EXIT_CODE}.
+ */
+async function executeWorkflowCancelDryRun(
+  command: Extract<WorkflowCommand, { action: 'cancel' }>,
+  connection: ConnectionOptions,
+): Promise<CommandOutput> {
+  const result = await callCatalogOperation(connection, 'weft.workflows.cancel', {
+    workflowId: command.workflowId,
+    dryRun: true,
+  });
+  if (!result.ok) {
+    return result.kind === 'operation' && result.notFound === true
+      ? renderFault(result, { json: command.json, exitCode: NOT_FOUND_EXIT_CODE })
+      : failure(result, command.json);
+  }
+
+  if (command.json) return { stdout: prettyJson(result.value), exitCode: 0 };
+  const answer: unknown = result.value;
+  if (!isRecord(answer) || typeof answer['status'] !== 'string') {
+    return renderFault(
+      cliFault(
+        'EngineFailure',
+        'workflow cancel: the server answered the dry run with an unexpected shape',
+        "Run 'weft server info' to compare the server's version with this CLI's",
+      ),
+      { json: false, exitCode: 1 },
+    );
+  }
+  const status = answer['status'];
+  const stdout =
+    answer['cancellable'] === true
+      ? `Would cancel workflow ${command.workflowId} (status: ${status})`
+      : `Cannot cancel workflow ${command.workflowId}: it is already ${status}`;
+  return { stdout, exitCode: 0 };
+}
+
 async function executeWorkflowSignal(
   command: Extract<WorkflowCommand, { action: 'signal' }>,
   connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const parsed = await loadJsonInput(command.input, command.inputFile);
-  if (!parsed.ok) {
-    return { stdout: '', stderr: `workflow signal: ${parsed.error.message}`, exitCode: 3 };
-  }
+  if (!parsed.ok) return inputFailure('workflow signal', parsed.error.message, command.json);
 
   const result = await callCatalogOperation(connection, 'weft.workflows.signal', {
     workflowId: command.workflowId,
     signalName: command.signalName,
     ...(parsed.value === undefined ? {} : { payload: parsed.value }),
   });
-  if (!result.ok) return failure(result);
+  if (!result.ok) return failure(result, command.json);
 
   if (command.json) return { stdout: prettyJson(result.value), exitCode: 0 };
   return {
@@ -253,15 +296,26 @@ async function executeWorkflowSignal(
   };
 }
 
-function failure(result: {
-  readonly ok: false;
-  readonly kind: 'connection' | 'compat' | 'operation';
-  readonly message: string;
-}): CommandOutput {
-  const prefix = result.kind === 'connection' ? 'connection failed: ' : '';
-  return {
-    stdout: '',
-    stderr: `${prefix}${result.message}`,
-    exitCode: failureExitCode(result.kind),
-  };
+/** An input the command could not read (`--input`, `--input-file`): a usage error, exit code 3. */
+function inputFailure(commandName: string, message: string, json: boolean): CommandOutput {
+  return renderFault(
+    cliFault(
+      'InvalidParams',
+      `${commandName}: ${message}`,
+      'Pass valid JSON with --input, or a readable file (or - for stdin) with --input-file',
+    ),
+    { json, exitCode: 3 },
+  );
+}
+
+/**
+ * A failed catalog call as command output: the fault the server (or the CLI) reported, with the
+ * exit code of its kind. With `--json` it is `{ ok: false, error }` on stdout; otherwise the
+ * message and a `Try:` line on stderr.
+ */
+function failure(
+  result: CliFault & { readonly kind: 'connection' | 'compat' | 'operation' },
+  json: boolean,
+): CommandOutput {
+  return renderFault(result, { json, exitCode: failureExitCode(result.kind) });
 }

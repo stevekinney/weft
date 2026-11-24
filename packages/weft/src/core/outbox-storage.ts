@@ -6,8 +6,13 @@
  * @module core/outbox-storage
  */
 
-import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
-import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
+import {
+  encodeStorageKeyComponent,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import {
   commitApplicationTransition,
   type ApplicationCommitPlan,

@@ -11,8 +11,8 @@ import {
   advanceTimersByTime,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
 import { ApplicationDeliveryValidationError } from './outbox-guards.ts';
 import {
@@ -102,7 +102,7 @@ describe('Outbox waitForDue', () => {
   it('looks past a due entry whose record already moved on', async () => {
     const { outbox, storage } = createOutboxFixture();
     await enqueueOne(outbox);
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     const { encode } = await import('./codec.ts');
     await storage.put(
       KEYS.applicationDeliveryDue('bureau', 'agent-7', 0, 'ghost'),

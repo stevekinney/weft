@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
+import { type StorageCapabilities } from "../src/embedded/storage/src/index.ts";
 import type {
   CatalogOperationTypes,
   ClientOperationTypes,
 } from '../src/client/generated/operation-client.generated.ts';
-import { createCatalogSnapshot } from '../src/server/operation-catalog-snapshot.ts';
-import { type StorageCapabilities } from '../src/storage/interface.ts';
+import { createCatalogSnapshot } from '../src/server/weft-catalog-snapshot.ts';
 
 import { generatedSourcesText, snapshotOperation } from './operation-client-test-support.ts';
 describe('schedule update operation generation', () => {
@@ -153,5 +153,14 @@ describe('type equivalence — aliases are transparent at call sites', () => {
       CatalogOperationTypes['weft.workflows.bulk.signal']['input']['createdAt']
     > = { gt: 1, gte: 2, lt: 3, lte: 4 };
     expect(range.lte).toBe(4);
+  });
+});
+
+describe('alias selection on the real catalog', () => {
+  it('does not alias the 1-field key object in real output', async () => {
+    const source = await generatedSourcesText(createCatalogSnapshot());
+    // The attribute element { gt, gte, key, lt, lte, value } is aliased, but a
+    // bare { readonly "key": string } object must never become its own alias.
+    expect(source).not.toMatch(/type Shared\w+ = \{ readonly "key": string; \};/);
   });
 });

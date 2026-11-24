@@ -1,11 +1,12 @@
 /** Builders for the single batch `completeWorkflow` commits. */
-import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import type { BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { encode } from '../../codec.ts';
 import { buildIndexOperations } from '../../search-attributes.ts';
 import type { SearchAttributeValue, WorkflowState } from '../../types.ts';
 import { buildRetainedTerminalSearchAttributes } from '../attributes-tags.ts';
 import type { EngineInternals } from '../internals.ts';
+import { withoutSignalWaits } from '../signal-wait-state.ts';
 
 /** The engine ID a terminal write stamps as `terminalCommittedBy`, only under `workflow-lease`. */
 export function terminalCommitterStamp(
@@ -23,7 +24,7 @@ export function buildCompletedWorkflowState(
   terminalCleanupToken: string | undefined,
 ): WorkflowState {
   return {
-    ...state,
+    ...withoutSignalWaits(state),
     status: 'completed' as const,
     result,
     updatedAt: now,

@@ -24,7 +24,9 @@ export type WorkerDiagnosticsOperationTypes = {
           readonly inFlight: number;
           readonly lastHeartbeatAt: number;
           readonly queue: string;
+          readonly reconnectGraceEndsAt?: number;
           readonly sessionGeneration: number;
+          readonly sessionLeaseExpiresAt?: number;
           readonly startedAt: number;
           readonly transport: 'websocket' | 'long-poll';
           readonly workerId: string;

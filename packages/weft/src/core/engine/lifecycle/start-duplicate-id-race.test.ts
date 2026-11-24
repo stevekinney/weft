@@ -33,8 +33,8 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../../storage/memory.ts';
-import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { storageBackends } from '../../../testing/storage-backends.test-support.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
@@ -58,17 +58,8 @@ afterEach(() => {
   activityRunCounts.clear();
 });
 
-/**
- * The durable backends the ticket names (LMDB and SQLite) plus `MemoryStorage`.
- * Filtering the shared descriptor list rather than restating the factories keeps
- * this in step with the backends' own construction/cleanup contracts.
- */
-const racedBackends = storageBackends.filter((backend) =>
-  ['MemoryStorage', 'BunSQLiteStorage', 'LMDBStorage'].includes(backend.name),
-);
-
 describe('WFT-152: two engines racing the same explicit start id', () => {
-  for (const backend of racedBackends) {
+  for (const backend of storageBackends) {
     it(`exactly one start wins and the loser fails fast on ${backend.name}`, async () => {
       const { storage, cleanup } = backend.factory();
       const workflowId = `duplicate-id-race-${crypto.randomUUID()}`;

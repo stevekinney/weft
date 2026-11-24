@@ -12,11 +12,14 @@
  */
 
 import { UpdateValidationError } from '../updates.ts';
+import { assertLiveWorkflowMessageDeclared } from './declared-messages.ts';
 import type { EngineInternals } from './internals.ts';
 
 /**
  * Run the pre-acceptance validator for an update, if one is registered.
- * Throws `UpdateValidationError` if the validator rejects (by throwing or by
+ * Throws `UndeclaredWorkflowMessageError` before running it when the workflow
+ * declares its updates and `name` is not one of them, and
+ * `UpdateValidationError` if the validator rejects (by throwing or by
  * returning a Standard Schema `{ issues: [...] }` failure result).
  */
 export async function runUpdateValidator(
@@ -27,6 +30,9 @@ export async function runUpdateValidator(
 ): Promise<void> {
   const validator = internals.inlineStrategy?.getContext(workflowId)?.updateValidators.get(name);
   if (validator === undefined) return;
+  // A validator is user code, so an undeclared name must be rejected before it
+  // runs. A validator exists only on a run live here, whose identity is cached.
+  assertLiveWorkflowMessageDeclared(internals, 'update', workflowId, name);
 
   let result: unknown;
   try {

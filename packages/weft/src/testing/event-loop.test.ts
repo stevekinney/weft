@@ -20,6 +20,7 @@ describe('yieldToPortableEventLoop', () => {
   it('resolves after yielding a turn, with microtasks drained', async () => {
     const order: string[] = [];
     void Promise.resolve().then(() => order.push('microtask'));
+    // load-proof: the helper under test: a microtask queued before the call must have run when it resolves, and the microtask queue empties before any later task whatever the load
     await yieldToPortableEventLoop();
     // The MessageChannel turn plus the trailing flushPortableMicrotasks() must
     // have let the queued microtask run before this resolves.
@@ -47,6 +48,7 @@ describe('yieldToPortableEventLoop', () => {
       return;
     }
     try {
+      // load-proof: the helper under test on its setTimeout fallback: the only assertion is that it resolves to undefined, so nothing load-dependent follows
       expect(await yieldToPortableEventLoop()).toBeUndefined();
     } finally {
       if (hadMessageChannel) {

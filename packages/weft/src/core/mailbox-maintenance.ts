@@ -17,8 +17,12 @@
  * @module core/mailbox-maintenance
  */
 
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { formatSortableStorageTimestamp, storageConditionalBatch } from '../storage/interface.ts';
+import {
+  formatSortableStorageTimestamp,
+  storageConditionalBatch,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../embedded/storage/src/index.ts";
 import { leaseCommitSerial } from './application-primitive-attempt-registry.ts';
 import { decodeApplicationCommandRecord } from './mailbox-codec.ts';
 import type { LoadedCommandRecord, MailboxMaintenanceReport } from './mailbox-contract.ts';

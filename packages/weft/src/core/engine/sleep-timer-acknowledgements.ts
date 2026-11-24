@@ -275,8 +275,11 @@ function clearEffectsOnGenerationReplacement(
   previous: DurableInlineOperation | undefined,
   current: DurableInlineOperation,
 ): void {
+  // A previous operation without a token belongs to a pre-token run, which a
+  // token-bearing current one replaced (COR-1604). A current one without a token
+  // only means this engine holds no checkpoint at the moment, so it decides nothing.
   if (
-    previous?.workflowExecutionToken !== undefined &&
+    previous !== undefined &&
     current.workflowExecutionToken !== undefined &&
     previous.workflowExecutionToken !== current.workflowExecutionToken
   ) {
@@ -452,11 +455,14 @@ function sleepTimerMatchesResolver(
   resolver: { fireAt: number; workflowExecutionToken?: string },
 ): boolean {
   if (entry.fireAt < resolver.fireAt) return false;
+  // The timer and the resolver are written with the same token by the sleep that
+  // owns both, so they match exactly (COR-1604): a resolver without one belongs to
+  // a pre-token run, and a token-bearing timer is a different run's.
+  if (entry.workflowExecutionToken !== resolver.workflowExecutionToken) return false;
   return (
     resolver.workflowExecutionToken === undefined ||
-    (entry.workflowExecutionToken === resolver.workflowExecutionToken &&
-      internals.checkpoints?.get(entry.workflowId)?.workflowExecutionToken ===
-        resolver.workflowExecutionToken)
+    internals.checkpoints?.get(entry.workflowId)?.workflowExecutionToken ===
+      resolver.workflowExecutionToken
   );
 }
 

@@ -114,6 +114,20 @@ const AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE = Symbol(
   'AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE',
 );
 
+/**
+ * Forget which scope store this module chose, and drop every fallback scope.
+ *
+ * The module chooses between `AsyncLocalStorage` and a process-local fallback stack once, on its
+ * first scope lookup, and keeps the choice for the life of the process. That makes the choice
+ * shared by every test file that imports this module in the same `bun test` run, so a test that
+ * wants the fallback must be able to put the choice back before and after.
+ * @internal Test-only.
+ */
+export function resetDurableActivityScopeStorageForTesting(): void {
+  durableActivityScopeStorage = undefined;
+  fallbackDurableActivityScopes.length = 0;
+}
+
 function loadAsyncLocalStorageConstructor(): AsyncLocalStorageConstructor | undefined {
   const processValue =
     'process' in globalThis

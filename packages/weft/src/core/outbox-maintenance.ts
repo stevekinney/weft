@@ -14,8 +14,12 @@
  * @module core/outbox-maintenance
  */
 
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { formatSortableStorageTimestamp, storageConditionalBatch } from '../storage/interface.ts';
+import {
+  formatSortableStorageTimestamp,
+  storageConditionalBatch,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../embedded/storage/src/index.ts";
 import { leaseCommitSerial } from './application-primitive-attempt-registry.ts';
 import { decodeApplicationDeliveryRecord } from './outbox-codec.ts';
 import type { LoadedDeliveryRecord, OutboxMaintenanceReport } from './outbox-contract.ts';
@@ -343,4 +347,53 @@ export async function runOutboxMaintenance(
   runtime.writeMaintenanceCursor(scan.nextCursor);
   if (!halted(runtime, stop)) await retireTerminalReceipts(runtime, now, counters, stop);
   return Object.freeze({ ...counters });
+}
+
+/** Retire one terminal index entry when its record is settled and bound for `destinationRef`. */
+async function purgeEntry(
+  runtime: OutboxRuntime,
+  destinationRef: string,
+  indexKey: string,
+  bytes: Uint8Array,
+): Promise<boolean> {
+  const deliveryId = deliveryIdFromTerminalKey(indexKey);
+  if (deliveryId === null) return false;
+  const loaded = await loadDelivery(runtime.storage, runtime.keys, deliveryId);
+  if (loaded === null || !ownsTerminalEntry(runtime, indexKey, loaded)) return false;
+  if (loaded.record.destinationRef !== destinationRef) return false;
+  return retireOneReceipt(runtime, indexKey, bytes);
+}
+
+/**
+ * Delete every settled (terminal) delivery bound for `destinationRef`, with its
+ * listing entry and idempotency binding, whatever its age. An open delivery
+ * (queued, claimed, attempting, retry-scheduled, or unknown-outcome) is never
+ * touched. Returns how many records were deleted.
+ *
+ * The scan walks the terminal index in pages and carries its cursor, so a
+ * concurrent retention sweep or purge that deletes an entry underneath it is a
+ * lost compare-and-swap that counts nothing, not an error.
+ */
+export async function purgeSettledDeliveries(
+  runtime: OutboxRuntime,
+  destinationRef: string,
+): Promise<number> {
+  const batchSize = runtime.policy.maintenanceBatchSize;
+  let purged = 0;
+  let cursor: string | undefined;
+  let fullPage = true;
+  while (fullPage) {
+    const page: [string, Uint8Array][] = [];
+    const options = cursor === undefined ? { limit: batchSize } : { limit: batchSize, gt: cursor };
+    for await (const [key, value] of runtime.storage.scan(runtime.keys.terminalPrefix, options)) {
+      page.push([key, value]);
+      cursor = key;
+    }
+    for (const [indexKey, bytes] of page) {
+      if (runtime.disposal.aborted) return purged;
+      if (await purgeEntry(runtime, destinationRef, indexKey, bytes)) purged += 1;
+    }
+    fullPage = page.length === batchSize;
+  }
+  return purged;
 }

@@ -1,13 +1,24 @@
-import { encode } from '../core/codec.ts';
-import { PersistedDataCorruptError } from '../core/persisted-data-incompatible-error.ts';
 import {
-  KEYS,
+  createReplayLiveFeed,
+  encodeCursor,
+  type Cursor,
+  type ReplayLiveFeed,
+  type ReplayLiveFeedBackend,
+} from "../embedded/backchannel/src/index.ts";
+import {
+  createDurableSubscription,
+  createSerialOperationQueue,
+} from "../embedded/backchannel/src/internals.ts";
+import {
   MAX_BATCH_OPERATIONS,
   storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
   type Storage,
-} from '../storage/interface.ts';
+} from "../embedded/storage/src/index.ts";
+import { encode } from '../core/codec.ts';
+import { PersistedDataCorruptError } from '../core/persisted-data-incompatible-error.ts';
+import { KEYS } from '../storage/keys.ts';
 import {
   collectRetentionRecords,
   createFleetEventEnvelope,
@@ -29,19 +40,10 @@ import {
 } from './fleet-event-feed-storage.ts';
 import type { FleetEventFeed } from './fleet-event-feed.ts';
 import {
-  createDurableSubscription,
-  createSerialOperationQueue,
-} from './replay-live-feed-internals.ts';
-import {
-  createReplayLiveFeed,
-  encodeCursor,
-  type Cursor,
   type FleetEventAppendOptions,
   type FleetEventEnvelope,
   type FleetEventInput,
   type FleetWorkflowEventInput,
-  type ReplayLiveFeed,
-  type ReplayLiveFeedBackend,
 } from './workflow-event-feed.ts';
 
 export function createFleetEventFeedOperations(
@@ -63,12 +65,9 @@ export function createFleetEventFeedOperations(
     event: FleetEventInput,
     options?: FleetEventAppendOptions,
   ): Promise<FleetEventEnvelope> {
-    const appended = await enqueueAppend(() =>
+    return enqueueAppend(() =>
       appendInternal(event, async () => options?.conditions ?? [], options?.operations ?? []),
     );
-    if (appended === null)
-      throw new Error('Fleet event append conditions unexpectedly disappeared.');
-    return appended;
   }
 
   async function appendWorkflowEventIfPresent(
@@ -83,6 +82,15 @@ export function createFleetEventFeedOperations(
     );
   }
 
+  // A condition loader that always yields conditions never abandons the append, so its overload
+  // promises an envelope; only a loader that can answer `null` (the workflow vanished) may
+  // resolve to `null`.
+  function appendInternal(
+    event: FleetEventInput,
+    loadConditions: () => Promise<readonly ConditionalBatchCondition[]>,
+    callerOperations?: readonly BatchOperation[],
+    maxAttempts?: number,
+  ): Promise<FleetEventEnvelope>;
   function appendInternal(
     event: FleetEventInput,
     loadConditions: () => Promise<readonly ConditionalBatchCondition[] | null>,
@@ -293,14 +301,9 @@ export function createFleetEventFeedOperations(
   }
 
   function fireLive(envelope: FleetEventEnvelope): void {
-    const listenerSnapshot = Array.from(listeners);
-    for (const listener of listenerSnapshot) {
-      try {
-        listener(envelope);
-      } catch {
-        // Listener failures must not corrupt append or other subscribers.
-      }
-    }
+    // Every listener is the non-throwing wake-up that `createDurableSubscription` registers, so
+    // no listener error has to be fenced off from the append that already committed.
+    for (const listener of Array.from(listeners)) listener(envelope);
   }
 
   return {

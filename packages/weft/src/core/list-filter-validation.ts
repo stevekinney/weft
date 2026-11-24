@@ -37,10 +37,10 @@ const failureCategorySchema: z.ZodType<FailureCategory> = z.enum(FAILURE_CATEGOR
 
 const timeRangeSchema = z
   .object({
-    gte: z.number().optional(),
-    lte: z.number().optional(),
-    gt: z.number().optional(),
-    lt: z.number().optional(),
+    gte: z.number().optional().describe('Inclusive lower bound, as a millisecond timestamp.'),
+    lte: z.number().optional().describe('Inclusive upper bound, as a millisecond timestamp.'),
+    gt: z.number().optional().describe('Exclusive lower bound, as a millisecond timestamp.'),
+    lt: z.number().optional().describe('Exclusive upper bound, as a millisecond timestamp.'),
   })
   .strict()
   .refine(
@@ -73,31 +73,79 @@ function normalizeAttributes(
 }
 
 /**
+ * The wire description of each {@link ListFilter} field, shared by every
+ * operation that accepts the filter (list, aggregate, purge, and the bulk
+ * operations) so a field reads the same wherever it appears.
+ */
+export const listFilterDescriptions = {
+  status: 'Return only workflows in this status, or in any of these statuses.',
+  type: 'Return only workflows of this registered workflow type.',
+  scheduleId: 'Return only workflows started by the schedule with this id.',
+  parentWorkflowId: 'Return only direct children of the workflow with this id.',
+  parentWorkflowExecutionToken:
+    'Narrow parentWorkflowId to one execution of the parent. Requires parentWorkflowId.',
+  tags: 'Return only workflows that carry every one of these tags.',
+  attributes: 'Return only workflows whose search attributes satisfy every one of these filters.',
+  limit: 'Maximum number of workflows to return, 1 to 1000.',
+  offset: 'Number of matching workflows to skip before the first one returned, for paging.',
+  idPrefix: 'Return only workflows whose id starts with this prefix: letters, digits, "_" and "-".',
+  createdAt: 'Return only workflows created within this time range.',
+  updatedAt: 'Return only workflows last updated within this time range.',
+  executionDeadline: 'Return only workflows whose execution deadline falls within this time range.',
+  failureCategory:
+    'Return only failed workflows in this failure category, or in any of these categories.',
+  failedStep:
+    'Return only failed workflows that stopped at the step with this operation label (an activity name, for one).',
+  retrying:
+    'true returns only running workflows that are retrying an activity from its second attempt on; false returns the workflows that are not.',
+} as const;
+
+/**
  * Concrete object schema for {@link ListFilter}. Supports `.omit()` and
  * `.extend()` for composition (used by the aggregate operation).
  */
 export const listFilterObjectSchema = z
   .object({
-    status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
-    type: z.string().min(1).optional(),
-    scheduleId: z.string().min(1).optional(),
-    parentWorkflowId: z.string().min(1).optional(),
-    parentWorkflowExecutionToken: z.string().min(1).optional(),
-    tags: z.array(z.string()).optional(),
-    attributes: z.array(attributeFilterSchema).optional(),
-    limit: z.number().int().min(1).max(1000).optional(),
-    offset: z.number().int().min(0).optional(),
+    status: z
+      .union([workflowStatusSchema, z.array(workflowStatusSchema)])
+      .optional()
+      .describe(listFilterDescriptions.status),
+    type: z.string().min(1).optional().describe(listFilterDescriptions.type),
+    scheduleId: z.string().min(1).optional().describe(listFilterDescriptions.scheduleId),
+    parentWorkflowId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(listFilterDescriptions.parentWorkflowId),
+    parentWorkflowExecutionToken: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(listFilterDescriptions.parentWorkflowExecutionToken),
+    tags: z.array(z.string()).optional().describe(listFilterDescriptions.tags),
+    attributes: z
+      .array(attributeFilterSchema)
+      .optional()
+      .describe(listFilterDescriptions.attributes),
+    limit: z.number().int().min(1).max(1000).optional().describe(listFilterDescriptions.limit),
+    offset: z.number().int().min(0).optional().describe(listFilterDescriptions.offset),
     idPrefix: z
       .string()
       .min(1)
       .regex(ID_PREFIX_PATTERN, 'idPrefix must match [A-Za-z0-9_-]+')
-      .optional(),
-    createdAt: timeRangeSchema.optional(),
-    updatedAt: timeRangeSchema.optional(),
-    executionDeadline: timeRangeSchema.optional(),
+      .optional()
+      .describe(listFilterDescriptions.idPrefix),
+    createdAt: timeRangeSchema.optional().describe(listFilterDescriptions.createdAt),
+    updatedAt: timeRangeSchema.optional().describe(listFilterDescriptions.updatedAt),
+    executionDeadline: timeRangeSchema
+      .optional()
+      .describe(listFilterDescriptions.executionDeadline),
     failureCategory: z
       .union([failureCategorySchema, z.array(failureCategorySchema).min(1)])
-      .optional(),
+      .optional()
+      .describe(listFilterDescriptions.failureCategory),
+    failedStep: z.string().min(1).optional().describe(listFilterDescriptions.failedStep),
+    retrying: z.boolean().optional().describe(listFilterDescriptions.retrying),
   })
   .strict();
 

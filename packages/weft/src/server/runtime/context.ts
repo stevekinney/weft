@@ -1,21 +1,24 @@
 import type { ServerWebSocket } from 'bun';
 
-import type { McpSessionManager } from '../../mcp/session.ts';
+import type { Authenticator, Principal, RateLimiter } from "../../embedded/backchannel/src/index.ts";
+import type {
+  ConnectionLease,
+  JsonRpcWebSocketSession,
+  OpenApiSecuritySchemeName,
+  ResolvedCorsPolicy,
+} from "../../embedded/backchannel/src/internals.ts";
+import type { McpEndpoint } from '../../mcp/http.ts';
 import type { MetricsCollector } from '../../observability/metrics.ts';
+import type { WorkerDeploymentCatalog } from '../../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../../worker/manifest/index.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
-import type { Authenticator, RateLimiter } from '../authentication.ts';
 import type { DeadlineTracker } from '../deadline-tracker.ts';
-import type { createEngineEventFeedBackend } from '../engine-event-feed-backend.ts';
 import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import type { JsonRpcWebSocketSession } from '../json-rpc-websocket.ts';
-import type { OpenApiSecuritySchemeName } from '../openapi.ts';
-import type { Principal } from '../principal.ts';
 import type { createLiveOperationRegistry, createLiveRestBindings } from '../rest-bindings.ts';
 import type { TaskQueue } from '../task-queue.ts';
+import type { WatchEventFeed } from '../watch-event-feed-backend.ts';
 import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
-import type { ResolvedCorsPolicy } from './cors.ts';
 
 /**
  * Startup task-ledger recovery gate (WFT-23). `ready` resolves once every
@@ -42,6 +45,25 @@ export type LongPollWorkerSession = Readonly<{
   createdAt: number;
   lastHeartbeatAt: number;
 }>;
+
+/**
+ * A deferred worker-disconnect requeue: the timer that will run it and the
+ * instant it fires. `endsAt` is when the reconnect grace window closes, which
+ * `weft.workers.diagnostics` reports as `reconnectGraceEndsAt`.
+ */
+export interface PendingWorkerRequeue {
+  readonly timer: ReturnType<typeof setTimeout>;
+  readonly endsAt: number;
+}
+
+/** Point-in-time live transport subscriber/connection counts owned by `serve()`. */
+export interface ServerConnectionCounts {
+  fleetSse: number;
+  fleetWebSocket: number;
+  workflowSse: number;
+  workflowWebSocket: number;
+  workers: number;
+}
 
 /**
  * Internal closure state for a single `serve()` invocation.
@@ -75,11 +97,15 @@ export interface ServerContext {
   readonly corsPolicy: ResolvedCorsPolicy | null;
   /** Server-owned process-local metrics collector used by runtime diagnostics. */
   readonly metricsCollector: MetricsCollector;
-  readonly eventFeedBackend: ReturnType<typeof createEngineEventFeedBackend>;
+  readonly connectionCounts: ServerConnectionCounts;
+  readonly refreshConnectionMetrics: () => void;
+  /** Serves the REST `/events/sse` route from the watch events `/watch` clients read. */
+  readonly watchEventFeed: WatchEventFeed;
+  /** Serves the JSON-RPC subscriptions from the engine's own event log. */
   readonly workflowEventFeed: WorkflowEventFeed;
   readonly fleetEventFeed: FleetEventFeed;
   readonly activeJsonRpcSessions: Set<JsonRpcWebSocketSession>;
-  readonly mcpSessionManager: McpSessionManager;
+  readonly mcpEndpoint: McpEndpoint;
   readonly authenticatorPromise: Promise<Authenticator> | null;
   /**
    * Per-key request rate limiter, or `null` when `serve()` was called without
@@ -103,7 +129,13 @@ export interface ServerContext {
    * Pending requeue timers keyed by `workerId`. A successful re-register clears
    * the timer for that worker, suppressing the deferred requeue.
    */
-  readonly pendingWorkerRequeues: Map<string, ReturnType<typeof setTimeout>>;
+  readonly pendingWorkerRequeues: Map<string, PendingWorkerRequeue>;
+  /**
+   * The durable deployment catalog. An accepted worker registration records its
+   * `(deploymentName, buildId)` version here (`deployment-version-registration.ts`).
+   * Absent only on a hand-built context that has no catalog to record into.
+   */
+  readonly workerDeploymentCatalog?: WorkerDeploymentCatalog;
   /** Mutex: prevents concurrent visibility scans from running simultaneously. */
   scanRunning: boolean;
   /** Fine-grained mutex for in-flight operation IDs being processed by expiry paths. */
@@ -128,4 +160,37 @@ export interface ServerContext {
    * been cleared.
    */
   stopping: boolean;
+}
+
+export function acquireFleetSseConnection(context: ServerContext): ConnectionLease {
+  return acquireConnection(context, 'fleetSse');
+}
+
+export function acquireFleetWebSocketConnection(context: ServerContext): ConnectionLease {
+  return acquireConnection(context, 'fleetWebSocket');
+}
+
+export function acquireWorkflowSseConnection(context: ServerContext): ConnectionLease {
+  return acquireConnection(context, 'workflowSse');
+}
+
+export function acquireWorkflowWebSocketConnection(context: ServerContext): ConnectionLease {
+  return acquireConnection(context, 'workflowWebSocket');
+}
+
+function acquireConnection(
+  context: ServerContext,
+  key: keyof Omit<ServerConnectionCounts, 'workers'>,
+): ConnectionLease {
+  context.connectionCounts[key] += 1;
+  context.refreshConnectionMetrics();
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      context.connectionCounts[key] = Math.max(0, context.connectionCounts[key] - 1);
+      context.refreshConnectionMetrics();
+    },
+  };
 }

@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import { principalFromUnauthenticatedLocal } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { DynamicWorkflowSourceUnavailableError } from '../../core/engine/dynamic-source-errors.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { anonymousPrincipal } from '../principal.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 
@@ -23,6 +25,12 @@ function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
   engine.register(echoWorkflow);
   return engine;
+}
+
+/** The time zone a stored schedule is read in. */
+async function zoneOf(engine: Engine, scheduleId: string): Promise<string | undefined> {
+  const summary = await engine.getSchedule(scheduleId);
+  return summary?.timeZone;
 }
 
 const registry = createOperationRegistry([createScheduleOperation]);
@@ -69,6 +77,77 @@ describe('weft.schedules.create', () => {
     );
   });
 
+  it('creates a schedule in the time zone it names, and in UTC when it names none', async () => {
+    engine = createEngine();
+
+    const zoned = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 9 * * 1-5',
+        id: 'weekday-mornings',
+        timeZone: 'America/Los_Angeles',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    const plain = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 9 * * 1-5',
+        id: 'weekday-mornings-utc',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect([zoned.status, plain.status]).toEqual([201, 201]);
+    expect(await zoneOf(engine, 'weekday-mornings')).toBe('America/Los_Angeles');
+    expect(await zoneOf(engine, 'weekday-mornings-utc')).toBe('UTC');
+  });
+
+  it('returns 400 for a time zone the runtime does not know, over REST and JSON-RPC', async () => {
+    engine = createEngine();
+
+    for (const timeZone of ['Mars/Olympus', '', 7]) {
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/schedules', {
+          type: 'echo',
+          cronExpression: '0 * * * *',
+          id: 'bad-zone',
+          timeZone,
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error:
+          'Field "timeZone" must be an IANA time zone name such as "America/Los_Angeles", or "UTC"',
+        retryable: false,
+      });
+    }
+    expect(await engine.getSchedule('bad-zone')).toBeNull();
+  });
+
+  it('returns 400 for a time zone on an interval schedule', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        every: '5m',
+        id: 'interval-zone',
+        timeZone: 'America/Los_Angeles',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await engine.getSchedule('interval-zone')).toBeNull();
+  });
+
   it('keeps create-only fields beside shared schedule fields', async () => {
     const input = {
       type: 'echo',
@@ -81,6 +160,43 @@ describe('weft.schedules.create', () => {
     const extracted = await createScheduleRestBinding.extractInput(request, {}, {});
 
     expect(extracted).toEqual(input);
+  });
+
+  it('stores the metadata it is given and returns 400 for metadata that is not a plain JSON object', async () => {
+    engine = createEngine();
+
+    const created = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        id: 'with-metadata',
+        metadata: { owner: { kind: 'user', id: 'ada' } },
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(created.status).toBe(201);
+    const stored = await engine.getSchedule('with-metadata');
+    expect(stored?.metadata).toEqual({ owner: { kind: 'user', id: 'ada' } });
+
+    for (const metadata of ['ada', 7, ['a'], null]) {
+      const response = await handleRequest(
+        jsonRequest('POST', '/v1/schedules', {
+          type: 'echo',
+          cronExpression: '0 * * * *',
+          id: 'bad-metadata',
+          metadata,
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: 'Field "metadata" must be a plain JSON object',
+        retryable: false,
+      });
+    }
+    expect(await engine.getSchedule('bad-metadata')).toBeNull();
   });
 
   it('returns 400 when description is not a string', async () => {
@@ -97,7 +213,10 @@ describe('weft.schedules.create', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Field "description" must be a string' });
+    expect(await response.json()).toEqual({
+      error: 'Field "description" must be a string',
+      retryable: false,
+    });
   });
 
   it('returns 400 when jitter is neither a duration string nor a number', async () => {
@@ -116,6 +235,7 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "jitter" must be a duration string or a number of milliseconds',
+      retryable: false,
     });
   });
 
@@ -135,6 +255,7 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Provide exactly one of cronExpression or every, not both',
+      retryable: false,
     });
   });
 
@@ -153,6 +274,7 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "every" must be a duration string or a number of milliseconds',
+      retryable: false,
     });
   });
 
@@ -181,7 +303,7 @@ describe('weft.schedules.create', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error });
+    expect(await response.json()).toEqual({ error, retryable: false });
   });
 
   it('returns InvalidParams over JSON-RPC for a malformed jitter duration', async () => {
@@ -202,7 +324,11 @@ describe('weft.schedules.create', () => {
           },
         }),
       }),
-      { registry, engine, principal: anonymousPrincipal() },
+      {
+        registry,
+        host: engine,
+        principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+      },
     );
 
     expect(response.status).toBe(200);
@@ -226,7 +352,7 @@ describe('weft.schedules.create', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+    expect(await response.json()).toEqual({ error: 'Invalid JSON body', retryable: false });
   });
 
   it('returns 400 when the request body is JSON null', async () => {
@@ -240,7 +366,10 @@ describe('weft.schedules.create', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+    expect(await response.json()).toEqual({
+      error: 'Request body must be a JSON object',
+      retryable: false,
+    });
   });
 
   it('returns 400 with "Missing required field: type" when body is a JSON array', async () => {
@@ -255,7 +384,10 @@ describe('weft.schedules.create', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 
   it('returns 400 when overlap is invalid', async () => {
@@ -274,6 +406,7 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "overlap" must be one of skip, queue, cancel-running, allow',
+      retryable: false,
     });
   });
 
@@ -299,6 +432,7 @@ describe('weft.schedules.create', () => {
       expect(await response.json()).toEqual({
         error: 'Schedule "missing-schedule" not found',
         data: { resource: 'schedule' },
+        retryable: false,
       });
     } finally {
       engine.schedule = originalSchedule;
@@ -356,7 +490,7 @@ describe('weft.schedules.create', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.schedule = originalSchedule;
     }
@@ -416,6 +550,7 @@ describe('weft.schedules.create DynamicWorkflowSourceUnavailableError wire mappi
       expect(JSON.parse(text)).toEqual({
         error: expectedMessage,
         weftCode: 'DynamicWorkflowSourceUnavailableError',
+        retryable: false,
       });
       expect(text).not.toContain('/etc/secrets/token=abc123');
     });
@@ -437,7 +572,11 @@ describe('weft.schedules.create DynamicWorkflowSourceUnavailableError wire mappi
             params: { type: 'echo', cronExpression: '0 * * * *', revisionPolicy: 'pinned' },
           }),
         }),
-        { registry, engine, principal: anonymousPrincipal() },
+        {
+          registry,
+          host: engine,
+          principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+        },
       );
       const text = await response.text();
 
@@ -448,7 +587,12 @@ describe('weft.schedules.create DynamicWorkflowSourceUnavailableError wire mappi
         error: {
           code: -32021,
           message: expectedMessage,
-          data: { reason: testCase.reason, weftCode: 'Conflict', httpStatus: 409 },
+          data: {
+            reason: testCase.reason,
+            weftCode: 'Conflict',
+            httpStatus: 409,
+            retryable: false,
+          },
         },
       });
       expect(text).not.toContain('/etc/secrets/token=abc123');

@@ -5,10 +5,11 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage, type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
+import { BulkOperationConfirmationError } from './errors.ts';
 import { ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING, Engine } from './index.ts';
 
 const echoWorkflow = workflow({ name: 'purge-supersession-echo' }).execute(async function* (
@@ -224,5 +225,77 @@ describe('bulk purge supersession (COR-1388)', () => {
     const reactivated = await engine.get(id);
     expect(reactivated?.status).toBe('running');
     expect(await base.get(KEYS.checkpoint(id))).not.toBeNull();
+  });
+});
+
+describe('a confirmed bulk purge names the run it previewed', () => {
+  /** Replace the completed run under `id` with one that ends in the same status. */
+  async function replaceWithCompletedRun(engine: TestEngine, id: string): Promise<void> {
+    const replacement = await engine.start('purge-supersession-echo', 'NEW', {
+      id,
+      onTerminalConflict: 'start-new',
+    });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING](id);
+    await engine.signal(id, 'go');
+    expect(await replacement.result()).toBe('NEW');
+  }
+
+  it('refuses a token whose run was replaced and ended in the same status', async () => {
+    const id = `purge-token-run-${(invocation += 1)}`;
+    const storage = new MemoryStorage();
+    await using engine = await createEngine(storage);
+    await completeFirstRun(engine, id);
+    const preview = await engine.purge(
+      { status: 'completed' },
+      { dryRun: true, requestId: 'preview' },
+    );
+    expect(preview.matched).toBe(1);
+
+    await replaceWithCompletedRun(engine, id);
+
+    const refusal = await rejectionOf(
+      engine.purge(
+        { status: 'completed' },
+        { confirmationToken: preview.confirmationToken, requestId: 'commit' },
+      ),
+    );
+    expect(refusal).toBeInstanceOf(BulkOperationConfirmationError);
+    expect(await storage.get(KEYS.workflow(id))).not.toBeNull();
+    const kept = await engine.get(id);
+    expect(kept?.status).toBe('completed');
+  });
+
+  it('skips a replacement that ends in the same status between the commit scan and the delete', async () => {
+    const id = `purge-token-fence-${(invocation += 1)}`;
+    const base = new MemoryStorage();
+    let armed = false;
+    const gate = gateStorage(
+      base,
+      (method, args) =>
+        armed && (method === 'has' || method === 'get') && args[0] === KEYS.teardownOwed(id),
+    );
+    await using engine = await createEngine(gate.storage);
+    await completeFirstRun(engine, id);
+    const preview = await engine.purge(
+      { status: 'completed' },
+      { dryRun: true, requestId: 'preview' },
+    );
+
+    armed = true;
+    const purging = engine.purge(
+      { status: 'completed' },
+      { confirmationToken: preview.confirmationToken, requestId: 'commit' },
+    );
+    await gate.reached;
+    // The scan above read the previewed run, so the token still matches; the replacement lands
+    // after it and has ended by the time the delete reads the run.
+    await replaceWithCompletedRun(engine, id);
+    gate.release();
+
+    const result = await purging;
+    expect('deleted' in result ? result.deleted : -1).toBe(0);
+    expect(await base.get(KEYS.workflow(id))).not.toBeNull();
+    const kept = await engine.get(id);
+    expect(kept?.status).toBe('completed');
   });
 });

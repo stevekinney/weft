@@ -19,7 +19,7 @@ export async function executeVersionCheck(options: {
 
   const { runVersionCheck } = await import('../index.ts');
   const { formatVersionCheckReport } = await import('../index.ts');
-  const { BunSQLiteStorage } = await import('../index.ts');
+  const { BunSQLiteStorage } = await import("../embedded/storage-bun-sqlite/src/index.ts");
 
   const storage = new BunSQLiteStorage(options.database);
 

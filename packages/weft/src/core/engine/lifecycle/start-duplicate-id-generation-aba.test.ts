@@ -32,10 +32,10 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type Storage } from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
-import { waitForCondition } from '../../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage, type Storage } from "../../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { encodeGeneration } from '../generation-codec.ts';

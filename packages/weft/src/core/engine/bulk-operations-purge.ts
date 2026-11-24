@@ -1,10 +1,11 @@
-import type { BatchOperation, Storage as WeftStorage } from '../../storage/interface.ts';
 import {
-  KEYS,
   encodeStorageKeyComponent,
   storageHas,
   storageKeys,
-} from '../../storage/interface.ts';
+  type BatchOperation,
+  type Storage as WeftStorage,
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { buildIndexOperations } from '../search-attributes.ts';
 import type { ListFilter, PurgeResult, SearchAttributeValue, WorkflowState } from '../types.ts';
@@ -15,17 +16,23 @@ import { EngineDisposedError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
 import { commitPurgeOrExplainLoss, isScannedRun } from './purge-supersession.ts';
+import { drainUpdateHistory } from './purge-update-history.ts';
+import { addUpdateDeleteKeys } from './purge-update-keys.ts';
 import { markPurgeWriteFailures } from './purge-write-tracking.ts';
 import { recordResultCommitter } from './result-committer.ts';
+import { pendingTerminalSettlementFor, waiterBelongsToRun } from './result-waiter-run.ts';
 import { streamExpiredRetentionWorkflowStates } from './retention-scan.ts';
 import { decodeScheduleRunMetadata } from './schedule-run-metadata.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import {
   buildExternalTerminalRotationFragment,
   deriveWorkflowResultFromState,
+  loadWorkflowState,
 } from './storage-io.ts';
+import { forgetBranchActivityReceipts } from './timeline-coordinator-detail.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 import { foldWorkflowGenerationBumpForPurge } from './workflow-generation-fence.ts';
+import { flushWorkflowLogs } from './workflow-logs.ts';
 import { getWorkflowRetentionDeadline } from './workflow-retention-deadline.ts';
 import {
   refreshWorkflowVisibilityMaintenance,
@@ -46,7 +53,7 @@ export async function purgeInternal(
   parameters: PurgeParameters,
   cleanupWaiters: CleanupWaiters,
 ): Promise<PurgeResult> {
-  const { effectiveLimit, manualOffset } = resolvePurgeWindow(internals, filter, parameters.limit);
+  const { effectiveLimit, manualOffset } = resolvePurgeWindow(filter, parameters.limit);
 
   if (effectiveLimit === 0) return { deleted: 0 };
 
@@ -80,8 +87,7 @@ export async function purgeInternal(
   return { deleted };
 }
 
-function resolvePurgeWindow(
-  _internals: EngineInternals,
+export function resolvePurgeWindow(
   filter: ListFilter | undefined,
   fallbackLimit: number | undefined,
 ): { effectiveLimit: number | undefined; manualOffset: number } {
@@ -114,7 +120,7 @@ function resolvePurgeLimit(
   return Math.min(manualLimit, fallbackLimit);
 }
 
-async function shouldPurgeWorkflowState(
+export async function shouldPurgeWorkflowState(
   internals: EngineInternals,
   state: WorkflowState,
   expiredOnly: boolean,
@@ -135,6 +141,18 @@ async function shouldPurgeWorkflowState(
 
   const deadline = await getWorkflowRetentionDeadline(internals, state);
   return deadline !== null && deadline <= now;
+}
+
+/** Purge one terminal workflow by its exact id (COR-1934), as `Engine.purgeById` documents it. */
+export async function purgeWorkflowById(
+  internals: EngineInternals,
+  workflowId: string,
+  cleanupWaiters: CleanupWaiters,
+): Promise<boolean> {
+  const state = await loadWorkflowState(internals, workflowId);
+  // Not `expiredOnly`, so `now` is never read: the caller means this run whatever its age.
+  if (state === null || !(await shouldPurgeWorkflowState(internals, state, false, 0))) return false;
+  return purgeWorkflow(internals, state, cleanupWaiters);
 }
 
 export async function purgeWorkflow(
@@ -176,7 +194,8 @@ export async function purgeWorkflow(
  * index deletes (search attributes + tags), the explicit key set (state,
  * checkpoint, headers, services marker, update requests/responses, and the
  * `wf:`/`ev:`/`sig:`/... prefix sweeps), and the visibility-index transition to
- * `null`. Pure: it reads storage to discover keys but writes nothing, so a caller
+ * `null`. It reads storage to discover keys and writes nothing but the run's update history
+ * (removed in bounded batches first, {@link drainUpdateHistory}), so a caller
  * can fold the returned ops into a larger atomic batch instead of committing them
  * standalone. {@link purgeWorkflow} commits them on their own; the
  * `onTerminalConflict: 'start-new'` restart path prepends them to the create batch
@@ -189,6 +208,12 @@ export async function collectWorkflowPurgeDeleteOperations(
   state: WorkflowState,
 ): Promise<BatchOperation[]> {
   const workflowId = state.id;
+  // A line still buffered would otherwise be written after the sweep below listed the run's lines,
+  // and outlive the run (COR-1811).
+  await flushWorkflowLogs(internals);
+  // The one thing this does write: the update history has no bound, so it is removed in batches of its
+  // own first (see `drainUpdateHistory`), and what is left folds into the atomic batch below.
+  await drainUpdateHistory(internals, state);
   const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
   const deleteOperations = buildWorkflowIndexDeleteOperations(state, attributeBytes);
   const deleteKeys = await collectWorkflowPurgeDeleteKeys(internals, state);
@@ -219,6 +244,7 @@ export function clearPurgedWorkflowInMemoryState(
   releaseLaunchCheckpoint(internals, workflowId);
   internals.heartbeatDetails.delete(workflowId);
   internals.lastHeartbeatDetailsByStep.delete(workflowId);
+  forgetBranchActivityReceipts(internals, workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {
     if (pending.workflowId === workflowId) {
       internals.pendingAsyncActivities.delete(token);
@@ -258,6 +284,12 @@ export function clearPurgedWorkflowInMemoryState(
 function settleAndForgetPurgedResultWaiter(internals: EngineInternals, state: WorkflowState): void {
   const waiter = internals.resultResolvers.get(state.id);
   if (waiter === undefined) return;
+  // Bound to a different run than the one purged: it is the replacement's (or an older run's
+  // that the result poll retires), so this record's outcome is not its to receive.
+  if (!waiterBelongsToRun(waiter, state.workflowExecutionToken)) return;
+  // A terminated run's result is held for its in-flight activity (COR-1597): the settlement that
+  // holds it rejects it, with the same terminal error, once the activity has landed.
+  if (pendingTerminalSettlementFor(internals, state.id, waiter) !== undefined) return;
   internals.resultResolvers.delete(state.id);
   recordResultCommitter(waiter, state.terminalCommittedBy);
   try {
@@ -307,7 +339,7 @@ async function collectWorkflowPurgeDeleteKeys(
   addExecutionDeadlineDeleteKeys(deleteKeys, state);
   addTerminalCleanupDeleteKey(deleteKeys, state);
   await addScheduleRunHistoryDeleteKeys(internals.storage, deleteKeys, workflowId);
-  await addUpdateRequestDeleteKeys(internals.storage, deleteKeys, workflowId);
+  await addUpdateDeleteKeys(internals.storage, deleteKeys, workflowId);
   await addWorkflowPrefixDeleteKeys(internals.storage, deleteKeys, workflowId);
   return deleteKeys;
 }
@@ -341,6 +373,7 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     // explicitly, else a purge + id reuse leaves a stale marker that would make
     // recovery re-provision services for a run that never had them.
     KEYS.workflowHasServices(state.id),
+    KEYS.activityRetrying(state.id), // `wf-retrying:{id}` (COR-2529) is under no purge prefix below.
     // The finalizer payload (`wf-finalizer-state:`) and the teardown-owed marker
     // (`wf-teardown-needed:`) live under their own prefixes, not `wf:{id}:`, so the
     // prefix sweep below misses them — delete them explicitly. Purge only reaches a
@@ -390,37 +423,18 @@ function shouldCleanupTerminalOutputArtifacts(state: WorkflowState): boolean {
   return state.status === 'cancelled' || state.status === 'timed-out';
 }
 
-async function addUpdateRequestDeleteKeys(
-  storage: WeftStorage,
-  deleteKeys: Set<string>,
-  workflowId: string,
-): Promise<void> {
-  const updateRequestPrefix = KEYS.updatePrefix(workflowId);
-  const updateRequestKeys = await collectKeysForPrefix(storage, updateRequestPrefix);
-  for (const key of updateRequestKeys) {
-    deleteKeys.add(key);
-    addUpdateResponseDeleteKey(deleteKeys, updateRequestPrefix, key);
-  }
-}
-
-function addUpdateResponseDeleteKey(
-  deleteKeys: Set<string>,
-  updateRequestPrefix: string,
-  updateRequestKey: string,
-): void {
-  const updateId = updateRequestKey.slice(updateRequestPrefix.length);
-  if (updateId.length > 0) deleteKeys.add(KEYS.updateResponse(updateId));
-}
-
 async function addWorkflowPrefixDeleteKeys(
   storage: WeftStorage,
   deleteKeys: Set<string>,
   workflowId: string,
 ): Promise<void> {
+  deleteKeys.add(KEYS.signalSequence(workflowId));
   for (const prefix of workflowPurgePrefixes(workflowId)) {
     const keys = await collectKeysForPrefix(storage, prefix);
     for (const key of keys) deleteKeys.add(key);
   }
+  // The counter record of the run's persisted `ctx.log` lines (COR-1811) sits under its own prefix.
+  deleteKeys.add(KEYS.workflowLogCounter(workflowId));
   await addWorkflowLinkedFleetEventDeleteKeys(storage, deleteKeys, workflowId);
 }
 
@@ -455,6 +469,10 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     // `onTerminalConflict: 'start-new'` restart — read the prior run's timeline.
     `wf:${encodedWorkflowId}:timeline:`,
     `ev:${encodedWorkflowId}:`,
+    KEYS.fileWorkflowEventReceiptPrefix(workflowId),
+    // The run's persisted `ctx.log` lines (COR-1811): they live as long as the run does.
+    KEYS.workflowLogPrefix(workflowId),
+    KEYS.watchEventPrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
     `review:${encodedWorkflowId}:`,
     `offload:${encodedWorkflowId}:`,
@@ -468,7 +486,6 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     `sigres:v1:${encodedWorkflowId}:`,
   ];
 }
-
 function appendKeyDeleteOperations(
   deleteOperations: BatchOperation[],
   deleteKeys: Iterable<string>,

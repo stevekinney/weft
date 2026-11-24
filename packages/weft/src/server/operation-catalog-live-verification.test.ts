@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 /**
  * Operation-catalog live verification — verifies that `serve()` wires the
  * live `OperationRegistry` + `REST_BINDINGS` into `handleRequest`, and that
@@ -7,16 +7,16 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { signJWT } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext, WorkflowState } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { workflow, type WorkflowContext, type WorkflowState } from '../core/types.ts';
+import { KEYS } from '../storage/keys.ts';
 import { WorkerDeploymentCatalog } from '../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../worker/manifest/types.ts';
 import { resolveWorkflowWorkerStartBinding } from '../worker/versioning-policy.ts';
-import { signJWT } from './authentication.ts';
 import { serve, type WeftServer } from './index.ts';
 import { jsonRecord, propertyRecord, record } from './protocol.test-support.ts';
 import { createLiveOperationRegistry, REST_BINDINGS } from './rest-bindings.ts';
@@ -44,10 +44,8 @@ async function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns()) {
     const state = await engine.get(workflowId);
     if (state?.status === status) return;
     await sleepForTesting(5);
@@ -59,7 +57,7 @@ async function issueJwt(): Promise<string> {
   return signJWT(
     {
       sub: 'operation-catalog-user',
-      scope: ['system:admin', 'workflows:read', 'workflows:write'].join(' '),
+      scope: ['signals:write', 'system:admin', 'workflows:read', 'workflows:write'].join(' '),
     },
     TEST_SECRET,
   );

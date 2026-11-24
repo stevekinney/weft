@@ -1,8 +1,11 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
+import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
 import { createServerWebSocketHandlers } from './authentication-bridge.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
+import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 import {
   endWorkerReconnectGracePeriods,
   runWorkerDisconnectRequeue,
@@ -18,6 +21,10 @@ import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 
 type FakeWorkerSocket = {
   data: WebSocketData;
+  sentMessages: string[];
+  readyState: number;
+  send(message: string): void;
+  close(code: number, reason: string): void;
 };
 
 function createWorkerSocket(workerId: string): FakeWorkerSocket {
@@ -28,7 +35,23 @@ function createWorkerSocket(workerId: string): FakeWorkerSocket {
       queue: 'default',
       workerId,
     },
+    sentMessages: [],
+    readyState: WebSocket.OPEN,
+    send(message) {
+      this.sentMessages.push(message);
+    },
+    close() {},
   };
+}
+
+function registerMessageJson(workerId: string): string {
+  return JSON.stringify({
+    type: 'register',
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    workerId,
+    manifest: manifestForActivities(['doWork']),
+    concurrency: 3,
+  });
 }
 
 function leasedFixture(overrides: Partial<RemoteTaskLeased> = {}): RemoteTaskLeased {
@@ -76,6 +99,66 @@ describe('createServerWebSocketHandlers', () => {
     );
     expect(context.workerSockets.get('worker-1') as unknown).toBe(freshSocket);
     expect(context.pendingWorkerRequeues.size).toBe(0);
+  });
+
+  it('drops a closed worker from live counts while preserving reconnect and grace cleanup', async () => {
+    const context = {
+      ...minimalServerContext(),
+      workerReconnectGracePeriodMs: 10,
+      connectionCounts: { ...minimalServerContext().connectionCounts, workers: 1 },
+    };
+    const options = minimalServeOptions();
+    const socket = createWorkerSocket('worker-1');
+    context.workerSockets.set('worker-1', socket as never);
+
+    const handlers = createServerWebSocketHandlers(context, options, () => {});
+    handlers.close(socket as never);
+
+    expect(context.workerSockets.has('worker-1')).toBe(false);
+    expect(context.connectionCounts.workers).toBe(0);
+    expect(context.pendingWorkerRequeues.has('worker-1')).toBe(true);
+
+    const freshSocket = createWorkerSocket('worker-1');
+    handleWorkerWebSocketMessage(
+      context,
+      options,
+      freshSocket as never,
+      registerMessageJson('worker-1'),
+      () => {},
+    );
+    await waitForCondition(() => freshSocket.sentMessages.length > 0, {
+      label: 'worker reconnect registration',
+    });
+
+    expect(JSON.parse(freshSocket.sentMessages[0]!).type).toBe('registerAck');
+    expect(context.workerSockets.get('worker-1') as unknown).toBe(freshSocket);
+    expect(context.connectionCounts.workers).toBe(1);
+    expect(context.pendingWorkerRequeues.has('worker-1')).toBe(false);
+
+    await waitForCondition(() => !context.pendingWorkerRequeues.has('worker-1'), {
+      label: 'reconnect grace timer cancellation',
+    });
+    expect(context.workerSockets.get('worker-1') as unknown).toBe(freshSocket);
+    expect(context.connectionCounts.workers).toBe(1);
+  });
+
+  it('finishes delayed grace cleanup without decrementing the live count twice', async () => {
+    const context = {
+      ...minimalServerContext(),
+      workerReconnectGracePeriodMs: 10,
+      connectionCounts: { ...minimalServerContext().connectionCounts, workers: 1 },
+    };
+    const socket = createWorkerSocket('worker-1');
+    context.workerSockets.set('worker-1', socket as never);
+
+    const handlers = createServerWebSocketHandlers(context, minimalServeOptions(), () => {});
+    handlers.close(socket as never);
+
+    await waitForCondition(() => !context.pendingWorkerRequeues.has('worker-1'), {
+      label: 'worker reconnect grace cleanup',
+    });
+    expect(context.workerSockets.has('worker-1')).toBe(false);
+    expect(context.connectionCounts.workers).toBe(0);
   });
 
   it('requeues a live, unexpired lease when its worker disconnects', async () => {
@@ -219,11 +302,10 @@ describe('createServerWebSocketHandlers', () => {
     ).toEqual(leased);
   });
 
-  // A worker that disconnected before the stop began is still inside its
-  // grace window: its `workerSockets` entry stays until the window ends.
-  // Stop used to cancel that window's timer without ending it, so
-  // `shutdownAllWorkers` kept polling the already-closed socket for its
-  // whole 30s default timeout.
+  // A worker that disconnected before the stop began keeps its registry entry
+  // for reconnect proof, but its closed transport must leave the live count
+  // immediately. Stop must still finish the pending requeue without touching a
+  // replacement socket.
   it('ends a pending reconnect grace window when the server stops', async () => {
     const context = { ...minimalServerContext(), workerReconnectGracePeriodMs: 2_000 };
     const options = minimalServeOptions();
@@ -240,7 +322,8 @@ describe('createServerWebSocketHandlers', () => {
     const handlers = createServerWebSocketHandlers(context, options, () => {});
     handlers.close(socket as never);
     expect(context.pendingWorkerRequeues.has('worker-1')).toBe(true);
-    expect(context.workerSockets.has('worker-1')).toBe(true);
+    expect(context.workerSockets.has('worker-1')).toBe(false);
+    expect(context.connectionCounts.workers).toBe(0);
 
     // What `server.stop()`'s timer-clearing disposer does, in order.
     context.stopping = true;

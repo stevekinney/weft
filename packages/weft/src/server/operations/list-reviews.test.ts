@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  type OperationFault,
+  defineOperation,
+  principalFromApiKey,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import type { ReviewRequest } from '../../core/review/index.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { storeHistoricalReviewDecisionWithoutRequestMetadata } from '../review-test-support.test-support.ts';
 import { listReviewsOperation, listReviewsRestBinding } from './list-reviews.ts';
 
@@ -225,7 +227,7 @@ describe('weft.reviews.list', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('returns 401 when the caller is anonymous', async () => {

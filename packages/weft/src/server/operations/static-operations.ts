@@ -1,5 +1,5 @@
 /** Static operations that require no per-server configuration. */
-import type { RegistrableOperation } from '../operation-catalog.ts';
+import type { RegistrableOperation } from "../../embedded/backchannel/src/internals.ts";
 import { activateWorkflowRevisionOperation } from './activate-workflow-revision.ts';
 import { addWorkflowTagsOperation } from './add-workflow-tags.ts';
 import { aggregateWorkflowsOperation } from './aggregate-workflows.ts';
@@ -12,6 +12,7 @@ import { bulkSignalWorkflowsOperation } from './bulk-signal-workflows.ts';
 import { cancelScheduleOperation } from './cancel-schedule.ts';
 import { cancelWorkflowOperation } from './cancel-workflow.ts';
 import { clearTaskDeadLetterOperation } from './clear-task-dead-letter.ts';
+import { compareWorkflowOperation } from './compare-workflow.ts';
 import { createScheduleOperation } from './create-schedule.ts';
 import { fleetEventsSseOperation } from './fleet-events-sse.ts';
 import { fleetEventsSubscriptionOperation } from './fleet-events-subscription.ts';
@@ -21,6 +22,7 @@ import { getCatalogDiagnosticsOperation } from './get-catalog-diagnostics.ts';
 import { getCheckpointAtOperation } from './get-checkpoint-at.ts';
 import { getPrincipalOperation } from './get-principal.ts';
 import { getRealmDiagnosticsOperation } from './get-realm-diagnostics.ts';
+import { getRefreshDiagnosticsOperation } from './get-refresh-diagnostics.ts';
 import { getRegistryOperation } from './get-registry.ts';
 import { getRetentionOverviewOperation } from './get-retention-overview.ts';
 import { getReviewOperation } from './get-review.ts';
@@ -34,6 +36,7 @@ import {
 import { getTaskDetailOperation } from './get-task-detail.ts';
 import { getUpdateResultOperation } from './get-update-result.ts';
 import { getWorkflowAttributesOperation } from './get-workflow-attributes.ts';
+import { getWorkflowDefinitionOperation } from './get-workflow-definition.ts';
 import { getWorkflowEventsOperation } from './get-workflow-events.ts';
 import * as workflowObservability from './get-workflow-observability.ts';
 import { getWorkflowResultOperation } from './get-workflow-result.ts';
@@ -44,21 +47,29 @@ import { installWorkflowRevisionOperation } from './install-workflow-revision.ts
 import { listAlertsOperation } from './list-alerts.ts';
 import { listCatalogSourcesOperation } from './list-catalog-sources.ts';
 import { listCheckpointsOperation } from './list-checkpoints.ts';
+import { listQueueTasksOperation } from './list-queue-tasks.ts';
 import { listReviewsOperation } from './list-reviews.ts';
+import { listScheduleMissedFiresOperation } from './list-schedule-missed-fires.ts';
 import { listSchedulesOperation } from './list-schedules.ts';
+import { listWorkflowDefinitionsOperation } from './list-workflow-definitions.ts';
+import { listWorkflowLogsOperation } from './list-workflow-logs.ts';
 import { listWorkflowRevisionsOperation } from './list-workflow-revisions.ts';
+import { listWorkflowUpdatesOperation } from './list-workflow-updates.ts';
 import { listWorkflowsOperation } from './list-workflows.ts';
 import { pauseScheduleOperation } from './pause-schedule.ts';
 import { preloadWorkflowRevisionOperation } from './preload-workflow-revision.ts';
 import { purgeWorkflowsOperation } from './purge-workflows.ts';
 import { queryWorkflowOperation } from './query-workflow.ts';
 import { recoverAllOperation } from './recover-all.ts';
+import { refreshWorkflowOperation } from './refresh-workflow.ts';
 import { removeWorkflowTagsOperation } from './remove-workflow-tags.ts';
 import { replayWorkflowOperation } from './replay-workflow.ts';
 import { resumeScheduleOperation } from './resume-schedule.ts';
 import { resumeWorkflowOperation } from './resume-workflow.ts';
+import { retryTaskDeadLetterOperation } from './retry-task-dead-letter.ts';
 import { setWorkflowAttributesOperation } from './set-workflow-attributes.ts';
 import { signalWorkflowOperation } from './signal-workflow.ts';
+import { skipNextScheduleOperation } from './skip-next-schedule.ts';
 import { startOrSignalWorkflowOperation } from './start-or-signal-workflow.ts';
 import { startWorkflowOperation } from './start-workflow.ts';
 import * as storageCapabilities from './storage-capabilities.ts';
@@ -67,6 +78,7 @@ import {
   storageConditionalBatchOperation,
   storageDeleteOperation,
   storageGetOperation,
+  storagePreviewOperation,
   storagePutOperation,
   storageScanOperation,
 } from './storage.ts';
@@ -74,6 +86,8 @@ import { streamWorkflowSseOperation } from './stream-workflow-sse.ts';
 import { submitReviewDecisionOperation } from './submit-review-decision.ts';
 import { suspendWorkflowOperation } from './suspend-workflow.ts';
 import { timeoutWorkflowOperation } from './timeout-workflow.ts';
+import { triggerScheduleOperation } from './trigger-schedule.ts';
+import { unskipScheduleOperation } from './unskip-schedule.ts';
 import { updateScheduleOperation } from './update-schedule.ts';
 import { updateWorkflowOperation } from './update-workflow.ts';
 import { workerStartOverridePreviewOperation } from './worker-start-override-preview.ts';
@@ -100,6 +114,8 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   bulkDeleteWorkflowsOperation,
   bulkMutateWorkflowTagsOperation,
   listCatalogSourcesOperation,
+  listWorkflowDefinitionsOperation,
+  getWorkflowDefinitionOperation,
   getCatalogDiagnosticsOperation,
   getRealmDiagnosticsOperation,
   getWorkflowOperation,
@@ -119,12 +135,16 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   forkWorkflowOperation,
   timeoutWorkflowOperation,
   updateWorkflowOperation,
+  listWorkflowUpdatesOperation,
+  listWorkflowLogsOperation,
   createScheduleOperation,
   updateScheduleOperation,
   getRegistryOperation,
   installWorkflowRevisionOperation,
   activateWorkflowRevisionOperation,
   preloadWorkflowRevisionOperation,
+  refreshWorkflowOperation,
+  getRefreshDiagnosticsOperation,
   getWorkflowRevisionOperation,
   listWorkflowRevisionsOperation,
   getActiveWorkflowRevisionOperation,
@@ -136,12 +156,17 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   listCheckpointsOperation,
   getCheckpointAtOperation,
   getWorkflowTimelineOperation,
+  compareWorkflowOperation,
   addWorkflowTagsOperation,
   removeWorkflowTagsOperation,
   submitReviewDecisionOperation,
   cancelScheduleOperation,
   pauseScheduleOperation,
   resumeScheduleOperation,
+  skipNextScheduleOperation,
+  unskipScheduleOperation,
+  triggerScheduleOperation,
+  listScheduleMissedFiresOperation,
   getStreamChunksOperation,
   streamWorkflowSseOperation,
   workflowEventsSseOperation,
@@ -149,6 +174,8 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   workflowEventsSubscriptionOperation,
   fleetEventsSubscriptionOperation,
   clearTaskDeadLetterOperation,
+  listQueueTasksOperation,
+  retryTaskDeadLetterOperation,
   getTaskDetailOperation,
   getTaskResultDeliveriesOperation,
   getTaskDeadLetterOperation,
@@ -160,6 +187,7 @@ export const STATIC_OPERATIONS: ReadonlyArray<RegistrableOperation> = [
   replayWorkflowOperation,
   storageCapabilities.storageCapabilitiesOperation,
   storageGetOperation,
+  storagePreviewOperation,
   storagePutOperation,
   storageDeleteOperation,
   storageScanOperation,

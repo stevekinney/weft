@@ -4,14 +4,12 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 import {
   queryWorkflowOperation,
@@ -129,7 +127,7 @@ describe('weft.workflows.query', () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+    expect(await response.json()).toEqual({ error: 'Invalid JSON body', retryable: false });
   });
 
   it('returns 400 for non-object POST query JSON', async () => {
@@ -152,7 +150,10 @@ describe('weft.workflows.query', () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+    expect(await response.json()).toEqual({
+      error: 'Request body must be a JSON object',
+      retryable: false,
+    });
   });
 
   it('returns 501 with the canonical error body when queries are not supported', async () => {
@@ -176,6 +177,7 @@ describe('weft.workflows.query', () => {
       expect(response.headers.get('content-type')).toBe('application/json');
       expect(await response.json()).toEqual({
         error: 'query not supported for this workflow',
+        retryable: false,
       });
     } finally {
       engine.query = originalQuery;
@@ -232,6 +234,6 @@ describe('weft.workflows.query', () => {
     // never reaches REST clients.
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });

@@ -33,9 +33,9 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { durableActivity } from '../context/durable-activity.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -92,7 +92,6 @@ describe('remote dispatch exclusions (COR-152 criterion 12)', () => {
       async () => (await engine.storage.get(KEYS.finalizerState(handle.id))) !== null,
       {
         label: 'workflow recorded finalizer state and parked',
-        timeoutMs: 2_000,
         intervalMs: 5,
       },
     );
@@ -105,7 +104,6 @@ describe('remote dispatch exclusions (COR-152 criterion 12)', () => {
 
     await waitForCondition(() => localDestroySandbox.mock.calls.length > 0, {
       label: 'finalizer to run',
-      timeoutMs: 2_000,
       intervalMs: 5,
     });
 

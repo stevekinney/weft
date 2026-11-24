@@ -1,4 +1,6 @@
+import { storageKeys } from "../../embedded/storage/src/index.ts";
 import { ActivityFailedEvent } from '../../core/events.ts';
+import { tagWorkflowEventGeneration } from '../../core/events/workflow-event-generation.ts';
 import {
   buildAttemptDispositionWriteForToken,
   buildCurrentAttemptDispositionWrites,
@@ -22,7 +24,6 @@ import {
   type RemoteTaskTerminal,
 } from '../../core/task-ledger/task-ledger.ts';
 import { taskResultDeliveryKey } from '../../core/task-ledger/task-result-delivery.ts';
-import { storageKeys } from '../../storage/interface.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
 import type { ServerContext } from './context.ts';
@@ -160,12 +161,15 @@ export async function reassignOrExpireTask(
 
   if (result.record.state === 'terminal') {
     options.engine.dispatchEvent(
-      new ActivityFailedEvent(
-        operationId,
-        record.workflowId ?? '',
-        record.activityName,
-        new Error(result.record.error),
-        record.attempt,
+      tagWorkflowEventGeneration(
+        new ActivityFailedEvent(
+          operationId,
+          record.workflowId ?? '',
+          record.activityName,
+          new Error(result.record.error),
+          record.attempt,
+        ),
+        record.workflowExecutionToken,
       ),
     );
     return;

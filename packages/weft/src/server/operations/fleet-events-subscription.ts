@@ -1,16 +1,16 @@
 import { z } from 'zod';
 
-import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
-import { raiseFault } from '../operation-catalog/raise-fault.ts';
-import type { TransportKind } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
-import { decodeCursor, type Cursor } from '../workflow-event-feed.ts';
 import {
   createReplayAwareClosableIterable,
-  fleetEventEnvelopeSchema,
-} from './event-stream-contracts.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+  decodeCursor,
+  defineOperation,
+  type Cursor,
+} from "../../embedded/backchannel/src/index.ts";
+import { invalidParamsFault, type TransportKind } from "../../embedded/backchannel/src/internals.ts";
+import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
+import { raiseFault } from '../operation-catalog/raise-fault.ts';
+import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
+import { fleetEventEnvelopeSchema } from './event-stream-contracts.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
 const MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS = 1_000;
@@ -24,7 +24,11 @@ const fleetCursorSchema = z
   });
 
 const fleetEventsSubscriptionInput = z.object({
-  workflowId: z.string().min(1).optional(),
+  workflowId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only events of the workflow with this id. Omit it for every workflow.'),
   /*
    * One kind, or several. Omitting it delivers every kind.
    *
@@ -34,8 +38,17 @@ const fleetEventsSubscriptionInput = z.object({
    * socket. The union keeps a bare string valid, so narrowing to one kind is
    * unchanged for existing callers.
    */
-  kind: z.union([fleetEventKindSchema, z.array(fleetEventKindSchema).min(1)]).optional(),
-  fromCursor: fleetCursorSchema.optional(),
+  kind: z
+    .union([fleetEventKindSchema, z.array(fleetEventKindSchema).min(1)])
+    .optional()
+    .describe(
+      'Return only events of this kind, or of any of these kinds. Omit it for every readable kind.',
+    ),
+  fromCursor: fleetCursorSchema
+    .optional()
+    .describe(
+      'Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.',
+    ),
 });
 
 const fleetEventsSubscriptionEnvelope = z.object({
@@ -66,7 +79,7 @@ export const fleetEventsSubscriptionOperation = defineOperation({
   discoverable: true,
   transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, transport }) => {
+  invoke: async ({ input, host: engine, transport }) => {
     const startingCursor = input.fromCursor ?? INITIAL_SUBSCRIPTION_CURSOR;
     if (decodeCursor(startingCursor) === null) {
       raiseFault(fleetEventsSubscriptionOperation, invalidParamsFault('Invalid cursor'));
@@ -87,8 +100,10 @@ export const fleetEventsSubscriptionOperation = defineOperation({
       { close: () => controller.abort() },
     );
 
+    const subscriptionId = `sub_${crypto.randomUUID()}`;
     return {
-      envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },
+      subscriptionId,
+      envelope: { subscriptionId, cursor: startingCursor },
       iterable,
       close: () => iterable.close(),
     };

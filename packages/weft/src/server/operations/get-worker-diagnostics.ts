@@ -18,10 +18,10 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkerHealth, WorkerRegistry, WorkerTransport } from '../../worker/registry.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const workerHealthSchema = z.enum(['active', 'draining', 'drained']) as z.ZodType<WorkerHealth>;
 const workerTransportSchema = z.enum(['websocket', 'long-poll']) as z.ZodType<WorkerTransport>;
@@ -59,6 +59,20 @@ const workerInstanceIdentitySchema = z
     // bump it.
     inFlight: z.number(),
     sessionGeneration: z.number(),
+    // Session lifecycle timing. Each is present only while it applies, so an
+    // absent field means "not in that state", never "unknown".
+    /**
+     * WebSocket only: when the reconnect grace window closes. Present while
+     * the worker's socket has dropped and the server is holding its session
+     * and leases for a same-id re-register; if none arrives by this instant
+     * the server requeues the worker's in-flight work and forgets it.
+     */
+    reconnectGraceEndsAt: z.number().optional(),
+    /**
+     * HTTP long-poll only: when the session lease runs out. A poll or heartbeat
+     * renews it; once it passes with neither, the server expires the session.
+     */
+    sessionLeaseExpiresAt: z.number().optional(),
   })
   .strict();
 
@@ -85,7 +99,7 @@ const workerDiagnosticsEntrySchema = z
   .strict();
 
 const getWorkerDiagnosticsInput = z.object({
-  workerId: z.string().min(1),
+  workerId: z.string().min(1).describe('Id of the connected worker to inspect.'),
 });
 
 const getWorkerDiagnosticsOutput = z.object({
@@ -96,9 +110,17 @@ export type GetWorkerDiagnosticsInput = z.infer<typeof getWorkerDiagnosticsInput
 export type WorkerDiagnosticsEntry = z.infer<typeof workerDiagnosticsEntrySchema>;
 export type GetWorkerDiagnosticsOutput = z.infer<typeof getWorkerDiagnosticsOutput>;
 
+/** The session lifecycle instants the server tracks outside the registry, per worker id. */
+export type WorkerSessionTiming = (workerId: string) => Readonly<{
+  reconnectGraceEndsAt?: number | undefined;
+  sessionLeaseExpiresAt?: number | undefined;
+}>;
+
 type GetWorkerDiagnosticsOptions = {
   workerRegistry?: WorkerRegistry;
   clock?: () => number;
+  /** Supplies `reconnectGraceEndsAt` and `sessionLeaseExpiresAt`; omitted, neither is reported. */
+  sessionTiming?: WorkerSessionTiming;
 };
 
 /** Project one connected worker's registry record into the bounded diagnostics shape, or `null` if not connected. */
@@ -106,6 +128,7 @@ function projectWorkerDiagnostics(
   registry: WorkerRegistry,
   workerId: string,
   now: number,
+  sessionTiming: WorkerSessionTiming | undefined,
 ): WorkerDiagnosticsEntry | null {
   const worker = registry.getWorker(workerId);
   if (worker === undefined) return null;
@@ -113,6 +136,7 @@ function projectWorkerDiagnostics(
   const summary = registry.getWorkerSummaries(now).find((entry) => entry.id === workerId);
   if (summary === undefined) return null;
 
+  const timing = sessionTiming?.(workerId);
   const workflows: Record<string, z.infer<typeof workerWorkflowContractSummarySchema>> = {};
   for (const [workflowType, contract] of Object.entries(worker.manifest.workflows)) {
     workflows[workflowType] = {
@@ -135,6 +159,12 @@ function projectWorkerDiagnostics(
       heartbeatAgeMs: summary.heartbeatAgeMs,
       inFlight: worker.inFlight,
       sessionGeneration: worker.sessionGeneration,
+      ...(timing?.reconnectGraceEndsAt === undefined
+        ? {}
+        : { reconnectGraceEndsAt: timing.reconnectGraceEndsAt }),
+      ...(timing?.sessionLeaseExpiresAt === undefined
+        ? {}
+        : { sessionLeaseExpiresAt: timing.sessionLeaseExpiresAt }),
     },
     deploymentVersion: {
       deploymentName: worker.manifest.deployment.name,
@@ -185,7 +215,9 @@ export function createGetWorkerDiagnosticsOperation(options: GetWorkerDiagnostic
           'weft.workers.diagnostics invoked from a discovery-only operation registry; no WorkerRegistry was wired in',
         );
       }
-      return { worker: projectWorkerDiagnostics(registry, input.workerId, clock()) };
+      return {
+        worker: projectWorkerDiagnostics(registry, input.workerId, clock(), options.sessionTiming),
+      };
     },
   });
 }
@@ -210,6 +242,6 @@ export function createGetWorkerDiagnosticsRestBinding(): UnknownRestBinding {
       workerId: pathParams['workerId'] ?? '',
     }),
     success: { kind: 'json', status: 200 },
-    shapeFault: shapeOperationFaultAsJson,
+    shapeFault: shapeWeftOperationFaultAsJson,
   };
 }

@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
+import { encodeCursor, principalFromApiKey } from "../embedded/backchannel/src/index.ts";
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
-} from './json-rpc-websocket.ts';
-import { principalFromApiKey } from './principal.ts';
+} from "../embedded/backchannel/src/internals.ts";
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 import {
   createWorkflowEventFeed,
-  encodeCursor,
   type EventEnvelope,
   type WorkflowEventFeed,
 } from './workflow-event-feed.ts';
@@ -48,8 +48,10 @@ function makeEmitter(): JsonRpcWebSocketEmitter & {
       const timeout = setTimeout(() => {
         const index = waiters.findIndex((waiter) => waiter.timeout === timeout);
         if (index >= 0) waiters.splice(index, 1);
-        reject(new Error(`${description} within 500ms; saw ${sent.length} frames`));
-      }, 500);
+        reject(
+          new Error(`${description} before the hang guard elapsed; saw ${sent.length} frames`),
+        );
+      }, HANG_GUARD_MILLISECONDS);
       waiters.push({ isSatisfied, resolve, reject, timeout });
     });
   }

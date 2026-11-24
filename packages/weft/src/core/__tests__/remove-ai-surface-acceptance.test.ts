@@ -12,8 +12,8 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { TestEngine } from '../../testing/test-engine.ts';
 import { computeSemanticHash, EffectLog } from '../effect-log/index.ts';
 import { ReviewTimeoutError } from '../review/index.ts';
@@ -43,9 +43,18 @@ describe('remove-ai-surface acceptance gates', () => {
     });
     engine.register(needsApprovalWorkflow);
 
+    const startedEngine = engine;
     const handle = await engine.start('needs-approval', null);
     const resultPromise = handle.result();
-    await sleepForTesting(10);
+    await waitForCondition(
+      async () => {
+        const pendingReviews = await startedEngine.listReviews();
+        return pendingReviews.length === 1;
+      },
+      {
+        label: 'the review request to be persisted',
+      },
+    );
 
     // Locate the persisted review request via the engine surface that
     // server routes use.
@@ -89,14 +98,22 @@ describe('remove-ai-surface acceptance gates', () => {
     );
     engine.register(approvalWithTimeoutWorkflow);
 
+    const startedEngine = engine;
     const handle = await engine.start('approval-with-timeout', null);
     // Attach the catch up-front so the eventual rejection isn't reported
     // as an unhandled promise before we assert on the workflow state.
     const settled = handle.result().catch((error: unknown) => error);
-    await sleepForTesting(10);
+    await waitForCondition(
+      async () => {
+        const pendingReviews = await startedEngine.listReviews();
+        return pendingReviews.length === 1;
+      },
+      {
+        label: 'the review request to be persisted',
+      },
+    );
 
     await engine.advanceTime(6_000);
-    await sleepForTesting(50);
 
     const error = await settled;
     expect(error).toBeInstanceOf(ReviewTimeoutError);

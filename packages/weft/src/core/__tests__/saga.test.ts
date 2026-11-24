@@ -1,5 +1,5 @@
 import { makeActivity } from '../../testing/activity.test-support.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 /**
  * Tests for ctx.saga() — sequential activity execution with reverse compensation.
  *
@@ -11,8 +11,8 @@ import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../engine.ts';
 import type { WorkflowInterceptor } from '../interceptor.ts';
 import type { ActivityContext, ActivityDefinition, WorkflowContext } from '../types.ts';
@@ -20,7 +20,7 @@ import { workflow } from '../types.ts';
 
 /** Drain microtasks so fire-and-forget engine work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 // ---------------------------------------------------------------------------

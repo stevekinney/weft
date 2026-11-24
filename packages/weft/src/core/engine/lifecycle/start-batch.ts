@@ -1,5 +1,5 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import type { BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { serializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
 import { buildTimerBatchOperations } from '../../scheduler.ts';
@@ -184,7 +184,7 @@ export function validateSearchAttributes(
 
   const schema = registration.searchAttributes;
   for (const [key, value] of Object.entries(searchAttributes)) {
-    if (!(key in schema)) {
+    if (!Object.hasOwn(schema, key)) {
       throw new Error(
         `Unknown search attribute "${key}". Registered attributes: ${Object.keys(schema).join(', ')}`,
       );

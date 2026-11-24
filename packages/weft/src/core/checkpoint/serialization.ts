@@ -73,7 +73,19 @@ export function validateCheckpointShape(value: unknown): asserts value is Checkp
   assertStringField(record, 'version');
   assertNumberField(record, 'createdAt');
   validateWorkflowExecutionToken(record);
+  validateForkCopiedSignatureSteps(record);
   assertCurrentSchemaVersion(record);
+}
+
+function validateForkCopiedSignatureSteps(record: Record<string, unknown>): void {
+  const steps = record['forkCopiedSignatureSteps'];
+  if (steps === undefined) return;
+  if (
+    !Array.isArray(steps) ||
+    steps.some((step) => typeof step !== 'number' || !Number.isSafeInteger(step) || step < 0)
+  ) {
+    throw new Error('Invalid checkpoint: invalid "forkCopiedSignatureSteps" (expected step list)');
+  }
 }
 
 function validateWorkflowExecutionToken(record: Record<string, unknown>): void {

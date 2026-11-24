@@ -29,4 +29,16 @@ describe('TrackingScanStorage — async-iterator return()', () => {
     // Closing the iterator early must not pull a further entry.
     expect(storage.entriesPulled).toBe(1);
   });
+
+  it('reports done once every entry has been pulled, without counting the exhausted read', async () => {
+    const storage = new TrackingScanStorage();
+    const iterator = storage.scan('wf:')[Symbol.asyncIterator]();
+
+    for (let index = 0; index < 3; index += 1) {
+      const pulled = await iterator.next();
+      expect(pulled.done).toBe(false);
+    }
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    expect(storage.entriesPulled).toBe(3);
+  });
 });

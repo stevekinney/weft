@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { captureWorkflowLogConsole } from '../../testing/workflow-log-capture.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow } from '../types/workflow-function.ts';
@@ -70,7 +70,8 @@ describe('EngineOptions.onLog host sink', () => {
     expect(sunk.some((record) => record.message === 'marker:host-owned')).toBe(true);
     const events = await engine.getEvents(handle.id);
     expect(events.some((event) => JSON.stringify(event).includes('marker:host-owned'))).toBe(false);
-    expect('getLogs' in engine).toBe(false);
+    // Without a `workflowLogs` store the engine keeps no lines to serve (COR-1811).
+    expect(await engine.getLogs(handle.id)).toEqual({ lines: [], dropped: 0 });
   });
 
   it('falls back to the console when no onLog sink is configured', async () => {
@@ -231,6 +232,7 @@ describe('EngineOptions.onLog host sink', () => {
     using consoleRecovered = new Engine({ storage: consoleStorage });
     build(consoleRecovered);
     const [consoleHandle] = await consoleRecovered.recoverAll();
+    // load-proof: recoverAll has resolved and the recovered run parks through promise continuations on in-memory storage; the awaited signal and result() wait for the outcome
     await sleepForTesting(10);
     await consoleRecovered.signal('spec-recover-id', 'go', 'go');
     expect(await consoleHandle!.result()).toBe(1);
@@ -253,6 +255,7 @@ describe('EngineOptions.onLog host sink', () => {
     });
     build(sinkRecovered);
     const [sinkHandle] = await sinkRecovered.recoverAll();
+    // load-proof: recoverAll has resolved and the recovered run parks through promise continuations on in-memory storage; the awaited signal and result() wait for the outcome
     await sleepForTesting(10);
     await sinkRecovered.signal('spec-recover-id', 'go', 'go');
     expect(await sinkHandle!.result()).toBe(1);

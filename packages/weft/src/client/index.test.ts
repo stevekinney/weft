@@ -1,16 +1,18 @@
+import { AUTHORIZATION_SCOPES } from '../authorization-scopes.ts';
+
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { query, workflow } from '../core/types.ts';
-import { handleRequest } from '../server/handler.ts';
+import { query, workflow, type WorkflowContext } from '../core/types.ts';
 import { serve, type WeftServer } from '../server/index.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../server/local-user-request.test-support.ts';
 import {
   CONTRACT_PAYLOAD_CAP_BYTES,
   nextAsyncPendingToken,
 } from '../testing/async-activity.test-support.ts';
-import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
@@ -184,6 +186,7 @@ async function exerciseWorkflowHandleAndSchedule(httpClient: HttpClient): Promis
     overlap: 'queue',
     backfill: true,
     jitter: '10s',
+    timeZone: 'America/Los_Angeles',
     type: 'wrong-workflow',
     input: 'wrong-input',
     cronExpression: '*/5 * * * *',
@@ -250,6 +253,9 @@ async function exerciseWorkflowClientRequests(httpClient: HttpClient): Promise<v
     overlap: 'queue',
     backfill: true,
     jitter: '30s',
+    timeZone: 'Europe/Berlin',
+    workflowType: 'report',
+    input: { text: 'moved' },
   });
   await httpClient.cancelSchedule('schedule-1');
   await httpClient.signal('wf/1', 'status', { ok: true });
@@ -426,6 +432,7 @@ function assertScheduleCalls(fetchCalls: FetchCall[]): void {
     overlap: 'queue',
     backfill: true,
     jitter: '10s',
+    timeZone: 'America/Los_Angeles',
   });
 
   const scheduleListCall = fetchCalls[16]!;
@@ -467,6 +474,9 @@ function assertFilterAndFollowupCalls(fetchCalls: FetchCall[]): void {
     overlap: 'queue',
     backfill: true,
     jitter: '30s',
+    timeZone: 'Europe/Berlin',
+    workflowType: 'report',
+    input: { text: 'moved' },
   });
   expect(fetchCalls[7]?.init?.method).toBe('DELETE');
   expect(fetchCalls[8]?.init?.method).toBe('DELETE');
@@ -524,19 +534,16 @@ beforeAll(() => {
     maxRequestBodyBytes: CONTRACT_PAYLOAD_CAP_BYTES * 3,
     auth: {
       apiKeys: [CONTRACT_API_KEY],
-      defaultApiKeyScopes: [
-        'events:read',
-        'reviews:read',
-        'system:read',
-        'workflows:read',
-        'workflows:write',
-      ],
+      // Every operation the shared client contract drives requires a scope.
+      defaultApiKeyScopes: AUTHORIZATION_SCOPES,
     },
   });
 
   client = new HttpClient({
     baseUrl: server.url,
     headers: { Authorization: `Bearer ${CONTRACT_API_KEY}` },
+    // The contract server runs under Bun, whose global WebSocket carries the auth header.
+    webSocketCarriesHeaders: true,
   });
 });
 
@@ -775,7 +782,7 @@ describe('HttpClient', () => {
         id: 'http-suspend-live',
       });
       // Let the run reach 'running' (parked on waitForSignal('continue')).
-      for (let attempt = 0; attempt < 20; attempt++) {
+      for await (const _turn of awakeTurns()) {
         if ((await statusOfWorkflow('http-suspend-live')) === 'running') break;
         await sleepForTesting(5);
       }
@@ -1040,12 +1047,12 @@ describe('HttpClient', () => {
 });
 
 describe('HttpClient live event streaming (end-to-end)', () => {
-  async function waitForStreaming(predicate: () => boolean, timeoutMs: number): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (!predicate()) {
-      if (Date.now() > deadline) throw new Error('timed out waiting for streaming predicate');
+  async function waitForStreaming(predicate: () => boolean): Promise<void> {
+    for await (const _turn of awakeTurns()) {
+      if (predicate()) return;
       await sleepForTesting(5);
     }
+    throw new Error('timed out waiting for streaming predicate');
   }
 
   it('resumes the event stream after the underlying socket drops', async () => {
@@ -1079,25 +1086,23 @@ describe('HttpClient live event streaming (end-to-end)', () => {
 
     // First signal: delivered live over the original socket.
     await handle.signal('continue', undefined, { signalId: 'first' });
-    await waitForStreaming(() => seen.includes('signal:received'), 2000);
+    await waitForStreaming(() => seen.includes('signal:received'));
 
     // Drop the live socket; the subscription must reconnect on its own.
     expect(liveSockets.length).toBeGreaterThanOrEqual(1);
     liveSockets[liveSockets.length - 1]!.close();
     // Wait for the reconnect to produce a new socket and for it to actually
     // open, so the second signal's events are delivered over the live socket.
-    await waitForStreaming(() => liveSockets.length >= 2, 3000);
+    await waitForStreaming(() => liveSockets.length >= 2);
     await waitForStreaming(
       () => liveSockets[liveSockets.length - 1]!.readyState === WebSocket.OPEN,
-      3000,
     );
 
     // Second signal completes the workflow; the resumed stream must deliver
-    // the terminal event and the tail must terminate cleanly. `withTimeout`
-    // (shared test support) always clears its timer, so a passing `consume`
-    // never leaves a real timeout alive for the guard to flag.
+    // the terminal event and the tail must terminate cleanly; a tail that hangs
+    // is ended by the hang guard.
     await handle.signal('continue', undefined, { signalId: 'second' });
-    await withTimeout(consume, 3000, 'resumed stream to complete');
+    await consume;
 
     expect(seen).toContain('workflow:completed');
     expect(await handle.result()).toBe('resume:done');
@@ -1506,12 +1511,7 @@ describe('HttpClient request surface', () => {
       void (async () => {
         // The subscription opens lazily on addEventListener; once the socket
         // is open and catch-up has run, deliver the live terminal event.
-        const deadline = Date.now() + 1000;
-        while (wsServer.sockets.length === 0 || !wsServer.latest().opened) {
-          if (Date.now() > deadline) throw new Error('subscription never opened');
-          await sleepForTesting(2);
-        }
-        await sleepForTesting(5); // let the catch-up fetch settle
+        await handle.whenConnected();
         wsServer.latest().deliver({
           type: 'workflow:completed',
           timestamp: 1,
@@ -1558,9 +1558,8 @@ describe('HttpClient request surface', () => {
     });
 
     // Wait for the catch-up to deliver the terminal event and auto-close.
-    const deadline = Date.now() + 1000;
-    while (completedCounts.first === 0) {
-      if (Date.now() > deadline) throw new Error('terminal event never delivered');
+    for await (const _turn of awakeTurns()) {
+      if (completedCounts.first !== 0) break;
       await sleepForTesting(2);
     }
     expect(completedCounts.first).toBe(1);
@@ -1573,6 +1572,7 @@ describe('HttpClient request surface', () => {
     handle.addEventListener('workflow:completed', () => {
       completedCounts.second += 1;
     });
+    // load-proof: negative window: asserts no further socket or events call follows the terminal event; load can only delay one, never create it
     await sleepForTesting(10);
 
     expect(wsServer.sockets.length).toBe(socketsAfterTerminal);
@@ -1597,7 +1597,7 @@ describe('HttpClient request surface', () => {
     handle.addEventListener('workflow:started', () => {});
     handle.addEventListener('workflow:completed', () => {});
 
-    await sleepForTesting(5);
+    await handle.whenConnected();
     expect(wsServer.sockets).toHaveLength(1);
   });
 
@@ -1616,7 +1616,7 @@ describe('HttpClient request surface', () => {
     const listener = (() => {}) as EventListener;
 
     handle.addEventListener('workflow:started', listener);
-    await sleepForTesting(5);
+    await handle.whenConnected();
     handle.removeEventListener('workflow:started', listener);
     handle[Symbol.dispose]();
 

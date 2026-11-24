@@ -13,12 +13,12 @@
  */
 
 import {
-  KEYS,
   storageConditionalBatch,
+  tryDecodeStorageKeyComponent,
   type ConditionalBatchCondition,
   type Storage,
-} from '../../storage/interface.ts';
-import { tryDecodeStorageKeyComponent } from '../../storage/key-encoding.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { parseWorkflowRevisionManifest } from '../contract/manifest-parse.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
 import { decodeActivePointer, manifestsAreByteIdentical } from './codec.ts';

@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { flushMicrotasks, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { flushMicrotasks, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -55,7 +55,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
 
     const handle = await engine.start('race-loss', null, { id: 'race-loss-1' });
     await waitForCondition(() => losingActivityStarted, {
-      timeoutMs: 2000,
       label: 'losing activity started',
     });
     await engine.signal('race-loss-1', 'go', 'signal-wins');
@@ -65,7 +64,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
     // The race coordinator aborts its controller when a sibling wins, which
     // propagates into the losing activity's ctx.signal (#584).
     await waitForCondition(() => losingSignalAborted, {
-      timeoutMs: 2000,
       label: 'losing activity signal aborted after race loss',
     });
     expect(losingSignalAborted).toBe(true);
@@ -110,7 +108,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
 
     const handle = await engine.start('cancel-wf', null, { id: 'cancel-1' });
     await waitForCondition(() => activityStarted, {
-      timeoutMs: 2000,
       label: 'long activity started',
     });
     // The result rejects once cancellation tears the workflow down; swallow it so
@@ -124,7 +121,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
     // The per-workflow AbortController fired, so the in-flight activity's signal
     // aborted and the activity observed it.
     await waitForCondition(() => signalAborted, {
-      timeoutMs: 2000,
       label: 'activity signal aborted on workflow cancel',
     });
     expect(signalAborted).toBe(true);
@@ -183,7 +179,7 @@ describe('#453/#584 cooperative activity cancellation', () => {
     );
 
     const handle = await engine.start('poll-wf', null, { id: 'poll-1' });
-    await waitForCondition(() => started, { timeoutMs: 2000, label: 'polling activity started' });
+    await waitForCondition(() => started, { label: 'polling activity started' });
     const settled = handle.result().then(
       () => ({ outcome: 'resolved' as const, message: '' }),
       (error: unknown) => ({
@@ -205,7 +201,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
     releaseNextPoll();
 
     await waitForCondition(() => bailedOut, {
-      timeoutMs: 2000,
       label: 'polling activity bailed out via throwIfAborted',
     });
     expect(bailedOut).toBe(true);
@@ -260,7 +255,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
 
     const handle = await engine.start('supersede-wf', null, { id: 'supersede-1' });
     await waitForCondition(() => activityStarted, {
-      timeoutMs: 2000,
       label: 'long activity started',
     });
 
@@ -271,7 +265,6 @@ describe('#453/#584 cooperative activity cancellation', () => {
 
     // The activity's ctx.signal must have been aborted by the coordinator.
     await waitForCondition(() => activityAbortObserved, {
-      timeoutMs: 2000,
       label: 'in-flight activity ctx.signal aborted by supersede',
     });
     expect(activityAbortObserved).toBe(true);

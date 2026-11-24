@@ -13,7 +13,8 @@
  * @module core/engine/workflow-indexes
  */
 
-import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
+import { type BatchOperation, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import { WeftError } from '../weft-error.ts';

@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 /**
  * `weft.system.metrics` operation + REST binding — unit tests.
  *
@@ -14,14 +15,17 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  type OperationFault,
+  defineOperation,
+  principalFromApiKey,
+  principalFromJwtClaims,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { METRICS, MetricsCollector } from '../../observability/metrics.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
   createGetSystemMetricsOperation,
@@ -101,7 +105,7 @@ describe('weft.system.metrics — default export (no collector)', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 });
 
@@ -212,7 +216,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'no credentials' });
+    expect(await response.json()).toEqual({ error: 'no credentials', retryable: false });
   });
 
   it('shapes Forbidden fault as 403 via the REST fault shaper', async () => {
@@ -241,7 +245,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
     );
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: 'insufficient scope' });
+    expect(await response.json()).toEqual({ error: 'insufficient scope', retryable: false });
   });
 
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
@@ -270,7 +274,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
     );
 
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: 'cannot process' });
+    expect(await response.json()).toEqual({ error: 'cannot process', retryable: false });
   });
 
   it('returns Unauthorized when called with no credentials via executeOperation', async () => {
@@ -282,7 +286,7 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
       {},
       {
         principal: { method: 'unauthenticated' },
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -301,8 +305,11 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
       'weft.system.metrics',
       {},
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'workflows:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -326,8 +333,11 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
       'weft.system.metrics',
       {},
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'system:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'system:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry,
       },

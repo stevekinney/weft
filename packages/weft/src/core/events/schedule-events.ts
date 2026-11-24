@@ -56,9 +56,30 @@ export class ScheduleFiredEvent extends Event {
 }
 
 /**
- * Fired on the {@link Engine} when a non-backfill schedule timer is more than
- * one second late and the engine skips the missed occurrence window instead of
- * starting workflows for those ticks.
+ * Why a schedule missed occurrences. `late`: the schedule's timer was reached more than one
+ * second plus one scheduler poll interval after the occurrence, as after the engine was down, and
+ * a non-backfill schedule skips what it was too late for. `dst-gap`: a cron schedule in a time
+ * zone matched a wall-clock time that does not exist, because the clock sprang forward past it;
+ * the time is skipped, never run late or early.
+ */
+export type ScheduleMissedFireReason = 'late' | 'dst-gap';
+
+/**
+ * Fired on the {@link Engine} when a schedule misses occurrences, with the
+ * {@link ScheduleMissedFireReason} why.
+ *
+ * With reason `late`, a non-backfill schedule timer is more than
+ * one second plus one scheduler poll interval late, as after the engine was
+ * down, and the engine skips the missed occurrence window instead of starting
+ * workflows for those ticks.
+ *
+ * With reason `dst-gap`, a cron schedule with a `timeZone` matched wall-clock times the clock
+ * skipped when it sprang forward (a daily 02:30 on that day). The event is emitted when the clock
+ * reaches the end of the gap, `missedCount` is how many times were skipped, and `windowStart` and
+ * `windowEnd` are that instant. The same tick may fire a run if the expression also matches it.
+ *
+ * Either way the schedule's {@link ScheduleState.missedFireCount} and
+ * {@link ScheduleState.lastMissedFireAt} are updated before this is emitted.
  *
  * @example
  * ```ts
@@ -66,7 +87,7 @@ export class ScheduleFiredEvent extends Event {
  *
  * const engine = new Engine();
  * engine.addEventListener(ScheduleMissedFireEvent.type, (event) => {
- *   console.warn(event.scheduleId, 'missed', event.missedCount, 'scheduled ticks');
+ *   console.warn(event.scheduleId, 'missed', event.missedCount, 'scheduled ticks:', event.reason);
  * });
  * ```
  */
@@ -76,13 +97,22 @@ export class ScheduleMissedFireEvent extends Event {
   readonly missedCount: number;
   readonly windowStart: number;
   readonly windowEnd: number;
+  /** Why the occurrences were missed. */
+  readonly reason: ScheduleMissedFireReason;
 
-  constructor(scheduleId: string, missedCount: number, windowStart: number, windowEnd: number) {
+  constructor(
+    scheduleId: string,
+    missedCount: number,
+    windowStart: number,
+    windowEnd: number,
+    reason: ScheduleMissedFireReason,
+  ) {
     super(ScheduleMissedFireEvent.type);
     this.scheduleId = scheduleId;
     this.missedCount = missedCount;
     this.windowStart = windowStart;
     this.windowEnd = windowEnd;
+    this.reason = reason;
   }
 }
 

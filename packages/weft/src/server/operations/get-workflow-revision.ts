@@ -8,10 +8,9 @@
 
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   validateWorkflowNameField,
@@ -46,7 +45,7 @@ export const getWorkflowRevisionOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetWorkflowRevisionOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetWorkflowRevisionOutput> => {
     assertOperationWorkflowMethods(engine, ['getRevision']);
     const e = engine;
     const name = validateWorkflowNameField(input.name);

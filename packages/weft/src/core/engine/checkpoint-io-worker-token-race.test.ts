@@ -31,9 +31,10 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../../test-support/embedded/testing/src/wait-until.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { Engine } from '../engine.ts';
@@ -50,7 +51,14 @@ const staleWorkerOperation: ContextOperationRequest = {
 
 function createStaleWorkerPersistCallbacks(workflowId: string): PersistCheckpointCallbacks {
   return {
-    appendTimelineBatchOperations: (_workflowId, _operation, step, timestamp, operations) => {
+    appendTimelineBatchOperations: (
+      _workflowId,
+      _operation,
+      step,
+      _stepIndex,
+      timestamp,
+      operations,
+    ) => {
       operations.push({
         type: 'put',
         key: KEYS.timeline(workflowId, step),
@@ -97,7 +105,7 @@ async function waitForCheckpointQuiescence(
   workflowId: string,
 ): Promise<Uint8Array> {
   let previous = await storage.get(KEYS.checkpoint(workflowId));
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for await (const _turn of awakeTurns()) {
     await new Promise((resolve) => setTimeout(resolve, 10));
     const current = await storage.get(KEYS.checkpoint(workflowId));
     if (
@@ -178,6 +186,7 @@ describe('persistWorkerCheckpoint vs. a start-new replacement — WFT-21 Codex r
             staleWorkerOperation,
             toExactArrayBuffer(serializeCheckpoint(staleCheckpoint)),
             createStaleWorkerPersistCallbacks(originalHandle.id),
+            { pendingStepIndex: 0 },
           ),
         ),
       ).toThrow('targets a different execution generation');

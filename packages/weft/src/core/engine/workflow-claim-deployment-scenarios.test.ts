@@ -30,13 +30,11 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import {
-  waitForCondition,
-  waitForRealTimersForTesting,
-} from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { quietFor } from "../../../test-support/embedded/testing/src/wait-until.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   Engine,
@@ -532,7 +530,7 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       // wake kind is unmet — pinning the safety property, not the silence.
       await engineA.getHandle(takenOverId)?.signal('go');
       // fixed delay: negative assertion — no discard warning is emitted on this path (see the note above), so there is no positive event to await; this bounds how long a wrongly-driven generator is given to run before asserting it did not.
-      await waitForRealTimersForTesting(50);
+      await quietFor(50);
       expect(runCountFor(takenOverId, 'after')).toBe(0);
 
       // NOT LOST: the new owner explicitly resumes it and consumes the
@@ -581,7 +579,7 @@ describe('WFT-79: workflow-lease deployment scenarios (two real engines, one sto
       // `acquireStandaloneClaimBeforeResume`, hitting the stale-cache branch.
       await engineA.getHandle(id)?.signal('go');
       // fixed delay: negative assertion — proving the stale generator never advanced has no observable event to await instead.
-      await waitForRealTimersForTesting(50);
+      await quietFor(50);
       expect(runCountFor(id, 'after')).toBe(0);
 
       // The successor completes it normally, consuming the durably-buffered signal.

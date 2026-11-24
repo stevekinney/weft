@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import {
   flushMicrotasks,
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import {
   type ContractScheduler,
   createSchedulerContractContext,
@@ -12,9 +12,8 @@ import {
   type SchedulerContractContext,
 } from '../testing/scheduler-contract.test-support.ts';
 
+import { MemoryStorage, type Storage } from "../embedded/storage/src/index.ts";
 import type { TimerEntry } from '../core/types.ts';
-import type { Storage } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { ServiceWorkerScheduler } from './scheduler.ts';
 
 /**
@@ -118,6 +117,16 @@ describe('ServiceWorkerScheduler — implementation-specific', () => {
 
     const keys = await collectStorageKeys();
     expect(keys.some((key) => key.startsWith('wf-delayed:'))).toBe(false);
+  });
+
+  it('fires timers due at the same instant in timer id order, whatever order they were scheduled', async () => {
+    const dueAt = now() - 1000;
+    await scheduler.schedule(makeTimer({ id: 'timer-b', workflowId: 'wf-b', fireAt: dueAt }));
+    await scheduler.schedule(makeTimer({ id: 'timer-a', workflowId: 'wf-a', fireAt: dueAt }));
+
+    await scheduler.tick(now());
+
+    expect(firedEntries.map((entry) => entry.id)).toEqual(['timer-a', 'timer-b']);
   });
 
   // -------------------------------------------------------------------------

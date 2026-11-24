@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
 import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
 
@@ -157,7 +158,7 @@ describe('Discovery parity', () => {
           const timer = setTimeout(() => {
             webSocket.removeEventListener('message', handler);
             reject(new Error('rpc.discover websocket response timed out'));
-          }, 3_000);
+          }, HANG_GUARD_MILLISECONDS);
 
           function handler(event: MessageEvent): void {
             const parsed = JSON.parse(String(event.data)) as {

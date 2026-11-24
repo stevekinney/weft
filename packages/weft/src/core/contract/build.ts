@@ -169,6 +169,22 @@ function buildActivityRecord(
   return built;
 }
 
+function applyActivityRecords(draft: ContractDraft, source: WorkflowContractSource): void {
+  const activities = buildActivityRecord(source.name, source.activities);
+  if (activities !== undefined) draft.activities = activities;
+  const usedActivities = buildActivityRecord(source.name, source.uses);
+  if (usedActivities === undefined) return;
+  // Mirrors the builder's `.activities()`/`.uses()` overlap rejection.
+  for (const name of Object.keys(usedActivities)) {
+    if (activities !== undefined && Object.hasOwn(activities, name)) {
+      throw new Error(
+        `Workflow "${source.name}" declares activity "${name}" in both activities and uses`,
+      );
+    }
+  }
+  draft.usedActivities = usedActivities;
+}
+
 /** Mutable draft of a {@link WorkflowContract}, built up field by field before being returned. */
 type ContractDraft = {
   name: string;
@@ -181,6 +197,7 @@ type ContractDraft = {
   updates?: Readonly<Record<string, WorkflowMessageContract>>;
   queries?: Readonly<Record<string, WorkflowMessageContract>>;
   activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  usedActivities?: Readonly<Record<string, WorkflowActivityContract>>;
   finalizer?: WorkflowActivityContract;
 };
 
@@ -243,8 +260,7 @@ export function buildWorkflowContract(source: WorkflowContractSource): WorkflowC
   applySchemas(draft, source);
   applyMessageRecords(draft, source);
 
-  const activities = buildActivityRecord(source.name, source.activities);
-  if (activities !== undefined) draft.activities = activities;
+  applyActivityRecords(draft, source);
 
   if (source.finalizer !== undefined) {
     draft.finalizer = buildMessageContract(

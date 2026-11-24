@@ -6,6 +6,7 @@ import {
   buildSharedStartWorkflowOptions,
   buildStartOrSignalWorkflowOptions,
   coerceStartWorkflowSearchAttributes,
+  normalizeDateTimeSearchAttributes,
 } from './start-workflow-options.ts';
 
 const FIELD = 'Field "searchAttributes"';
@@ -213,5 +214,43 @@ describe('coerceStartWorkflowSearchAttributes', () => {
     const result = coerceStartWorkflowSearchAttributes({ attempt: 5 }, FIELD, schema);
 
     expect(result).toEqual({ attempt: 5 });
+  });
+});
+
+describe('normalizeDateTimeSearchAttributes', () => {
+  const schema: SearchAttributeSchema = {
+    placedAt: { type: 'string', format: 'date-time' },
+    customerId: { type: 'string' },
+  };
+
+  it('returns the attributes untouched when no schema is supplied', () => {
+    const attributes = { placedAt: '2026-10-28T00:00:00.000Z' };
+
+    expect(normalizeDateTimeSearchAttributes(attributes, FIELD, undefined)).toBe(attributes);
+  });
+
+  it('converts declared date-time strings and leaves every other entry as it arrived', () => {
+    const result = normalizeDateTimeSearchAttributes(
+      { placedAt: '2026-10-28T00:00:00.000Z', customerId: 'c-1', undeclared: 42 },
+      FIELD,
+      schema,
+    );
+
+    expect(result['placedAt']).toEqual(new Date('2026-10-28T00:00:00.000Z'));
+    expect(result['customerId']).toBe('c-1');
+    expect(result['undeclared']).toBe(42);
+  });
+
+  it('does not mistake an inherited Object.prototype name for a declared attribute', () => {
+    const result = normalizeDateTimeSearchAttributes(
+      { constructor: 'kept', toString: 'kept too' },
+      FIELD,
+      schema,
+    );
+
+    expect(Object.entries(result)).toEqual([
+      ['constructor', 'kept'],
+      ['toString', 'kept too'],
+    ]);
   });
 });

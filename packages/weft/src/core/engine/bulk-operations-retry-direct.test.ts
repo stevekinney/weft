@@ -1,11 +1,12 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { decode, encode } from '../codec.ts';
 import type { Checkpoint, SearchAttributeValue, WorkflowState } from '../types.ts';
 import { retryFailedAll } from './bulk-operations.ts';
+import { reactivateOneFailedWorkflow } from './retry-failed-workflow.ts';
 
 function createFailedState(
   workflowId: string,
@@ -68,6 +69,34 @@ function createInternals(storage: MemoryStorage) {
     scheduleStateOperationChains: new Map(),
   } as never;
 }
+
+describe('retrying one failed workflow', () => {
+  it('answers retried, so the run is resumed, when only the cleanup timer cancel failed after the commit (COR-2424)', async () => {
+    const workflowId = 'retry-one-cleanup-fails';
+    const storage = new MemoryStorage();
+    const internals = createInternals(storage);
+    (internals as { scheduler: { cancel: unknown } }).scheduler.cancel = mock(async () => {
+      throw new Error('scheduler is down');
+    });
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode(createFailedState(workflowId, { terminalCleanupToken: 'cleanup-token' })),
+    );
+    await storage.put(
+      KEYS.checkpoint(workflowId),
+      serializeCheckpoint(createCheckpoint(workflowId)),
+    );
+
+    expect(await reactivateOneFailedWorkflow(internals, workflowId)).toEqual({
+      workflowId,
+      status: 'retried',
+    });
+    const stored = decode(
+      (await storage.get(KEYS.workflow(workflowId))) as Uint8Array,
+    ) as WorkflowState;
+    expect(stored.status).not.toBe('failed');
+  });
+});
 
 describe('bulk retry direct coverage', () => {
   it('reactivates failed checkpointed workflows, restoring attributes and cancelling terminal cleanup timers', async () => {

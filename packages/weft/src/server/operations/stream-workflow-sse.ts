@@ -1,16 +1,15 @@
 import { z } from 'zod';
 
-import type { StoredStreamChunk } from '../../core/context.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
 import {
-  assertOperationEngineMethods,
+  type UnknownRestBinding,
+  createStoredChunkSSEStream,
   invalidParamsFault,
-  shapeRestFault,
-} from './operation-helpers.ts';
-import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
+  parseOptionalSequenceCursor,
+  SSE_RESPONSE_HEADERS,
+} from "../../embedded/backchannel/src/internals.ts";
+import type { StoredStreamChunk } from '../../core/context.ts';
+import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 const TOKENS_STREAM_KEY = 'tokens';
 
@@ -19,8 +18,13 @@ const TOKENS_STREAM_KEY = 'tokens';
 // string; invoke parses it AFTER the 404 workflow-existence check, so
 // workflow-not-found takes precedence over a bad cursor.
 const streamWorkflowSseInput = z.object({
-  workflowId: z.string().min(1),
-  after: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow whose stream is followed.'),
+  after: z
+    .unknown()
+    .optional()
+    .describe(
+      'Resume cursor: the sequence number of the last chunk already received (-1 or greater). Replay starts after it.',
+    ),
 });
 
 export type StreamWorkflowSseInput = z.infer<typeof streamWorkflowSseInput>;
@@ -31,12 +35,17 @@ export const streamWorkflowSseOperation = defineOperation({
   mcpExposable: false,
   kind: 'stream',
   summary: 'Stream workflow tokens as Server-Sent Events',
+  description:
+    "Stream a workflow's stored token chunks as Server-Sent Events, resuming after " +
+    'the Last-Event-ID sequence number when one is given. REST only; the request must ' +
+    'accept text/event-stream. Faults with NotFound when the workflow is not visible.',
   destructive: false,
   tags: ['Streams'],
   inputSchema: streamWorkflowSseInput,
   outputSchema: z.object({ chunks: z.array(z.unknown()) }),
   eventSchema: z.object({ sequence: z.number(), value: z.unknown() }),
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   // SSE is a REST-shaped delivery format; JSON-RPC clients receive the
   // canonical `{ chunks }` envelope from the same operation. Keeping all
@@ -44,7 +53,7 @@ export const streamWorkflowSseOperation = defineOperation({
   // without needing a separate operation.
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<StreamWorkflowSseOutput> => {
+  invoke: async ({ input, host: engine }): Promise<StreamWorkflowSseOutput> => {
     assertOperationEngineMethods(engine, ['get', 'getStreamChunks']);
     const e = engine;
 

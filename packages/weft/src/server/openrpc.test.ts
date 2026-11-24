@@ -14,21 +14,21 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { VERSION } from '../version.ts';
-import { accessPolicyMetadataExamples } from './access-policy-metadata.test-support.ts';
-import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
-import { generateOpenRpcDocument } from './openrpc.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import type { ParameterizedAccessHint } from './operation-catalog/types.ts';
-import type { UnarySchemaOperationDefinition } from './operation-registry.ts';
-import { defineOperation } from './operation-registry.ts';
+import { type UnarySchemaOperationDefinition, defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type ParameterizedAccessHint,
+  OpenRpcDocumentSchema,
+  createOperationRegistry,
+  generateOpenRpcDocument,
+} from "../embedded/backchannel/src/internals.ts";
+import { accessPolicyMetadataExamples } from "../embedded/backchannel/src/testing.ts";
 import { isRecord } from './protocol.test-support.ts';
 
 function makeOp(overrides: {
   readonly name: string;
   readonly inputSchema?: z.ZodObject;
   readonly outputSchema?: z.ZodType;
-  readonly access?: import('./authorization.ts').AccessPolicy;
+  readonly access?: import("../embedded/backchannel/src/internals.ts").AccessPolicy;
   readonly discoverable?: boolean;
   readonly mcpExposable?: boolean;
   readonly mcpTool?: { readonly workflowType: string };
@@ -78,8 +78,8 @@ describe('generateOpenRpcDocument — basic shape', () => {
     expect(document['openrpc']).toBe('1.3.2');
     expect(typeof document['info']).toBe('object');
     const info = isRecord(document['info']) ? document['info'] : undefined;
-    expect(info?.['title']).toBeDefined();
-    expect(info?.['version']).toBe(VERSION);
+    expect(info?.['title']).toBe('API');
+    expect(info?.['version']).toBe('0.0.0');
     expect(Array.isArray(document['methods'])).toBe(true);
   });
 

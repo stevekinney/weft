@@ -1,5 +1,5 @@
-import type { BatchOperation } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import type { BatchOperation } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 
 const EMPTY_VALUE = new Uint8Array(0);
 

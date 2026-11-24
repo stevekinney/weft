@@ -3,8 +3,9 @@
  *
  * `revision` is the broader identity companion to `contractHash`: it hashes
  * the *entire* normalized contract — `name`, `workflowVersion`,
- * `description`, and `tags` included — so it changes whenever anything
- * about the definition changes, including documentation. This is the same
+ * `description`, `tags`, and `usedActivities` included — so it changes
+ * whenever anything about the definition changes, including documentation
+ * and the engine-provided activities it declares with `.uses()`. This is the same
  * formula the (now-refactored) `buildWorkerManifestFromRegistry()` used for
  * its `workflowRevision` field before this module existed.
  *

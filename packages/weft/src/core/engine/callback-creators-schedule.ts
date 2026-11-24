@@ -1,3 +1,4 @@
+import type { TimerFiredOutcome } from '../scheduler.ts';
 import type { ScheduleState, TimerEntry } from '../types.ts';
 import {
   createInlineLaunchQueueCallbacks,
@@ -14,8 +15,8 @@ import {
   applyScheduleOccurrence,
   handleScheduledWorkflowTerminal,
   refreshScheduledWorkflowState,
-  settleBackfillScheduleState,
 } from './schedule-current-run.ts';
+import type { OccurrenceCommit } from './schedule-occurrence-commit.ts';
 import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import {
   handleScheduleTimer,
@@ -39,6 +40,7 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
       revisionOverride,
       skipAdmissionIdCheck,
       transientState,
+      startConditions,
     ) => {
       await startWorkflow(
         getInternals(engine),
@@ -47,20 +49,23 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
         options,
         additionalStartOperations,
         createLifecycleCallbacks(engine),
-        undefined,
+        startConditions === undefined || startConditions.length === 0
+          ? undefined
+          : () => ({ operations: [], conditions: startConditions }),
         revisionOverride,
         skipAdmissionIdCheck,
         transientState,
       );
     },
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
-    cancelWorkflow: (workflowId) => engine.cancel(workflowId),
+    cancelWorkflow: async (workflowId) => {
+      await engine.cancel(workflowId);
+    },
     getWorkflowResult: (workflowId) => engine.getHandle(workflowId).result(),
     refreshScheduledWorkflowState: (state) => refreshScheduledWorkflowStateForEngine(engine, state),
     startScheduledRun: (state, options) => startScheduledRunForEngine(engine, state, options),
-    applyScheduleOccurrence: (state, occurrence) =>
-      applyScheduleOccurrenceForEngine(engine, state, occurrence),
-    settleBackfillScheduleState: (state) => settleBackfillScheduleStateForEngine(engine, state),
+    applyScheduleOccurrence: (state, occurrence, manual, commit) =>
+      applyScheduleOccurrenceForEngine(engine, state, occurrence, manual, commit),
     flushQueuedInlineWorkflowStartsDirectly: () =>
       flushQueuedInlineWorkflowStartsDirectly(
         getInternals(engine),
@@ -135,25 +140,23 @@ export async function applyScheduleOccurrenceForEngine<
 >(
   engine: Engine<TWorkflows, TActivities>,
   state: ScheduleState,
-  occurrence?: number,
+  occurrence: number | undefined,
+  manual: true | undefined,
+  commit: OccurrenceCommit,
 ): Promise<ScheduleState> {
   return applyScheduleOccurrence(
     getInternals(engine),
     state,
     createScheduleCallbacks(engine),
     occurrence,
+    manual,
+    commit,
   );
-}
-export async function settleBackfillScheduleStateForEngine<
-  TWorkflows extends object,
-  TActivities extends object,
->(engine: Engine<TWorkflows, TActivities>, state: ScheduleState): Promise<ScheduleState> {
-  return settleBackfillScheduleState(getInternals(engine), state, createScheduleCallbacks(engine));
 }
 export async function handleScheduleTimerForEngine<
   TWorkflows extends object,
   TActivities extends object,
->(engine: Engine<TWorkflows, TActivities>, entry: TimerEntry): Promise<void> {
+>(engine: Engine<TWorkflows, TActivities>, entry: TimerEntry): Promise<TimerFiredOutcome> {
   return handleScheduleTimer(getInternals(engine), entry, createScheduleCallbacks(engine));
 }
 export async function handleScheduledWorkflowTerminalForEngine<

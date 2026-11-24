@@ -9,9 +9,9 @@ export const BULK_WORKFLOW_FILTER_ERROR_MESSAGE =
 
 /**
  * Discriminant for the closed set of `ListFilter` dimensions that, on
- * their own, narrow a bulk operation to a scoped subset. `failureCategory`
- * and the three time-range fields are intentionally absent — they require
- * pairing with one of these scopes.
+ * their own, narrow a bulk operation to a scoped subset. `failureCategory`,
+ * `failedStep`, `retrying` and the three time-range fields are intentionally
+ * absent — they require pairing with one of these scopes.
  */
 type BulkFilterDimension = 'status' | 'type' | 'scheduleId' | 'tags' | 'attributes' | 'idPrefix';
 

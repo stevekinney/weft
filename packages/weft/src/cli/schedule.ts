@@ -1,4 +1,5 @@
 import type { Engine, WorkflowDefinition } from '../index.ts';
+import { cliFault, faultFromLocalError, renderFault } from './cli-fault.ts';
 import { parseJsonInput } from './json-input.ts';
 import { createStorage } from './storage-factory.ts';
 import type {
@@ -43,7 +44,12 @@ function getScheduleStorageValidationError(storage: string): string | null {
     return null;
   }
 
-  return 'Error: --storage memory is not supported for schedule commands because data does not persist across CLI invocations';
+  return '--storage memory is not supported for schedule commands because data does not persist across CLI invocations';
+}
+
+/** A usage error of a schedule command: an `InvalidParams` fault, exit code 1. */
+function scheduleUsageFailure(message: string, json: boolean): CommandOutput {
+  return renderFault(cliFault('InvalidParams', message), { json, exitCode: 1, prefix: 'Error: ' });
 }
 
 async function executeScheduleList(
@@ -65,20 +71,20 @@ async function executeScheduleList(
 
 function getScheduleCreateValidationError(options: ScheduleCreateCommand): string | null {
   if (!options.workflows) {
-    return 'Error: --workflows flag is required for schedule create';
+    return '--workflows flag is required for schedule create';
   }
 
   if (!options.workflowType) {
-    return 'Error: missing required argument <workflowType> for schedule create';
+    return 'missing required argument <workflowType> for schedule create';
   }
 
   const hasCron = typeof options.cronExpression === 'string' && options.cronExpression.length > 0;
   const hasEvery = options.every !== undefined;
   if (hasCron && hasEvery) {
-    return 'Error: provide exactly one of <cronExpression> or --every, not both';
+    return 'provide exactly one of <cronExpression> or --every, not both';
   }
   if (!hasCron && !hasEvery) {
-    return 'Error: provide a <cronExpression> argument or an --every <duration> flag for schedule create';
+    return 'provide a <cronExpression> argument or an --every <duration> flag for schedule create';
   }
 
   return null;
@@ -105,32 +111,37 @@ async function executeScheduleCreate(
   }>,
 ): Promise<CommandOutput> {
   const validationError = getScheduleCreateValidationError(options);
-  if (validationError !== null) {
-    return { stdout: '', stderr: validationError, exitCode: 1 };
-  }
+  if (validationError !== null) return scheduleUsageFailure(validationError, options.json);
 
   await registerScheduleWorkflows(engine, options.workflows, loadRegistrationsFromModule);
 
   const parsedInput = parseJsonInput(options.input);
   if (!parsedInput.ok) {
-    return {
-      stdout: '',
-      stderr:
-        parsedInput.error.kind === 'invalid-json'
-          ? `Error: could not parse --input JSON: ${parsedInput.error.detail}`
-          : `Error: ${parsedInput.error.message}`,
-      exitCode: 1,
-    };
+    return scheduleUsageFailure(
+      `could not parse --input JSON: ${parsedInput.error.detail}`,
+      options.json,
+    );
   }
 
   const spec = options.every !== undefined ? { every: options.every } : options.cronExpression;
-  const handle = await engine.schedule(options.workflowType, parsedInput.value, spec, {
-    ...(options.id !== undefined ? { id: options.id } : {}),
-    ...(options.overlap !== undefined ? { overlap: options.overlap } : {}),
-    ...(options.backfill ? { backfill: true } : {}),
-    ...(options.jitter !== undefined ? { jitter: options.jitter } : {}),
-    ...(options.revisionPolicy !== undefined ? { revisionPolicy: options.revisionPolicy } : {}),
-  });
+  let handle: Awaited<ReturnType<Engine['schedule']>>;
+  try {
+    handle = await engine.schedule(options.workflowType, parsedInput.value, spec, {
+      ...(options.id !== undefined ? { id: options.id } : {}),
+      ...(options.overlap !== undefined ? { overlap: options.overlap } : {}),
+      ...(options.backfill ? { backfill: true } : {}),
+      ...(options.jitter !== undefined ? { jitter: options.jitter } : {}),
+      ...(options.revisionPolicy !== undefined ? { revisionPolicy: options.revisionPolicy } : {}),
+    });
+  } catch (error) {
+    // Everything the engine refuses here is the caller's spec (a cron expression, an interval, an
+    // id, an overlap policy), so what the generic classification cannot name is `InvalidParams`.
+    return renderFault(faultFromLocalError(error, 'InvalidParams'), {
+      json: options.json,
+      exitCode: 1,
+      prefix: 'Error: ',
+    });
+  }
 
   const schedule = await handle.describe();
   return {
@@ -144,11 +155,10 @@ async function executeScheduleMutation(
   engine: Engine,
 ): Promise<CommandOutput> {
   if (!options.scheduleId) {
-    return {
-      stdout: '',
-      stderr: `Error: scheduleId is required for schedule ${options.action}`,
-      exitCode: 1,
-    };
+    return scheduleUsageFailure(
+      `scheduleId is required for schedule ${options.action}`,
+      options.json,
+    );
   }
 
   if (options.action === 'pause') {
@@ -193,11 +203,7 @@ async function executeScheduleMutation(
 export async function executeSchedule(options: ScheduleCommand): Promise<CommandOutput> {
   const storageValidationError = getScheduleStorageValidationError(options.storage);
   if (storageValidationError !== null) {
-    return {
-      stdout: '',
-      stderr: storageValidationError,
-      exitCode: 1,
-    };
+    return scheduleUsageFailure(storageValidationError, options.json);
   }
 
   const { Engine } = await import('../index.ts');
@@ -215,8 +221,11 @@ export async function executeSchedule(options: ScheduleCommand): Promise<Command
 
     return await executeScheduleMutation(options, engine);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { stdout: '', stderr: `Error: ${message}`, exitCode: 1 };
+    return renderFault(faultFromLocalError(error), {
+      json: options.json,
+      exitCode: 1,
+      prefix: 'Error: ',
+    });
   } finally {
     await engine[Symbol.asyncDispose]();
     storage[Symbol.dispose]();

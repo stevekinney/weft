@@ -18,16 +18,19 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  createOperationRegistry,
+  emitBindings,
+  generateOpenApiDocument,
+  generateOpenRpcDocument,
+  OpenRpcDocumentSchema,
+} from "../embedded/backchannel/src/internals.ts";
+import { MAX_BATCH_OPERATIONS } from "../embedded/storage/src/index.ts";
 import { generateMcpDiscovery } from './mcp-discovery.ts';
-import { emitBindings, generateOpenApiDocument } from './openapi.ts';
-import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
-import { generateOpenRpcDocument } from './openrpc.ts';
-import { createCatalogSnapshot } from './operation-catalog-snapshot.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
-import type { UnknownRestBinding } from './rest-bindings.ts';
-import { createLiveOperationRegistry } from './rest-bindings.ts';
+import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
+import { createCatalogSnapshot } from './weft-catalog-snapshot.ts';
 
 const DESCRIBED_OPERATION_DESCRIPTION =
   'Longer-form prose describing what this operation does, its key inputs, and notable faults.';
@@ -116,7 +119,10 @@ describe('operation catalog description — OpenAPI', () => {
   });
 
   it('carries real interactive-subset descriptions in the live /openapi.json', () => {
-    const document = generateOpenApiDocument();
+    const document = generateOpenApiDocument({
+      registry: createLiveOperationRegistry(),
+      restBindings: createLiveRestBindings(),
+    });
     const paths = document['paths'] as Record<string, Record<string, Record<string, unknown>>>;
     // weft.workflows.start is POST /api/v1/workflows.
     const startEntry = paths['/api/v1/workflows']?.['post'];
@@ -178,18 +184,18 @@ describe('operation catalog description — MCP discovery linkage', () => {
 });
 
 describe('operation catalog description — snapshot', () => {
-  it('includes description for the interactive subset and omits it elsewhere', () => {
+  it('includes the description of a described operation and omits it for one without', () => {
     const snapshot = createCatalogSnapshot();
     const byName = new Map(snapshot.operations.map((operation) => [operation.name, operation]));
 
     const cancel = byName.get('weft.workflows.cancel');
     expect(typeof cancel?.description).toBe('string');
 
-    // weft.storage.get is not in the interactive subset and declares no
-    // description, so the snapshot must omit the key rather than default it.
-    const storageGet = byName.get('weft.storage.get');
-    expect(storageGet).toBeDefined();
-    expect(storageGet?.description).toBeUndefined();
+    // An operation that declares no description is reported without the key
+    // rather than with a default. Every live operation is described, so this
+    // uses a summary-only operation.
+    const summaryOnly = createCatalogSnapshot([summaryOnlyOperation()]).operations[0];
+    expect(summaryOnly?.description).toBeUndefined();
   });
 
   it('pins raw storage batch operation-count limits in the catalog schemas', () => {

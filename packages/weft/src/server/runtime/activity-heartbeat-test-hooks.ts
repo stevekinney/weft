@@ -22,7 +22,7 @@
  * version of this hook, which passed its own unit tests against
  * `handleWorkerWebSocketMessage()` called directly with one shared `options`
  * object (no `serve()`, no copy involved) and only surfaced as a 5-second
- * hang once `remote-worker-reconnection.test.ts` exercised it through a real
+ * hang once `remote-worker-reconnection.integration.test.ts` exercised it through a real
  * `serve()` server. The spread is shallow, so `options.engine` is the exact
  * same reference on both sides of the copy; every `ServeOptions` a test
  * builds also constructs its own `Engine`, so keying on it is equally

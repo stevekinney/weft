@@ -11,8 +11,8 @@
  * @module core/engine/checkpoint-prune
  */
 
-import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS, MAX_BATCH_OPERATIONS, storageKeys } from '../../storage/interface.ts';
+import { type BatchOperation, MAX_BATCH_OPERATIONS, storageKeys } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { PruneCheckpointsOptions, PruneCheckpointsResult } from '../types/checkpoint.ts';
 import { commitFencedEngineWrite } from './fenced-write.ts';

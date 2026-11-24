@@ -14,8 +14,10 @@ import {
 import { clonePlain } from '../types/clone-plain.ts';
 import { validateWorkflowOrActivityName } from '../types/name-grammar.ts';
 import { DEFAULT_WORKFLOW_VERSION } from '../versioning.ts';
+import { applyBuilderDeclarations } from './builder-declarations.ts';
 import type { RegistrationEntry } from './engine-internal-types.ts';
 import type { EngineInternals } from './internals.ts';
+import { assertWorkflowSchemas } from './schema-policy.ts';
 import { normalizeRetentionPolicy } from './validation.ts';
 
 export type RegistrationCallbacks = {
@@ -185,9 +187,7 @@ export function buildRegistrationEntry(
   const entry = buildBaseRegistrationEntry(name, registration);
   applyOptionalRegistrationFields(entry, registration);
   if (isBuilderWorkflowDefinition(registration)) {
-    entry.signals = normalizeMessageDefinitions(name, 'signal', registration.signals);
-    entry.updates = normalizeMessageDefinitions(name, 'update', registration.updates);
-    entry.queries = normalizeMessageDefinitions(name, 'query', registration.queries);
+    applyBuilderDeclarations(entry, name, registration);
   }
   return entry;
 }
@@ -232,30 +232,6 @@ export function hasUnresolvedDynamicSourceCandidate(internals: EngineInternals):
     }
   }
   return false;
-}
-
-type RuntimeNamedMessageDefinition = {
-  readonly name: string;
-};
-
-function normalizeMessageDefinitions<TDefinition extends RuntimeNamedMessageDefinition>(
-  workflowType: string,
-  messageKind: 'signal' | 'update' | 'query',
-  definitions: Readonly<Record<string, TDefinition>>,
-): Readonly<Record<string, TDefinition>> {
-  const normalized = Object.create(null) as Record<string, TDefinition>;
-  const sortedDefinitions = Object.values(definitions).toSorted((left, right) =>
-    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-  );
-  for (const definition of sortedDefinitions) {
-    if (Object.hasOwn(normalized, definition.name)) {
-      throw new Error(
-        `Duplicate ${messageKind} runtime name "${definition.name}" in workflow "${workflowType}"`,
-      );
-    }
-    normalized[definition.name] = definition;
-  }
-  return normalized;
 }
 
 function commitWorkflowDefinition(
@@ -453,6 +429,7 @@ export function register(
   if (isBuilderWorkflowDefinition(definition)) {
     const decision = checkWorkflowCollision(internals, definition.name, definition);
     if (decision.kind === 'idempotent') return;
+    assertWorkflowSchemas(internals.options, definition);
     // Build the per-workflow ActivityRegistry before any commits so an
     // activity-metadata failure leaves zero state behind. Commit both maps
     // (workflowDefinitionsByName + activityRegistriesByWorkflow) together
@@ -470,6 +447,7 @@ export function register(
   // maps). The builder always populates those maps to empty objects, so this
   // branch only fires for hand-rolled `WorkflowDefinition` literals — which
   // are still valid because the public type is structural.
+  assertWorkflowSchemas(internals.options, definition);
   commitWorkflowDefinition(internals, definition, callbacks);
 }
 

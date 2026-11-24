@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  encodeStorageKeyComponent,
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from "../../embedded/storage/src/index.ts";
+import { flushMicrotasks } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  Storage,
-} from '../../storage/interface.ts';
-import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { decode, encode } from '../codec.ts';

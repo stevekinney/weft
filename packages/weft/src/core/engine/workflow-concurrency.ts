@@ -1,6 +1,10 @@
+import {
+  storageConditionalBatch,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
 import { sleep } from '../../runtime/portable.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS, storageConditionalBatch } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import {
   AtomicState,
   AtomicStateConflictError,

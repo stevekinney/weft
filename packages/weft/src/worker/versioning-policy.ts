@@ -1,8 +1,9 @@
 /** Durable, per-workflow worker-version binding policy. */
 
+import { type Storage } from "../embedded/storage/src/index.ts";
 import { decode, encode } from '../core/codec/index.ts';
 import type { WorkflowWorkerVersioningPolicy } from '../core/versioning.ts';
-import { KEYS, storageConditionalBatch, type Storage } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import {
   WorkerDeploymentCatalog,
   selectWorkerDeployment,
@@ -10,7 +11,9 @@ import {
   type DeploymentSelection,
   type WorkerDeploymentVersion,
 } from './deployment-routing.ts';
-import type { WorkerExecutionRequirement } from './manifest/types.ts';
+import type { WorkerExecutionRequirement, WorkerManifest } from './manifest/types.ts';
+import { NoRoutedWorkerDeploymentError } from './no-routed-deployment-error.ts';
+import { commitWorkerBinding } from './worker-binding-commit.ts';
 
 export const DEFAULT_WORKFLOW_WORKER_VERSIONING_POLICY = {
   mode: 'pinned',
@@ -70,9 +73,17 @@ export async function resolveWorkflowWorkerStartBinding(
     if (selection.candidate === undefined) continue;
     return bindingFromDeploymentSelection(selection, versions, options);
   }
-  throw new Error(
-    `No accepted routed worker deployment provides workflow "${options.workflowType}" revision "${options.workflowRevision}".`,
-  );
+  throw new NoRoutedWorkerDeploymentError(options.workflowType, options.workflowRevision);
+}
+
+/** The manifest's workflow of this type, if it declares one itself, so `constructor` finds nothing. */
+function ownManifestWorkflow(
+  manifest: WorkerManifest,
+  workflowType: string,
+): WorkerManifest['workflows'][string] | undefined {
+  return Object.hasOwn(manifest.workflows, workflowType)
+    ? manifest.workflows[workflowType]
+    : undefined;
 }
 
 function matchingDeploymentNames(
@@ -83,7 +94,7 @@ function matchingDeploymentNames(
     .filter(
       (version) =>
         version.state === 'ready' &&
-        version.manifest.workflows[options.workflowType]?.workflowRevision ===
+        ownManifestWorkflow(version.manifest, options.workflowType)?.workflowRevision ===
           options.workflowRevision,
     )
     .map((version) => version.deploymentName)
@@ -101,7 +112,7 @@ function deploymentCandidates(
       (version) =>
         version.deploymentName === deploymentName &&
         version.state === 'ready' &&
-        version.manifest.workflows[options.workflowType]?.workflowRevision ===
+        ownManifestWorkflow(version.manifest, options.workflowType)?.workflowRevision ===
           options.workflowRevision,
     )
     .map((version) => ({
@@ -135,7 +146,7 @@ function bindingFromDeploymentSelection(
     checkpointId: string;
   }>,
 ): WorkflowWorkerBinding {
-  const workflow = selection.candidate.manifest.workflows[options.workflowType]!;
+  const workflow = ownManifestWorkflow(selection.candidate.manifest, options.workflowType)!;
   const activity = Object.entries(workflow.activities).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )[0];
@@ -299,11 +310,7 @@ export async function bindWorkflowWorkerAtStart(
   }
   const record: WorkflowWorkerBindingRecord = { current: binding, history: [] };
   state['workerBinding'] = record;
-  const applied = await storageConditionalBatch(
-    storage,
-    [{ key, expectedValue: existing }],
-    [{ type: 'put', key, value: encode(state) }],
-  );
+  const applied = await commitWorkerBinding(storage, key, existing, state, binding);
   if (!applied) {
     const raced = await readWorkflowWorkerBinding(storage, binding.workflowId);
     if (raced !== null && bindingEquals(raced.current, binding)) return raced;
@@ -334,12 +341,9 @@ export async function recordWorkflowWorkerUpgrade(
     history: [current, ...previous.history].slice(0, limit),
   };
   state['workerBinding'] = record;
-  const applied = await storageConditionalBatch(
-    storage,
-    [{ key, expectedValue: previousBytes }],
-    [{ type: 'put', key, value: encode(state) }],
-  );
-  if (!applied) throw new Error('Concurrent workflow worker upgrade lost the binding CAS.');
+  if (!(await commitWorkerBinding(storage, key, previousBytes, state, next))) {
+    throw new Error('Concurrent workflow worker upgrade lost the binding CAS.');
+  }
   return record;
 }
 

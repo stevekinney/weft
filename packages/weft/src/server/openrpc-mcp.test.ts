@@ -15,19 +15,18 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import { record, records } from './protocol.test-support.ts';
 
+import { type UnarySchemaOperationDefinition, defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type ErasedOperation,
+  type OperationRegistry,
+  type ParameterizedAccessHint,
+  createOperationRegistry,
+  generateOpenRpcDocument,
+} from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import { workflow } from '../core/types.ts';
 import { listMcpTools } from '../mcp/tools.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { generateOpenRpcDocument } from './openrpc.ts';
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationRegistry,
-} from './operation-catalog.ts';
-import type { ParameterizedAccessHint } from './operation-catalog/types.ts';
-import type { UnarySchemaOperationDefinition } from './operation-registry.ts';
-import { defineOperation } from './operation-registry.ts';
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -60,7 +59,7 @@ function makeOp(overrides: {
   readonly name: string;
   readonly inputSchema?: z.ZodObject;
   readonly outputSchema?: z.ZodType;
-  readonly access?: import('./authorization.ts').AccessPolicy;
+  readonly access?: import("../embedded/backchannel/src/internals.ts").AccessPolicy;
   readonly discoverable?: boolean;
   readonly mcpExposable?: boolean;
   readonly mcpTool?: { readonly workflowType: string };
@@ -234,7 +233,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
     ).toThrow(/live MCP tools\/list/);
   });
 
-  it('rejects MCP-exposable operations missing workflow tool metadata', () => {
+  it('omits engine MCP metadata for an operation served by dispatch (no mcpTool)', () => {
     const registry = createRegistryDouble([
       makeOp({
         name: 'weft.workflows.unmapped.start',
@@ -245,13 +244,11 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       }),
     ]);
 
-    expect(() =>
-      generateOpenRpcDocument({
-        registry,
-        transports: ['http'],
-        mcpTools: [],
-      }),
-    ).toThrow(/lacks mcpTool\.workflowType metadata/);
+    const document = generateOpenRpcDocument({ registry, transports: ['http'], mcpTools: [] });
+    const methods = records(document['methods'], 'document methods');
+    const method = methods.find((entry) => entry['name'] === 'weft.workflows.unmapped.start');
+    expect(method).toBeDefined();
+    expect(method?.['x-weft-mcp']).toBeUndefined();
   });
 
   it('rejects MCP-exposable operations when live MCP tool metadata is absent', () => {

@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import { principalFromStdioLocal } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
 import type { WorkflowState } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { WorkerDeploymentCatalog } from '../../worker/deployment-routing.ts';
 import type { WorkerManifest } from '../../worker/manifest/types.ts';
 import { resolveWorkflowWorkerStartBinding } from '../../worker/versioning-policy.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromStdioLocal } from '../principal.ts';
 import {
   createWorkerStartOverridePreviewOperation,
   workerStartOverridePreviewRestBinding,
@@ -18,6 +19,14 @@ const WORKFLOW_ID = 'preview-workflow';
 const WORKFLOW_TYPE = 'preview-workflow-type';
 const WORKFLOW_REVISION = 'revision-1';
 
+class ScanFailingStorage extends MemoryStorage {
+  failScans = false;
+  override scan(...args: Parameters<MemoryStorage['scan']>): ReturnType<MemoryStorage['scan']> {
+    if (this.failScans) throw new Error('catalog scan failed');
+    return super.scan(...args);
+  }
+}
+
 describe('weft.worker.startoverrides.preview operation', () => {
   it('requires server signing configuration', async () => {
     const registry = createOperationRegistry([createWorkerStartOverridePreviewOperation()]);
@@ -26,8 +35,8 @@ describe('weft.worker.startoverrides.preview operation', () => {
       'weft.worker.startoverrides.preview',
       { workflowId: WORKFLOW_ID },
       {
-        principal: principalFromStdioLocal(),
-        engine: {},
+        principal: principalFromStdioLocal(WEFT_SCOPE_VOCABULARY),
+        host: {},
         transport: 'http-rest',
         registry,
       },
@@ -35,7 +44,10 @@ describe('weft.worker.startoverrides.preview operation', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('Expected preview operation to fail.');
-    expect(result.fault.code).toBe('EngineFailure');
+    expect(result.fault).toMatchObject({
+      code: 'UnsupportedCapability',
+      data: { capability: 'workerStartOverrideSigning' },
+    });
   });
 
   it('issues a scoped preview for a terminal auto-upgrade workflow', async () => {
@@ -112,8 +124,8 @@ describe('weft.worker.startoverrides.preview operation', () => {
       'weft.worker.startoverrides.preview',
       { workflowId: WORKFLOW_ID, ttlMs: 50 },
       {
-        principal: principalFromStdioLocal(),
-        engine: {},
+        principal: principalFromStdioLocal(WEFT_SCOPE_VOCABULARY),
+        host: {},
         transport: 'http-rest',
         registry,
       },
@@ -147,7 +159,10 @@ describe('weft.worker.startoverrides.preview operation', () => {
     const missing = await executePreview(new MemoryStorage());
     expect(missing.ok).toBe(false);
     if (missing.ok) throw new Error('Expected missing workflow preview to fail.');
-    expect(missing.fault.code).toBe('EngineFailure');
+    expect(missing.fault).toMatchObject({
+      code: 'NotFound',
+      data: { resource: 'workflow', identifier: WORKFLOW_ID },
+    });
 
     const currentBinding = await seedPreviewCatalogAndBinding();
 
@@ -163,14 +178,20 @@ describe('weft.worker.startoverrides.preview operation', () => {
     const live = await executePreview(liveStorage);
     expect(live.ok).toBe(false);
     if (live.ok) throw new Error('Expected live workflow preview to fail.');
-    expect(live.fault.code).toBe('EngineFailure');
+    expect(live.fault).toMatchObject({
+      code: 'Conflict',
+      data: { reason: 'workflow-not-terminal' },
+    });
 
     const unboundStorage = new MemoryStorage();
     await seedWorkflowState(unboundStorage, { status: 'completed' });
     const unbound = await executePreview(unboundStorage);
     expect(unbound.ok).toBe(false);
     if (unbound.ok) throw new Error('Expected unbound workflow preview to fail.');
-    expect(unbound.fault.code).toBe('EngineFailure');
+    expect(unbound.fault).toMatchObject({
+      code: 'Conflict',
+      data: { reason: 'no-worker-binding' },
+    });
 
     const pinnedStorage = new MemoryStorage();
     await seedWorkflowState(pinnedStorage, {
@@ -181,7 +202,10 @@ describe('weft.worker.startoverrides.preview operation', () => {
     const pinned = await executePreview(pinnedStorage);
     expect(pinned.ok).toBe(false);
     if (pinned.ok) throw new Error('Expected pinned workflow preview to fail.');
-    expect(pinned.fault.code).toBe('EngineFailure');
+    expect(pinned.fault).toMatchObject({
+      code: 'Conflict',
+      data: { reason: 'policy-not-auto-upgrade' },
+    });
   });
 
   it('rejects a resolved target that does not satisfy the workflow compatibility contract', async () => {
@@ -230,6 +254,54 @@ describe('weft.worker.startoverrides.preview operation', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('Expected incompatible preview to fail.');
+    expect(result.fault).toMatchObject({
+      code: 'Conflict',
+      data: { reason: 'upgrade-incompatible-contract' },
+    });
+  });
+
+  it('faults with a no-routed-deployment Conflict when no ready build provides the revision', async () => {
+    const storage = new MemoryStorage();
+    const currentBinding = await seedPreviewCatalogAndBinding();
+    await seedWorkflowState(storage, {
+      status: 'completed',
+      revision: 'revision-nobody-serves',
+      workerVersioningPolicy: {
+        mode: 'auto-upgrade',
+        compatibility: compatibilityFromBinding(currentBinding),
+      },
+      workerBinding: { current: currentBinding, history: [] },
+    });
+
+    const result = await executePreview(storage);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a conflict.');
+    expect(result.fault).toMatchObject({
+      code: 'Conflict',
+      data: { reason: 'no-routed-deployment' },
+    });
+  });
+
+  it('does not turn a catalog read failure into a no-routed-deployment Conflict', async () => {
+    const storage = new ScanFailingStorage();
+    const currentBinding = await seedPreviewCatalogAndBinding(storage);
+    await seedWorkflowState(storage, {
+      status: 'completed',
+      revision: WORKFLOW_REVISION,
+      workerVersioningPolicy: {
+        mode: 'auto-upgrade',
+        compatibility: compatibilityFromBinding(currentBinding),
+      },
+      workerBinding: { current: currentBinding, history: [] },
+    });
+    storage.failScans = true;
+
+    const result = await executePreview(storage);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a failure.');
+    // Only the "nothing is routed" refusal is a Conflict; a storage fault stays an engine failure.
     expect(result.fault.code).toBe('EngineFailure');
   });
 
@@ -259,16 +331,15 @@ async function executePreview(storage: MemoryStorage) {
     'weft.worker.startoverrides.preview',
     { workflowId: WORKFLOW_ID },
     {
-      principal: principalFromStdioLocal(),
-      engine: {},
+      principal: principalFromStdioLocal(WEFT_SCOPE_VOCABULARY),
+      host: {},
       transport: 'http-rest',
       registry,
     },
   );
 }
 
-async function seedPreviewCatalogAndBinding() {
-  const storage = new MemoryStorage();
+async function seedPreviewCatalogAndBinding(storage: MemoryStorage = new MemoryStorage()) {
   const catalog = new WorkerDeploymentCatalog(storage);
   await registerManifest(catalog, 'build-1', 'sha256:workflow');
   await catalog.setRouting({

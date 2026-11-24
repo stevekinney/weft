@@ -14,16 +14,17 @@
 
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { type UnknownRestBinding, invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowReplay } from '../../core/types.ts';
 import { negotiatedResponse } from '../handler/response-helpers.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const replayWorkflowInput = z.object({
-  workflowId: z.string().min(1),
-  step: z.union([z.string(), z.number()]),
+  workflowId: z.string().min(1).describe('Id of the workflow to replay.'),
+  step: z
+    .union([z.string(), z.number()])
+    .describe('Checkpoint step to reconstruct state at, as a step number or step name.'),
 });
 
 const replayWorkflowOutput = z.unknown();
@@ -55,7 +56,7 @@ export const replayWorkflowOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<ReplayWorkflowOutput> => {
+  invoke: async ({ input, host: engine }): Promise<ReplayWorkflowOutput> => {
     assertOperationEngineMethods(engine, ['get', 'replayTo']);
     const e = engine;
 

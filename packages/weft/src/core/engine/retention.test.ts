@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';

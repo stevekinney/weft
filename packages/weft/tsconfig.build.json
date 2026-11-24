@@ -15,6 +15,10 @@
   "exclude": [
     "node_modules",
     "src/benchmarks/**",
+    "src/embedded/backchannel/scripts/**",
+    "src/embedded/backchannel/src/generator.ts",
+    "src/embedded/backchannel/src/testing.ts",
+    "src/embedded/storage/src/testing/**",
     "src/cli/__fixtures__/**",
     "**/*.test.ts",
     "**/*.spec.ts",

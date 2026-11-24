@@ -11,8 +11,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import {
   readEnvironmentVariableFromSources,
   resetMemoryStorageFallbackWarningForTesting,

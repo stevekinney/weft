@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import { type OperationFault, anonymousPrincipal } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  faultToHttpResponse,
+  invalidParamsFault,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { faultToHttpResponse } from '../fault-to-http.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { anonymousPrincipal } from '../principal.ts';
 import {
   bulkCancelWorkflowsOperation,
   bulkCancelWorkflowsRestBinding,
@@ -39,7 +40,6 @@ import { getUpdateResultRestBinding } from './get-update-result.ts';
 import { listCheckpointsRestBinding } from './list-checkpoints.ts';
 import { listReviewsRestBinding } from './list-reviews.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 import { purgeWorkflowsOperation } from './purge-workflows.ts';
 import { recoverAllRestBinding } from './recover-all.ts';
 import { resumeWorkflowRestBinding } from './resume-workflow.ts';
@@ -78,10 +78,15 @@ async function expectJsonError(
   status: number,
   error: string,
   data?: Readonly<Record<string, unknown>>,
+  // `null` for a route-level error that never passed through the fault model, so it has no `retryable`.
+  retryable: boolean | null = false,
 ): Promise<void> {
   expect(response.status).toBe(status);
   expect(response.headers.get('content-type')).toBe('application/json');
-  expect(await response.json()).toEqual(data === undefined ? { error } : { error, data });
+  const advice = retryable === null ? {} : { retryable };
+  expect(await response.json()).toEqual(
+    data === undefined ? { error, ...advice } : { error, data, ...advice },
+  );
 }
 
 describe('operation coverage regressions', () => {
@@ -273,7 +278,7 @@ describe('operation coverage regressions', () => {
   it('rejects invalid filter tags in direct bulk-operation invokes', async () => {
     const engine = createEngine();
     const context = {
-      engine: engine as never,
+      host: engine as never,
       principal: anonymousPrincipal(),
       transport: 'jsonRpcHttp' as const,
     };
@@ -393,7 +398,7 @@ describe('operation coverage regressions', () => {
       },
     );
 
-    await expectJsonError(response, 400, 'Invalid JSON body');
+    await expectJsonError(response, 400, 'Invalid JSON body', undefined, null);
     engine[Symbol.dispose]();
   });
 
@@ -412,7 +417,7 @@ describe('operation coverage regressions', () => {
     expect(
       await getStreamChunksOperation.invoke({
         input: { workflowId: 'wf-stream', key: 'tokens', after: 7 },
-        engine: engine,
+        host: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),
@@ -422,7 +427,7 @@ describe('operation coverage regressions', () => {
     expect(
       await streamWorkflowSseOperation.invoke({
         input: { workflowId: 'wf-stream', after: 9 },
-        engine: engine,
+        host: engine,
         principal: anonymousPrincipal(),
         transport: 'jsonRpcHttp',
       }),

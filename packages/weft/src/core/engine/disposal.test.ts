@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import { WorkflowSourceLoadCancelledEvent } from '../events/workflow-source-events.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -19,6 +19,11 @@ import {
   type InlineLaunchQueueCallbacks,
 } from './inline-launch-queue.ts';
 import { getInternals } from './internals.ts';
+import {
+  hasQueuedInlineWorkflowStart,
+  hasQueuedOrLaunchingInlineWorkflowStart,
+  recordInlineWorkflowStartQueued,
+} from './local-execution.ts';
 import { buildRegistrationEntry } from './registration.ts';
 
 async function revisionFor(definition: WorkflowDefinition): Promise<string> {
@@ -55,6 +60,7 @@ function seedQueuedInlineStart(
     onStarted: () => {
       settled = true;
     },
+    launch: recordInlineWorkflowStartQueued(internals, workflowId),
   };
   // Drop any start already queued for this id (e.g. from a prior engine.start in
   // the same test) so the seeded entry is the only one — avoids a double-start
@@ -63,8 +69,6 @@ function seedQueuedInlineStart(
     (start) => start.workflowId !== workflowId,
   );
   internals.queuedInlineWorkflowStarts.push(queued);
-  internals.queuedInlineWorkflowStartIds.add(workflowId);
-  internals.queuedOrLaunchingInlineWorkflowStartIds.add(workflowId);
   return { fired: () => settled };
 }
 
@@ -152,7 +156,7 @@ describe('disposeEngine', () => {
     // termination. Without the dispose fix this promise is cleared but never
     // settled, so an awaiting caller hangs forever.
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-    internals.resultResolvers.set('wf-pending', { promise, resolve, reject });
+    internals.resultResolvers.set('wf-pending', { promise, resolve, reject, boundToRun: false });
 
     disposeEngine(internals);
 
@@ -192,7 +196,7 @@ describe('disposeEngine', () => {
     // momentarily unhandled and could trip an unhandled-rejection warning.
     const outcomes = ['wf-1', 'wf-2', 'wf-3'].map((workflowId) => {
       const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-      internals.resultResolvers.set(workflowId, { promise, resolve, reject });
+      internals.resultResolvers.set(workflowId, { promise, resolve, reject, boundToRun: false });
       return promise.then(
         () => ({ rejected: false as const, error: undefined as unknown }),
         (error: unknown) => ({ rejected: true as const, error }),
@@ -518,10 +522,8 @@ describe('defer:false synchronous launch', () => {
     await engine.start('defer-true', null, { id: 'lazy' });
 
     expect(bodyEntered).toBe(false);
-    // Yield one scheduler turn so the queued inline launch flushes, proving the
-    // run is otherwise healthy. (With real timers, sleepForTesting yields a
-    // single minimal turn regardless of the argument; 1 makes that intent clear.)
-    await sleepForTesting(1);
+    // The queued inline launch flushes, proving the run is otherwise healthy.
+    await waitForCondition(() => bodyEntered, { label: 'the deferred body to enter' });
     expect(bodyEntered).toBe(true);
     engine[Symbol.dispose]();
   });
@@ -593,10 +595,9 @@ describe('dropQueuedInlineWorkflowStart settles defer:false awaiters', () => {
       onStarted: () => {
         settled = true;
       },
+      launch: recordInlineWorkflowStartQueued(internals, 'cancelled-while-queued'),
     };
     internals.queuedInlineWorkflowStarts.push(queued);
-    internals.queuedInlineWorkflowStartIds.add(queued.workflowId);
-    internals.queuedOrLaunchingInlineWorkflowStartIds.add(queued.workflowId);
 
     const dropped = dropQueuedInlineWorkflowStart(internals, 'cancelled-while-queued');
 
@@ -717,10 +718,8 @@ describe('onStarted fires on every flush terminal path', () => {
     expect(internals.queuedInlineWorkflowStarts.length).toBe(0);
     // The membership indexes must not still claim the discarded start, or
     // isInlineWorkflowLocallyOwned would report a torn-down run as live.
-    expect(internals.queuedInlineWorkflowStartIds.has('aborted-before-flush')).toBe(false);
-    expect(internals.queuedOrLaunchingInlineWorkflowStartIds.has('aborted-before-flush')).toBe(
-      false,
-    );
+    expect(hasQueuedInlineWorkflowStart(internals, 'aborted-before-flush')).toBe(false);
+    expect(hasQueuedOrLaunchingInlineWorkflowStart(internals, 'aborted-before-flush')).toBe(false);
     engine[Symbol.dispose]();
   });
 });

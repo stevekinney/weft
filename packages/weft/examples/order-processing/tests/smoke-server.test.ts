@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { BunSQLiteStorage, Engine, serve } from '@lostgradient/weft';
+import { BunSQLiteStorage } from "../../../src/embedded/storage-bun-sqlite/src/index.ts";
+import { Engine, serve } from '@lostgradient/weft';
 
 import { createOrderProcessingEngine, orderProcessingSchedule } from '../src/registry';
 

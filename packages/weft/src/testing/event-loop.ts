@@ -42,6 +42,7 @@ export async function flushPortableMicrotasks(turns = 3): Promise<void> {
  */
 export async function yieldToPortableEventLoop(): Promise<void> {
   if (typeof MessageChannel !== 'undefined') {
+    // load-proof: exported one-turn yield whose contract is exactly one event-loop turn; callers drain a disposed engine's queued inline launch or open a negative window, and a caller needing real work must wait on that state instead
     await new Promise<void>((resolve) => {
       const channel = new MessageChannel();
       channel.port1.onmessage = () => {
@@ -52,6 +53,7 @@ export async function yieldToPortableEventLoop(): Promise<void> {
       channel.port2.postMessage(undefined);
     });
   } else {
+    // load-proof: exported one-turn yield whose contract is exactly one event-loop turn; callers drain a disposed engine's queued inline launch or open a negative window, and a caller needing real work must wait on that state instead
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  principalFromApiKey,
+  principalFromMutualTls,
+  type AuthorizationScope,
+  type Principal,
+} from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import {
+  encodeRemoteTaskRecord,
+  taskLedgerKey,
+  type RemoteTaskQueued,
+} from '../../core/task-ledger/task-ledger.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { principalFromApiKey, principalFromMutualTls, type Principal } from '../principal.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleWorkerSessionRequest } from './worker-sessions.ts';
@@ -501,6 +511,54 @@ describe('worker-session runtime handler', () => {
     );
     expect(resultResponse?.status).not.toBe(409);
     expect(context.registry.getWorker(session.sessionId)).toBeDefined();
+  });
+
+  it('polls with the default timeout and hands the claimed task its prior heartbeat details', async () => {
+    const storage = new MemoryStorage();
+    const queued: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId: 'op-details',
+      workflowType: 'checkout',
+      activityName: 'checkout.charge',
+      queue: 'default',
+      input: {},
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: Date.now(),
+      generation: 0,
+      state: 'queued',
+      attempt: 2,
+      availableAt: Date.now(),
+      firstQueuedAt: Date.now(),
+      lastQueuedAt: Date.now(),
+      retryCount: 1,
+      requeueCount: 0,
+      lastHeartbeatDetails: { processed: 41 },
+    };
+    await storage.put(taskLedgerKey('op-details'), encodeRemoteTaskRecord(queued));
+    const context = minimalServerContext();
+    const options = minimalServeOptions(storage);
+    const session = await registerSession(context);
+    context.taskQueue.enqueue('default', task('op-details'));
+
+    // No `timeout` query parameter: the handler falls back to its default poll timeout, which a
+    // task that is already queued never has to wait out.
+    const pollRequest = emptyRequest(
+      `/v1/worker-sessions/${encodeURIComponent(session.sessionId)}/tasks`,
+      'GET',
+      sessionHeaders(session.sessionToken),
+    );
+    const pollResponse = await handleWorkerSessionRequest(
+      context,
+      options,
+      pollRequest,
+      new URL(pollRequest.url),
+    );
+
+    expect(pollResponse?.status).toBe(200);
+    const body = (await pollResponse?.json()) as Record<string, unknown>;
+    expect(body['operationId']).toBe('op-details');
+    expect(body['lastHeartbeatDetails']).toEqual({ processed: 41 });
   });
 
   it('retains tasks when a parked poll request aborts before any task arrives', async () => {

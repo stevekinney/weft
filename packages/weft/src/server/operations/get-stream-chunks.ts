@@ -1,11 +1,15 @@
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  createStoredChunkSSEStream,
+  invalidParamsFault,
+  parseOptionalSequenceCursor,
+  SSE_RESPONSE_HEADERS,
+} from "../../embedded/backchannel/src/internals.ts";
 import type { StoredStreamChunk } from '../../core/context.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
-import { assertOperationEngineMethods, invalidParamsFault } from './operation-helpers.ts';
-import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
 // share one validation path. extractInput passes through the raw query
@@ -13,9 +17,14 @@ import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.t
 // receive identical "Invalid after query parameter" messages (and reject
 // the same edge cases — < -1, hex, scientific notation).
 const getStreamChunksInput = z.object({
-  workflowId: z.string().min(1),
-  key: z.string().min(1),
-  after: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow that owns the stream.'),
+  key: z.string().min(1).describe('Stream key whose stored chunks are read.'),
+  after: z
+    .unknown()
+    .optional()
+    .describe(
+      'Return only chunks after this sequence number (-1 or greater); omit it to read from the start.',
+    ),
 });
 
 export type GetStreamChunksInput = z.infer<typeof getStreamChunksInput>;
@@ -25,14 +34,19 @@ export const getStreamChunksOperation = defineOperation({
   name: 'weft.workflows.streams.chunks',
   mcpExposable: false,
   summary: 'Read stored stream chunks for a workflow stream key',
+  description:
+    'Read the stored chunks a workflow wrote to one named stream, in order, ' +
+    'optionally only those after a given sequence number. Read-only. Use ' +
+    '`weft.workflows.streams.sse` to follow the token stream live.',
   destructive: false,
   tags: ['Streams'],
   inputSchema: getStreamChunksInput,
   outputSchema: z.object({ chunks: z.array(z.unknown()) }),
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+  discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetStreamChunksOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetStreamChunksOutput> => {
     assertOperationEngineMethods(engine, ['getStreamChunks']);
     const e = engine;
 

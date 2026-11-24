@@ -10,7 +10,9 @@
  * @module worker/manifest/content-digest
  */
 
-import { copyBytesToArrayBuffer } from '../../core/byte-arrays.ts';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import { copyBytesToArrayBuffer } from "../../embedded/backchannel/src/internals.ts";
 import { utf8Encode } from './utf8.ts';
 
 /**
@@ -29,10 +31,22 @@ function bytesToHex(bytes: Uint8Array): string {
   return hex;
 }
 
-/** Digest a UTF-8 string with SHA-256, returning `sha256:<hex>`. */
+/**
+ * Digest a UTF-8 string with SHA-256, returning `sha256:<hex>`.
+ *
+ * Prefers `crypto.subtle`, which browsers expose only in secure contexts.
+ * An operator console served over plain HTTP still derives
+ * activity contract hashes in the browser, so without SubtleCrypto the same
+ * digest comes from `@noble/hashes`' portable SHA-256.
+ */
 export async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', copyBytesToArrayBuffer(utf8Encode(input)));
-  return `${CONTENT_DIGEST_ALGORITHM}:${bytesToHex(new Uint8Array(digest))}`;
+  const bytes = utf8Encode(input);
+  const subtle = globalThis.crypto?.subtle as SubtleCrypto | undefined;
+  const digest =
+    subtle === undefined
+      ? sha256(bytes)
+      : new Uint8Array(await subtle.digest('SHA-256', copyBytesToArrayBuffer(bytes)));
+  return `${CONTENT_DIGEST_ALGORITHM}:${bytesToHex(digest)}`;
 }
 
 /**

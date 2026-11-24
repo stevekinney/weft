@@ -22,7 +22,8 @@ export const ALERT_METRICS = [
  * - `'activity.p99_duration'` — 99th-percentile activity execution duration in
  *   milliseconds.
  * - `'storage.size'` — total storage size in bytes as reported by the engine's
- *   `StorageSizeReported` event.
+ *   `StorageSizeReported` event. Backends without native `Storage.sizeBytes()`
+ *   support are a no-op for this metric.
  *
  * @example
  * ```ts

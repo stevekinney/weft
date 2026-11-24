@@ -23,12 +23,22 @@ const searchAttributeValueSchema: z.ZodType = z.union([
 ]);
 
 export const attributeFilterSchema = z.object({
-  key: z.union([z.string().min(1), z.any()]),
-  value: searchAttributeValueSchema.optional(),
-  gt: searchAttributeScalarValueSchema.optional(),
-  lt: searchAttributeScalarValueSchema.optional(),
-  gte: searchAttributeScalarValueSchema.optional(),
-  lte: searchAttributeScalarValueSchema.optional(),
+  key: z.union([z.string().min(1), z.any()]).describe('Name of the search attribute to filter on.'),
+  value: searchAttributeValueSchema
+    .optional()
+    .describe('Match workflows whose attribute equals this value.'),
+  gt: searchAttributeScalarValueSchema
+    .optional()
+    .describe('Match workflows whose attribute is greater than this value.'),
+  lt: searchAttributeScalarValueSchema
+    .optional()
+    .describe('Match workflows whose attribute is less than this value.'),
+  gte: searchAttributeScalarValueSchema
+    .optional()
+    .describe('Match workflows whose attribute is greater than or equal to this value.'),
+  lte: searchAttributeScalarValueSchema
+    .optional()
+    .describe('Match workflows whose attribute is less than or equal to this value.'),
 });
 
 function isSearchAttributeHandle(value: unknown): value is SearchAttributeHandle {

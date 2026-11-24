@@ -166,7 +166,7 @@ const fallbackObservableSymbol = Symbol.for('observable') as typeof Symbol.obser
  * @example
  * ```ts
  * import { AtomicState, OBSERVABLE_SYMBOL } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const state = new AtomicState<number>(new MemoryStorage(), 'state:workflow-scope:default:count');
  * const observable = state[OBSERVABLE_SYMBOL]();

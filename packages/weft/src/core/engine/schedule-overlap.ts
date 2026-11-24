@@ -1,6 +1,8 @@
 import { ScheduleSkippedEvent } from '../events.ts';
 import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
+import { startUnderScheduleRead } from './schedule-conditioned-start.ts';
+import { startOccurrenceRun, type OccurrenceCommit } from './schedule-occurrence-commit.ts';
 import type { ScheduledRunStartOptions } from './schedule-run.ts';
 import { clearScheduleCurrentWorkflow } from './state-utilities.ts';
 
@@ -15,10 +17,12 @@ export async function applyBlockedScheduleOccurrence(
   state: ScheduleState,
   hasActiveWorkflow: boolean,
   callbacks: ScheduleOverlapCallbacks,
-  occurrence?: number,
+  occurrence: number | undefined,
+  manual: true | undefined,
+  commit: OccurrenceCommit,
 ): Promise<ScheduleState> {
   if (!hasActiveWorkflow) {
-    return startScheduleRunInOccupiedSlot(state, callbacks, occurrence);
+    return startScheduleRunInOccupiedSlot(state, callbacks, occurrence, manual, commit);
   }
 
   if (state.overlap === 'cancel-running') {
@@ -30,6 +34,8 @@ export async function applyBlockedScheduleOccurrence(
       clearScheduleCurrentWorkflow(state),
       callbacks,
       occurrence,
+      manual,
+      commit,
     );
   }
 
@@ -42,6 +48,7 @@ export async function applyBlockedScheduleOccurrence(
           workflowId: crypto.randomUUID(),
           queuedAt: internals.options.getNow(),
           ...(occurrence !== undefined && { occurrence }),
+          ...(manual === true && { manual }),
         },
       ],
     };
@@ -78,38 +85,77 @@ export async function applyBlockedScheduleOccurrence(
 async function startScheduleRunInOccupiedSlot(
   state: ScheduleState,
   callbacks: Pick<ScheduleOverlapCallbacks, 'startScheduledRun'>,
-  occurrence?: number,
+  occurrence: number | undefined,
+  manual: true | undefined,
+  commit: OccurrenceCommit,
 ): Promise<ScheduleState> {
   const workflowId = crypto.randomUUID();
   const stateAfterStart: ScheduleState = { ...state, currentWorkflowId: workflowId };
-  await callbacks.startScheduledRun(state, {
+  const options: ScheduledRunStartOptions = {
     workflowId,
     ...(occurrence !== undefined && { occurrence }),
-  });
+    ...(manual === true && { manual }),
+  };
+  await startOccurrenceRun(commit, callbacks, state, stateAfterStart, options, true);
   return stateAfterStart;
+}
+
+/** The start of the run queued first: the schedule it leaves and how the run is started. */
+function planQueuedRunStart(
+  state: ScheduleState,
+  completedWorkflowId?: string,
+): { after: ScheduleState; options: ScheduledRunStartOptions } | null {
+  const [queuedRun, ...remainingQueuedRuns] = state.queuedRuns;
+  if (queuedRun === undefined) return null;
+  const after: ScheduleState = {
+    ...state,
+    currentWorkflowId: queuedRun.workflowId,
+    queuedRuns: remainingQueuedRuns,
+  };
+  const options: ScheduledRunStartOptions = {
+    workflowId: queuedRun.workflowId,
+    ...(queuedRun.occurrence !== undefined && { occurrence: queuedRun.occurrence }),
+    ...(queuedRun.manual === true && { manual: queuedRun.manual }),
+    ...(completedWorkflowId !== undefined && { completedWorkflowId }),
+    // WFT-95: this replays an already-persisted queued-run id rather than
+    // admitting a fresh one — see ScheduledRunStartOptions.skipAdmissionIdCheck.
+    skipAdmissionIdCheck: true,
+  };
+  return { after, options };
 }
 
 export async function drainQueuedScheduleRun(
   state: ScheduleState,
   callbacks: Pick<ScheduleOverlapCallbacks, 'startScheduledRun'>,
-  completedWorkflowId?: string,
+  commit: OccurrenceCommit,
 ): Promise<ScheduleState> {
-  const [queuedRun, ...remainingQueuedRuns] = state.queuedRuns;
-  if (queuedRun === undefined) return state;
+  const plan = planQueuedRunStart(state);
+  if (plan === null) return state;
+  // Ahead of this occurrence's own run, so it commits the schedule as the drain leaves it.
+  await startOccurrenceRun(commit, callbacks, state, plan.after, plan.options, false);
+  return plan.after;
+}
 
-  const stateAfterStart: ScheduleState = {
-    ...state,
-    currentWorkflowId: queuedRun.workflowId,
-    queuedRuns: remainingQueuedRuns,
-  };
-  await callbacks.startScheduledRun(state, {
-    workflowId: queuedRun.workflowId,
-    ...(queuedRun.occurrence !== undefined && { occurrence: queuedRun.occurrence }),
-    scheduleStateAfterStart: stateAfterStart,
-    ...(completedWorkflowId !== undefined && { completedWorkflowId }),
-    // WFT-95: this replays an already-persisted queued-run id rather than
-    // admitting a fresh one — see ScheduledRunStartOptions.skipAdmissionIdCheck.
-    skipAdmissionIdCheck: true,
+/**
+ * Starts the run queued first in the same batch as the schedule that names it, committed only
+ * while the schedule key still holds `basis` (COR-1925), for a drain outside a tick's occurrence:
+ * the end of a run, or a resumed backfill. Resolves the schedule as it was written, or `null` when
+ * another engine changed the schedule first: nothing committed, no run launched, and the caller
+ * reads the schedule again. `state` is the schedule the drain decides from, which may differ from
+ * the stored bytes `basis` by what the caller has already cleared in memory.
+ */
+export async function drainQueuedScheduleRunUnderRead(
+  internals: EngineInternals,
+  state: ScheduleState,
+  basis: Uint8Array,
+  callbacks: Pick<ScheduleOverlapCallbacks, 'startScheduledRun'>,
+  completedWorkflowId?: string,
+): Promise<ScheduleState | null> {
+  const plan = planQueuedRunStart(state, completedWorkflowId);
+  if (plan === null) return state;
+  const started = await startUnderScheduleRead(internals, callbacks, state, basis, {
+    ...plan.options,
+    scheduleStateAfterStart: plan.after,
   });
-  return stateAfterStart;
+  return started ? plan.after : null;
 }

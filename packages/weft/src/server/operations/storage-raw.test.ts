@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MAX_SCAN_LIMIT, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import { MAX_SCAN_LIMIT } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
   adminStorageOptions,
@@ -22,6 +21,7 @@ describe('storage REST raw operations', () => {
     const registry = createLiveOperationRegistry();
     const storageOperationNames = [
       'weft.storage.get',
+      'weft.storage.preview',
       'weft.storage.put',
       'weft.storage.delete',
       'weft.storage.scan',
@@ -56,6 +56,7 @@ describe('storage REST raw operations', () => {
     expect(await response.json()).toEqual({
       error: 'Payload Too Large',
       data: { maxBytes: 1 },
+      retryable: false,
     });
     expect(await storage.get('oversized-value')).toBeNull();
   });
@@ -64,6 +65,7 @@ describe('storage REST raw operations', () => {
     const registry = createLiveOperationRegistry();
     const storageOperationNames = [
       'weft.storage.get',
+      'weft.storage.preview',
       'weft.storage.put',
       'weft.storage.delete',
       'weft.storage.scan',
@@ -169,9 +171,10 @@ describe('storage REST raw operations', () => {
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line));
+    // MemoryStorage records no write times, so every entry says so.
     expect(lines).toEqual([
-      { key: 'wf:a', value: btoa('a') },
-      { key: 'wf:b', value: btoa('b') },
+      { key: 'wf:a', value: btoa('a'), updatedAt: null },
+      { key: 'wf:b', value: btoa('b'), updatedAt: null },
     ]);
   });
 
@@ -189,7 +192,7 @@ describe('storage REST raw operations', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(
-      `${JSON.stringify({ key: 'wf:a', value: btoa('a') })}\n${JSON.stringify({ key: 'wf:b', value: btoa('b') })}\n`,
+      `${JSON.stringify({ key: 'wf:a', value: btoa('a'), updatedAt: null })}\n${JSON.stringify({ key: 'wf:b', value: btoa('b'), updatedAt: null })}\n`,
     );
   });
 
@@ -213,7 +216,7 @@ describe('storage REST raw operations', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error });
+      expect(await response.json()).toEqual({ error, retryable: false });
     }
   });
 
@@ -251,6 +254,7 @@ describe('storage REST raw operations', () => {
           },
         ],
       },
+      retryable: false,
     });
   });
 
@@ -278,7 +282,7 @@ describe('storage REST raw operations', () => {
     expect(first.done).toBe(false);
     expect(rawStorage.entriesPulled).toBe(1);
     expect(new TextDecoder().decode(first.value)).toBe(
-      `${JSON.stringify({ key: 'wf:a', value: btoa('a') })}\n`,
+      `${JSON.stringify({ key: 'wf:a', value: btoa('a'), updatedAt: null })}\n`,
     );
 
     const second = await reader.read();

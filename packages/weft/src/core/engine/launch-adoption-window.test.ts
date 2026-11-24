@@ -23,12 +23,12 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
+  MemoryStorage,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { createDeferred, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+} from "../../embedded/storage/src/index.ts";
+import { createDeferred, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec/api.ts';
 import {
   workflow,
@@ -179,6 +179,11 @@ type Launcher = {
   label: string;
   /** The `ctx.services` the adopting launch holds, by identity; `undefined` when it holds none. */
   services: unknown;
+  /**
+   * The `ctx.services` the run holds once its create batch has committed, when that differs from
+   * `services`: a scheduled occurrence resolves its services after the commit (COR-1925).
+   */
+  servicesOnceCommitted?: unknown;
   /** Whether the adopting launch is a member of terminal cleanup. */
   owesCleanup: boolean;
   /** The services resolution of a scheduled occurrence; absent for a plain launch. */
@@ -195,11 +200,13 @@ function createScheduleState(): ScheduleState {
     status: 'paused',
     overlap: 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     createdAt: 0,
     updatedAt: 0,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     nextFireAt: null,
     queuedRuns: [],
   };
@@ -209,7 +216,9 @@ function scheduledOccurrence(resolution: ServicesResolution, label: string): Lau
   return {
     label,
     resolution,
-    services: resolution === 'available' ? SERVICES : undefined,
+    // Resolved once the create batch has committed, so a start that loses it resolves nothing.
+    services: undefined,
+    servicesOnceCommitted: resolution === 'available' ? SERVICES : undefined,
     // Every scheduled run writes `schedule-run` metadata that only the deferred cleanup sweeps.
     owesCleanup: true,
     launch: (harness) =>
@@ -309,7 +318,7 @@ async function launchIntoTheBatchWindow(harness: Harness, launcher: Launcher) {
 
 describe('what a launch holds while its create batch commits', () => {
   for (const launcher of LAUNCHERS) {
-    it(`holds the services and the cleanup membership it adopted the id with, for ${launcher.label}`, async () => {
+    it(`holds the cleanup membership it adopted the id with, and its services as the launch resolves them, for ${launcher.label}`, async () => {
       const harness = await createHarness(launcher.resolution ?? 'none');
       try {
         const { batch, launching } = await launchIntoTheBatchWindow(harness, launcher);
@@ -322,6 +331,9 @@ describe('what a launch holds while its create batch commits', () => {
 
         batch.release();
         await launching;
+        expect(harness.holdings().services).toBe(
+          'servicesOnceCommitted' in launcher ? launcher.servicesOnceCommitted : launcher.services,
+        );
       } finally {
         await harness.dispose();
       }

@@ -40,9 +40,9 @@ import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts
 import type { WorkflowEvent } from '../core/types.ts';
 import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import {
-  defaultWebSocketFactory,
   dropOverlappingLiveFrames,
   parseWatchFrame,
+  selectWebSocketFactory,
   type StreamSocket,
   type WebSocketFactory,
 } from './event-stream-transport.ts';
@@ -138,7 +138,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     this.#workflowId = workflowId;
     this.#fetchHistory = fetchHistory;
     this.#onEvent = onEvent;
-    this.#factory = options?.webSocketFactory ?? defaultWebSocketFactory;
+    this.#factory = selectWebSocketFactory(options);
     this.#maxReconnectAttempts = options?.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
     this.#reconnectBackoffMs = options?.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
     this.#lifecycle = new WorkflowEventTailLifecycle({

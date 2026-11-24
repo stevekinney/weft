@@ -1,17 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   advanceTimersByTime,
   flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import {
   createSchedulerContractContext,
   describeSchedulerContract,
   type SchedulerContractContext,
 } from '../testing/scheduler-contract.test-support.ts';
 
-import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface.ts';
+import { type BatchOperation, type ScanOptions } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import {
   buildTimerBatchOperations,
@@ -246,6 +247,63 @@ describe('Scheduler — implementation-specific', () => {
     expect(await storage.get(`timer-idx:${timer.id}`)).toBeNull();
   });
 
+  it('cancel drops a timer index that does not hold a deadline key and leaves other keys alone', async () => {
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const timer = makeTimer({ id: 'healthy', workflowId: 'w-healthy' });
+      await scheduler.schedule(timer);
+      await storage.put('timer-idx:corrupt', encode(42));
+
+      await scheduler.cancel('corrupt', 'w-corrupt');
+
+      expect(consoleError).toHaveBeenCalledWith(
+        'Corrupted timer index for corrupt: expected string, got number',
+      );
+      expect(await storage.get('timer-idx:corrupt')).toBeNull();
+      expect(await storage.get(`timer-idx:${timer.id}`)).not.toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('keeps a fired timer in storage when its cleanup cannot be built, and fires it again next tick', async () => {
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const timer = makeTimer({
+        id: 'sleep:cleanup-fails',
+        workflowId: 'w-cleanup',
+        kind: 'sleep',
+        fireAt: now() - 1000,
+      });
+      await scheduler.schedule(timer);
+      const readIndex = storage.get.bind(storage);
+      let failIndexReads = true;
+      storage.get = async (key: string) => {
+        if (failIndexReads && key.startsWith('timer-idx:')) throw new Error('index read failed');
+        return readIndex(key);
+      };
+
+      await scheduler.tick(now());
+
+      expect(firedEntries).toHaveLength(1);
+      expect(consoleError).toHaveBeenCalledWith(
+        `Failed to delete timer keys for ${timer.id}:`,
+        expect.objectContaining({ message: 'index read failed' }),
+      );
+      const remaining = await collectStorageKeys();
+      expect(remaining.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(1);
+
+      failIndexReads = false;
+      await scheduler.tick(now());
+
+      expect(firedEntries).toHaveLength(2);
+      const keysAfterRetry = await collectStorageKeys();
+      expect(keysAfterRetry.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('limits each expired timer source scan and drains a larger backlog across ticks with one cleanup batch per tick', async () => {
     const timerCount = EXPECTED_EXPIRED_TIMER_SCAN_LIMIT + 2;
     await storage.batch(
@@ -417,7 +475,7 @@ describe('Scheduler — implementation-specific', () => {
   it('start is idempotent (calling start twice does not create duplicate intervals)', async () => {
     scheduler.start();
     scheduler.start(); // second call should be a no-op
-    scheduler.stop();
+    await scheduler.stop();
     // No assertion needed -- just verifying it doesn't throw or create duplicate intervals
   });
 
@@ -498,7 +556,7 @@ describe('Scheduler — implementation-specific', () => {
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('timer-1');
 
-    scheduler.stop();
+    await scheduler.stop();
   });
 
   it('removes corrupted timer entries from storage and processes valid timers', async () => {
@@ -595,7 +653,7 @@ describe('Scheduler — implementation-specific', () => {
     const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
-    scheduler.stop();
+    await scheduler.stop();
 
     // Calling tick after stop should not fire any callbacks
     await scheduler.tick(now());
@@ -607,7 +665,7 @@ describe('Scheduler — implementation-specific', () => {
     const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
-    scheduler.stop();
+    await scheduler.stop();
     await scheduler.tick(now());
     expect(firedEntries).toHaveLength(0);
 
@@ -617,7 +675,7 @@ describe('Scheduler — implementation-specific', () => {
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('timer-1');
 
-    scheduler.stop();
+    await scheduler.stop();
   });
 
   it('flush works after stop (drains remaining timers)', async () => {
@@ -625,7 +683,7 @@ describe('Scheduler — implementation-specific', () => {
     await scheduler.schedule(entry);
 
     // Stop the scheduler (halts the polling loop)
-    scheduler.stop();
+    await scheduler.stop();
 
     // flush() should still process expired timers despite stop() having been called
     await scheduler.flush(now());
@@ -645,7 +703,7 @@ describe('Scheduler — implementation-specific', () => {
         fired.push(entry.id);
         if (entry.id === 'timer-a') {
           // Calling stop() mid-tick should prevent subsequent callbacks
-          scheduler.stop();
+          void scheduler.stop();
         }
       },
       pollIntervalMs: 100,

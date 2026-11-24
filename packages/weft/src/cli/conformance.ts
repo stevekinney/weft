@@ -14,6 +14,8 @@ import type { CommandOutput } from './types.ts';
 
 type ConformanceCommandOptions = {
   timeoutMs: number;
+  /** The bound for the waits that end the reconnect check; defaults to `timeoutMs`. */
+  settleTimeoutMs?: number;
   json: boolean;
   workerCommand: string[];
 };
@@ -40,6 +42,7 @@ export async function executeConformance(
   const report = await runConformanceReport({
     command: options.workerCommand,
     timeoutMs: options.timeoutMs,
+    ...(options.settleTimeoutMs === undefined ? {} : { settleTimeoutMs: options.settleTimeoutMs }),
     serve,
   });
   return { stdout: formatReport(report, options.json), exitCode: report.ok ? 0 : 1 };

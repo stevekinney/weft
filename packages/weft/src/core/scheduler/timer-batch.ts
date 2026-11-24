@@ -1,5 +1,5 @@
-import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
 import { normalizeStorageTimestamp } from './duration.ts';

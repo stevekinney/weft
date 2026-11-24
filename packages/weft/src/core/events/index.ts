@@ -2,6 +2,7 @@ export * from './activity-events.ts';
 export * from './attribute-events.ts';
 export * from './catalog-events.ts';
 export * from './event-map.ts';
+export * from './fleet-state-events.ts';
 export * from './schedule-events.ts';
 export * from './signal-events.ts';
 export * from './system-events.ts';

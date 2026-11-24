@@ -18,7 +18,7 @@
  * @module core/engine/lifecycle/resume-revision-restamp
  */
 
-import { KEYS } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/keys.ts';
 import { encode } from '../../codec.ts';
 import { checkWorkflowCompatibility } from '../../contract/compatibility.ts';
 import type { WorkflowState } from '../../types.ts';

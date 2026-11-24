@@ -9,21 +9,25 @@
  * compensate functions run in reverse order (last-completed first).
  */
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
 import { makeActivity } from '../../testing/activity.test-support.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +279,7 @@ describe('ctx.onCancel()', () => {
       ctx: WorkflowContext,
     ) {
       ctx.onCancel(async () => {
+        // load-proof: the delay is the handler's own simulated async work inside the code under test; the engine awaits it and the test asserts only after cancel() and the rejected result() settle
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         sequence.push('async-handler-done');
       });
@@ -438,6 +443,60 @@ describe('ctx.saga() — cancellation compensation', () => {
 
     // Steps 1 and 2 completed before cancel, so their compensators run in reverse.
     // Step 3 was in-flight (not completed) so its compensator must NOT run.
+    expect(compensationOrder).toEqual(['step-two', 'step-one']);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('keeps compensating earlier steps and still cancels when a compensator throws on cancel', async () => {
+    const engine = new Engine();
+    const compensationOrder: string[] = [];
+    const gate = deferred();
+
+    const step1 = makeActivity({
+      name: 'step-one',
+      execute: (_input: string) => 'out-one',
+      compensate: (_input, _output) => {
+        compensationOrder.push('step-one');
+      },
+    });
+
+    const step2 = makeActivity({
+      name: 'step-two',
+      execute: (_input: string) => 'out-two',
+      compensate: (_input, _output) => {
+        compensationOrder.push('step-two');
+        throw new Error('compensation for step two failed');
+      },
+    });
+
+    const step3 = makeActivity({
+      name: 'step-three',
+      execute: async (_input: string) => {
+        await gate.promise;
+        return 'out-three';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'saga-cancel-failing-compensator' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.saga([
+          { definition: step1, input: 'a' },
+          { definition: step2, input: 'b' },
+          { definition: step3, input: 'c' },
+        ]);
+      }),
+    );
+
+    const handle = await engine.start('saga-cancel-failing-compensator', null);
+    await flush();
+
+    await engine.cancel(handle.id);
+    gate.resolve();
+
+    expect(await throwingRejectionOf(handle.result())).toThrow('Workflow cancelled');
     expect(compensationOrder).toEqual(['step-two', 'step-one']);
 
     engine[Symbol.dispose]();
@@ -783,7 +842,6 @@ describe('ctx.setFinalizerState() (#446)', () => {
       async () => (await storage.get(KEYS.finalizerState('finalizer-durable-1'))) !== null,
       {
         label: 'finalizer state committed after ctx.run checkpoint',
-        timeoutMs: 400,
         intervalMs: 5,
       },
     );
@@ -822,7 +880,6 @@ describe('ctx.setFinalizerState() (#446)', () => {
       async () => (await storage.get(KEYS.finalizerState('finalizer-park-1'))) !== null,
       {
         label: 'finalizer state committed after the workflow parks',
-        timeoutMs: 400,
         intervalMs: 5,
       },
     );
@@ -881,7 +938,6 @@ describe('ctx.setFinalizerState() (#446)', () => {
     const handle = await engine.start('finalizer-atomic', null, { id: 'finalizer-atomic-1' });
     await waitForCondition(async () => (await storage.get(finalizerKey)) !== null, {
       label: 'finalizer state committed atomically',
-      timeoutMs: 400,
       intervalMs: 5,
     });
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { activity, workflow, type ActivityContext, type WorkflowContext } from '../types.ts';
@@ -905,7 +905,10 @@ describe('timeline and replay', () => {
       status: 'failed',
       operationLabel: 'failStep',
     });
-    expect(timeline[0]?.duration).toBe(1);
+    // The clock ticks on every read. Between the operation's start and its end the engine reads it
+    // once more, for the event log entry it writes (stamped on the engine's clock, COR-2009). A
+    // cleanup that rewrote the duration would read the clock again and record more.
+    expect(timeline[0]?.duration).toBe(2);
     expect(timeline[0]?.outputSummary).toContain('timeline failure');
   });
 });

@@ -3,9 +3,11 @@ import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   BulkCancelResult,
   BulkDeleteResult,
+  BulkOperationDryRunResult,
   BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
+  CancelWorkflowResult,
   CoordinatedUpdateResult,
   ForkOptions,
   ListFilter,
@@ -116,13 +118,24 @@ export function getRetentionOverviewRequest(
   return request<RetentionOverview>(context.baseUrl, '/retention', context.headers);
 }
 
-export function purgeWorkflowRequests(
+/**
+ * Purge over HTTP. The server commits a purge only with the confirmation token of a dry run of the
+ * same filter, so this previews first and commits with that token (COR-2521): two requests, the
+ * second deleting exactly what the first named.
+ */
+export async function purgeWorkflowRequests(
   context: HttpClientRequestContext,
   filter?: ListFilter,
 ): Promise<PurgeResult> {
+  const preview = await request<BulkOperationDryRunResult>(
+    context.baseUrl,
+    '/workflows/purge',
+    context.headers,
+    { method: 'POST', body: JSON.stringify({ filter, dryRun: true }) },
+  );
   return request<PurgeResult>(context.baseUrl, '/workflows/purge', context.headers, {
     method: 'POST',
-    body: JSON.stringify({ filter }),
+    body: JSON.stringify({ filter, confirmationToken: preview.confirmationToken }),
   });
 }
 
@@ -427,10 +440,15 @@ export function getScheduleRequest(
 export function cancelWorkflowRequest(
   context: HttpClientRequestContext,
   id: string,
-): Promise<void> {
-  return request<void>(context.baseUrl, `/workflows/${encodeURIComponent(id)}`, context.headers, {
-    method: 'DELETE',
-  });
+): Promise<CancelWorkflowResult> {
+  return request<CancelWorkflowResult>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}`,
+    context.headers,
+    {
+      method: 'DELETE',
+    },
+  );
 }
 
 /** Force-timeout a workflow (`POST /v1/workflows/:id/timeout`). */
@@ -500,11 +518,15 @@ export function updateScheduleRequest(
   options?: ScheduleUpdateOptions,
 ): Promise<void> {
   const body = scheduleSpecToWireFields(newSpec);
+  setIfDefined(body, 'workflowType', options?.workflowType);
+  setIfDefined(body, 'input', options?.input);
   setIfDefined(body, 'description', options?.description);
   setIfDefined(body, 'overlap', options?.overlap);
   setIfDefined(body, 'backfill', options?.backfill);
   setIfDefined(body, 'jitter', options?.jitter);
+  setIfDefined(body, 'timeZone', options?.timeZone);
   setIfDefined(body, 'revisionPolicy', options?.revisionPolicy);
+  setIfDefined(body, 'metadata', options?.metadata);
 
   return request<void>(context.baseUrl, `/schedules/${encodeURIComponent(id)}`, context.headers, {
     method: 'PATCH',

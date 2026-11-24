@@ -28,6 +28,16 @@ export type TaskDiagnosticsOperationTypes = {
     };
     readonly faults: 'NotFound';
   };
+  'weft.tasks.deadletters.retry': {
+    readonly input: { readonly attemptTokenDigest?: string; readonly operationId: string };
+    readonly output: {
+      readonly attempt: number;
+      readonly operationId: string;
+      readonly requeueCount: number;
+      readonly state: 'queued';
+    };
+    readonly faults: 'Conflict' | 'NotFound';
+  };
   'weft.tasks.deliveries': {
     readonly input: { readonly operationId: string };
     readonly output: {

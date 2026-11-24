@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 
+import { resolveNumericDefaults, resolveRetentionFields } from './engine/construction.ts';
 import type { OperationOutcome, WorkflowStatus } from './types.ts';
 import {
+  DEFAULT_CHECKPOINT_HISTORY,
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
   DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
+  DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
   DEFAULT_RETRY_POLICY,
   DEFAULT_VISIBILITY_TIMEOUT_MS,
 } from './types.ts';
@@ -42,6 +46,22 @@ describe('default constants', () => {
 
   it('DEFAULT_VISIBILITY_TIMEOUT_MS is 30000', () => {
     expect(DEFAULT_VISIBILITY_TIMEOUT_MS).toBe(30_000);
+  });
+
+  // Callers report these as what an unset option does (COR-2009), so they must be what the engine
+  // applies when the option is left out.
+  it('are what an engine built with no options applies', () => {
+    expect(resolveNumericDefaults(undefined)).toMatchObject({
+      checkpointHistory: DEFAULT_CHECKPOINT_HISTORY,
+      checkpointSizeWarningThreshold: DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
+      maxNestingDepth: DEFAULT_MAX_NESTING_DEPTH,
+      schedulerPollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
+    });
+    expect(resolveRetentionFields(undefined)).toEqual({
+      retention: null,
+      retentionSweepIntervalMs: DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
+      retentionSweepBatchSize: DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
+    });
   });
 });
 

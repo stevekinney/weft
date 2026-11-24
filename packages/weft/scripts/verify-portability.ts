@@ -24,18 +24,17 @@ type PortableEntry = {
 
 const PORTABLE_ENTRIES: PortableEntry[] = [
   { name: 'weft (root)', entrypoint: './src/index.ts' },
-  { name: '@lostgradient/weft/client', entrypoint: './src/client/index.ts' },
-  { name: '@lostgradient/weft/service-worker', entrypoint: './src/service-worker/index.ts' },
-  { name: '@lostgradient/weft/storage/http', entrypoint: './src/storage/http.ts' },
-  { name: '@lostgradient/weft/storage/cloudflare', entrypoint: './src/storage/cloudflare.ts' },
-  { name: '@lostgradient/weft/storage/indexeddb', entrypoint: './src/storage/indexeddb.ts' },
-  { name: '@lostgradient/weft/storage/resolve', entrypoint: './src/storage/resolve.ts' },
+  { name: '@lostgradient/weft/worker', entrypoint: './src/worker/index.ts' },
+  { name: '@lostgradient/weft/worker/authoring', entrypoint: './src/worker/authoring.ts' },
   {
-    name: '@lostgradient/weft/storage/web-extension',
-    entrypoint: './src/storage/web-extension.ts',
+    name: '@lostgradient/weft/worker/generated-authoring',
+    entrypoint: './src/worker/generated-authoring.ts',
   },
-  { name: '@lostgradient/weft/worker-protocol', entrypoint: './src/worker/protocol.ts' },
-  { name: '@lostgradient/weft/server/handler', entrypoint: './src/server/handler.ts' },
+  { name: '@lostgradient/weft/storage', entrypoint: './src/embedded/storage/src/index.ts' },
+  {
+    name: '@lostgradient/weft/storage/indexeddb',
+    entrypoint: './src/embedded/storage-indexeddb/src/index.ts',
+  },
 ];
 
 /**

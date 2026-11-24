@@ -1,4 +1,5 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { quietFor } from "../../test-support/embedded/testing/src/wait-until.ts";
 /**
  * End-to-end integration — `serve()` WebSocket /jsonrpc endpoint wired to
  * the JSON-RPC WebSocket session adapter.
@@ -6,11 +7,11 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
 import { WorkflowSuspendedEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
 import { serve, type WeftServer } from './index.ts';
@@ -59,9 +60,8 @@ function waitForStatus(
   engine: Engine,
   workflowId: string,
   status: WaitableWorkflowStatus,
-  timeoutMilliseconds = 2_000,
 ): Promise<void> {
-  return waitForStatusWithTimeout(engine, workflowId, status, timeoutMilliseconds);
+  return waitForStatusWithTimeout(engine, workflowId, status);
 }
 
 /** WebSocket URL for the `/jsonrpc` endpoint of a running server. */
@@ -230,6 +230,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
     // a timing regression where deliveries lag would previously
     // pass the sleep-based assertion vacuously; here the test only
     // passes if the promise explicitly times out.
+    // load-proof: no delivery may arrive after the unsubscribe, and a loaded host can only delay one
     const deliverPromise = waitForMessage(
       ws,
       (parsed: any) =>
@@ -267,7 +268,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
       // runs. This short sleep is a cross-handler handoff, not a
       // correctness assertion — the test's real assertion is on
       // `leakedRejection`.
-      await sleepForTesting(50);
+      await quietFor(50);
     } finally {
       process.off('unhandledRejection', rejectionHandler);
     }
@@ -306,6 +307,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
       port: 0,
       auth: {
         apiKeys: ['weft_key_valid123456789012345678901'],
+        defaultApiKeyScopes: ['workflows:read'],
       },
     });
 
@@ -380,7 +382,9 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
       // One final microtask flush so any promise rejections queued
       // by the emitter.send() → close() sequence have a turn.
+      // load-proof: negative window for a late rejection: load can only delay an unhandled rejection, never produce one earlier, so the absence check cannot flip
       await new Promise<void>((resolve) => setImmediate(resolve));
+      // load-proof: negative window for a late rejection: load can only delay an unhandled rejection, never produce one earlier, so the absence check cannot flip
       await new Promise<void>((resolve) => setImmediate(resolve));
     } finally {
       process.off('unhandledRejection', rejectionHandler);
@@ -413,6 +417,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
       port: 0,
       auth: {
         apiKeys: [apiKey],
+        defaultApiKeyScopes: ['workflows:read'],
       },
     });
 
@@ -485,14 +490,16 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
     // Close A — B must keep receiving deliveries.
     wsA.close();
-    await sleepForTesting(20);
+    // The client sees A's close handshake finish only after the server has handled the close.
+    await waitForCondition(() => wsA.readyState === WebSocket.CLOSED, {
+      label: "A's close handshake",
+    });
 
     const deliverBPromise = waitForMessage(
       wsB,
       (parsed: any) =>
         parsed?.method === 'weft.events.deliver' &&
         parsed?.params?.subscriptionId === subscriptionB,
-      1_000,
     );
 
     await engine.signal(handle.id, 'release', 'done');
@@ -682,7 +689,9 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
       // Flush microtasks so any late rejections land before the
       // assertion below.
+      // load-proof: negative window for a late rejection: load can only delay an unhandled rejection, never produce one earlier, so the absence check cannot flip
       await new Promise<void>((resolve) => setImmediate(resolve));
+      // load-proof: negative window for a late rejection: load can only delay an unhandled rejection, never produce one earlier, so the absence check cannot flip
       await new Promise<void>((resolve) => setImmediate(resolve));
     } finally {
       process.off('unhandledRejection', rejectionHandler);

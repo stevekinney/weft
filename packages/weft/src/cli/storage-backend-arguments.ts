@@ -8,7 +8,7 @@
 
 import type { PersistentStorageBackend, StorageBackend } from './types.ts';
 
-const VALID_STORAGE_BACKENDS = new Set(['sqlite', 'lmdb', 'memory']);
+const VALID_STORAGE_BACKENDS = new Set(['sqlite', 'memory']);
 
 function isValidStorageBackend(value: string): value is StorageBackend {
   return VALID_STORAGE_BACKENDS.has(value);
@@ -19,9 +19,7 @@ export function parseStorageBackend(value: string | undefined): StorageBackend {
   const storageValue = value ?? 'sqlite';
 
   if (!isValidStorageBackend(storageValue)) {
-    throw new Error(
-      `Invalid storage backend '${storageValue}'. Must be one of: sqlite, lmdb, memory`,
-    );
+    throw new Error(`Invalid storage backend '${storageValue}'. Must be one of: sqlite, memory`);
   }
 
   return storageValue;
@@ -36,7 +34,7 @@ export function parsePersistentStorageBackend(value: string | undefined): Persis
 
   if (storageValue === 'memory') {
     throw new Error(
-      "Invalid storage backend 'memory'. Schedule commands support only sqlite and lmdb because data must persist across CLI invocations",
+      "Invalid storage backend 'memory'. Schedule commands support only sqlite because data must persist across CLI invocations",
     );
   }
 

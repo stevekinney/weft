@@ -7,6 +7,7 @@
  * @module core/engine/time-operation-callbacks
  */
 
+import type { TimerFiredOutcome } from '../scheduler.ts';
 import type { Checkpoint, Duration, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { ExecutableRegistration } from './dynamic-source-execution.ts';
@@ -48,7 +49,7 @@ export type TimeOperationCallbacks = {
   ) => number;
   runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
   runWorkflowFinalizer: (workflowId: string, timerId: string, firedAt: number) => Promise<void>;
-  handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
+  handleScheduleTimer: (entry: TimerEntry) => Promise<TimerFiredOutcome>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
   /** Resolve `type` against an EXACT pinned `WorkflowState.revision` (WFT-17, `undefined` for a legacy record) — never the catalog's active pointer. Used by a delayed-start fire, matching `resumeWorkflowFromStorage()`. */

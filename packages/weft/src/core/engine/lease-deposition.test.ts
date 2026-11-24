@@ -22,17 +22,13 @@
  * deposition test would re-exercise the identical shared commit code, so it is not
  * duplicated here.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
-import { BunSQLiteStorage } from '../../storage/bun-sql.ts';
-import type {
-  BatchOperation,
-  ConditionalBatchCondition,
-  Storage,
-} from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import type { BatchOperation, ConditionalBatchCondition, Storage } from "../../embedded/storage/src/index.ts";
+import { BunSQLiteStorage } from "../../embedded/storage-bun-sqlite/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import {
   commitFencedEngineWrite,
@@ -787,7 +783,9 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       expect(internals.deposed).toBe(true);
       await engine[Symbol.asyncDispose]();
       // Let the deferred deposition teardown run; it must no-op (already disposed).
+      // load-proof: negative window for a late rejection from an already disposed engine: load can only delay a rejection, never produce one earlier
       await new Promise((resolve) => setImmediate(resolve));
+      // load-proof: negative window for a late rejection from an already disposed engine: load can only delay a rejection, never produce one earlier
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
       process.off('warning', listener);
@@ -981,6 +979,111 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       // something to swallow.
       await engine[Symbol.asyncDispose]();
       storage[Symbol.dispose]?.();
+    }
+  });
+});
+
+describe('fired-timer cleanup under ownership: lease', () => {
+  it('reports a cleanup commit that loses a precondition race while the lease is still held, and keeps the timer', async () => {
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { 'deposition-sleeper': sleeperWorkflow },
+      ownership: 'lease',
+      leaseTtl: '10m',
+      leaseRenewInterval: '5m',
+    });
+    const internals = getInternals(engine);
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await engine.start('deposition-sleeper', null, { id: 'raced-sleeper' });
+      const deadlineKeys = async (): Promise<string[]> => {
+        const keys: string[] = [];
+        for await (const [key] of storage.scan('wf-deadline:')) keys.push(key);
+        return keys;
+      };
+      await waitForCondition(
+        async () => {
+          const keys = await deadlineKeys();
+          return keys.length === 1;
+        },
+        { label: 'sleep timer armed' },
+      );
+      const armedKeys = await deadlineKeys();
+      const armedKey = armedKeys[0]!;
+
+      // The cleanup commit reports a lost compare-and-swap although the lease epoch it is
+      // conditioned on is unchanged, as a write that lost a race to something other than a
+      // successor would: not a deposition, so the engine keeps running.
+      const commit = storage.conditionalBatch.bind(storage);
+      storage.conditionalBatch = async (conditions, operations) =>
+        operations.some((operation) => operation.type === 'delete' && operation.key === armedKey)
+          ? false
+          : commit(conditions, operations);
+
+      await internals.scheduler.tick(internals.options.getNow() + 2 * 60 * 60 * 1000);
+
+      expect(consoleError).toHaveBeenCalledWith(
+        'Failed to delete timer keys for processed scheduler tick:',
+        new Error('Timer cleanup lost its fenced CAS race'),
+      );
+      expect(internals.deposed).toBe(false);
+      expect(await deadlineKeys()).toContain(armedKey);
+    } finally {
+      consoleError.mockRestore();
+      await engine[Symbol.asyncDispose]();
+      storage[Symbol.dispose]?.();
+    }
+  });
+});
+
+describe('engine-generated workflow writes that lose a precondition race under ownership: lease', () => {
+  /** An engine whose lease is held, and a hook that makes chosen commits report a lost race. */
+  async function createRacingEngine() {
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { 'deposition-waiter': waiterWorkflow },
+      ownership: 'lease',
+      leaseTtl: '10m',
+      leaseRenewInterval: '5m',
+    });
+    const commit = storage.conditionalBatch.bind(storage);
+    let loseWhen: (operations: BatchOperation[]) => boolean = () => false;
+    storage.conditionalBatch = async (conditions, operations) =>
+      loseWhen(operations) ? false : commit(conditions, operations);
+    return {
+      storage,
+      engine,
+      loseCommitsWhen(predicate: (operations: BatchOperation[]) => boolean) {
+        loseWhen = predicate;
+      },
+      async close() {
+        await engine[Symbol.asyncDispose]();
+        storage[Symbol.dispose]?.();
+      },
+    };
+  }
+
+  const writesWorkflowRecord = (workflowId: string) => (operations: BatchOperation[]) =>
+    operations.some(
+      (operation) => operation.type === 'put' && operation.key === KEYS.workflow(workflowId),
+    );
+
+  it('rejects a resume whose commit loses the race while the lease is still held', async () => {
+    const racing = await createRacingEngine();
+    try {
+      await racing.engine.start('deposition-waiter', null, { id: 'raced-resume' });
+      await racing.engine.suspend('raced-resume');
+      racing.loseCommitsWhen(writesWorkflowRecord('raced-resume'));
+
+      const failure = await rejectionOf(racing.engine.resume('raced-resume'));
+
+      expect(failure).toEqual(new Error('Resume of workflow "raced-resume" lost its CAS race.'));
+      expect(getInternals(racing.engine).deposed).toBe(false);
+    } finally {
+      await racing.close();
     }
   });
 });

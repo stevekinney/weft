@@ -13,11 +13,11 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
+  MemoryStorage,
+} from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { workflow, type WorkflowContext } from '../../types.ts';
 import { Engine } from '../index.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';

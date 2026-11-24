@@ -109,8 +109,10 @@ export type WorkflowCompatibilityVerdict =
  *   is never reported. What that difference *means* depends on how `revision`
  *   was produced. Under the default content-derived revision
  *   ({@link deriveWorkflowRevision}), a `revision`-only difference is always a
- *   documentation-only edit (`contract.description` or `contract.tags`, since
- *   `contractHash` deliberately excludes both). Under a caller-supplied
+ *   documentation edit (`contract.description` or `contract.tags`) or a change
+ *   to the engine-provided activities the workflow declares with `.uses()`
+ *   (`contract.usedActivities`), since `contractHash` deliberately excludes
+ *   all three. Under a caller-supplied
  *   revision (`buildWorkflowRevisionManifest(contract, { revision })`), a
  *   `revision`-only difference can be any artifact-identity change the caller
  *   chose to encode there (a build id, a deployment tag)—`false` tolerates

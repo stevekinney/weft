@@ -8,8 +8,9 @@
  * @module core/engine/remote-activity-broker
  */
 
-import type { Storage } from '../../storage/interface.ts';
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import { executionRequirementFromWorkflowWorkerBinding } from '../../worker/binding-helpers.ts';
+import { WorkerDeploymentVersionRemovedError } from '../../worker/deployment-version-removed-error.ts';
 import { readWorkflowWorkerBinding } from '../../worker/versioning-policy.ts';
 import { isJSONValue } from '../json.ts';
 import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
@@ -183,6 +184,14 @@ export class EngineOwnedRemoteActivityBroker implements RemoteActivityBroker {
       (current, now) => createQueued(current, createInput, now),
     );
 
+    if (!result.ok && result.removedBuild !== undefined) {
+      // The build the run is bound to was removed: the run is already terminal, and nothing may
+      // be queued for a build no worker can serve.
+      throw new WorkerDeploymentVersionRemovedError(
+        result.removedBuild.deploymentName,
+        result.removedBuild.buildId,
+      );
+    }
     if (!result.ok) {
       // Lost a create race to a concurrent writer for this exact operationId
       // (another process, or a duplicate concurrent replay) — the record now

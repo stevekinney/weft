@@ -1,12 +1,11 @@
 import { z } from 'zod';
 
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowResultInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow whose result is read.'),
 });
 const getWorkflowResultOutput = z.unknown();
 
@@ -17,15 +16,21 @@ export const getWorkflowResultOperation = defineOperation({
   name: 'weft.workflows.result.get',
   mcpExposable: false,
   summary: 'Get workflow result by id',
+  description:
+    "Read a workflow's result by id, waiting up to 30 seconds for a running workflow " +
+    'to finish. Faults with NotFound when the workflow is not visible, Unprocessable ' +
+    'when it failed or was cancelled, and Timeout when it is still running after the ' +
+    'wait.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: getWorkflowResultInput,
   outputSchema: getWorkflowResultOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound', 'Unprocessable', 'Timeout'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetWorkflowResultOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetWorkflowResultOutput> => {
     assertOperationEngineMethods(engine, ['get', 'getHandle']);
     const e = engine;
     const state = await e.get(input.workflowId);
@@ -110,7 +115,8 @@ export const getWorkflowResultOperation = defineOperation({
 
 function shapeGetWorkflowResultFault(fault: OperationFault): Response {
   if (fault.code === 'Timeout') {
-    return shapeRestFault(fault, { message: 'Timeout waiting for workflow result', status: 408 });
+    // The status is the fault map's: `Timeout` answers 504.
+    return shapeRestFault(fault, { message: 'Timeout waiting for workflow result' });
   }
   // Every other fault goes through the canonical `shapeRestFault`, which
   // masks EngineFailure to a generic "Internal server error" 500 and maps

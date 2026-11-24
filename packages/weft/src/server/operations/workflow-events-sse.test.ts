@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  anonymousPrincipal,
+  principalFromApiKey,
+  type ReplayLiveSubscribeOptions,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, type EventSelector } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import {
   createWorkflowEventFeed,
   type EventEnvelope,
-  type EventSelector,
-  type ReplayLiveSubscribeOptions,
   type WorkflowEventFeed,
 } from '../workflow-event-feed.ts';
 import { workflowEventsSseOperation, workflowEventsSseRestBinding } from './workflow-events-sse.ts';
@@ -249,6 +250,7 @@ describe('weft.workflows.events.sse', () => {
     expect(await response.json()).toEqual({
       error: 'unknown operation: weft.workflows.events.sse',
       data: { method: 'weft.workflows.events.sse' },
+      retryable: false,
     });
     expect(feed.subscribeCalls).toEqual([]);
   });
@@ -282,7 +284,7 @@ describe('weft.workflows.events.sse', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid cursor' });
+    expect(await response.json()).toEqual({ error: 'Invalid cursor', retryable: false });
     expect(feed.subscribeCalls).toEqual([]);
   });
 
@@ -299,6 +301,7 @@ describe('weft.workflows.events.sse', () => {
     expect(response.status).toBe(406);
     expect(await response.json()).toEqual({
       error: 'Accept header must include text/event-stream',
+      retryable: false,
     });
   });
 
@@ -375,7 +378,7 @@ describe('weft.workflows.events.sse', () => {
       await authorize({
         input: { workflowId: 'wf-sse', selector: 'events' },
         principal: anonymousPrincipal(),
-        engine: {},
+        host: {},
         transport: 'http-rest',
       }),
     ).toEqual({
@@ -408,7 +411,7 @@ describe('weft.workflows.events.sse', () => {
         workflowEventsSseOperation.invoke({
           input: { workflowId: 'wf-sse', selector: 'events' },
           principal: principalFromApiKey({ subject: 'tester', scopes: ['events:read'] }),
-          engine: null,
+          host: null,
           transport: 'http-rest',
         }),
       ),
@@ -460,6 +463,7 @@ describe('weft.workflows.events.sse', () => {
     expect(response.status).toBe(429);
     expect(await response.json()).toEqual({
       error: 'maximum stream connections per workflow exceeded',
+      retryable: false,
     });
     expect(feed.subscribeCalls.length).toBe(0);
   });
@@ -484,7 +488,7 @@ describe('weft.workflows.events.sse', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     expect(releaseCount).toBe(1);
   });
 });

@@ -1,5 +1,6 @@
 import type { WeftEventMap } from '../core/events.ts';
 import type {
+  CancelWorkflowResult,
   MessageName,
   QueryDefinition,
   ScheduleSpec,
@@ -15,7 +16,7 @@ import type { WorkflowEventTail } from './event-tail.ts';
 import type { ClientHandle, ClientScheduleHandle, StartOrSignalOutcome } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
-  cancel(id: string): Promise<void>;
+  cancel(id: string): Promise<CancelWorkflowResult>;
   suspend(id: string): Promise<void>;
   resume(id: string): Promise<ClientHandle>;
   tail(id: string): WorkflowEventTail;
@@ -53,7 +54,7 @@ export abstract class WorkflowHandleDelegation<
 
   abstract result(): Promise<unknown>;
 
-  async cancel(): Promise<void> {
+  async cancel(): Promise<CancelWorkflowResult> {
     return this.client.cancel(this.id);
   }
 

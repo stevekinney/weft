@@ -2,11 +2,11 @@ const MAX_WORKFLOW_ID_LENGTH = 128;
 
 function containsControlCharacter(value: string): boolean {
   for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint === undefined) {
-      continue;
-    }
-    if ((codePoint >= 0x00 && codePoint <= 0x1f) || codePoint === 0x7f) {
+    // Iterating a string yields non-empty characters, so `charCodeAt(0)` is always a number.
+    // A character outside the Basic Multilingual Plane reports a surrogate (0xD800 and up),
+    // which is never a control character.
+    const codeUnit = character.charCodeAt(0);
+    if (codeUnit <= 0x1f || codeUnit === 0x7f) {
       return true;
     }
   }

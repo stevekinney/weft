@@ -1,8 +1,12 @@
 import { z } from 'zod';
 
+import { defineOperation, type OperationFault } from "../../embedded/backchannel/src/index.ts";
+import { readRestTextBody, type UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
+import { type Storage } from "../../embedded/storage/src/index.ts";
 import { decode } from '../../core/codec.ts';
 import type { WorkflowState } from '../../core/types.ts';
-import { KEYS, type Storage } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { NoRoutedWorkerDeploymentError } from '../../worker/no-routed-deployment-error.ts';
 import {
   issueWorkflowWorkerStartOverridePreview,
   type WorkerStartOverridePreview,
@@ -10,11 +14,13 @@ import {
 import {
   evaluateWorkflowWorkerUpgrade,
   resolveWorkflowWorkerStartBinding,
+  type WorkflowWorkerBinding,
 } from '../../worker/versioning-policy.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestTextBody } from '../rest-body.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
+import {
+  UPGRADE_REFUSAL_REASON_PREFIX,
+  WORKER_CONFLICT_REASONS,
+} from './worker-conflict-reasons.ts';
 
 const inputSchema = z.object({
   workflowId: z.string().min(1),
@@ -64,33 +70,44 @@ function decodeWorkflowState(bytes: Uint8Array, workflowId: string): WorkflowSta
   return decoded as WorkflowState;
 }
 
+function previewConflict(reason: string, message: string): OperationFault {
+  return { code: 'Conflict', message, data: { reason } };
+}
+
 async function issuePreview(
   input: Input,
   options: Required<Options>,
 ): Promise<WorkerStartOverridePreview> {
   const stateBytes = await options.storage.get(KEYS.workflow(input.workflowId));
   if (stateBytes === null) {
-    throw new Error(`Workflow "${input.workflowId}" does not exist.`);
+    const missing: OperationFault = {
+      code: 'NotFound',
+      message: `Workflow "${input.workflowId}" does not exist.`,
+      data: { resource: 'workflow', identifier: input.workflowId },
+    };
+    throw missing;
   }
   const state = decodeWorkflowState(stateBytes, input.workflowId);
   if (!terminal(state.status)) {
-    throw new Error('Worker start override previews are only issued for terminal workflows.');
+    throw previewConflict(
+      WORKER_CONFLICT_REASONS.workflowNotTerminal,
+      'Worker start override previews are only issued for terminal workflows.',
+    );
   }
   if (state.workerBinding === undefined || state.workerVersioningPolicy === undefined) {
-    throw new Error('Workflow has no durable worker binding to override.');
+    throw previewConflict(
+      WORKER_CONFLICT_REASONS.noWorkerBinding,
+      'Workflow has no durable worker binding to override.',
+    );
   }
   if (state.workerVersioningPolicy.mode !== 'auto-upgrade' || state.revision === undefined) {
-    throw new Error('Worker start override previews require an auto-upgrade worker policy.');
+    throw previewConflict(
+      WORKER_CONFLICT_REASONS.policyNotAutoUpgrade,
+      'Worker start override previews require an auto-upgrade worker policy.',
+    );
   }
   const policy = state.workerVersioningPolicy;
-  const targetBinding = await resolveWorkflowWorkerStartBinding(options.storage, {
-    workflowId: input.workflowId,
-    workflowType: state.type,
-    workflowRevision: state.revision,
-    policy,
-    boundAt: options.clock(),
-    checkpointId: input.workflowId,
-  });
+  const targetBinding = await resolveTargetBinding(options, input, state, policy);
   const evaluation = evaluateWorkflowWorkerUpgrade({
     policy,
     current: state.workerBinding.current,
@@ -99,7 +116,10 @@ async function issuePreview(
     realmAcquired: false,
   });
   if (!evaluation.allowed) {
-    throw new Error(evaluation.message);
+    throw previewConflict(
+      `${UPGRADE_REFUSAL_REASON_PREFIX}${evaluation.reason}`,
+      evaluation.message,
+    );
   }
   return issueWorkflowWorkerStartOverridePreview({
     workflowId: input.workflowId,
@@ -109,6 +129,29 @@ async function issuePreview(
     now: options.clock(),
     ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
   });
+}
+
+async function resolveTargetBinding(
+  options: Required<Options>,
+  input: Input,
+  state: WorkflowState,
+  policy: NonNullable<WorkflowState['workerVersioningPolicy']>,
+): Promise<WorkflowWorkerBinding> {
+  try {
+    return await resolveWorkflowWorkerStartBinding(options.storage, {
+      workflowId: input.workflowId,
+      workflowType: state.type,
+      workflowRevision: state.revision ?? '',
+      policy,
+      boundAt: options.clock(),
+      checkpointId: input.workflowId,
+    });
+  } catch (error) {
+    if (error instanceof NoRoutedWorkerDeploymentError) {
+      throw previewConflict(WORKER_CONFLICT_REASONS.noRoutedDeployment, error.message);
+    }
+    throw error;
+  }
 }
 
 export function createWorkerStartOverridePreviewOperation(options: Options = {}) {
@@ -123,12 +166,17 @@ export function createWorkerStartOverridePreviewOperation(options: Options = {})
     inputSchema,
     outputSchema,
     access,
-    producibleFaults: ['InvalidParams'],
+    producibleFaults: ['Conflict', 'InvalidParams', 'NotFound', 'UnsupportedCapability'],
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
     invoke: async ({ input }) => {
       if (options.storage === undefined || options.serverSecret === undefined) {
-        throw new Error('Worker start override previews require server signing configuration.');
+        const unsupported: OperationFault = {
+          code: 'UnsupportedCapability',
+          message: 'Worker start override previews require server signing configuration.',
+          data: { capability: 'workerStartOverrideSigning' },
+        };
+        throw unsupported;
       }
       return {
         preview: await issuePreview(input, {
@@ -152,5 +200,5 @@ export const workerStartOverridePreviewRestBinding: UnknownRestBinding = {
   extractInput: async (request, _path, context) =>
     JSON.parse(await readRestTextBody(request, context)),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };

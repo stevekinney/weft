@@ -1,10 +1,13 @@
 import type { z } from 'zod';
 
+import {
+  defineOperation,
+  type AuthorizationScope,
+  type FaultCode,
+  type OperationFault,
+  type SchemaOperationDefinition,
+} from "../../embedded/backchannel/src/index.ts";
 import type { Engine } from '../../core/engine.ts';
-import type { FaultCode } from '../../core/fault-code.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import type { SchemaOperationDefinition } from '../operation-registry.ts';
-import { defineOperation } from '../operation-registry.ts';
 import {
   assertOperationEngineMethods,
   type OperationEngineMethodName,
@@ -27,6 +30,8 @@ type SingleWorkflowControlOperationConfiguration<
   readonly tags: ReadonlyArray<string>;
   /** Whether this control operation irreversibly mutates state. Required. */
   readonly destructive: boolean;
+  /** The scope a caller must hold to run this operation. Required: no control operation is public. */
+  readonly scope: AuthorizationScope;
   readonly inputSchema: InputSchema;
   readonly outputSchema: OutputSchema;
   readonly producibleFaults: ReadonlyArray<FaultCode>;
@@ -53,11 +58,12 @@ export function createSingleWorkflowControlOperation<
     destructive: configuration.destructive,
     inputSchema: configuration.inputSchema,
     outputSchema: configuration.outputSchema,
-    access: { kind: 'public' },
+    access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: [configuration.scope] } },
+    discoverable: true,
     producibleFaults: configuration.producibleFaults,
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-    invoke: async ({ input, engine }): Promise<z.input<OutputSchema>> => {
+    invoke: async ({ input, host: engine }): Promise<z.input<OutputSchema>> => {
       try {
         assertOperationEngineMethods(engine, configuration.requiredEngineMethods);
         return await configuration.invoke({ engine, input });

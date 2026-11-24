@@ -1,0 +1,1291 @@
+{
+  "asyncapi": "3.0.0",
+  "channels": {
+    "weft/events/sse": {
+      "address": "/api/v1/events/sse",
+      "description": "Server-Sent Events stream channel for weft.events.sse. Responses use text/event-stream; charset=utf-8.",
+      "messages": {
+        "errorEvent": {
+          "$ref": "#/components/messages/weft_events_sse_errorEvent"
+        },
+        "eventEnvelopeEvent": {
+          "$ref": "#/components/messages/weft_events_sse_eventEnvelopeEvent"
+        },
+        "pingEvent": {
+          "$ref": "#/components/messages/weft_events_sse_pingEvent"
+        }
+      },
+      "title": "Stream fleet events as Server-Sent Events",
+      "x-weft-operation-name": "weft.events.sse",
+      "x-weft-transport": "server-sent-events"
+    },
+    "weft/events/subscribe": {
+      "address": "/api/jsonrpc",
+      "bindings": {
+        "ws": {
+          "method": "GET"
+        }
+      },
+      "description": "JSON-RPC WebSocket subscription channel for weft.events.subscribe.",
+      "messages": {
+        "errorFrame": {
+          "$ref": "#/components/messages/weft_events_subscribe_errorFrame"
+        },
+        "eventDeliver": {
+          "$ref": "#/components/messages/weft_events_subscribe_eventDeliver"
+        },
+        "subscribeAck": {
+          "$ref": "#/components/messages/weft_events_subscribe_subscribeAck"
+        },
+        "subscribeRequest": {
+          "$ref": "#/components/messages/weft_events_subscribe_subscribeRequest"
+        },
+        "terminated": {
+          "$ref": "#/components/messages/weft_events_subscribe_terminated"
+        },
+        "unsubscribeRequest": {
+          "$ref": "#/components/messages/weft_events_subscribe_unsubscribeRequest"
+        }
+      },
+      "title": "Subscribe to fleet-wide events with replay-from-cursor",
+      "x-weft-operation-name": "weft.events.subscribe",
+      "x-weft-transport": "json-rpc-websocket"
+    },
+    "weft/workflows/events": {
+      "address": "/api/jsonrpc",
+      "bindings": {
+        "ws": {
+          "method": "GET"
+        }
+      },
+      "description": "JSON-RPC WebSocket subscription channel for weft.workflows.events.",
+      "messages": {
+        "errorFrame": {
+          "$ref": "#/components/messages/weft_workflows_events_errorFrame"
+        },
+        "eventDeliver": {
+          "$ref": "#/components/messages/weft_workflows_events_eventDeliver"
+        },
+        "subscribeAck": {
+          "$ref": "#/components/messages/weft_workflows_events_subscribeAck"
+        },
+        "subscribeRequest": {
+          "$ref": "#/components/messages/weft_workflows_events_subscribeRequest"
+        },
+        "terminated": {
+          "$ref": "#/components/messages/weft_workflows_events_terminated"
+        },
+        "unsubscribeRequest": {
+          "$ref": "#/components/messages/weft_workflows_events_unsubscribeRequest"
+        }
+      },
+      "title": "Subscribe to workflow events with replay-from-cursor",
+      "x-weft-operation-name": "weft.workflows.events",
+      "x-weft-transport": "json-rpc-websocket"
+    },
+    "weft/workflows/events/sse": {
+      "address": "/api/v1/workflows/{id}/events/sse",
+      "description": "Server-Sent Events stream channel for weft.workflows.events.sse. Responses use text/event-stream; charset=utf-8.",
+      "messages": {
+        "errorEvent": {
+          "$ref": "#/components/messages/weft_workflows_events_sse_errorEvent"
+        },
+        "eventEnvelopeEvent": {
+          "$ref": "#/components/messages/weft_workflows_events_sse_eventEnvelopeEvent"
+        },
+        "pingEvent": {
+          "$ref": "#/components/messages/weft_workflows_events_sse_pingEvent"
+        }
+      },
+      "title": "Stream workflow events as Server-Sent Events",
+      "x-weft-operation-name": "weft.workflows.events.sse",
+      "x-weft-transport": "server-sent-events"
+    },
+    "weft/workflows/streams/sse": {
+      "address": "/api/v1/workflows/{id}/sse",
+      "description": "Server-Sent Events stream channel for weft.workflows.streams.sse. Responses use text/event-stream; charset=utf-8.",
+      "messages": {
+        "doneEvent": {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_doneEvent"
+        },
+        "errorEvent": {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_errorEvent"
+        },
+        "tokenEvent": {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_tokenEvent"
+        }
+      },
+      "title": "Stream workflow tokens as Server-Sent Events",
+      "x-weft-operation-name": "weft.workflows.streams.sse",
+      "x-weft-transport": "server-sent-events"
+    }
+  },
+  "components": {
+    "messages": {
+      "weft_events_sse_errorEvent": {
+        "bindings": {
+          "http": {
+            "event": "error"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_events_sse_errorEvent",
+        "payload": {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "data": {},
+            "message": {
+              "type": "string"
+            },
+            "remediation": {
+              "description": "One line of plain text saying what to do next; omitted when none is known",
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "retryable": {
+              "description": "Whether repeating the identical call later can succeed",
+              "type": "boolean"
+            }
+          },
+          "required": ["message", "retryable"],
+          "type": "object"
+        },
+        "summary": "SSE error event for weft.events.sse.",
+        "x-weft-sse-frame": "event: error\\ndata: <JSON Error>\\n\\n"
+      },
+      "weft_events_sse_eventEnvelopeEvent": {
+        "bindings": {
+          "http": {
+            "event": "<envelope.kind>"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_events_sse_eventEnvelopeEvent",
+        "payload": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "emittedAtMs": {
+                  "type": "number"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "payload": {},
+                "sequence": {
+                  "type": "number"
+                },
+                "workflowId": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "emittedAtMs": {
+                  "type": "number"
+                },
+                "kind": {
+                  "const": "fleet:gap",
+                  "type": "string"
+                },
+                "payload": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "firstRetainedSequence": {
+                      "type": "number"
+                    },
+                    "requestedCursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["requestedCursor", "firstRetainedSequence"],
+                  "type": "object"
+                },
+                "sequence": {
+                  "type": "number"
+                }
+              },
+              "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+              "type": "object"
+            }
+          ]
+        },
+        "summary": "SSE event envelope for weft.events.sse.",
+        "x-weft-sse-frame": "id: <cursor>\\nevent: <envelope.kind>\\ndata: <JSON event envelope>\\n\\n"
+      },
+      "weft_events_sse_pingEvent": {
+        "bindings": {
+          "http": {
+            "event": "ping"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_events_sse_pingEvent",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "emittedAtMs": {
+              "type": "number"
+            },
+            "replayComplete": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": ["emittedAtMs"],
+          "type": "object"
+        },
+        "summary": "SSE ping keepalive for weft.events.sse.",
+        "x-weft-sse-frame": "event: ping\\ndata: {\"emittedAtMs\":<timestamp>[,\"replayComplete\":true]}\\n\\n"
+      },
+      "weft_events_subscribe_errorFrame": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_errorFrame",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/components/schemas/JsonRpcError"
+            },
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            }
+          },
+          "required": ["jsonrpc", "id", "error"],
+          "type": "object"
+        },
+        "summary": "JSON-RPC error response for weft.events.subscribe."
+      },
+      "weft_events_subscribe_eventDeliver": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_eventDeliver",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.events.deliver",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "envelope": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cursor": {
+                          "type": "string"
+                        },
+                        "emittedAtMs": {
+                          "type": "number"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "payload": {},
+                        "sequence": {
+                          "type": "number"
+                        },
+                        "workflowId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cursor": {
+                          "type": "string"
+                        },
+                        "emittedAtMs": {
+                          "type": "number"
+                        },
+                        "kind": {
+                          "const": "fleet:gap",
+                          "type": "string"
+                        },
+                        "payload": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "firstRetainedSequence": {
+                              "type": "number"
+                            },
+                            "requestedCursor": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["requestedCursor", "firstRetainedSequence"],
+                          "type": "object"
+                        },
+                        "sequence": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "envelope"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Event delivery notification for weft.events.subscribe."
+      },
+      "weft_events_subscribe_subscribeAck": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_subscribeAck",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "cursor"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "result"],
+          "type": "object"
+        },
+        "summary": "Subscription acknowledgement for weft.events.subscribe."
+      },
+      "weft_events_subscribe_subscribeRequest": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_subscribeRequest",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.events.subscribe",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "fromCursor": {
+                  "description": "Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.",
+                  "pattern": "^(?:-1|\\d+)$",
+                  "type": "string"
+                },
+                "kind": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "workflow:definition-registered",
+                        "workflow:started",
+                        "workflow:completed",
+                        "workflow:failed",
+                        "workflow:cancelled",
+                        "workflow:timed-out",
+                        "workflow:resumed",
+                        "workflow:suspended",
+                        "workflow:recovery-skipped",
+                        "workflow:teardown",
+                        "activity:started",
+                        "activity:completed",
+                        "activity:failed",
+                        "activity:async-pending",
+                        "activity:remote-queued",
+                        "activity:remote-cancellation-requested",
+                        "task:dead-lettered",
+                        "task:result-delivery",
+                        "signal:received",
+                        "signal:waiting",
+                        "signal:delivered",
+                        "schedule:fired",
+                        "human-review:requested",
+                        "human-review:completed",
+                        "attributes:changed",
+                        "schedule:missed-fire",
+                        "schedule:attempted",
+                        "schedule:skipped",
+                        "update:received",
+                        "update:completed",
+                        "checkpoint:size-warning",
+                        "development:warning",
+                        "cleanup:warning",
+                        "storage:size-reported",
+                        "worker:connected",
+                        "worker:disconnected",
+                        "alert:fired",
+                        "alert:resolved",
+                        "constraint:violated",
+                        "catalog:revision-installed",
+                        "catalog:revision-activated",
+                        "catalog:activation-rejected",
+                        "catalog:revision-draining",
+                        "catalog:revision-removed",
+                        "workflow-source:load-started",
+                        "workflow-source:load-ready",
+                        "workflow-source:load-failed",
+                        "workflow-source:load-cancelled",
+                        "realm:state-changed",
+                        "lease:health-changed",
+                        "worker:registration-rejected",
+                        "worker:deployment-changed",
+                        "stream:chunk",
+                        "queue:depth-changed"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "workflow:definition-registered",
+                          "workflow:started",
+                          "workflow:completed",
+                          "workflow:failed",
+                          "workflow:cancelled",
+                          "workflow:timed-out",
+                          "workflow:resumed",
+                          "workflow:suspended",
+                          "workflow:recovery-skipped",
+                          "workflow:teardown",
+                          "activity:started",
+                          "activity:completed",
+                          "activity:failed",
+                          "activity:async-pending",
+                          "activity:remote-queued",
+                          "activity:remote-cancellation-requested",
+                          "task:dead-lettered",
+                          "task:result-delivery",
+                          "signal:received",
+                          "signal:waiting",
+                          "signal:delivered",
+                          "schedule:fired",
+                          "human-review:requested",
+                          "human-review:completed",
+                          "attributes:changed",
+                          "schedule:missed-fire",
+                          "schedule:attempted",
+                          "schedule:skipped",
+                          "update:received",
+                          "update:completed",
+                          "checkpoint:size-warning",
+                          "development:warning",
+                          "cleanup:warning",
+                          "storage:size-reported",
+                          "worker:connected",
+                          "worker:disconnected",
+                          "alert:fired",
+                          "alert:resolved",
+                          "constraint:violated",
+                          "catalog:revision-installed",
+                          "catalog:revision-activated",
+                          "catalog:activation-rejected",
+                          "catalog:revision-draining",
+                          "catalog:revision-removed",
+                          "workflow-source:load-started",
+                          "workflow-source:load-ready",
+                          "workflow-source:load-failed",
+                          "workflow-source:load-cancelled",
+                          "realm:state-changed",
+                          "lease:health-changed",
+                          "worker:registration-rejected",
+                          "worker:deployment-changed",
+                          "stream:chunk",
+                          "queue:depth-changed"
+                        ],
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  ],
+                  "description": "Return only events of this kind, or of any of these kinds. Omit it for every readable kind."
+                },
+                "workflowId": {
+                  "description": "Return only events of the workflow with this id. Omit it for every workflow.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Subscribe to weft.events.subscribe."
+      },
+      "weft_events_subscribe_terminated": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_terminated",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.events.terminated",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "fault": {
+                  "type": "object"
+                },
+                "reason": {
+                  "enum": ["client-unsubscribed", "server-closed", "validation-failed"],
+                  "type": "string"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "reason"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Subscription termination notification for weft.events.subscribe."
+      },
+      "weft_events_subscribe_unsubscribeRequest": {
+        "contentType": "application/json",
+        "name": "weft_events_subscribe_unsubscribeRequest",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.workflows.unsubscribe",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Unsubscribe from weft.events.subscribe."
+      },
+      "weft_workflows_events_errorFrame": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_errorFrame",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/components/schemas/JsonRpcError"
+            },
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            }
+          },
+          "required": ["jsonrpc", "id", "error"],
+          "type": "object"
+        },
+        "summary": "JSON-RPC error response for weft.workflows.events."
+      },
+      "weft_workflows_events_eventDeliver": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_eventDeliver",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.events.deliver",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "envelope": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cursor": {
+                      "type": "string"
+                    },
+                    "emittedAtMs": {
+                      "type": "number"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "payload": {},
+                    "selector": {
+                      "enum": ["events", "tokens"],
+                      "type": "string"
+                    },
+                    "sequence": {
+                      "type": "number"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "workflowId",
+                    "selector",
+                    "sequence",
+                    "cursor",
+                    "emittedAtMs",
+                    "payload"
+                  ],
+                  "type": "object"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "envelope"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Event delivery notification for weft.workflows.events."
+      },
+      "weft_workflows_events_sse_errorEvent": {
+        "bindings": {
+          "http": {
+            "event": "error"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_events_sse_errorEvent",
+        "payload": {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "data": {},
+            "message": {
+              "type": "string"
+            },
+            "remediation": {
+              "description": "One line of plain text saying what to do next; omitted when none is known",
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "retryable": {
+              "description": "Whether repeating the identical call later can succeed",
+              "type": "boolean"
+            }
+          },
+          "required": ["message", "retryable"],
+          "type": "object"
+        },
+        "summary": "SSE error event for weft.workflows.events.sse.",
+        "x-weft-sse-frame": "event: error\\ndata: <JSON Error>\\n\\n"
+      },
+      "weft_workflows_events_sse_eventEnvelopeEvent": {
+        "bindings": {
+          "http": {
+            "event": "<envelope.kind>"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_events_sse_eventEnvelopeEvent",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {
+              "type": "string"
+            },
+            "emittedAtMs": {
+              "type": "number"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "payload": {},
+            "selector": {
+              "enum": ["events", "tokens"],
+              "type": "string"
+            },
+            "sequence": {
+              "type": "number"
+            },
+            "workflowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "workflowId",
+            "selector",
+            "sequence",
+            "cursor",
+            "emittedAtMs",
+            "payload"
+          ],
+          "type": "object"
+        },
+        "summary": "SSE event envelope for weft.workflows.events.sse.",
+        "x-weft-sse-frame": "id: <cursor>\\nevent: <envelope.kind>\\ndata: <JSON event envelope>\\n\\n"
+      },
+      "weft_workflows_events_sse_pingEvent": {
+        "bindings": {
+          "http": {
+            "event": "ping"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_events_sse_pingEvent",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "emittedAtMs": {
+              "type": "number"
+            },
+            "replayComplete": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": ["emittedAtMs"],
+          "type": "object"
+        },
+        "summary": "SSE ping keepalive for weft.workflows.events.sse.",
+        "x-weft-sse-frame": "event: ping\\ndata: {\"emittedAtMs\":<timestamp>[,\"replayComplete\":true]}\\n\\n"
+      },
+      "weft_workflows_events_subscribeAck": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_subscribeAck",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "cursor"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "result"],
+          "type": "object"
+        },
+        "summary": "Subscription acknowledgement for weft.workflows.events."
+      },
+      "weft_workflows_events_subscribeRequest": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_subscribeRequest",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.workflows.subscribe",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "fromCursor": {
+                  "description": "Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.",
+                  "type": "string"
+                },
+                "selector": {
+                  "default": "events",
+                  "description": "What to deliver: \"events\" for workflow events (default) or \"tokens\" for the workflow's token stream.",
+                  "enum": ["events", "tokens"],
+                  "type": "string"
+                },
+                "workflowId": {
+                  "description": "Id of the workflow to subscribe to.",
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": ["workflowId"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Subscribe to weft.workflows.events."
+      },
+      "weft_workflows_events_terminated": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_terminated",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.events.terminated",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "fault": {
+                  "type": "object"
+                },
+                "reason": {
+                  "enum": ["client-unsubscribed", "server-closed", "validation-failed"],
+                  "type": "string"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId", "reason"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Subscription termination notification for weft.workflows.events."
+      },
+      "weft_workflows_events_unsubscribeRequest": {
+        "contentType": "application/json",
+        "name": "weft_workflows_events_unsubscribeRequest",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "jsonrpc": {
+              "const": "2.0",
+              "type": "string"
+            },
+            "method": {
+              "const": "weft.workflows.unsubscribe",
+              "type": "string"
+            },
+            "params": {
+              "additionalProperties": false,
+              "properties": {
+                "subscriptionId": {
+                  "type": "string"
+                }
+              },
+              "required": ["subscriptionId"],
+              "type": "object"
+            }
+          },
+          "required": ["jsonrpc", "id", "method", "params"],
+          "type": "object"
+        },
+        "summary": "Unsubscribe from weft.workflows.events."
+      },
+      "weft_workflows_streams_sse_doneEvent": {
+        "bindings": {
+          "http": {
+            "event": "done"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_streams_sse_doneEvent",
+        "payload": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "summary": "SSE completion event for weft.workflows.streams.sse.",
+        "x-weft-sse-frame": "event: done\\n\\n"
+      },
+      "weft_workflows_streams_sse_errorEvent": {
+        "bindings": {
+          "http": {
+            "event": "error"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_streams_sse_errorEvent",
+        "payload": {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "data": {},
+            "message": {
+              "type": "string"
+            },
+            "remediation": {
+              "description": "One line of plain text saying what to do next; omitted when none is known",
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "retryable": {
+              "description": "Whether repeating the identical call later can succeed",
+              "type": "boolean"
+            }
+          },
+          "required": ["message", "retryable"],
+          "type": "object"
+        },
+        "summary": "SSE error event for weft.workflows.streams.sse.",
+        "x-weft-sse-frame": "event: error\\ndata: <JSON Error>\\n\\n"
+      },
+      "weft_workflows_streams_sse_tokenEvent": {
+        "bindings": {
+          "http": {
+            "event": "token"
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "weft_workflows_streams_sse_tokenEvent",
+        "payload": {
+          "type": "string"
+        },
+        "summary": "SSE token event for weft.workflows.streams.sse. The data: line carries the token text.",
+        "x-weft-event-schema": {
+          "additionalProperties": false,
+          "properties": {
+            "sequence": {
+              "type": "number"
+            },
+            "value": {}
+          },
+          "required": ["sequence", "value"],
+          "type": "object"
+        },
+        "x-weft-sse-frame": "event: token\\nid: <sequence>\\ndata: <token-text>\\n\\n"
+      }
+    },
+    "schemas": {
+      "JsonRpcError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "number"
+          },
+          "data": {},
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Weft Workflow Engine",
+    "version": "0.0.0-golden"
+  },
+  "operations": {
+    "weft_events_sse": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/weft~1events~1sse"
+      },
+      "messages": [
+        {
+          "$ref": "#/components/messages/weft_events_sse_eventEnvelopeEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_sse_pingEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_sse_errorEvent"
+        }
+      ],
+      "operationId": "weft_events_sse",
+      "summary": "Stream fleet events as Server-Sent Events",
+      "tags": [
+        {
+          "name": "Events"
+        }
+      ]
+    },
+    "weft_events_subscribe": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/weft~1events~1subscribe"
+      },
+      "messages": [
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_subscribeRequest"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_subscribeAck"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_eventDeliver"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_unsubscribeRequest"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_terminated"
+        },
+        {
+          "$ref": "#/components/messages/weft_events_subscribe_errorFrame"
+        }
+      ],
+      "operationId": "weft_events_subscribe",
+      "summary": "Subscribe to fleet-wide events with replay-from-cursor",
+      "tags": [
+        {
+          "name": "Events"
+        }
+      ]
+    },
+    "weft_workflows_events": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/weft~1workflows~1events"
+      },
+      "messages": [
+        {
+          "$ref": "#/components/messages/weft_workflows_events_subscribeRequest"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_subscribeAck"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_eventDeliver"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_unsubscribeRequest"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_terminated"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_errorFrame"
+        }
+      ],
+      "operationId": "weft_workflows_events",
+      "summary": "Subscribe to workflow events with replay-from-cursor",
+      "tags": [
+        {
+          "name": "Events"
+        }
+      ]
+    },
+    "weft_workflows_events_sse": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/weft~1workflows~1events~1sse"
+      },
+      "messages": [
+        {
+          "$ref": "#/components/messages/weft_workflows_events_sse_eventEnvelopeEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_sse_pingEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_events_sse_errorEvent"
+        }
+      ],
+      "operationId": "weft_workflows_events_sse",
+      "summary": "Stream workflow events as Server-Sent Events",
+      "tags": [
+        {
+          "name": "Events"
+        }
+      ]
+    },
+    "weft_workflows_streams_sse": {
+      "action": "receive",
+      "channel": {
+        "$ref": "#/channels/weft~1workflows~1streams~1sse"
+      },
+      "messages": [
+        {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_tokenEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_doneEvent"
+        },
+        {
+          "$ref": "#/components/messages/weft_workflows_streams_sse_errorEvent"
+        }
+      ],
+      "operationId": "weft_workflows_streams_sse",
+      "summary": "Stream workflow tokens as Server-Sent Events",
+      "tags": [
+        {
+          "name": "Streams"
+        }
+      ]
+    }
+  }
+}

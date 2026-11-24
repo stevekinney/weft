@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from './testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from './testing/inline-launch-settle.test-support.ts';
 
+import { MemoryStorage } from "./embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { workflow } from './core/types/workflow-function.ts';
-import { Engine, MemoryStorage, WorkflowCompletedEvent, WorkflowStartedEvent } from './index.ts';
-import { throwingRejectionOf } from './testing/promise-outcome.test-support.ts';
+import { Engine, WorkflowCompletedEvent, WorkflowStartedEvent } from './index.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 describe('integration: full workflow lifecycle', () => {
@@ -179,7 +180,7 @@ describe('integration: full workflow lifecycle', () => {
   });
 
   it('BunSQLiteStorage works as engine backend', async () => {
-    const { BunSQLiteStorage } = await import('./storage/bun-sql.ts');
+    const { BunSQLiteStorage } = await import("./embedded/storage-bun-sqlite/src/index.ts");
 
     using storage = new BunSQLiteStorage(':memory:');
     await using engine = new Engine({ storage });

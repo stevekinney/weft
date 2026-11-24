@@ -7,9 +7,9 @@
  * @module core/event-log-shared
  */
 
+import type { Storage } from "../embedded/storage/src/index.ts";
 import { hashBytes as portableHashBytes } from '../runtime/portable.ts';
-import type { Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import { decode } from './codec.ts';
 import type { WorkflowVersionTuple } from './workflow-version-tuple.ts';
 

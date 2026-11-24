@@ -1,10 +1,19 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
+import { waitUntil } from "../../../test-support/embedded/testing/src/wait-until.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { deserializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
+import { isParallelOperationCacheEntry } from '../context/parallel-cache-entry.ts';
+import { workflow } from '../types.ts';
 import { createDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
+import { Engine, ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   executeRunAllOperationResult,
@@ -30,6 +39,7 @@ function createSignalInternals(storage = new MemoryStorage()): EngineInternals {
     conditionWaiters: new Map<string, () => void>(),
     deliveredPendingUpdateIds: new Map<string, Set<string>>(),
     pendingAtomicWorkflowCommitSideEffects: new Map(),
+    engine: { dispatchEvent: () => true },
     storage,
   } as unknown as EngineInternals;
 }
@@ -259,6 +269,7 @@ describe('partial-failure preservation worker-mode boundary', () => {
     const operation: Extract<ContextOperationRequest, { type: 'race' }> = {
       type: 'race',
       operationId: 'race:0',
+      step: 0,
       operations: [
         { type: 'wait-signal', operationId: 'race:0:0', signalName: 'ready' },
         {
@@ -515,6 +526,7 @@ describe('partial-failure preservation worker-mode boundary', () => {
     await signalWaiters.registration.promise;
     // Let the post-registration scan finish so the old operation is parked on
     // its waiter promise before replacement races the delivered wake.
+    // load-proof: the registration promise was awaited and the scan that follows runs inside the promise chain on in-memory waiters, so a microtask drain parks the old operation
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const oldWaiter = signalWaiters.get('workflow-id:release');
     if (!oldWaiter) throw new Error('expected the old waiter');
@@ -946,5 +958,429 @@ describe('partial-failure preservation worker-mode boundary', () => {
       cached: 'cached result',
       fresh: 'fresh result',
     });
+  });
+});
+
+/** The parallel cache entry a run's committed checkpoint holds, with its slots, if it holds one. */
+async function committedParallelEntry(storage: MemoryStorage, workflowId: string) {
+  const bytes = await storage.get(KEYS.checkpoint(workflowId));
+  if (bytes === null) return undefined;
+  return deserializeCheckpoint(bytes)
+    .accumulatedResults.map(([, value]) => value)
+    .find(isParallelOperationCacheEntry);
+}
+
+/** Records the keys of every batch the engine commits, so a test can say what one batch held. */
+class RecordingStorage extends MemoryStorage {
+  readonly batches: string[][] = [];
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const committed = await super.conditionalBatch(conditions, operations);
+    if (committed) this.batches.push(operations.map((operation) => operation.key));
+    return committed;
+  }
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    await super.batch(operations);
+    this.batches.push(operations.map((operation) => operation.key));
+  }
+}
+
+type ParallelOperationRequest = Extract<ContextOperationRequest, { type: 'parallel' }>;
+
+/**
+ * A `ctx.all` operation of `count` branches the test settles by hand, in the order it chooses, run
+ * through `processParallelOperation` with a persist callback that records what it was asked to
+ * commit and what the cache held at that moment.
+ */
+function slotCommitHarness(
+  count: number,
+  options: { settle?: 'settled'; persist?: boolean; token?: string } = {},
+) {
+  const workflowId = 'wf-slot-commit';
+  const operation: ParallelOperationRequest = {
+    type: 'parallel',
+    ...(options.settle === undefined ? {} : { settle: options.settle }),
+    operationId: 'parallel:0',
+    step: 3,
+    operations: Array.from({ length: count }, (_, index) => ({
+      type: 'wait-signal' as const,
+      operationId: `parallel:0:${String(index)}`,
+      signalName: `branch-${String(index)}`,
+    })),
+  };
+  const accumulatedResults = new Map<number, unknown>();
+  const internals = {
+    inlineStrategy: { getContext: () => ({ accumulatedResults }) },
+    durableInlineOperations: new Map([
+      [
+        workflowId,
+        { operationId: 'parallel:0', workflowExecutionToken: options.token ?? 'token-1' },
+      ],
+    ]),
+    checkpoints: new Map(),
+    pendingTimelineEntries: new Map(),
+  } as unknown as EngineInternals;
+  const branches = operation.operations.map(() => Promise.withResolvers<unknown>());
+  const finalized: number[] = [];
+  const commits: {
+    cache: unknown;
+    finalizedBefore: number[];
+    settledBranchOperationIds: readonly string[] | undefined;
+  }[] = [];
+  let inFlight = 0;
+  let overlapped = false;
+  let persistFailure: Error | undefined;
+  let captured: unknown;
+  const done = processParallelOperation(internals, workflowId, operation, {
+    executeSubOperation: (_id, subOperation) => {
+      const index = Number(subOperation.operationId.split(':').at(-1));
+      return branches[index]!.promise;
+    },
+    runOperationWithResult: async (_id, _operation, execute) => {
+      try {
+        captured = await execute();
+      } catch (error) {
+        captured = error;
+      }
+    },
+    ...(options.persist === false
+      ? {}
+      : {
+          persistCheckpoint: async (_id, _operation, report) => {
+            inFlight += 1;
+            overlapped ||= inFlight > 1;
+            commits.push({
+              cache: structuredClone(accumulatedResults.get(3)),
+              finalizedBefore: [...finalized],
+              settledBranchOperationIds: report?.settledBranchOperationIds,
+            });
+            await Promise.resolve();
+            inFlight -= 1;
+            if (persistFailure !== undefined) throw persistFailure;
+          },
+        }),
+  });
+  return {
+    internals,
+    accumulatedResults,
+    commits,
+    finalized,
+    failPersistWith(error: Error) {
+      persistFailure = error;
+    },
+    overlapped: () => overlapped,
+    result: () => captured,
+    done,
+    /** Settle branch `index` with a deferred-consume envelope that records its finalization. */
+    fulfill(index: number, value: unknown) {
+      branches[index]!.resolve(
+        createDeferredConsumeEnvelope(async () => {
+          finalized.push(index);
+          return value;
+        }),
+      );
+    },
+    reject(index: number, error: Error) {
+      branches[index]!.reject(error);
+    },
+  };
+}
+
+describe('a ctx.all branch that settles before its siblings commits on its own (COR-2416)', () => {
+  const slotOf = (cache: unknown, index: number) =>
+    (cache as { branches: { status: string; value?: unknown }[] }).branches[index];
+
+  it('finalizes the settled branch and commits it, with its siblings still pending', async () => {
+    const harness = slotCommitHarness(2);
+    harness.fulfill(0, 'first');
+    await waitUntil(async () => harness.commits.length === 1);
+    expect(harness.finalized).toEqual([0]);
+    expect(harness.commits[0]!.settledBranchOperationIds).toEqual(['parallel:0:0']);
+    expect(slotOf(harness.commits[0]!.cache, 0)).toMatchObject({
+      status: 'fulfilled',
+      value: 'first',
+    });
+    expect(slotOf(harness.commits[0]!.cache, 1)?.status).toBe('pending');
+    harness.fulfill(1, 'second');
+    await harness.done;
+    expect(harness.result()).toEqual(['first', 'second']);
+    // The last branch to settle belongs to the operation's own result: it commits no slot.
+    expect(harness.commits).toHaveLength(1);
+  });
+
+  const countRows: readonly [string, number, number][] = [
+    ['one branch has no sibling to wait for', 1, 0],
+    ['two branches: the first to settle commits', 2, 1],
+    ['three branches: every settle but the last commits', 3, 2],
+  ];
+  for (const [name, count, commits] of countRows) {
+    it(`commits ${String(commits)} slot(s): ${name}`, async () => {
+      const harness = slotCommitHarness(count);
+      for (let index = 0; index < count; index++) {
+        harness.fulfill(index, `value-${String(index)}`);
+        // Each branch settles after the commit of the one before it has finished.
+        await waitUntil(async () => harness.commits.length >= Math.min(index + 1, commits));
+      }
+      await harness.done;
+      expect(harness.commits).toHaveLength(commits);
+      expect(harness.result()).toEqual(
+        Array.from({ length: count }, (_, index) => `value-${String(index)}`),
+      );
+    });
+  }
+
+  it('never overlaps two commits when branches settle together', async () => {
+    const harness = slotCommitHarness(4);
+    for (const index of [0, 1, 2]) harness.fulfill(index, index);
+    harness.fulfill(3, 3);
+    await harness.done;
+    expect(harness.overlapped()).toBe(false);
+    expect(harness.result()).toEqual([0, 1, 2, 3]);
+  });
+
+  it('keeps a branch whose own commit is still queued out of the entry it commits', async () => {
+    const harness = slotCommitHarness(3);
+    harness.fulfill(0, 'a');
+    harness.fulfill(1, 'b');
+    await waitUntil(async () => harness.commits.length === 2);
+    harness.fulfill(2, 'c');
+    await harness.done;
+    for (const commit of harness.commits) {
+      const fulfilled = (commit.cache as { branches: { status: string }[] }).branches.flatMap(
+        (slot, index) => (slot.status === 'fulfilled' ? [index] : []),
+      );
+      // Every value in a committed entry has been finalized, so an envelope never reaches storage.
+      for (const index of fulfilled) expect(commit.finalizedBefore).toContain(index);
+    }
+  });
+
+  it('writes the all-settled variant for a settled operation', async () => {
+    const harness = slotCommitHarness(2, { settle: 'settled' });
+    harness.fulfill(0, 'first');
+    await waitUntil(async () => harness.commits.length === 1);
+    expect((harness.commits[0]!.cache as { variant: string }).variant).toBe('all-settled');
+    harness.fulfill(1, 'second');
+    await harness.done;
+    expect((harness.accumulatedResults.get(3) as { variant: string }).variant).toBe('all-settled');
+  });
+
+  const noCommitRows: readonly [string, Parameters<typeof slotCommitHarness>[1]][] = [
+    ['no persist callback is provided', { persist: false }],
+  ];
+  for (const [name, options] of noCommitRows) {
+    it(`commits nothing when ${name}`, async () => {
+      const harness = slotCommitHarness(2, options);
+      harness.fulfill(0, 'first');
+      harness.fulfill(1, 'second');
+      await harness.done;
+      expect(harness.commits).toHaveLength(0);
+      expect(harness.result()).toEqual(['first', 'second']);
+    });
+  }
+
+  it('commits nothing for a branch that settles after its workflow moved to another run', async () => {
+    const harness = slotCommitHarness(2);
+    harness.internals.durableInlineOperations.set('wf-slot-commit', {
+      operationId: 'parallel:0',
+      workflowExecutionToken: 'token-2',
+    } as never);
+    harness.fulfill(0, 'first');
+    harness.fulfill(1, 'second');
+    await harness.done;
+    expect(harness.commits).toHaveLength(0);
+  });
+
+  it('fails the operation with a slot commit failure and commits no later slot', async () => {
+    const harness = slotCommitHarness(3);
+    harness.failPersistWith(new Error('checkpoint write refused'));
+    harness.fulfill(0, 'a');
+    await waitUntil(async () => harness.commits.length === 1);
+    harness.fulfill(1, 'b');
+    harness.fulfill(2, 'c');
+    await harness.done;
+    expect(harness.commits).toHaveLength(1);
+    expect(harness.result()).toBeInstanceOf(Error);
+    expect((harness.result() as Error).message).toBe('checkpoint write refused');
+  });
+
+  it('still writes a rejected sibling and rethrows its reason after the slot commits', async () => {
+    const harness = slotCommitHarness(3);
+    harness.fulfill(0, 'a');
+    await waitUntil(async () => harness.commits.length === 1);
+    harness.reject(1, new Error('branch failed'));
+    harness.fulfill(2, 'c');
+    await harness.done;
+    expect((harness.result() as Error).message).toBe('branch failed');
+    const entry = harness.accumulatedResults.get(3) as { branches: { status: string }[] };
+    expect(entry.branches.map((slot) => slot.status)).toEqual([
+      'fulfilled',
+      'rejected',
+      'fulfilled',
+    ]);
+  });
+});
+
+describe('a settled ctx.all branch is committed durably (COR-2416)', () => {
+  const rows = [
+    { coordinator: 'all', expected: ['A', 'yes'] },
+    {
+      coordinator: 'allSettled',
+      expected: [
+        { status: 'fulfilled', value: 'A' },
+        { status: 'fulfilled', value: 'yes' },
+      ],
+    },
+  ] as const;
+
+  for (const row of rows) {
+    it(`runs a finished ${row.coordinator} branch activity once across three restarts while a sibling wait is open`, async () => {
+      let executions = 0;
+      const finishing = async () => {
+        executions += 1;
+        return 'A';
+      };
+      const name = `${row.coordinator}-slot-commit`;
+      const id = `${name}-run`;
+      const define = () =>
+        workflow({ name }).execute(async function* (ctx) {
+          const branches = [ctx.run(finishing), ctx.waitForSignal<string>('go')];
+          return yield* row.coordinator === 'all' ? ctx.all(branches) : ctx.allSettled(branches);
+        });
+      const storage = new MemoryStorage();
+      {
+        await using original = new Engine({ storage });
+        original.register(define());
+        await original.start(name, null, { id });
+        await original[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+        await waitUntil(async () => (await committedParallelEntry(storage, id)) !== undefined, {
+          message: 'the finished branch to be committed',
+        });
+      }
+      for (const restart of [1, 2, 3]) {
+        await using restarted = new Engine({ storage });
+        restarted.register(define());
+        await restarted.recoverAll();
+        await restarted[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+        expect({ restart, executions }).toEqual({ restart, executions: 1 });
+      }
+      await using last = new Engine({ storage });
+      last.register(define());
+      const [handle] = await last.recoverAll();
+      await last[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+      await last.signal(id, 'go', 'yes');
+      expect(await handle!.result()).toEqual(row.expected as unknown as never);
+      expect(executions).toBe(1);
+    });
+  }
+
+  it('resumes without a restart with the same result, the activity run once (matrix row E2)', async () => {
+    let executions = 0;
+    const name = 'all-slot-commit-resume';
+    const id = `${name}-run`;
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name }).execute(async function* (ctx) {
+        return yield* ctx.all([
+          ctx.run(async () => {
+            executions += 1;
+            return 'A';
+          }),
+          ctx.waitForSignal<string>('go'),
+        ]);
+      }),
+    );
+    const handle = await engine.start(name, null, { id });
+    await engine[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+    await handle.signal('go', 'yes');
+    expect(await handle.result()).toEqual(['A', 'yes']);
+    expect(executions).toBe(1);
+  });
+
+  it('commits a nested ctx.all as one branch of the outer one (matrix row E11)', async () => {
+    // A nested coordinator is a single operation of its outer branch: durability is the outer
+    // `ctx.all`'s, so the nested activities run again only if the nested branch did not settle.
+    const executions = { inner: 0 };
+    const name = 'all-nested-slot-commit';
+    const id = `${name}-run`;
+    const define = () =>
+      workflow({ name }).execute(async function* (ctx) {
+        const inner = ctx.all([
+          ctx.run(async () => {
+            executions.inner += 1;
+            return 'x';
+          }),
+          ctx.run(async () => {
+            executions.inner += 1;
+            return 'y';
+          }),
+        ]);
+        return yield* ctx.all([inner, ctx.waitForSignal<string>('go')]);
+      });
+    const storage = new MemoryStorage();
+    {
+      await using original = new Engine({ storage });
+      original.register(define());
+      await original.start(name, null, { id });
+      await original[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+      await waitUntil(async () => (await committedParallelEntry(storage, id)) !== undefined, {
+        message: 'the nested branch to be committed',
+      });
+    }
+    await using restarted = new Engine({ storage });
+    restarted.register(define());
+    const [handle] = await restarted.recoverAll();
+    await restarted[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+    await restarted.signal(id, 'go', 'yes');
+    expect(await handle!.result()).toEqual([['x', 'y'], 'yes']);
+    expect(executions.inner).toBe(2);
+  });
+
+  it('commits a fulfilled wait slot together with its signal consume, and takes the signal once across a restart', async () => {
+    // AC7: the consume of a fulfilled wait slot is staged into the same batch that checkpoints the
+    // slot, so no commit holds the slot without the delete, or the delete without the slot.
+    const storage = new RecordingStorage();
+    let releaseSlow: (value: string) => void = () => undefined;
+    let slowRuns = 0;
+    const slow = () => {
+      slowRuns += 1;
+      return new Promise<string>((resolve) => {
+        releaseSlow = resolve;
+      });
+    };
+    const name = 'all-wait-slot-commit';
+    const id = `${name}-run`;
+    const define = () =>
+      workflow({ name }).execute(async function* (ctx) {
+        return yield* ctx.all([ctx.waitForSignal<string>('go'), ctx.run(slow)]);
+      });
+    {
+      await using original = new Engine({ storage });
+      original.register(define());
+      const handle = await original.start(name, null, { id });
+      await original[ENGINE_WAIT_FOR_SIGNAL_WAITER_FOR_TESTING](id);
+      await handle.signal('go', 'yes');
+      await waitUntil(async () => (await committedParallelEntry(storage, id)) !== undefined, {
+        message: 'the fulfilled wait slot to be committed',
+      });
+    }
+    const signalRecordKeys = (batch: string[]) => batch.filter((key) => key.startsWith('sig:'));
+    const slotBatches = storage.batches.filter(
+      (batch) => batch.includes(KEYS.checkpoint(id)) && signalRecordKeys(batch).length > 0,
+    );
+    expect(slotBatches).toHaveLength(1);
+    const remaining: string[] = [];
+    for await (const [key] of storage.scan('sig:')) remaining.push(key);
+    expect(remaining).toEqual([]);
+
+    await using restarted = new Engine({ storage });
+    restarted.register(define());
+    const [handle] = await restarted.recoverAll();
+    await waitUntil(async () => slowRuns === 2, { message: 'the unfinished branch to run again' });
+    releaseSlow('done');
+    expect(await handle!.result()).toEqual(['yes', 'done']);
   });
 });

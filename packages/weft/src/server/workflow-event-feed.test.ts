@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 /**
  * Tests for `WorkflowEventFeed` — the transport-neutral event-replay
  * plus live-tail abstraction that REST SSE, WebSocket watch/stream,
@@ -25,14 +25,12 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { decodeCursor, encodeCursor } from "../embedded/backchannel/src/index.ts";
+import { ReplayWindowExceededError, compareCursor } from "../embedded/backchannel/src/internals.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
-import { ReplayWindowExceededError } from './replay-live-feed-internals.ts';
 import {
-  compareCursor,
   createWorkflowEventFeed,
-  decodeCursor,
-  encodeCursor,
   type EventEnvelope,
   type WorkflowEventFeedBackend,
 } from './workflow-event-feed.ts';

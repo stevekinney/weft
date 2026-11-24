@@ -1,21 +1,21 @@
-import { describe, expect, it, mock, spyOn } from 'bun:test';
 import {
   createDeferred,
   flushMicrotasks,
   waitForCondition,
-  yieldToEventLoop,
-} from '../testing/fake-timers.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { describe, expect, it, mock, spyOn } from 'bun:test';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import { Engine } from './engine.ts';
-import {
-  handleScheduledWorkflowTerminalForEngine,
-  settleBackfillScheduleStateForEngine,
-} from './engine/callback-creators-schedule.ts';
+import { handleScheduledWorkflowTerminalForEngine } from './engine/callback-creators-schedule.ts';
 import {
   computeScheduleJitterOffset,
   resolveEffectiveScheduleFireAt,
@@ -159,14 +159,26 @@ class FailingScheduleBatchStorage extends MemoryStorage {
     this.#nextFailingKey = key;
   }
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  #failIfTargeted(operations: BatchOperation[]): void {
     const failingKey = this.#nextFailingKey;
     if (failingKey !== null && operations.some((operation) => operation.key === failingKey)) {
       this.#nextFailingKey = null;
       throw new Error(`simulated schedule batch failure for ${failingKey}`);
     }
+  }
 
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.#failIfTargeted(operations);
     return super.batch(operations);
+  }
+
+  // A schedule write is conditioned on the bytes it read (COR-1594), so it commits here.
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.#failIfTargeted(operations);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -181,7 +193,7 @@ class ControlledScheduleBatchStorage extends MemoryStorage {
     this.#failure = failure ?? null;
   }
 
-  override async batch(operations: BatchOperation[]): Promise<void> {
+  async #blockIfTargeted(operations: BatchOperation[]): Promise<void> {
     const blockedKey = this.#blockedKey;
     if (blockedKey !== null && operations.some((operation) => operation.key === blockedKey)) {
       this.#blockedKey = null;
@@ -189,14 +201,25 @@ class ControlledScheduleBatchStorage extends MemoryStorage {
       await this.releaseBatch.promise;
       if (this.#failure !== null) throw this.#failure;
     }
+  }
 
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    await this.#blockIfTargeted(operations);
     return super.batch(operations);
+  }
+
+  // A schedule write is conditioned on the bytes it read (COR-1594), so it commits here.
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    await this.#blockIfTargeted(operations);
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
 async function drainEngine(): Promise<void> {
-  await yieldToEventLoop();
-  await yieldToEventLoop();
+  await settleInlineLaunches();
 }
 
 function registerWorkflow<TInput, TOutput>(
@@ -309,9 +332,11 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     status: 'active',
     overlap: 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     queuedRuns: [],
     updatedAt: 1,
     workflowType: 'workflow',
@@ -335,6 +360,14 @@ describe('schedule validation helpers', () => {
       backfill: false,
       jitterMs: 1_000,
     });
+
+    expect(
+      normalizeScheduleUpdateOptions({ workflowType: 'other', input: { text: 'hi' } }),
+    ).toEqual({ workflowType: 'other', input: { text: 'hi' } });
+    expect(normalizeScheduleUpdateOptions({ input: null })).toEqual({ input: null });
+    expect(() => normalizeScheduleUpdateOptions({ workflowType: ' ' })).toThrow(
+      'options.workflowType must be a non-empty string when provided',
+    );
 
     expect(() => normalizeScheduleUpdateOptions(null as never)).toThrow(
       'options must be an object when provided',
@@ -597,17 +630,6 @@ describe('recurring schedules', () => {
     expect(() => parseCronExpression('5-1 * * * *')).toThrow('Invalid cron range "5-1"');
     expect(() => parseCronExpression('*/0 * * * *')).toThrow('Invalid cron step "*/0"');
     expect(() => parseCronExpression(', * * * *')).toThrow('Invalid cron field ","');
-  });
-
-  it('returns the same backfill state when no current workflow is active', async () => {
-    const engine = createEngine({ now: 1 });
-    const state = createScheduleState();
-
-    try {
-      expect(await settleBackfillScheduleStateForEngine(engine, state)).toEqual(state);
-    } finally {
-      await engine[Symbol.asyncDispose]();
-    }
   });
 
   it('rejects resuming a cancelled schedule', async () => {
@@ -1485,7 +1507,7 @@ describe('recurring schedules', () => {
     engine[Symbol.dispose]();
   });
 
-  it('keeps the fired schedule timer retryable when the rearm batch fails.', async () => {
+  it('pauses the schedule and leaves no run when the batch that starts the run and rearms the timer fails.', async () => {
     const storage = new FailingScheduleBatchStorage();
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const engine = createEngine(clock, storage);
@@ -1514,21 +1536,20 @@ describe('recurring schedules', () => {
     try {
       await tickEngine(engine, clock, originalFireAt);
 
+      // The run and the rearm are one batch (COR-1925), so a fault in it starts no run and
+      // records nothing, and pauses the schedule as any failed start does.
       const storedScheduleBytes = await storage.get(KEYS.schedule('rearm-atomicity-schedule'));
       expect(storedScheduleBytes).not.toBeNull();
       expect(decode(storedScheduleBytes!)).toMatchObject({
         id: 'rearm-atomicity-schedule',
-        status: 'active',
-        nextFireAt: originalFireAt,
+        status: 'paused',
       });
       expect(decode(storedScheduleBytes!)).not.toHaveProperty('lastFireAt');
       expect(
-        await storage.get(KEYS.scheduleTick(originalFireAt, 'rearm-atomicity-schedule')),
-      ).not.toBeNull();
-      expect(
         await storage.get(KEYS.scheduleTick(nextFireAt, 'rearm-atomicity-schedule')),
       ).toBeNull();
-      expect(await storage.get('timer-idx:schedule:rearm-atomicity-schedule')).not.toBeNull();
+      const runs = await engine.list({});
+      expect(runs.items).toEqual([]);
     } finally {
       errorSpy.mockRestore();
       engine[Symbol.dispose]();
@@ -1593,7 +1614,7 @@ describe('recurring schedules', () => {
     engine[Symbol.dispose]();
   });
 
-  it('rejects a concurrent update and preserves the fired timer when callback rearm fails.', async () => {
+  it('applies a concurrent update after a failed start-and-rearm batch paused the schedule.', async () => {
     const storage = new ControlledScheduleBatchStorage();
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const engine = createEngine(clock, storage);
@@ -1634,17 +1655,17 @@ describe('recurring schedules', () => {
       expect(updateSettled).toBe(false);
       storage.releaseBatch.resolve();
       await tickPromise;
-      expect(await throwingRejectionOf(updatePromise)).toThrow(
-        'Failed to persist schedule "serialized-update-failure" while processing its timer',
-      );
+      await updatePromise;
 
+      // The tick's failure paused the schedule and started no run; the update was serialized
+      // behind it and applied to the schedule as it was left.
       expect(await schedule.describe()).toMatchObject({
-        cronExpression: '*/15 * * * * *',
-        nextFireAt: originalFireAt,
+        cronExpression: '*/45 * * * * *',
+        status: 'paused',
       });
-      expect(
-        await storage.get(KEYS.scheduleTick(originalFireAt, 'serialized-update-failure')),
-      ).not.toBeNull();
+      expect(await schedule.describe()).not.toHaveProperty('lastFireAt');
+      const runs = await engine.list({});
+      expect(runs.items).toEqual([]);
     } finally {
       storage.releaseBatch.resolve();
       errorSpy.mockRestore();
@@ -2525,7 +2546,8 @@ describe('recurring schedules', () => {
     });
     const description = await schedule.describe();
 
-    await tickEngine(engine, clock, Date.UTC(2026, 0, 1, 0, 1, 2));
+    // Three seconds late: past one poll interval plus the one-second drift margin (COR-1616).
+    await tickEngine(engine, clock, Date.UTC(2026, 0, 1, 0, 1, 3));
 
     expect(executions).toEqual([]);
 
@@ -2625,7 +2647,6 @@ describe('recurring schedules', () => {
       const tickPromise = engine.scheduler.tick(clock.now);
       void tickPromise.catch(() => {});
       await waitForCondition(() => postMessageCount >= 1, {
-        timeoutMs: 100,
         label: 'initial queued inline workflow start',
       });
       await flushMicrotasks();
@@ -3209,13 +3230,14 @@ describe('recurring schedules', () => {
     expect(nextFireAt).toBe(Date.parse('2026-03-09T06:30:00.000Z'));
   });
 
-  it('Tests cover: cron edge cases (DST transitions) by emitting both repeated fall-back wall-clock times.', () => {
+  it('Tests cover: cron edge cases (DST transitions) by firing a repeated fall-back wall-clock time once.', () => {
     const nextFireAt = getNextCronOccurrence(
       '0 30 1 * * *',
       Date.parse('2026-11-01T05:30:00.000Z'),
       { timeZone: 'America/New_York' },
     );
 
-    expect(nextFireAt).toBe(Date.parse('2026-11-01T06:30:00.000Z'));
+    // 05:30Z is the first 01:30 (EDT); the second (06:30Z, EST) is the same wall-clock time again.
+    expect(nextFireAt).toBe(Date.parse('2026-11-02T06:30:00.000Z'));
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS, type BatchOperation } from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
+import { MemoryStorage, type BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import {
   beginExecutionAttempt,
   captureExecutionAttemptIdentity,
@@ -10,6 +10,7 @@ import {
 import type { EngineInternals } from '../internals.ts';
 import {
   bytesEqual,
+  cancelRunTimers,
   captureOrReadTerminalFence,
   commitFencedTeardownBatch,
   deleteKeysInGuardedChunks,
@@ -166,5 +167,43 @@ describe('deleteKeysInGuardedChunks', () => {
       }),
     ).toBe(true);
     expect(calls).toBe(0);
+  });
+});
+
+describe('cancelRunTimers', () => {
+  const cancelCalls = (storage: MemoryStorage): Array<{ timerId: string; conditions: unknown }> => {
+    const calls: Array<{ timerId: string; conditions: unknown }> = [];
+    const internals = {
+      storage,
+      scheduler: {
+        cancel: async (timerId: string, _workflowId: string, conditions: unknown) => {
+          calls.push({ timerId, conditions });
+        },
+      },
+    } as unknown as EngineInternals;
+    cancelRunTimers(
+      internals,
+      'w',
+      fence,
+      () => false,
+      ['t1'],
+      async () => {},
+    );
+    return calls;
+  };
+
+  it('fences the cancel on the run generation when the storage can condition a write', () => {
+    expect(cancelCalls(new MemoryStorage())).toEqual([
+      {
+        timerId: 't1',
+        conditions: [expect.objectContaining({ key: KEYS.workflowGeneration('w') })],
+      },
+    ]);
+  });
+
+  it('cancels without a condition when the storage cannot condition a write', () => {
+    expect(cancelCalls(storageWithoutConditionalBatch())).toEqual([
+      { timerId: 't1', conditions: undefined },
+    ]);
   });
 });

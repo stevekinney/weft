@@ -1,10 +1,13 @@
+import type { Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import type { AlertingOptions } from '../../alerting/types.ts';
-import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { WorkerStartOverridePreview } from '../../worker/start-override-preview.ts';
 import type { CompressionOptions } from '../compression.ts';
 import type { Interceptor } from '../interceptor.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
+import type { WorkflowLogStore } from '../workflow-log-store.ts';
 import type { ArchiveAdapter } from './archive-adapter.ts';
+import type { EngineRunConcurrencyOptions } from './engine-run-concurrency-options.ts';
+import type { EngineSchemaPolicyOptions } from './engine-schema-policy-options.ts';
 import type { HistoryPolicy } from './history-policy.ts';
 import type { PayloadSizePolicy } from './payload-size-policy.ts';
 import type { Duration, RetentionPolicy, RetryPolicy } from './retry-retention.ts';
@@ -16,11 +19,9 @@ import type {
 } from './services-resolution.ts';
 import type { WorkflowLogRecord } from './workflow-log.ts';
 import type { WorkflowVisibilityIndexOptions } from './workflow-visibility-index-options.ts';
-
 // ---------------------------------------------------------------------------
 // Start options for engine.start()
 // ---------------------------------------------------------------------------
-
 /**
  * Options accepted by `engine.start(type, input, options?)`.
  *
@@ -247,7 +248,8 @@ export interface ForkOptions {
  * const engine = new Engine({ development: true });
  * ```
  */
-export interface EngineOptions<TServices = unknown> extends WorkflowVisibilityIndexOptions {
+export interface EngineOptions<TServices = unknown>
+  extends WorkflowVisibilityIndexOptions, EngineSchemaPolicyOptions, EngineRunConcurrencyOptions {
   storage?: WeftStorage;
   development?: boolean;
   workerStartOverrideSigningSecret?: string;
@@ -410,6 +412,8 @@ export interface EngineOptions<TServices = unknown> extends WorkflowVisibilityIn
    * poller without waiting a full real poll cycle.
    */
   schedulerPollIntervalMs?: number;
+  /** Storage-size report interval in ms, at most 2147483647; defaults to 60s, `0` disables. */
+  storageSizeReportIntervalMs?: number;
   /** Enable BroadcastChannel for cross-worker event coordination. Default: false. */
   broadcastEvents?: boolean;
   /**
@@ -522,17 +526,16 @@ export interface EngineOptions<TServices = unknown> extends WorkflowVisibilityIn
   ) => WorkflowServicesResolution<TServices> | Promise<WorkflowServicesResolution<TServices>>;
   /**
    * Optional host sink for `ctx.log` records. When provided, every non-replayed
-   * record from inline and worker workflow execution is routed here (into your
-   * pino / winston / OpenTelemetry stack, etc.) **instead of** the console; when
-   * omitted, records fall back to the matching process console.
+   * record from inline and worker workflow execution is routed here (pino, winston,
+   * OpenTelemetry, a `createWorkflowLogStore` store's `sink`) **instead of** the
+   * console; when omitted, records go to the matching process console.
    *
-   * Engine-scoped infrastructure: set once at construction, never per run. The sink
-   * is not invoked for records suppressed during replay, so a recovered run does
-   * not re-emit its replayed prefix. Weft does not persist these records or expose
-   * a log-history API; the sink is the integration point for retention and remote
-   * log queries.
+   * Engine-scoped: set once at construction. Records suppressed during replay never
+   * reach it, so a recovered run does not re-emit its replayed prefix.
    */
   onLog?: (record: WorkflowLogRecord) => void;
+  /** The `createWorkflowLogStore` store `Engine.getLogs` reads; the host wires its `sink` as `onLog`. */
+  workflowLogs?: WorkflowLogStore;
 }
 
 /**

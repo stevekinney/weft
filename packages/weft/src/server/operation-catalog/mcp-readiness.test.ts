@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 
 /**
@@ -113,9 +113,9 @@ describe('mcpExposable ratchet', () => {
       expect(isInputSchemaNonTrivial(operation.inputSchema)).toBe(false);
     });
 
-    it('rejects an mcpExposable: true operation without workflow tool metadata', () => {
+    it('accepts an mcpExposable: true operation without workflow tool metadata, as a dispatched tool', () => {
       const operation = defineOperation({
-        name: 'weft.test.mcpexposablemissingmetadata',
+        name: 'weft.test.mcpexposabledispatched',
         summary: 'fixture',
         mcpExposable: true,
         destructive: false,
@@ -127,7 +127,25 @@ describe('mcpExposable ratchet', () => {
         invoke: async () => ({}),
       });
 
-      expect(() => createOperationRegistry([operation])).toThrow(/mcpTool\.workflowType/);
+      expect(() => createOperationRegistry([operation])).not.toThrow();
+    });
+
+    it('rejects workflow tool metadata on an operation that is not mcpExposable', () => {
+      const operation = defineOperation({
+        name: 'weft.test.mcpmetadatawithoutexposure',
+        summary: 'fixture',
+        mcpExposable: false,
+        mcpTool: { workflowType: 'fixture' },
+        destructive: false,
+        inputSchema: z.object({ field: z.string() }),
+        outputSchema: z.object({}),
+        access: { kind: 'public' },
+        transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+        unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+        invoke: async () => ({}),
+      });
+
+      expect(() => createOperationRegistry([operation])).toThrow(/not mcpExposable/);
     });
   });
 });

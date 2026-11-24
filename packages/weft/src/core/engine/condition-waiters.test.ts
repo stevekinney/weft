@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { drainMicrotasks } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { notifyConditionWaiters, notifyConditionWaitersForTimerFire } from './condition-waiters.ts';
 import { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
@@ -67,8 +67,7 @@ describe('notifyConditionWaiters', () => {
     notifyConditionWaiters(internals, 'wf-match');
     expect(resolved).toBe(false); // not yet — the check is still in flight
 
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await drainMicrotasks();
     expect(resolved).toBe(true);
   });
 
@@ -85,8 +84,7 @@ describe('notifyConditionWaiters', () => {
     });
 
     notifyConditionWaiters(internals, 'wf-stale');
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await drainMicrotasks();
     expect(resolved).toBe(false);
   });
 
@@ -108,8 +106,7 @@ describe('notifyConditionWaiters', () => {
       freshCalled = true;
     });
 
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await drainMicrotasks();
 
     expect(staleCalled).toBe(false);
     expect(freshCalled).toBe(true);

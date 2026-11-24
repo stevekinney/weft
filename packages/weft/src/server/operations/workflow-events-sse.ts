@@ -1,35 +1,37 @@
 import { z } from 'zod';
 
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { isAuthenticated } from '../principal.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import type { WorkflowStreamConnectionLease } from '../runtime/websocket-stream.ts';
-import {
-  decodeCursor,
-  type Cursor,
-  type EventEnvelope,
-  type EventSelector,
-  type ReplayLiveSubscribeOptions,
-  type WorkflowEventFeed,
-} from '../workflow-event-feed.ts';
 import {
   createReplayAwareClosableIterable,
-  isClosableAsyncIterable,
-  isReplayAwareClosableIterable,
-  workflowEventEnvelopeSchema,
-  workflowEventParameterizedAccess,
+  decodeCursor,
+  defineOperation,
+  type AuthorizationScope,
+  type Cursor,
+  type OperationFault,
   type ReplayAwareClosableIterable,
-} from './event-stream-contracts.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+  type ReplayLiveSubscribeOptions,
+} from "../../embedded/backchannel/src/index.ts";
 import {
   createEventEnvelopeSSEStream,
+  invalidParamsFault,
+  isAuthenticated,
+  isClosableAsyncIterable,
+  isReplayAwareClosableIterable,
   readServerSentEventsCursor,
   requireServerSentEventsAccept,
   shapeServerSentEventsFault,
   SSE_RESPONSE_HEADERS,
-} from './sse-stream.ts';
+  type ConnectionLease,
+  type EventSelector,
+  type UnknownRestBinding,
+} from "../../embedded/backchannel/src/internals.ts";
+import type { WorkflowStreamConnectionLease } from '../runtime/websocket-stream.ts';
+import { weftFaultPolicy } from '../weft-fault-policy.ts';
+import { type EventEnvelope, type WorkflowEventFeed } from '../workflow-event-feed.ts';
+import {
+  workflowEventEnvelopeSchema,
+  workflowEventParameterizedAccess,
+} from './event-stream-contracts.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 
 export type WorkflowStreamConnectionAcquirer = (
   workflowId: string,
@@ -38,6 +40,7 @@ export type WorkflowStreamConnectionAcquirer = (
 export type EventStreamOperationContext = {
   readonly workflowEventFeed?: WorkflowEventFeed;
   readonly acquireWorkflowStreamConnection?: WorkflowStreamConnectionAcquirer;
+  readonly acquireWorkflowEventSubscriber?: () => ConnectionLease;
 };
 
 type WorkflowEventsSseOutput = AsyncIterable<EventEnvelope>;
@@ -52,10 +55,23 @@ const cursorSchema = z.string().refine((cursor) => decodeCursor(cursor) !== null
 });
 
 const workflowEventsSseInputSchema = z.object({
-  workflowId: z.string().min(1),
-  selector: z.enum(['events', 'tokens']).default('events'),
-  fromCursor: cursorSchema.optional(),
-  lastEventId: cursorSchema.optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow whose events are streamed.'),
+  selector: z
+    .enum(['events', 'tokens'])
+    .default('events')
+    .describe(
+      'What to stream: "events" for workflow events (default) or "tokens" for the workflow\'s token stream.',
+    ),
+  fromCursor: cursorSchema
+    .optional()
+    .describe(
+      'Resume after this cursor, as returned with an earlier event. Omit it to start from the beginning.',
+    ),
+  lastEventId: cursorSchema
+    .optional()
+    .describe(
+      'Cursor of the last event the client received, as sent in the Last-Event-ID header on an SSE reconnect. It takes precedence over fromCursor when both are given.',
+    ),
 });
 
 type WorkflowEventsSseInput = z.infer<typeof workflowEventsSseInputSchema>;
@@ -72,7 +88,7 @@ export const workflowEventsSseOperation = defineOperation({
   kind: 'stream',
   summary: 'Stream workflow events as Server-Sent Events',
   description:
-    '`selector: "events"` requires `events:read`; `selector: "tokens"` requires `streams:read`. The stream replays from `fromCursor` or `Last-Event-ID`, then remains open for live events and `ping` keepalives.',
+    '`selector: "events"` requires `events:read` and streams the lifecycle events the `/watch` WebSocket delivers, with the same order and cursors under `serve()`; `selector: "tokens"` requires `streams:read`. The stream replays from `fromCursor` or `Last-Event-ID`, then remains open for live events and `ping` keepalives.',
   destructive: false,
   tags: ['Events'],
   inputSchema: workflowEventsSseInputSchema,
@@ -96,7 +112,7 @@ export const workflowEventsSseOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: false, jsonRpcWebSocket: false, jsonRpcStdio: false },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
+  invoke: async ({ input, host: engine }) => {
     return createWorkflowEventsIterable(input, eventStreamOperationContext(engine));
   },
 });
@@ -145,6 +161,7 @@ function createWorkflowEventsIterable(
 
   const fromCursor = input.lastEventId ?? input.fromCursor ?? INITIAL_CURSOR;
   const controller = new AbortController();
+  const subscriberLease = context.acquireWorkflowEventSubscriber?.();
   return createReplayAwareClosableIterable(
     (onReplayComplete) => {
       const subscribeOptions: {
@@ -167,6 +184,7 @@ function createWorkflowEventsIterable(
     {
       close: () => {
         controller.abort();
+        subscriberLease?.release();
         lease?.release();
       },
     },
@@ -201,7 +219,7 @@ function shapeWorkflowEventsSseFault(fault: OperationFault): Response {
   if (fault.code === 'InvalidParams' && fault.message === MAXIMUM_WORKFLOW_STREAMS_MESSAGE) {
     return shapeRestFault(fault, { status: 429 });
   }
-  return shapeServerSentEventsFault(fault);
+  return shapeServerSentEventsFault(fault, weftFaultPolicy);
 }
 
 function readSelector(request: Request): string | undefined {

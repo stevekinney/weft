@@ -73,7 +73,8 @@ export function initializeWorkerMessageLoop(
   workflows: Readonly<Record<string, WorkflowHandler>>,
 ): void {
   const runnerContext = createWorkflowRunnerContext();
-  const getWorkflowHandler = (type: string): WorkflowHandler | undefined => workflows[type];
+  const getWorkflowHandler = (type: string): WorkflowHandler | undefined =>
+    Object.hasOwn(workflows, type) ? workflows[type] : undefined;
 
   const readyMessage: WorkerRealmReadyMessage = {
     type: 'ready',

@@ -1,27 +1,33 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { WEFT_SCOPE_VOCABULARY } from '../authorization-scopes.ts';
+import { createWeftDiscoverDocument } from './weft-documents.ts';
 
+import {
+  anonymousPrincipal,
+  defineOperation,
+  type OperationFault,
+} from "../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  dispatchJsonRpc,
+  faultToHttpResponse,
+  faultToJsonRpcError,
+  runStdioSession,
+} from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { workflow, type WorkflowContext } from '../core/types.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
-import { faultToHttpResponse } from './fault-to-http.ts';
-import { faultToJsonRpcError } from './fault-to-json-rpc.ts';
 import { serve, type WeftServer } from './index.ts';
-import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
 import {
   collectWebSocketDeliveredEnvelopes,
   openWebSocket,
   waitForMessage,
 } from './json-rpc-websocket-client.test-support.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import type { OperationFault } from './operation-fault.ts';
-import { defineOperation } from './operation-registry.ts';
-import { anonymousPrincipal } from './principal.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
-import { runStdioSession } from './stdio-session.ts';
 import { createWorkflowEventFeed, type EventEnvelope } from './workflow-event-feed.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
@@ -46,10 +52,8 @@ async function waitForEventCount(
   engine: Engine,
   workflowId: string,
   expected: number,
-  timeoutMilliseconds = 1_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+  for await (const _turn of awakeTurns()) {
     const events = await engine.getEvents(workflowId);
     if (events.length >= expected) {
       return;
@@ -112,7 +116,7 @@ describe('defineOperation builder input', () => {
       await operation.invoke({
         input: { value: 'ok' },
         principal: anonymousPrincipal(),
-        engine: {},
+        host: {},
         transport: 'http-rest',
       }),
     ).toEqual({ length: 2 });
@@ -149,6 +153,7 @@ describe('defineOperation builder input', () => {
       transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
       unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
       invoke: async () => ({
+        subscriptionId: 's',
         envelope: { subscriptionId: 's' },
         iterable: (async function* () {
           yield { value: 1 };
@@ -348,7 +353,7 @@ describe('Operation-catalog acceptance coverage', () => {
       }),
       {
         principal: anonymousPrincipal(),
-        engine: {},
+        host: {},
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -377,7 +382,7 @@ describe('Operation-catalog acceptance coverage', () => {
       }),
       {
         principal: anonymousPrincipal(),
-        engine: {},
+        host: {},
         transport: 'jsonRpcHttp',
         registry,
       },
@@ -514,11 +519,13 @@ describe('Operation-catalog acceptance coverage', () => {
 
     try {
       await runStdioSession({
+        scopeVocabulary: WEFT_SCOPE_VOCABULARY,
         input: stdioInput,
         output: stdioOutput,
         admission: { kind: 'allow-unauthenticated-local-admin' },
         registry,
         engine,
+        discoverDocument: createWeftDiscoverDocument(registry, engine),
         feed,
       });
     } finally {
@@ -677,7 +684,12 @@ describe('Operation-catalog acceptance coverage', () => {
     ] as const;
 
     for (const [fileName, criterionText] of fileExpectations) {
-      const content = await Bun.file(`${import.meta.dir}/${fileName}`).text();
+      // A test of the operation layer lives in `@lostgradient/backchannel`, beside what it tests.
+      const weftPath = `${import.meta.dir}/${fileName}`;
+      const path = (await Bun.file(weftPath).exists())
+        ? weftPath
+        : `${import.meta.dir}/../../../backchannel/src/${fileName}`;
+      const content = await Bun.file(path).text();
       expect(content).toContain(criterionText);
     }
   });

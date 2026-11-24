@@ -21,17 +21,14 @@
  * @module server/engine-event-feed-backend
  */
 
+import { encodeCursor } from "../embedded/backchannel/src/index.ts";
+import { type EventSelector } from "../embedded/backchannel/src/internals.ts";
 import type {
   RegistryAgnosticEngine,
   WorkflowFeedRecord,
   WorkflowFeedSelector,
 } from '../core/engine.ts';
-import {
-  encodeCursor,
-  type EventEnvelope,
-  type EventSelector,
-  type WorkflowEventFeedBackend,
-} from './workflow-event-feed.ts';
+import { type EventEnvelope, type WorkflowEventFeedBackend } from './workflow-event-feed.ts';
 
 /**
  * Build the production `WorkflowEventFeedBackend`. Call once per
@@ -46,7 +43,8 @@ import {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import {
  *   createEngineEventFeedBackend,
  *   createWorkflowEventFeed,

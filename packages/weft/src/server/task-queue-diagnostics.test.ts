@@ -19,10 +19,10 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { buildClaimAttemptRecordWrite } from '../core/task-ledger/task-attempt-runtime.ts';
 import { decodeTaskAttemptRecord } from '../core/task-ledger/task-attempt.ts';
 import { claimQueued, createQueued } from '../core/task-ledger/task-ledger-transitions.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { buildWorkerExecutionIdentity } from '../worker/manifest/execution-identity.ts';
 import {
   manifestForActivities,

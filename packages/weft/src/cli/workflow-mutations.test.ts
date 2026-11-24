@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import type { WorkflowContext } from '../index.ts';
 import { Engine, serve, workflow } from '../index.ts';
+import { isParkedOn, statusOf } from '../testing/run-observation.test-support.ts';
+import { NOT_FOUND_EXIT_CODE } from './server-client.ts';
 import type { WorkflowCommand } from './types.ts';
 import { executeWorkflow } from './workflow-commands.ts';
 
@@ -151,10 +154,30 @@ describe('weft workflow cancel (destructive gate)', () => {
       await server.stop();
     }
   });
+});
 
-  it('--dry-run prints the affected count without cancelling', async () => {
+describe('weft workflow cancel --dry-run', () => {
+  async function startParkedWorkflow(served: { engine: Engine; url: string }, id: string) {
+    await served.engine.start('parked', null, { id });
+    await waitForCondition(() => isParkedOn(served.engine, id, 'go'), {
+      label: `"${id}" to park on the go signal`,
+    });
+  }
+
+  function createParkedServedEngine() {
     const served = createServedEngine();
+    served.engine.register(
+      workflow({ name: 'parked' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal('go');
+      }),
+    );
+    return served;
+  }
+
+  it('asks the server and says a running workflow can be cancelled, cancelling nothing', async () => {
+    const served = createParkedServedEngine();
     try {
+      await startParkedWorkflow(served, 'wf-dry');
       const result = await executeWorkflow({
         ...base,
         action: 'cancel',
@@ -163,11 +186,81 @@ describe('weft workflow cancel (destructive gate)', () => {
         yes: false,
         dryRun: true,
       } satisfies WorkflowCommand);
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Would cancel 1 workflow');
+      expect(result).toEqual({
+        stdout: 'Would cancel workflow wf-dry (status: running)',
+        exitCode: 0,
+      });
+      expect(await statusOf(served.engine, 'wf-dry')).toBe('running');
     } finally {
       await served.stop();
     }
+  });
+
+  it('prints the server answer as JSON, and says a finished workflow cannot be cancelled', async () => {
+    const served = createServedEngine();
+    try {
+      const handle = await served.engine.start('echo', 'done', { id: 'wf-dry-json' });
+      await handle.result();
+      const json = await executeWorkflow({
+        ...base,
+        json: true,
+        action: 'cancel',
+        server: served.url,
+        workflowId: 'wf-dry-json',
+        yes: false,
+        dryRun: true,
+      } satisfies WorkflowCommand);
+      expect(json.exitCode).toBe(0);
+      expect(JSON.parse(json.stdout)).toEqual({
+        dryRun: true,
+        workflowId: 'wf-dry-json',
+        status: 'completed',
+        cancellable: false,
+      });
+
+      const text = await executeWorkflow({
+        ...base,
+        action: 'cancel',
+        server: served.url,
+        workflowId: 'wf-dry-json',
+        yes: false,
+        dryRun: true,
+      } satisfies WorkflowCommand);
+      expect(text.stdout).toBe('Cannot cancel workflow wf-dry-json: it is already completed');
+    } finally {
+      await served.stop();
+    }
+  });
+
+  it('exits with the not-found exit code for an unknown id', async () => {
+    const served = createServedEngine();
+    try {
+      const result = await executeWorkflow({
+        ...base,
+        action: 'cancel',
+        server: served.url,
+        workflowId: 'wf-missing',
+        yes: false,
+        dryRun: true,
+      } satisfies WorkflowCommand);
+      expect(result.exitCode).toBe(NOT_FOUND_EXIT_CODE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('not found');
+    } finally {
+      await served.stop();
+    }
+  });
+
+  it('reports a connection failure as a connection error, not as a missing workflow', async () => {
+    const result = await executeWorkflow({
+      ...base,
+      action: 'cancel',
+      server: 'http://127.0.0.1:1',
+      workflowId: 'wf-unreachable',
+      yes: false,
+      dryRun: true,
+    } satisfies WorkflowCommand);
+    expect(result.exitCode).toBe(2);
   });
 });
 

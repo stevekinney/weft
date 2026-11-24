@@ -8,7 +8,7 @@
  */
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { ActivityRegistry } from '../activity-registry.ts';
 import { ScheduleFiredEvent } from '../events.ts';
 import { buildWorkflowManifestFromDefinition } from '../registry-workflow-manifest.ts';
@@ -25,6 +25,7 @@ function createEngine(clock: Clock, storage = new MemoryStorage()) {
   return new Engine({ storage, getNow: () => clock.now });
 }
 
+// load-proof: in-memory scheduler tick whose follow-on work settles inside the promise chain, so a microtask drain passes every drainEngine caller
 async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }

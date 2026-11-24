@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { type Storage, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
 import { encodeEpoch } from './lease-codec.ts';
+import {
+  loadScheduleState,
+  requireScheduleState,
+  ScheduleReadConditionLostError,
+  scheduleReadConditions,
+} from './schedule-state-read.ts';
 import { encodeWorkflowStartHeaders } from './state-utilities.ts';
 import {
   buildExternalTerminalRotationFragment,
   commitExternalTerminalWorkflowStateOperations,
   commitSelfWorkflowStateOperations,
-  loadScheduleState,
   loadWorkflowResult,
   loadWorkflowStartHeaders,
-  requireScheduleState,
   writeScheduleState,
 } from './storage-io.ts';
 import { decodeEpoch } from './workflow-claim-codec.ts';
@@ -63,9 +66,11 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     intervalMs: 1_000,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     nextFireAt: 2_000,
     overlap: 'skip',
     queuedRuns: [],
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     status: 'active',
     updatedAt: 1_000,
@@ -149,10 +154,15 @@ describe('storage I/O helpers', () => {
       encodeWorkflowStartHeaders(headers),
     );
 
-    expect(await loadScheduleState({ storage } as never, scheduleState.id)).toEqual(scheduleState);
-    expect(await requireScheduleState({ storage } as never, scheduleState.id)).toEqual(
-      scheduleState,
-    );
+    const storedBytes = (await storage.get(KEYS.schedule(scheduleState.id)))!;
+    expect(await loadScheduleState({ storage } as never, scheduleState.id)).toEqual({
+      state: scheduleState,
+      bytes: storedBytes,
+    });
+    expect(await requireScheduleState({ storage } as never, scheduleState.id)).toEqual({
+      state: scheduleState,
+      bytes: storedBytes,
+    });
     expect(
       await throwingRejectionOf(requireScheduleState({ storage } as never, 'missing-schedule')),
     ).toThrow('Schedule "missing-schedule" not found');
@@ -214,6 +224,82 @@ describe('storage I/O helpers', () => {
     expect((rejection as Error).message).toBe('typed revision-unavailable error');
   });
 
+  // COR-1594: the schedule's own condition is the writer's to retry, not the caller's typed error.
+  it('reports a lost condition on the schedule key as ScheduleReadConditionLostError, ahead of the caller typed error', async () => {
+    const storage = new MemoryStorage();
+    const scheduleState = createScheduleState({ id: 'schedule-read-condition' });
+    await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));
+    const internals = createCommitInternals(storage, 'none');
+    const loaded = await loadScheduleState(internals, scheduleState.id);
+    await storage.put(
+      KEYS.schedule(scheduleState.id),
+      encode({ ...scheduleState, updatedAt: scheduleState.updatedAt + 1 }),
+    );
+
+    const rejection = await writeScheduleState(
+      internals,
+      { ...scheduleState, revision: 2 },
+      {
+        extraConditions: [
+          { key: 'catalog-entry:checkout:rev-c', expectedValue: encode('was') },
+          ...scheduleReadConditions(internals, scheduleState.id, loaded!),
+        ],
+        onExtraConditionsLost: () => new Error('typed revision-unavailable error'),
+      },
+    ).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(ScheduleReadConditionLostError);
+    const reread = await loadScheduleState(internals, scheduleState.id);
+    expect(reread?.state.revision).toBe(scheduleState.revision);
+  });
+
+  it("judges a caller condition on the schedule key as the caller's, by identity and not by key", async () => {
+    const storage = new MemoryStorage();
+    const scheduleState = createScheduleState({ id: 'schedule-caller-condition' });
+    await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));
+    const internals = createCommitInternals(storage, 'none');
+    const stale = encode({ ...scheduleState, updatedAt: scheduleState.updatedAt - 1 });
+
+    const rejection = await writeScheduleState(
+      internals,
+      { ...scheduleState, revision: 2 },
+      {
+        extraConditions: [{ key: KEYS.schedule(scheduleState.id), expectedValue: stale }],
+        onExtraConditionsLost: () => new Error('typed caller error'),
+      },
+    ).catch((error: unknown) => error);
+
+    expect(rejection).not.toBeInstanceOf(ScheduleReadConditionLostError);
+    expect((rejection as Error).message).toBe('typed caller error');
+  });
+
+  it('writes when the schedule key still holds the bytes it was read as, and resolves with the bytes it wrote', async () => {
+    const storage = new MemoryStorage();
+    const scheduleState = createScheduleState({ id: 'schedule-read-condition-held' });
+    await storage.put(KEYS.schedule(scheduleState.id), encode(scheduleState));
+    const internals = createCommitInternals(storage, 'none');
+    const loaded = await loadScheduleState(internals, scheduleState.id);
+    const next = { ...scheduleState, revision: scheduleState.revision + 1 };
+
+    const written = await writeScheduleState(internals, next, {
+      extraConditions: scheduleReadConditions(internals, scheduleState.id, loaded!),
+    });
+
+    expect(written).toEqual(encode(next));
+    expect(await storage.get(KEYS.schedule(scheduleState.id))).toEqual(written);
+  });
+
+  it('drops the schedule condition on a storage that cannot condition a write', () => {
+    const storage = new MemoryStorage();
+    storage.capabilities = () => ({
+      ...MemoryStorage.prototype.capabilities.call(storage),
+      conditionalBatch: false,
+    });
+    expect(
+      scheduleReadConditions(createCommitInternals(storage, 'none'), 'any', { bytes: encode(1) }),
+    ).toEqual([]);
+  });
+
   it('falls back to the generic lost-precondition error when no extra condition itself disagrees on re-read', async () => {
     const storage = new MemoryStorage();
     storage.conditionalBatch = async () => false;
@@ -262,6 +348,24 @@ function createCommitInternals(
 const rotationTestWorkflowState = createWorkflowState({ id: 'wf-rotation' });
 
 describe('ADR 0002 self vs. external-terminal workflow-state commits', () => {
+  it('commitSelfWorkflowStateOperations drops the atomic side-effect conditions on a storage that cannot condition a write', async () => {
+    const storage = new MemoryStorage();
+    storage.capabilities = () => ({
+      ...MemoryStorage.prototype.capabilities.call(storage),
+      conditionalBatch: false,
+    });
+    const key = KEYS.workflow(rotationTestWorkflowState.id);
+
+    await commitSelfWorkflowStateOperations(
+      createCommitInternals(storage, 'none'),
+      rotationTestWorkflowState,
+      [{ type: 'put', key, value: new Uint8Array([2]) }],
+      { extraConditions: [{ key, expectedValue: new Uint8Array([9]) }] },
+    );
+
+    expect(await storage.get(key)).toEqual(new Uint8Array([2]));
+  });
+
   it('commitSelfWorkflowStateOperations under "none"/"lease" leaves wf-owner-epoch untouched (byte-for-byte unchanged)', async () => {
     const storage = new MemoryStorage();
     await commitSelfWorkflowStateOperations(

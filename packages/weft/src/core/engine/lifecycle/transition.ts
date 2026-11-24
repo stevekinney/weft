@@ -6,15 +6,14 @@ import { releaseInFlightStart, reserveInFlightStart } from '../catalog-removal.t
 import { releaseLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { resolveExecutableRegistrationOrRenamedNotFound } from '../dynamic-source-execution.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
-import { commitFencedEngineWrite } from '../fenced-write.ts';
 import type { WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { launchWorkflowFromCheckpoint } from './checkpoint-launch.ts';
+import { commitForkWrite, releaseUnlaunchedForkClaim } from './fork-build-binding.ts';
 import {
-  applyForkWorkerBindingInheritance,
   buildForkBatchOperations,
   buildForkCatalogEntryCondition,
   buildForkCheckpoint,
@@ -30,6 +29,7 @@ import {
   assertForkSourceCheckpointMatchesState,
   assertForkSourceNotReplacedBeforeCommit,
 } from './fork-source-replacement-guards.ts';
+import { inheritForkWorkerBinding } from './fork-worker-binding.ts';
 import { derivePreparedExecutionState } from './persist.ts';
 import { isolateRecoveryFailure } from './recovery-isolation.ts';
 import {
@@ -37,7 +37,7 @@ import {
   classifyRevisionGroups,
   createRecoveryScopedRevisionCallbacks,
 } from './recovery-revision-groups.ts';
-import { resumeWorkflowFromStorage, type FreshResumeClaimTracker } from './resume.ts';
+import { resumeStoredWorkflow, type FreshResumeClaimTracker } from './resume.ts';
 import {
   enforceHistoryPolicyBeforeReplayById,
   loadWorkflowStartHeaders,
@@ -293,6 +293,8 @@ export type ResumeOptions = {
    */
   readonly deferClaimReleaseOnRejection?: boolean;
   readonly freshClaimTracker?: FreshResumeClaimTracker;
+  /** Forwarded to `ResumeFromStorageOptions.skipIfLaunchedUnderClaimEpoch`; set by a claim reclaim's replay only. */
+  readonly skipIfLaunchedUnderClaimEpoch?: number;
 };
 
 export async function resume(
@@ -321,14 +323,7 @@ export async function resume(
     }
   }
 
-  return resumeWorkflowFromStorage(internals, workflowId, true, callbacks, onRecoveredWorkflow, {
-    ...(options?.deferClaimReleaseOnRejection !== undefined && {
-      deferClaimReleaseOnRejection: options.deferClaimReleaseOnRejection,
-    }),
-    ...(options?.freshClaimTracker !== undefined && {
-      freshClaimTracker: options.freshClaimTracker,
-    }),
-  });
+  return resumeStoredWorkflow(internals, workflowId, callbacks, onRecoveredWorkflow, options);
 }
 
 export async function fork(
@@ -410,7 +405,7 @@ export async function fork(
 
     const workflowId = crypto.randomUUID();
     const forkedAt = internals.options.getNow();
-    const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
+    const lineage = createForkLineage(internals, sourceState, sourceCheckpoint, callbacks);
     const forkState = createForkedWorkflowState(
       internals,
       workflowId,
@@ -421,7 +416,7 @@ export async function fork(
       callbacks,
       persistedRevision,
     );
-    applyForkWorkerBindingInheritance(forkState, sourceState, {
+    await inheritForkWorkerBinding(internals, forkState, sourceState, {
       persistedRevision,
       forkedAt,
       checkpointId: `fork:${sourceWorkflowId}:${String(sourceCheckpoint.step)}`,
@@ -449,8 +444,8 @@ export async function fork(
     let forkStarted = false;
     try {
       const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
-      // Fence fork creation so a deposed engine cannot create a phantom run.
-      await commitFencedEngineWrite(
+      // Fenced, or under `workflow-lease` claiming the fork id in the same batch (COR-2635).
+      await commitForkWrite(
         internals,
         workflowId,
         buildForkBatchOperations(
@@ -463,6 +458,7 @@ export async function fork(
           callbacks,
         ),
         forkCatalogEntryCondition,
+        forkState,
         () =>
           buildForkCommitLostRaceError(
             workflowId,
@@ -490,6 +486,7 @@ export async function fork(
         internals.workflowVersionTuples.delete(workflowId);
         internals.eventLogHeads.delete(workflowId);
         internals.workflowHeaders.delete(workflowId);
+        await releaseUnlaunchedForkClaim(internals, workflowId);
       }
     }
   } finally {

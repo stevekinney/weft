@@ -27,7 +27,8 @@ import { serve } from '../server/index.ts';
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+ * import { Engine, serve } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import { createConformanceTargets } from '@lostgradient/weft/testing';
  *
  * const engine = new Engine({ storage: new MemoryStorage() });

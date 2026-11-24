@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { pauseScheduleOperation, pauseScheduleRestBinding } from './pause-schedule.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -70,6 +69,7 @@ describe('weft.schedules.pause', () => {
     expect(await response.json()).toEqual({
       error: 'Schedule "does-not-exist" not found',
       data: { resource: 'schedule', identifier: 'does-not-exist' },
+      retryable: false,
     });
   });
 
@@ -91,7 +91,10 @@ describe('weft.schedules.pause', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: 'No workflow registered for schedule' });
+      expect(await response.json()).toEqual({
+        error: 'No workflow registered for schedule',
+        retryable: false,
+      });
     } finally {
       engine.pauseSchedule = originalPauseSchedule;
     }
@@ -115,7 +118,7 @@ describe('weft.schedules.pause', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.pauseSchedule = originalPauseSchedule;
     }

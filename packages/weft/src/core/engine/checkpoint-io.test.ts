@@ -1,22 +1,24 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
   type BatchOperation,
   type ConditionalBatchCondition,
   type StorageCapabilities,
-} from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { createCheckpoint, serializeCheckpoint } from '../checkpoint.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { EMPTY_EVENT_HEAD } from '../event-log.ts';
+import { ActivityCompletedEvent } from '../events.ts';
 import type { Checkpoint } from '../types.ts';
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { WorkflowCheckpointConflictError } from './checkpoint-conflict-error.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
+import { StreamChunkAnnouncer } from './stream-chunk-announcer.ts';
 import { cleanupTerminalWorkflowMemory } from './termination/cleanup.ts';
 
 class NoConditionalBatchStorage extends MemoryStorage {
@@ -58,6 +60,41 @@ class CountingConditionalBatchStorage extends MemoryStorage {
   }
 }
 
+class CommitGateStorage extends MemoryStorage {
+  readonly entered = Promise.withResolvers<void>();
+  readonly released = Promise.withResolvers<void>();
+  committed = false;
+  conditionalCalls = 0;
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.entered.resolve();
+    await this.released.promise;
+    await super.batch(operations);
+    this.committed = true;
+  }
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.conditionalCalls++;
+    this.entered.resolve();
+    await this.released.promise;
+    const committed = await super.conditionalBatch(conditions, operations);
+    this.committed = committed;
+    return committed;
+  }
+}
+
+class RefusingConditionalBatchStorage extends MemoryStorage {
+  override async conditionalBatch(
+    _conditions: ConditionalBatchCondition[],
+    _operations: BatchOperation[],
+  ): Promise<boolean> {
+    return false;
+  }
+}
+
 const checkpointOperation: ContextOperationRequest = {
   type: 'sleep',
   operationId: 'sleep-operation',
@@ -71,6 +108,7 @@ function createPersistCallbacks() {
       _workflowId: string,
       _operation: ContextOperationRequest,
       step: number,
+      _stepIndex: number,
       timestamp: number,
       operations: BatchOperation[],
     ) => {
@@ -129,6 +167,10 @@ function createCleanupInternals(storage: MemoryStorage, checkpoint: Checkpoint):
   return {
     ...createCheckpointInternals(storage, checkpoint),
     cancelHandlersByWorkflow: new Map(),
+    streamChunkAnnouncer: new StreamChunkAnnouncer(
+      () => {},
+      () => false,
+    ),
     heartbeatDetails: new Map(),
     lastHeartbeatDetailsByStep: new Map(),
     pendingAsyncActivities: new Map(),
@@ -184,6 +226,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer(firstNext),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     expect(
@@ -194,6 +237,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           serializeCheckpointBuffer(secondNext),
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toThrow('Checkpoint commit for workflow "checkpoint-workflow" lost its CAS race');
@@ -230,6 +274,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
         checkpointOperation,
         nextBuffer,
         createPersistCallbacks(),
+        { pendingStepIndex: 0 },
       ),
     );
     expect(advancedReason).toBeInstanceOf(WorkflowCheckpointConflictError);
@@ -247,6 +292,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           nextBuffer,
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toBeInstanceOf(WorkflowCheckpointConflictError);
@@ -286,6 +332,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
         checkpointOperation,
         serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 3_000 }),
         createPersistCallbacks(),
+        { pendingStepIndex: 0 },
       ),
     );
 
@@ -315,6 +362,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
         checkpointOperation,
         serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
         createPersistCallbacks(),
+        { pendingStepIndex: 0 },
       ),
     );
 
@@ -337,6 +385,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     expect(
@@ -347,6 +396,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 3_000 }),
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toThrow('lost its CAS race');
@@ -357,6 +407,60 @@ describe('checkpoint commit compare-and-swap guard', () => {
     expect(staleSecondOwner.eventLogHeads.get(initialCheckpoint.workflowId)).toEqual(
       EMPTY_EVENT_HEAD,
     );
+  });
+
+  it('refuses a worker commit that does not report the step index its operation occupies', async () => {
+    const storage = new CountingConditionalBatchStorage();
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const internals = createCheckpointInternals(storage, initialCheckpoint);
+    await seedCheckpoint(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(internals, initialCheckpoint);
+
+    const reason = await rejectionOf(
+      persistCheckpoint(
+        internals,
+        initialCheckpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
+        createPersistCallbacks(),
+      ),
+    );
+
+    expect((reason as Error).message).toContain('carries no pending step index');
+    expect(storage.conditionalBatchCallCount).toBe(0);
+  });
+
+  it('records the step index a worker reports on the timeline entry, not the checkpoint count', async () => {
+    const storage = new CountingConditionalBatchStorage();
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const internals = createCheckpointInternals(storage, initialCheckpoint);
+    await seedCheckpoint(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(internals, initialCheckpoint);
+    const recorded: Array<{ step: number; stepIndex: number }> = [];
+    const callbacks = {
+      ...createPersistCallbacks(),
+      appendTimelineBatchOperations: (
+        _workflowId: string,
+        _operation: ContextOperationRequest,
+        step: number,
+        stepIndex: number,
+        timestamp: number,
+      ) => {
+        recorded.push({ step, stepIndex });
+        return { startedAt: timestamp, entry: { step } as never };
+      },
+    };
+
+    await persistCheckpoint(
+      internals,
+      initialCheckpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer({ ...initialCheckpoint, step: 4, createdAt: 2_000 }),
+      callbacks,
+      { pendingStepIndex: 9 },
+    );
+
+    expect(recorded).toEqual([{ step: 4, stepIndex: 9 }]);
   });
 
   it('leaves pending timeline entries empty when preserve-pending finds no existing entry', async () => {
@@ -372,7 +476,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
       createPersistCallbacks(),
-      { timeline: 'preserve-pending' },
+      { timeline: 'preserve-pending', pendingStepIndex: 0 },
     );
 
     expect(internals.pendingTimelineEntries.has(initialCheckpoint.workflowId)).toBe(false);
@@ -392,6 +496,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer(nextCheckpoint),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     expect(await storage.get(KEYS.checkpoint(initialCheckpoint.workflowId))).toEqual(
@@ -427,6 +532,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer(nextCheckpoint),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     expect(await storage.get(KEYS.checkpoint(newCheckpoint.workflowId))).toEqual(
@@ -462,6 +568,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           serializeCheckpointBuffer(workerClaimedCheckpoint),
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toThrow('targets a different execution generation');
@@ -499,6 +606,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           serializeCheckpointBuffer(workerCheckpointNoToken),
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toThrow('targets a different execution generation');
@@ -525,6 +633,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer(workerCheckpoint),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     const persistedBytes = await storage.get(KEYS.checkpoint('checkpoint-workflow-agree'));
@@ -553,6 +662,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
       checkpointOperation,
       serializeCheckpointBuffer(workerClaimedCheckpoint),
       createPersistCallbacks(),
+      { pendingStepIndex: 0 },
     );
 
     const decodedRoundTrip = internals.checkpoints.get('checkpoint-workflow-no-host-token');
@@ -582,6 +692,7 @@ describe('checkpoint commit compare-and-swap guard', () => {
           checkpointOperation,
           serializeCheckpointBuffer(workerClaimedCheckpoint),
           createPersistCallbacks(),
+          { pendingStepIndex: 0 },
         ),
       ),
     ).toThrow('targets a generation that no longer exists');
@@ -590,5 +701,107 @@ describe('checkpoint commit compare-and-swap guard', () => {
     expect(await storage.get(KEYS.checkpoint('checkpoint-workflow-torn-down'))).toEqual(
       serializeCheckpoint(checkpoint),
     );
+  });
+
+  it.each([false, true])(
+    'dispatches activity completion only after a %s checkpoint batch commits',
+    async (conditional) => {
+      const storage = new CommitGateStorage();
+      const checkpoint = createCheckpoint('checkpoint-activity-commit', '1', 1_000, 'run-a');
+      const internals = createCheckpointInternals(storage, checkpoint);
+      internals.durableInlineOperations = new Map([
+        [
+          'checkpoint-activity-commit',
+          { operationId: 'activity-1', type: 'activity', workflowExecutionToken: 'run-a' },
+        ],
+      ]) as never;
+      internals.pendingTimelineEntries.set('checkpoint-activity-commit', {
+        startedAt: 900,
+        entry: {
+          step: 1,
+          operationType: 'activity',
+          operationLabel: 'send-email',
+          inputSummary: 'input',
+          timestamp: 900,
+          status: 'completed',
+          duration: 42,
+        },
+      });
+      const observed: Array<{ event: Event; committed: boolean }> = [];
+      if (conditional) rememberRecoveredCheckpoint(internals, checkpoint);
+      const callbacks = {
+        ...createPersistCallbacks(),
+        dispatchEvent: (event: Event) => {
+          observed.push({
+            event,
+            committed: storage.committed,
+          });
+        },
+      };
+      await seedCheckpoint(storage, checkpoint);
+
+      const persist = persistCheckpoint(
+        internals,
+        checkpoint.workflowId,
+        checkpointOperation,
+        serializeCheckpointBuffer({ ...checkpoint, step: 1, workflowExecutionToken: 'run-a' }),
+        callbacks,
+        { pendingStepIndex: 0 },
+      );
+      await storage.entered.promise;
+      expect(observed).toHaveLength(0);
+      storage.released.resolve();
+      await persist;
+
+      expect(observed).toHaveLength(1);
+      expect(observed[0]?.event).toBeInstanceOf(ActivityCompletedEvent);
+      expect(observed[0]?.committed).toBe(true);
+      if (conditional) expect(storage.conditionalCalls).toBeGreaterThan(0);
+    },
+  );
+
+  it('does not dispatch an activity completion receipt when a stale checkpoint CAS refuses', async () => {
+    const storage = new RefusingConditionalBatchStorage();
+    const checkpoint = createCheckpoint('checkpoint-stale-activity', '1', 1_000, 'run-a');
+    const internals = createCheckpointInternals(storage, checkpoint);
+    rememberRecoveredCheckpoint(internals, checkpoint);
+    internals.durableInlineOperations = new Map([
+      [
+        'checkpoint-stale-activity',
+        { operationId: 'activity-stale', type: 'activity', workflowExecutionToken: 'run-a' },
+      ],
+    ]) as never;
+    internals.pendingTimelineEntries.set('checkpoint-stale-activity', {
+      startedAt: 900,
+      entry: {
+        step: 1,
+        operationType: 'activity',
+        operationLabel: 'send-email',
+        inputSummary: 'input',
+        timestamp: 900,
+        status: 'completed',
+        duration: 42,
+      },
+    });
+    await seedCheckpoint(storage, checkpoint);
+    const dispatched: Event[] = [];
+    const callbacks = {
+      ...createPersistCallbacks(),
+      dispatchEvent: (event: Event) => dispatched.push(event),
+    };
+
+    expect(
+      await throwingRejectionOf(
+        persistCheckpoint(
+          internals,
+          checkpoint.workflowId,
+          checkpointOperation,
+          serializeCheckpointBuffer({ ...checkpoint, step: 1, workflowExecutionToken: 'run-a' }),
+          callbacks,
+          { pendingStepIndex: 0 },
+        ),
+      ),
+    ).toThrow();
+    expect(dispatched.filter((event) => event instanceof ActivityCompletedEvent)).toHaveLength(0);
   });
 });

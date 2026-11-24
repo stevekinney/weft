@@ -8,7 +8,7 @@ export function validateAttribute(
   value: SearchAttributeValue,
 ): void {
   if (internals.searchAttributeSchema) {
-    if (!(key in internals.searchAttributeSchema)) {
+    if (!Object.hasOwn(internals.searchAttributeSchema, key)) {
       throw new Error(
         `Unknown search attribute "${key}". Registered attributes: ${Object.keys(internals.searchAttributeSchema).join(', ')}`,
       );
@@ -46,7 +46,9 @@ export function getAttribute(
   internals: ContextInternals,
   key: string,
 ): SearchAttributeValue | undefined {
-  return internals.searchAttributes[key];
+  return Object.hasOwn(internals.searchAttributes, key)
+    ? internals.searchAttributes[key]
+    : undefined;
 }
 
 export function getAttributes(

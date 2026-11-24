@@ -14,6 +14,7 @@ import {
   type ActivityOperationRequest,
 } from '../context/run-operation.ts';
 import { AsyncActivityDeferral } from './async-activity-completion.ts';
+import { currentExecutionAttempt } from './execution-attempts.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   executeActivityOperationResult,
@@ -74,7 +75,9 @@ class MemoDurableActivityScope implements DurableActivityScope {
   #activePromise: Promise<unknown> | undefined;
   #activeNonCancellableWriteCount = 0;
   #closed = false;
-  #closeReason: Error | undefined;
+  #closeReason: Error = new DurableActivityScopeError(
+    'durableActivity() scope closed before completion.',
+  );
   #nextOrdinal = 0;
 
   constructor(
@@ -163,6 +166,9 @@ class MemoDurableActivityScope implements DurableActivityScope {
     ordinal: number,
   ): Promise<TResult> {
     const activityStateKey = this.#activityStateKey(ordinal);
+    // The retry driver yields the activity request for each attempt and, between attempts, the
+    // sleep `#retrySleepOperation` builds. The driver's declared type is every operation a
+    // workflow can yield, which narrows to these two.
     const generator = runActivityWithRetryAtStep<TResult>(
       this.#context,
       invocation.activity,
@@ -175,7 +181,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
         retrySleep: (duration, nextAttempt) =>
           this.#retrySleepOperation(duration, ordinal, nextAttempt),
       },
-    );
+    ) as Generator<ActivityOperationRequest | SleepOperation, TResult, unknown>;
 
     let next = generator.next();
     while (!next.done) {
@@ -196,7 +202,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
   }
 
   async #executeYieldedOperation(
-    operation: ContextOperationRequest,
+    operation: ActivityOperationRequest | SleepOperation,
     invocation: DurableActivityInvocation,
     ordinal: number,
   ): Promise<unknown> {
@@ -204,14 +210,9 @@ class MemoDurableActivityScope implements DurableActivityScope {
     if (operation.type === 'activity') {
       return this.#executeActivityOperation(operation, invocation.callerStack, ordinal);
     }
-    if (operation.type === 'sleep') {
-      await this.#raceWithScopeAbort(this.#executeDurableRetrySleepOperation(operation));
-      this.#throwIfClosed();
-      return undefined;
-    }
-    throw new DurableActivityScopeError(
-      `durableActivity() retry driver yielded unsupported operation "${operation.type}".`,
-    );
+    await this.#raceWithScopeAbort(this.#executeDurableRetrySleepOperation(operation));
+    this.#throwIfClosed();
+    return undefined;
   }
 
   #executeActivityOperation(
@@ -245,6 +246,14 @@ class MemoDurableActivityScope implements DurableActivityScope {
   }
 
   async #executeDurableRetrySleepOperation(operation: SleepOperation): Promise<void> {
+    // The run this sleep belongs to, captured before its first await (COR-1604). The timer
+    // and the resolver carry the same token, because a timer only wakes a resolver bound to
+    // the token it carries.
+    const run = currentExecutionAttempt(this.#internals, this.#workflowId);
+    const workflowExecutionToken = workflowExecutionTokenForWorkflow(
+      this.#internals,
+      this.#workflowId,
+    );
     const finishCheckpointWrite = this.#beginNonCancellableWrite();
     try {
       await this.#persistCheckpoint(this.#workflowId, operation);
@@ -265,6 +274,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
         workflowId: this.#workflowId,
         fireAt: operation.scheduledFireAt,
         kind: 'sleep',
+        ...(workflowExecutionToken === undefined ? {} : { workflowExecutionToken }),
       });
     } finally {
       finishTimerWrite();
@@ -276,7 +286,8 @@ class MemoDurableActivityScope implements DurableActivityScope {
       operation.operationId,
       resolve,
       operation.scheduledFireAt,
-      workflowExecutionTokenForWorkflow(this.#internals, this.#workflowId),
+      workflowExecutionToken,
+      run,
     );
     await promise;
   }
@@ -308,11 +319,6 @@ class MemoDurableActivityScope implements DurableActivityScope {
   }
 
   #activityStateKey(ordinal: number): string {
-    if (!Number.isSafeInteger(ordinal) || ordinal < 0) {
-      throw new DurableActivityScopeError(
-        `Invalid durableActivity() call ordinal ${String(ordinal)} for ctx.memo() step ${String(this.#operation.step)}.`,
-      );
-    }
     return `${this.#identityPrefix}:call:${String(ordinal)}`;
   }
 
@@ -334,29 +340,21 @@ class MemoDurableActivityScope implements DurableActivityScope {
         callback();
       };
 
+      // The scope signal only ever aborts once no non-cancellable write is active, so an abort
+      // always settles the race.
       const onAbort = () => {
-        if (this.#activeNonCancellableWriteCount > 0) {
-          return;
-        }
         settle(() => reject(this.#abortError()));
       };
 
+      // `#throwIfClosed()` above already rejected an aborted scope, and nothing awaits between it
+      // and this registration, so the signal cannot have aborted yet.
       signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
 
+      // A scope that closed while the operation ran has already settled this race: every write the
+      // operation made non-cancellable ended before it resolved, and the last one to end aborts a
+      // closed scope's signal, which `onAbort` answers.
       void operation
-        .then((value) =>
-          settle(() => {
-            if (this.#closed || signal.aborted) {
-              reject(this.#abortError());
-              return;
-            }
-            resolve(value);
-          }),
-        )
+        .then((value) => settle(() => resolve(value)))
         .catch((error: unknown) => {
           settle(() => reject(error));
         });
@@ -427,13 +425,7 @@ class MemoDurableActivityScope implements DurableActivityScope {
   }
 
   #abortError(): Error {
-    if (this.#closeReason !== undefined) {
-      return this.#closeReason;
-    }
-    const reason = this.#scopeAbortController.signal.reason;
-    return reason instanceof Error
-      ? reason
-      : new DurableActivityScopeError('durableActivity() scope closed before completion.');
+    return this.#closeReason;
   }
 }
 

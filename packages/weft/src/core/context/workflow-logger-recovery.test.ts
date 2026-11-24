@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { captureWorkflowLogConsole } from '../../testing/workflow-log-capture.test-support.ts';
 import { Engine } from '../engine.ts';
 import { activity } from '../types.ts';
@@ -17,7 +18,7 @@ import type { WorkflowLogRecord } from '../types/workflow-log.ts';
  */
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 /** Messages emitted at our marker levels, in order (ignores engine debug noise). */
@@ -177,6 +178,62 @@ describe('ctx.log engine-level replay safety', () => {
 
     await recovered.signal('log-after-last-id', 'go', 'go');
     expect(await handle!.result()).toBe('done');
+  });
+
+  it('marks the calls a recovered run repeats in front of its park, and only those (COR-1811)', async () => {
+    // The operation a run was parked on is not cached, so the calls in front of it reach the
+    // sink again on recovery (the human-wait park marker relies on that). They carry
+    // `replayed`, which the persisted log store skips; a call past the park does not.
+    const storage = new MemoryStorage();
+    const noop = activity({ name: 'noop', execute: async (input: string) => input });
+    const build = (engine: Engine) =>
+      engine.register(
+        workflow({ name: 'log-marked' })
+          .activities({ noop })
+          .execute(async function* (ctx) {
+            ctx.log?.info('marker:cached');
+            yield* ctx.run('noop', 'x');
+            ctx.log?.info('marker:before-park');
+            yield* ctx.waitForSignal<string>('go');
+            ctx.log?.info('marker:after-park');
+            return 'done';
+          }),
+      );
+    const firstSink: WorkflowLogRecord[] = [];
+    {
+      using first = new Engine({ storage, onLog: (record) => firstSink.push(record) });
+      build(first);
+      await first.start('log-marked', null, { id: 'log-marked-id' });
+      await flush();
+    }
+    expect(firstSink.map((record) => [record.message, record.replayed])).toEqual([
+      ['marker:cached', undefined],
+      ['marker:before-park', undefined],
+    ]);
+
+    const sink: WorkflowLogRecord[] = [];
+    using recovered = new Engine({ storage, onLog: (record) => sink.push(record) });
+    build(recovered);
+    const [handle] = await recovered.recoverAll();
+    await flush();
+    expect(sink.map((record) => [record.message, record.replayed])).toEqual([
+      ['marker:before-park', true],
+    ]);
+
+    await recovered.signal('log-marked-id', 'go', 'go');
+    expect(await handle!.result()).toBe('done');
+    // The signal relaunches the run once more, so the call in front of the park repeats again,
+    // marked each time; the call past it logs once, unmarked.
+    expect(sink.filter((record) => record.message === 'marker:before-park')).not.toHaveLength(0);
+    for (const record of sink.filter((entry) => entry.message === 'marker:before-park')) {
+      expect(record.replayed).toBe(true);
+    }
+    expect(
+      sink
+        .filter((record) => record.message === 'marker:after-park')
+        .map((record) => record.replayed),
+    ).toEqual([undefined]);
+    expect(sink.some((record) => record.message === 'marker:cached')).toBe(false);
   });
 
   it('delivers a recovered-run live-frontier log to the host sink at parity with the console (#549)', async () => {

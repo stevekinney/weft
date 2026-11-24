@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types/workflow-function.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import {
   advanceTimersByTime,
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { Engine } from '../core/engine.ts';
+import type { WorkflowContext } from '../core/types.ts';
+import { workflow } from '../core/types/workflow-function.ts';
 import {
   type MemorySample,
   MemoryProfiler,
@@ -53,6 +53,15 @@ describe('linearRegression', () => {
     const { slope, intercept } = linearRegression(points);
     expect(slope).toBe(0);
     expect(intercept).toBe(42);
+  });
+
+  it('returns the mean as the intercept when every point shares one x', () => {
+    const points: [number, number][] = [
+      [7, 10],
+      [7, 20],
+      [7, 60],
+    ];
+    expect(linearRegression(points)).toEqual({ slope: 0, intercept: 30 });
   });
 
   it('handles noisy data with upward trend', () => {
@@ -271,6 +280,7 @@ describe('engine memory stability under load', () => {
 
       // Let GC run
       Bun.gc(true);
+      // load-proof: Bun.gc(true) collects synchronously, so no work is pending for the loop; the yield is surplus and the assertions read synchronous profiler state
       await sleepForTesting(100);
 
       profiler.stop();
@@ -313,6 +323,7 @@ describe('engine memory stability under load', () => {
 
     // Force GC to let FinalizationRegistry clean up WeakRef entries
     Bun.gc(true);
+    // load-proof: Bun.gc(true) collects synchronously, so no work is pending for the loop; the yield is surplus and the assertions await real workflow results
     await sleepForTesting(50);
 
     // Verify the engine can still start new workflows (no leaked state

@@ -1,3 +1,6 @@
+import type { Principal } from "../../embedded/backchannel/src/index.ts";
+import { ActivityStartedEvent } from '../../core/events.ts';
+import { tagWorkflowEventGeneration } from '../../core/events/workflow-event-generation.ts';
 import type { JSONValue } from '../../core/json.ts';
 import {
   buildClaimAttemptRecordWrite,
@@ -9,7 +12,6 @@ import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-r
 import { claimQueued, renewAttemptLease } from '../../core/task-ledger/task-ledger-transitions.ts';
 import { decodeRemoteTaskRecord, taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
 import type { ServeOptions } from '../index.ts';
-import type { Principal } from '../principal.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
 import { recordTaskBacklogMetric, recordTaskQueueLatencyMetric } from './task-metrics.ts';
@@ -126,17 +128,33 @@ export async function markTaskClaimedByLongPollWorker(
   );
   // COR-198: attempt-by-attempt worker transition.
   options.engine.dispatchEvent(
-    await buildTaskAttemptTransitionEvent(options.engine.storage, {
-      operationId: task.operationId,
-      workflowId: task.workflowId,
-      activityName: task.activityName,
-      attempt: result.record.attempt,
-      attemptTokenDigest,
-      workerSessionId,
-      executionIdentity: undefined,
-      executionRequirement: result.record.executionRequirement,
-    }),
+    tagWorkflowEventGeneration(
+      await buildTaskAttemptTransitionEvent(options.engine.storage, {
+        operationId: task.operationId,
+        workflowId: task.workflowId,
+        activityName: task.activityName,
+        attempt: result.record.attempt,
+        attemptTokenDigest,
+        workerSessionId,
+        executionIdentity: undefined,
+        executionRequirement: result.record.executionRequirement,
+      }),
+      result.record.workflowExecutionToken,
+    ),
   );
+  if (task.workflowId !== undefined) {
+    options.engine.dispatchEvent(
+      tagWorkflowEventGeneration(
+        new ActivityStartedEvent(
+          result.record.operationId,
+          task.workflowId,
+          result.record.activityName,
+          result.record.attempt,
+        ),
+        result.record.workflowExecutionToken,
+      ),
+    );
+  }
 
   return {
     workerId: workerSessionId,

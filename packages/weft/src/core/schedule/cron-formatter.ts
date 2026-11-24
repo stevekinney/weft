@@ -16,6 +16,31 @@ export function getDefaultTimeZone(): string {
   return 'UTC';
 }
 
+/**
+ * Whether `value` names a time zone the runtime knows: `UTC` or an IANA name such as
+ * `America/Los_Angeles`. A non-string, an empty string, and a name the runtime does not know are
+ * all `false`. This is the one definition of a valid schedule time zone; creating or updating a
+ * schedule, decoding a persisted one, and the Bureau and Weft operations all ask it.
+ */
+export function isValidTimeZone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    getFormatter(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The canonical spelling of a valid time zone, which is the one a schedule stores: the runtime
+ * reads `utc` and `america/los_angeles` as the zones `UTC` and `America/Los_Angeles`, and two
+ * spellings of one zone must not read as two zones.
+ */
+export function canonicalTimeZone(timeZone: string): string {
+  return getFormatter(timeZone).resolvedOptions().timeZone;
+}
+
 function getFormatter(timeZone: string): Intl.DateTimeFormat {
   const cached = formatterCache.get(timeZone);
   if (cached) {
@@ -39,7 +64,8 @@ function getFormatter(timeZone: string): Intl.DateTimeFormat {
   return formatter;
 }
 
-function getOffsetMilliseconds(timestamp: number, timeZone: string): number {
+/** The offset of `timeZone` from UTC at `timestamp`, in milliseconds (positive east of UTC). */
+export function getOffsetMilliseconds(timestamp: number, timeZone: string): number {
   const parts = getFormatter(timeZone).formatToParts(new Date(timestamp));
   const offsetPart = parts.find((part) => part.type === 'timeZoneName')?.value;
   const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(offsetPart ?? '');

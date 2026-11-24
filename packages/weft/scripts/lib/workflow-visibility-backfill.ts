@@ -6,6 +6,13 @@
  * @module scripts/lib/workflow-visibility-backfill
  */
 
+import {
+  storageConditionalBatch,
+  tryDecodeStorageKeyComponent,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from "../../src/embedded/storage/src/index.ts";
 import { decode, encode } from '../../src/core/codec.ts';
 import { decodeWorkflowState } from '../../src/core/engine/validation.ts';
 import {
@@ -13,14 +20,7 @@ import {
   WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS,
   buildWorkflowVisibilityIndexTransition,
 } from '../../src/core/engine/workflow-indexes.ts';
-import {
-  KEYS,
-  storageConditionalBatch,
-  tryDecodeStorageKeyComponent,
-  type BatchOperation,
-  type ConditionalBatchCondition,
-  type Storage,
-} from '../../src/storage/interface.ts';
+import { KEYS } from '../../src/storage/keys.ts';
 
 // Per-workflow manifest rows, written only by index layout version 1.
 const LAYOUT_VERSION_ONE_MANIFEST_PREFIX = 'wf-idx-manifest:';

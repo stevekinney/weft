@@ -5,19 +5,20 @@ import {
 } from '../core/codec.ts';
 import { isJSONValue, type JSONValue } from '../core/json.ts';
 
-import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
 import {
   assertStorageBatchOperationCount,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
+  storageDeleteRange,
   storageHas,
   storageKeys,
   type BatchOperation,
   type ConditionalBatchCondition,
+  type DeleteRangeOptions,
   type ScanOptions,
   type Storage,
-} from './interface.ts';
+} from "../embedded/storage/src/index.ts";
 
 /**
  * Encode/decode pair that bridges a typed domain value to and from `Uint8Array`.
@@ -28,7 +29,8 @@ import {
  *
  * @example
  * ```ts
- * import { type StorageCodec, withCodec, MemoryStorage } from '@lostgradient/weft';
+ * import { type StorageCodec, withCodec } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const encoder = new TextEncoder();
  * const decoder = new TextDecoder();
@@ -97,7 +99,8 @@ export type MessagePackValue =
  *
  * @example
  * ```ts
- * import { MemoryStorage, withCodec, jsonCodec, type TypedBatchOperation } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { withCodec, jsonCodec, type TypedBatchOperation } from '@lostgradient/weft';
  *
  * await using raw = new MemoryStorage();
  * const store = withCodec(raw, jsonCodec());
@@ -171,7 +174,8 @@ export type CodecStorageOptions = {
  *
  * @example
  * ```ts
- * import { MemoryStorage, withCodec, jsonCodec, type TypedStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { withCodec, jsonCodec, type TypedStorage } from '@lostgradient/weft';
  *
  * type User = { name: string; age: number };
  *
@@ -325,7 +329,8 @@ class CodecStorage<Value> implements ConditionalTypedStorage<Value> {
  *
  * @example
  * ```ts
- * import { MemoryStorage, withCodec, jsonCodec } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { withCodec, jsonCodec } from '@lostgradient/weft';
  *
  * type Config = { retries: number; timeout: number };
  *
@@ -401,7 +406,8 @@ function decodeMessagePackValue(bytes: Uint8Array): MessagePackValue {
  *
  * @example
  * ```ts
- * import { MemoryStorage, withCodec, jsonCodec } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { withCodec, jsonCodec } from '@lostgradient/weft';
  *
  * type Point = { x: number; y: number };
  * const isPoint = (v: unknown): v is Point =>
@@ -446,7 +452,8 @@ export function jsonCodec<Value extends JSONValue>(
  *
  * @example
  * ```ts
- * import { MemoryStorage, withCodec, msgpackCodec } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { withCodec, msgpackCodec } from '@lostgradient/weft';
  *
  * type Event = { ts: Date; payload: Uint8Array };
  *

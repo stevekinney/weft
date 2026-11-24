@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { createReplayAwareClosableIterable } from "../../embedded/backchannel/src/index.ts";
 import {
-  createReplayAwareClosableIterable,
-  fleetEventEnvelopeSchema,
   isClosableAsyncIterable,
   isReplayAwareClosableIterable,
+} from "../../embedded/backchannel/src/internals.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import {
+  fleetEventEnvelopeSchema,
   workflowEventEnvelopeSchema,
   workflowEventParameterizedAccess,
 } from './event-stream-contracts.ts';

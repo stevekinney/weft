@@ -1,5 +1,5 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { evaluateAndRecordWorkflowWorkerUpgradeAfterCheckpoint } from '../../worker/versioning-policy.ts';
 import { bytesEqual } from '../application-primitive-commit.ts';
 import {
@@ -13,12 +13,17 @@ import type { ContextOperationRequest } from '../context.ts';
 import { hasPendingAttributeChanges } from '../context/context-presence.ts';
 import { EMPTY_EVENT_HEAD, EventLog } from '../event-log.ts';
 import {
+  ActivityCompletedEvent,
   AttributesChangedEvent,
   CheckpointSizeWarningEvent,
   DevelopmentWarningEvent,
 } from '../events.ts';
+import { tagWorkflowEventGeneration } from '../events/workflow-event-generation.ts';
+import { resolvePendingOperationStep } from '../pending-operation-step.ts';
 import { buildIndexOperations } from '../search-attributes.ts';
 import type { SearchAttributeValue, WorkflowTimelineEntry } from '../types.ts';
+import { buildActivityRetryingOperations } from './activity-retrying-record.ts';
+import { retryCheckpointBatch } from './checkpoint-commit-retry.ts';
 import {
   getCommittedCheckpointBytes,
   rememberCommittedCheckpointBytes,
@@ -35,7 +40,7 @@ import {
 } from './checkpoint-replay.ts';
 import {
   clearPendingAtomicWorkflowCommitSideEffects,
-  takePendingAtomicWorkflowCommitSideEffects,
+  takeCommitSideEffects,
   type AtomicWorkflowCommitSideEffects,
 } from './checkpoint-side-effects.ts';
 import {
@@ -44,9 +49,15 @@ import {
   type CompactionResult,
 } from './event-log-compaction.ts';
 import { commitFencedEngineWriteAllowingPreconditionFailure } from './fenced-write.ts';
+import type { FileWorkflowEvent } from './file-workflow-completion-events.ts';
+import { appendFileWorkflowCheckpointEvents } from './file-workflow-history.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
 import { buildPendingTimelineOperation } from './termination.ts';
+import {
+  captureCommitReceipts,
+  type ActivityCompletionReceipt,
+} from './timeline-coordinator-detail.ts';
 import { notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
 type PendingTimelineEntryValue = {
@@ -54,15 +65,52 @@ type PendingTimelineEntryValue = {
   entry: WorkflowTimelineEntry;
 };
 
+function dispatchActivityCompletionReceipt(
+  callbacks: Pick<PersistCheckpointCallbacks, 'dispatchEvent'>,
+  workflowId: string,
+  receipt: ActivityCompletionReceipt,
+): void {
+  callbacks.dispatchEvent(
+    tagWorkflowEventGeneration(
+      new ActivityCompletedEvent(
+        receipt.operationId,
+        workflowId,
+        receipt.activityName,
+        receipt.duration,
+      ),
+      receipt.workflowExecutionToken,
+    ),
+  );
+}
+
 export type PersistCheckpointOptions = {
   timeline?: 'record-operation' | 'preserve-pending';
+  /**
+   * The durable step index the operation occupies, as a worker reports it on its `checkpoint`
+   * message (`pendingStepIndex`). Only a worker commit reads it, and requires it: an inline commit
+   * reads the live context.
+   */
+  pendingStepIndex?: number;
+  /** With `preserve-pending`: the branch activities whose completion receipts this commit reports. */
+  settledBranchOperationIds?: readonly string[];
+  /** With `preserve-pending`: the file-workflow completion events this commit records. */
+  settledFileWorkflowEvents?: readonly FileWorkflowEvent[];
+  /** With `preserve-pending`: the held side effects it writes in place of the staged ones. */
+  sideEffects?: AtomicWorkflowCommitSideEffects;
 };
+
+/** What a commit made while its operation is still running reports for the steps it settled. */
+export type MidOperationCommitReport = Omit<
+  PersistCheckpointOptions,
+  'timeline' | 'pendingStepIndex'
+>;
 
 export type PersistCheckpointCallbacks = {
   appendTimelineBatchOperations: (
     workflowId: string,
     operation: ContextOperationRequest,
     step: number,
+    stepIndex: number,
     timestamp: number,
     operations: BatchOperation[],
   ) => PendingTimelineEntryValue;
@@ -89,6 +137,7 @@ export function appendTimelineBatchOperations(
   workflowId: string,
   operation: ContextOperationRequest,
   step: number,
+  stepIndex: number,
   timestamp: number,
   operations: BatchOperation[],
 ): PendingTimelineEntryValue {
@@ -101,6 +150,22 @@ export function appendTimelineBatchOperations(
 
   const entry: WorkflowTimelineEntry = {
     step,
+    stepIndex,
+    ...((operation as ContextOperationRequest & { documentStep?: number }).documentStep ===
+    undefined
+      ? {}
+      : {
+          documentStep: (operation as ContextOperationRequest & { documentStep?: number })
+            .documentStep,
+        }),
+    ...((operation as ContextOperationRequest & { documentStepAddress?: string })
+      .documentStepAddress === undefined
+      ? {}
+      : {
+          documentStepAddress: (
+            operation as ContextOperationRequest & { documentStepAddress: string }
+          ).documentStepAddress,
+        }),
     operationType: operation.type,
     operationLabel: getTimelineOperationLabel(operation),
     inputSummary: getTimelineInputSummary(operation),
@@ -127,6 +192,8 @@ type CheckpointCommit = {
   replayPayload?: CheckpointReplayPayload;
   expectedSerialized?: Uint8Array;
   step: number;
+  /** The durable step index of the operation this commit records; see {@link WorkflowTimelineEntry.stepIndex}. */
+  stepIndex: number;
   timestamp: number;
   operations: BatchOperation[];
 };
@@ -177,10 +244,11 @@ async function persistInlineCheckpoint(
     now: internals.options.getNow(),
     ...(pendingAttributeChanges !== undefined ? { searchAttributes: pendingAttributeChanges } : {}),
   });
-  const pruned = pruneCheckpointReplayState(
-    advanced,
-    resolvePendingOperationStep(operation, context.stepIndex),
+  const pendingStepIndex = resolvePendingOperationStep(
+    operation,
+    Math.max(0, context.stepIndex - 1),
   );
+  const pruned = pruneCheckpointReplayState(advanced, pendingStepIndex);
   let serialized: ReturnType<typeof serializeCheckpoint>;
   try {
     serialized = serializeCheckpoint(
@@ -195,6 +263,7 @@ async function persistInlineCheckpoint(
     pruned.checkpoint,
     serialized,
     pruned.replayPayload,
+    pendingStepIndex,
   );
   appendAttributeOperations(
     workflowId,
@@ -277,10 +346,13 @@ async function persistWorkerCheckpoint(
     delete checkpoint.workflowExecutionToken;
   }
   const workerReplayPayload = readCheckpointReplayPayload(checkpoint);
-  const pruned = pruneCheckpointReplayState(
-    checkpoint,
-    resolvePendingOperationStep(operation, checkpoint.step),
-  );
+  if (options.pendingStepIndex === undefined) {
+    throw new Error(
+      `Worker checkpoint commit for workflow "${workflowId}" carries no pending step index.`,
+    );
+  }
+  const pendingStepIndex = resolvePendingOperationStep(operation, options.pendingStepIndex);
+  const pruned = pruneCheckpointReplayState(checkpoint, pendingStepIndex);
   const replayPayload = mergeCheckpointReplayPayloads(workerReplayPayload, pruned.replayPayload);
   const prunedSerialized = serializeCheckpoint(
     attachTransientCheckpointReplayPayload(pruned.checkpoint, replayPayload),
@@ -295,6 +367,7 @@ async function persistWorkerCheckpoint(
       pruned.checkpoint,
       prunedSerialized,
       replayPayload,
+      pendingStepIndex,
     ),
     callbacks,
     options,
@@ -307,6 +380,7 @@ function createCheckpointCommit(
   checkpoint: CheckpointStateForCommit,
   serialized: Uint8Array,
   replayPayload: CheckpointReplayPayload | undefined,
+  stepIndex: number,
 ): CheckpointCommit {
   const operations: BatchOperation[] = [
     { type: 'put', key: KEYS.checkpoint(workflowId), value: serialized },
@@ -325,6 +399,7 @@ function createCheckpointCommit(
     ...(replayPayload === undefined ? {} : { replayPayload }),
     ...(expectedSerialized !== undefined ? { expectedSerialized } : {}),
     step: checkpoint.step,
+    stepIndex,
     timestamp: checkpoint.createdAt,
     operations,
   };
@@ -359,7 +434,17 @@ async function commitCheckpoint(
   callbacks: PersistCheckpointCallbacks,
   options: PersistCheckpointOptions,
 ): Promise<void> {
+  const activityCompletionReceipts = captureCommitReceipts(
+    internals,
+    workflowId,
+    options.timeline,
+    options.settledBranchOperationIds,
+  );
   dispatchCheckpointSizeWarning(internals, workflowId, commit, callbacks);
+  // The record behind `WorkflowSummary.retrying` moves in this same batch, only when it changes.
+  commit.operations.push(
+    ...buildActivityRetryingOperations(internals, workflowId, commit.checkpoint),
+  );
   const nextPendingTimelineEntry =
     options.timeline === 'preserve-pending'
       ? preservePendingTimelineEntry(internals, workflowId, commit.operations)
@@ -367,10 +452,25 @@ async function commitCheckpoint(
           workflowId,
           operation,
           commit.step,
+          commit.stepIndex,
           commit.timestamp,
           commit.operations,
         );
-  const { newHead, timestamp } = appendCheckpointEventLog(internals, workflowId, commit);
+  const fileWorkflowHead = await appendFileWorkflowCheckpointEvents(
+    internals,
+    workflowId,
+    operation,
+    commit.stepIndex,
+    commit.operations,
+    internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
+    options.settledFileWorkflowEvents,
+  );
+  const { newHead, timestamp } = appendCheckpointEventLog(
+    internals,
+    workflowId,
+    commit,
+    fileWorkflowHead,
+  );
 
   // Event-log compaction: fold the deletes + watermark into the SAME batch as the
   // checkpoint and event append, so verify() can never observe a gap without its
@@ -389,10 +489,11 @@ async function commitCheckpoint(
           retentionWindow,
           commit.operations,
         );
-  const pendingSideEffects = takePendingAtomicWorkflowCommitSideEffects(
+  const { sideEffects: pendingSideEffects, fromStaged } = takeCommitSideEffects(
     internals,
     workflowId,
     commit.checkpoint.workflowExecutionToken,
+    options.sideEffects,
   );
   if (pendingSideEffects !== undefined) {
     commit.operations.push(...pendingSideEffects.operations);
@@ -417,26 +518,32 @@ async function commitCheckpoint(
   // checkpoint-CAS/side-effect condition would bypass the fence and let a deposed
   // zombie's write land unconditioned. Under `ownership: 'none'` it is a
   // byte-for-byte no-op (plain batch when no conditions, conditionalBatch otherwise).
-  const committed = await commitFencedEngineWriteAllowingPreconditionFailure(
+  //
+  // A refused write is retried in process (see `retryCheckpointBatch`). The retry starts from the
+  // catch of this first attempt, so a batch that commits first time adds no promise turn.
+  let committed: boolean;
+  try {
+    committed = await commitFencedEngineWriteAllowingPreconditionFailure(
+      internals,
+      workflowId,
+      commit.operations,
+      conditions,
+    );
+  } catch (error) {
+    committed = await retryCheckpointBatch(internals, workflowId, commit, conditions, error);
+  }
+  if (!committed) await throwCheckpointCommitLoss(internals, workflowId, commit);
+  recordCommittedCheckpoint(
     internals,
     workflowId,
-    commit.operations,
-    conditions,
+    commit,
+    newHead,
+    nextPendingTimelineEntry,
+    fromStaged,
   );
-  if (!committed) await throwCheckpointCommitLoss(internals, workflowId, commit);
-  if (pendingSideEffects !== undefined) {
-    clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
+  for (const receipt of activityCompletionReceipts) {
+    dispatchActivityCompletionReceipt(callbacks, workflowId, receipt);
   }
-  if (commit.expectedSerialized !== undefined) {
-    rememberCommittedCheckpointBytes(internals, workflowId, commit.serialized);
-  }
-  if (nextPendingTimelineEntry === undefined) {
-    internals.pendingTimelineEntries.delete(workflowId);
-  } else {
-    internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
-  }
-  internals.checkpoints.set(workflowId, commit.checkpoint);
-  internals.eventLogHeads.set(workflowId, newHead);
   // Archival runs only after the truncation has committed durably; it is a
   // best-effort export, never a rollback trigger (see ArchiveAdapter). The
   // Promise.resolve().then(...) wrapper turns synchronous adapter throws into
@@ -468,6 +575,30 @@ async function commitCheckpoint(
   if (historyEventLimitBreached(internals, newHead.sequence)) {
     await callbacks.enforceHistoryCircuitBreaker(workflowId);
   }
+}
+
+/** The engine's in-memory record of a checkpoint batch that has just committed. Synchronous. */
+function recordCommittedCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  commit: CheckpointCommit,
+  newHead: ReturnType<EventLog['appendToBatch']>['newHead'],
+  nextPendingTimelineEntry: PendingTimelineEntryValue | undefined,
+  hadPendingSideEffects: boolean,
+): void {
+  if (hadPendingSideEffects) {
+    clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
+  }
+  if (commit.expectedSerialized !== undefined) {
+    rememberCommittedCheckpointBytes(internals, workflowId, commit.serialized);
+  }
+  if (nextPendingTimelineEntry === undefined) {
+    internals.pendingTimelineEntries.delete(workflowId);
+  } else {
+    internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
+  }
+  internals.checkpoints.set(workflowId, commit.checkpoint);
+  internals.eventLogHeads.set(workflowId, newHead);
 }
 
 function preservePendingTimelineEntry(
@@ -608,32 +739,18 @@ function appendCheckpointEventLog(
   internals: EngineInternals,
   workflowId: string,
   commit: CheckpointCommit,
+  head = internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
 ): ReturnType<EventLog['appendToBatch']> {
-  const eventLog = new EventLog(internals.storage, workflowId);
+  const eventLog = new EventLog(internals.storage, workflowId, internals.options.getNow);
   return eventLog.appendToBatch(
     {
       type: 'workflow:checkpoint',
       payload: createCheckpointEventPayload(commit.step, commit.replayPayload),
     },
     commit.operations,
-    internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
+    head,
     internals.workflowVersionTuples.get(workflowId),
   );
-}
-
-function resolvePendingOperationStep(
-  operation: ContextOperationRequest,
-  fallbackStepIndex: number,
-): number {
-  const operationStep = 'step' in operation ? operation.step : undefined;
-  if (
-    typeof operationStep === 'number' &&
-    Number.isSafeInteger(operationStep) &&
-    operationStep >= 0
-  ) {
-    return operationStep;
-  }
-  return Math.max(0, fallbackStepIndex - 1);
 }
 
 /** Delete the single checkpoint history entry that overflows the retention limit. */

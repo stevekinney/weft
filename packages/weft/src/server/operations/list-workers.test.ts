@@ -15,6 +15,8 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
 import { Engine } from '../../core/engine.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
@@ -22,8 +24,6 @@ import {
 } from '../../worker/registry-fixtures.test-support.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
@@ -342,7 +342,7 @@ describe('worker drain operations', () => {
       { workerId: 'worker-1' },
       {
         principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([createDrainWorkerOperation({ workerRegistry })]),
       },
@@ -377,12 +377,12 @@ describe('worker drain operations', () => {
     const workerResult = await executeOperation(
       'weft.workers.resume',
       { workerId: 'worker-1', reason: 'unused' },
-      { principal, engine, transport: 'jsonRpcStdio', registry },
+      { principal, host: engine, transport: 'jsonRpcStdio', registry },
     );
     const deploymentResult = await executeOperation(
       'weft.worker.deployments.resume',
       { deploymentName: 'payments', reason: 'unused' },
-      { principal, engine, transport: 'jsonRpcStdio', registry },
+      { principal, host: engine, transport: 'jsonRpcStdio', registry },
     );
 
     expect(workerResult.ok).toBe(false);
@@ -456,7 +456,7 @@ describe('worker drain operations', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: '' });
+    expect(await response.json()).toEqual({ error: '', retryable: false });
     expect(workerRegistry.getWorkerSummaries(2000)[0]?.health).toBe('active');
   });
 
@@ -469,7 +469,7 @@ describe('worker drain operations', () => {
       { workerId: 'missing-worker' },
       {
         principal,
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([createDrainWorkerOperation()]),
       },
@@ -483,7 +483,7 @@ describe('worker drain operations', () => {
       { workerId: 'missing-worker' },
       {
         principal,
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([
           createDrainWorkerOperation({ workerRegistry: new WorkerRegistry() }),
@@ -612,7 +612,7 @@ describe('weft.workers.list — operation behavior', () => {
         {},
         {
           principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-          engine,
+          host: engine,
           transport: 'jsonRpcStdio',
           registry: createOperationRegistry([operation]),
         },
@@ -636,7 +636,7 @@ describe('weft.workers.list — operation behavior', () => {
         {},
         {
           principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-          engine,
+          host: engine,
           transport: 'jsonRpcStdio',
           registry: createOperationRegistry([listWorkersOperation]),
         },

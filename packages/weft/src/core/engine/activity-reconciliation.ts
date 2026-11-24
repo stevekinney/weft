@@ -1,9 +1,9 @@
 import {
-  KEYS,
   requireStorageCapability,
   storageConditionalBatch,
   type Storage,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
@@ -328,7 +328,7 @@ export async function commitActivityReconciliationTransitionWithFencedWrite(
   );
 }
 
-function buildActivityReconciliationTransitionSideEffects(
+export function buildActivityReconciliationTransitionSideEffects(
   reference: ActivityReconciliationReference,
   expectedRecord: ActivityReconciliationRecord,
   nextRecord: ActivityReconciliationRecord,

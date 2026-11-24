@@ -18,22 +18,27 @@ import { WeftError } from '../weft-error.ts';
  * One slot in a {@link ParallelOperationCacheEntry}'s `branches` table.
  *
  * - `pending`: branch was dispatched but never observed to settle (e.g., the
- *   process crashed before its result was recorded). Re-dispatched on retry.
+ *   process crashed before its result was recorded). Re-dispatched on retry. A branch of an
+ *   advancing parallel step that has finished some of its steps carries their `results`, keyed by
+ *   the branch's own step numbers, so a recovered run resumes it where it stopped.
  * - `fulfilled`: branch completed successfully. Reused on retry; never re-runs.
  * - `rejected`: branch threw. Metadata only — never reused on retry; the
  *   branch re-dispatches just like a `pending` slot. The `reason` is a
  *   normalized `{ name, message }` because raw `Error` objects don't
- *   round-trip through MessagePack.
+ *   round-trip through MessagePack. A branch of an advancing parallel step keeps the `results` of
+ *   the steps it finished before it threw, as a `pending` one does: a signal one of them took is
+ *   consumed for good, so a recovered run replays those steps and runs only the one that threw.
  * - `aborted`: reserved for `ctx.race` losers. Never produced by
  *   `ctx.all`/`ctx.runAll` because they don't cancel siblings on failure.
  */
 export type ParallelBranchSlot =
-  | { status: 'pending'; operationId: string }
+  | { status: 'pending'; operationId: string; results?: [number, unknown][] }
   | { status: 'fulfilled'; value: unknown; operationId: string }
   | {
       status: 'rejected';
       reason: { name: string; message: string };
       operationId: string;
+      results?: [number, unknown][];
     }
   | { status: 'aborted'; operationId: string };
 
@@ -49,7 +54,7 @@ export type ParallelBranchSlot =
 export type ParallelOperationCacheEntry = {
   __weftParallelOperationCache: true;
   formatVersion: 2;
-  variant: 'all' | 'race' | 'run-all';
+  variant: 'all' | 'all-settled' | 'race' | 'run-all';
   branches: ParallelBranchSlot[];
   /** Ordered key list for `run-all` or `raceKeyed`; absent for `all` and positional `race`. */
   branchNames?: string[];
@@ -77,8 +82,8 @@ export class BranchTopologyChangedError extends WeftError<'BranchTopologyChanged
   }
 }
 
-function isValidVariant(value: unknown): value is 'all' | 'race' | 'run-all' {
-  return value === 'all' || value === 'race' || value === 'run-all';
+function isValidVariant(value: unknown): value is 'all' | 'all-settled' | 'race' | 'run-all' {
+  return value === 'all' || value === 'all-settled' || value === 'race' || value === 'run-all';
 }
 
 function isValidSlotStatus(
@@ -95,12 +100,27 @@ function isValidRejectionReason(value: unknown): boolean {
   return typeof reason['name'] === 'string' && typeof reason['message'] === 'string';
 }
 
+/** The step results a pending branch carries: absent, or a list of `[step, value]` pairs. */
+function isValidBranchResults(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    Array.isArray(value) &&
+    value.every((pair) => Array.isArray(pair) && pair.length === 2 && Number.isSafeInteger(pair[0]))
+  );
+}
+
 function isValidBranchSlot(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false;
   const slot = value as Record<string, unknown>;
   if (!isValidSlotStatus(slot['status'])) return false;
   if (typeof slot['operationId'] !== 'string') return false;
   if (slot['status'] === 'rejected' && !isValidRejectionReason(slot['reason'])) return false;
+  if (
+    (slot['status'] === 'pending' || slot['status'] === 'rejected') &&
+    !isValidBranchResults(slot['results'])
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -122,7 +142,7 @@ function hasParallelOperationCacheMarker(value: unknown): boolean {
 }
 
 function hasValidBranchTopology(
-  variant: 'all' | 'race' | 'run-all',
+  variant: 'all' | 'all-settled' | 'race' | 'run-all',
   branches: unknown[],
   subOperationCount: number,
   branchNames: unknown,
@@ -206,7 +226,7 @@ export function assertValidParallelOperationCacheEntry(value: unknown): void {
 
 /** Build a fresh v2 cache entry with the given branch slots. */
 export function createParallelOperationCacheEntry(
-  variant: 'all' | 'race' | 'run-all',
+  variant: 'all' | 'all-settled' | 'race' | 'run-all',
   branches: ParallelBranchSlot[],
   subOperationCount: number,
   branchNames?: string[],
@@ -219,4 +239,13 @@ export function createParallelOperationCacheEntry(
     ...(branchNames !== undefined ? { branchNames } : {}),
     subOperationCount,
   };
+}
+
+/** The engine settles reasons as `{ name, message }`; anything else is coerced to it. */
+export function durableRejectionReason(reason: unknown): { name: string; message: string } {
+  if (typeof reason === 'object' && reason !== null) {
+    const { name, message } = reason as { name?: unknown; message?: unknown };
+    if (typeof name === 'string' && typeof message === 'string') return { name, message };
+  }
+  return { name: 'Error', message: String(reason) };
 }

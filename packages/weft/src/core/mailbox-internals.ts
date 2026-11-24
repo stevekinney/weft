@@ -11,7 +11,7 @@
  * @module core/mailbox-internals
  */
 
-import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition, Storage } from "../embedded/storage/src/index.ts";
 import { AttemptRegistry } from './application-primitive-attempt-registry.ts';
 import type { ApplicationCommandReceipt, MailboxEventSink } from './mailbox-contract.ts';
 import {

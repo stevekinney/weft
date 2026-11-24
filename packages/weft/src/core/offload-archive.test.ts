@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { TestEngine } from '../testing/test-engine.ts';
 import { decode, encode } from './codec.ts';
 import type { OffloadReference } from './context.ts';
@@ -192,7 +192,7 @@ describe('offload, load, and archive', () => {
 
     const handle = await engine.start('offload-step', {});
     // Let the offload complete and the workflow pause at waitForSignal
-    await sleepForTesting(10);
+    await settleInlineLaunches();
 
     // Recover engine (simulates process restart)
     await using recovered = engine.recover();

@@ -48,7 +48,8 @@
  * @module core/catalog/removal
  */
 
-import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
+import { storageConditionalBatch, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decodeActivePointer } from './codec.ts';
 
 /**

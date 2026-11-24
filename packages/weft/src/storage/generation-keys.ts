@@ -10,7 +10,7 @@
  * @module storage/generation-keys
  */
 
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 
 /**
  * A monotonic per-workflow-id generation counter, spread into `KEYS`; not

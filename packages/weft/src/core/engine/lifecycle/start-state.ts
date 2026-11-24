@@ -8,6 +8,7 @@
  */
 
 import { inheritWorkflowWorkerBinding } from '../../../worker/binding-helpers.ts';
+import { assertInheritedWorkerBuildNotRemoved } from '../../../worker/inherited-worker-build.ts';
 import type { WorkflowWorkerBinding } from '../../../worker/versioning-policy.ts';
 import { resolveWorkflowWorkerStartBinding } from '../../../worker/versioning-policy.ts';
 import { createCheckpoint } from '../../checkpoint.ts';
@@ -78,6 +79,11 @@ export async function resolveInitialWorkerBinding(
     terminalRunToPurge?.workerBinding !== undefined &&
     options?.workerStartOverridePreview === undefined
   ) {
+    // A terminal run's binding is not counted by a build's removal, so the build is checked here.
+    await assertInheritedWorkerBuildNotRemoved(
+      internals.storage,
+      terminalRunToPurge.workerBinding.current,
+    );
     return inheritWorkflowWorkerBinding(terminalRunToPurge.workerBinding.current, {
       workflowId,
       boundAt: submissionTime,

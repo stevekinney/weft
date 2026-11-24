@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { Engine } from '../engine.ts';
 import { CleanupWarningEvent } from '../events.ts';
@@ -11,8 +15,6 @@ import { workflow } from '../types.ts';
 import { copyWorkflowDefinition } from './construction.ts';
 import { getInternals } from './internals.ts';
 import { buildRegistrationEntry } from './registration.ts';
-
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
 
 type HeldCall = { kind: 'read' | 'delete' | 'commit'; key: string };
 
@@ -213,6 +215,7 @@ describe('retention sweep disposal', () => {
     });
     // The held commit is the only thing disposal can be waiting on, so nothing
     // but the release below can let it finish.
+    // load-proof: negative window: disposal waits on a held commit that only the release below can free, so load can only delay it, never complete it
     await Bun.sleep(0);
     expect(disposalSettled).toBe(false);
 
@@ -251,6 +254,7 @@ describe('retention sweep disposal', () => {
     const disposal = engine[Symbol.asyncDispose]().then(() => {
       disposalSettled = true;
     });
+    // load-proof: negative window: disposal waits on a held commit that only the release below can free, so load can only delay it, never complete it
     await Bun.sleep(0);
     expect(disposalSettled).toBe(false);
 
@@ -276,6 +280,7 @@ describe('retention sweep disposal', () => {
     const disposal = engine[Symbol.asyncDispose]().then(() => {
       disposalSettled = true;
     });
+    // load-proof: negative window: disposal waits on a held commit that only the release below can free, so load can only delay it, never complete it
     await Bun.sleep(0);
     expect(disposalSettled).toBe(false);
 

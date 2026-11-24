@@ -1,14 +1,15 @@
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { z } from 'zod';
 import { Engine } from '../core/engine.ts';
 import { workflow } from '../core/types.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import type { HandlerOptions } from './handler.ts';
+
+import { defineOperation, type AuthConfig, type DiscoveryInfo } from "../embedded/backchannel/src/index.ts";
 import {
   serve,
   TaskQueue,
   WorkerRegistry,
-  type AuthConfig,
-  type DiscoveryInfo,
   type PrometheusExporter,
   type RetryPolicy,
   type RoutingPolicy,
@@ -57,13 +58,6 @@ const invalidRoutesServeOptions: ServeOptions = {
   routes: { '/status': { shell: true } },
 };
 void invalidRoutesServeOptions;
-
-const removedDashboardServeOptions: ServeOptions = {
-  engine,
-  // @ts-expect-error `dashboard` is no longer a server option; dashboard() mounts the dashboard.
-  dashboard: new Response('<html></html>'),
-};
-void removedDashboardServeOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public server option.
 const rejectedServeOptions: ServeOptions = { engine, metricsCollector: new MetricsCollector() };
@@ -204,3 +198,43 @@ async function verifyConcreteWorkflowRegistryEngineAcceptedByServe(): Promise<vo
   void concreteEngineServer;
 }
 void verifyConcreteWorkflowRegistryEngineAcceptedByServe;
+
+// `serve()` hands each foreign operation its `Engine` as `host`. An operation
+// that needs a capability an engine lacks is a compile error, and one that
+// declares only what an engine has (or nothing) is accepted.
+const needsFeeds = defineOperation<
+  z.ZodObject<{}>,
+  z.ZodObject<{}>,
+  { readonly bureauFeeds: ReadonlyMap<string, never> }
+>({
+  name: 'probe.feeds',
+  mcpExposable: false,
+  summary: 'needs a host the engine is not',
+  destructive: false,
+  inputSchema: z.object({}),
+  outputSchema: z.object({}),
+  access: { kind: 'public' },
+  transports: { http: false, jsonRpcHttp: true, jsonRpcWebSocket: false, jsonRpcStdio: false },
+  unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+  invoke: async ({ host }) => {
+    void host.bureauFeeds;
+    return {};
+  },
+});
+const needsNothing = defineOperation({
+  name: 'probe.nothing',
+  mcpExposable: false,
+  summary: 'needs no host',
+  destructive: false,
+  inputSchema: z.object({}),
+  outputSchema: z.object({}),
+  access: { kind: 'public' },
+  transports: { http: false, jsonRpcHttp: true, jsonRpcWebSocket: false, jsonRpcStdio: false },
+  unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+  invoke: async () => ({}),
+});
+const acceptedOperations: ServeOptions = { engine, operations: [needsNothing] };
+void acceptedOperations;
+// @ts-expect-error — an engine has no `bureauFeeds`, so serve() cannot host this operation.
+const rejectedOperations: ServeOptions = { engine, operations: [needsFeeds] };
+void rejectedOperations;

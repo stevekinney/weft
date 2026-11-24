@@ -15,8 +15,10 @@ export type SchedulesOperationTypes = {
       readonly id?: unknown;
       readonly input?: unknown;
       readonly jitter?: unknown;
+      readonly metadata?: unknown;
       readonly overlap?: unknown;
       readonly revisionPolicy?: unknown;
+      readonly timeZone?: unknown;
       readonly type: unknown;
     };
     readonly output: { readonly id: string };
@@ -37,6 +39,19 @@ export type SchedulesOperationTypes = {
     readonly output: unknown;
     readonly faults: 'Conflict';
   };
+  'weft.schedules.missed': {
+    readonly input: { readonly limit?: unknown; readonly scheduleId: string };
+    readonly output: {
+      readonly missed: ReadonlyArray<{
+        readonly count: number;
+        readonly occurrence: number;
+        readonly reason: 'late' | 'dst-gap';
+        readonly recordedAt: number;
+        readonly scheduleId: string;
+      }>;
+    };
+    readonly faults: 'Conflict' | 'NotFound';
+  };
   'weft.schedules.pause': {
     readonly input: { readonly scheduleId: string };
     readonly output: unknown;
@@ -47,16 +62,46 @@ export type SchedulesOperationTypes = {
     readonly output: unknown;
     readonly faults: 'Conflict' | 'NotFound';
   };
+  'weft.schedules.runnow': {
+    readonly input: { readonly scheduleId: string };
+    readonly output:
+      | { readonly outcome: 'started'; readonly workflowId: string }
+      | { readonly outcome: 'queued'; readonly workflowId: string }
+      | { readonly blockingWorkflowId?: string; readonly outcome: 'skipped' };
+    readonly faults: 'Conflict' | 'NotFound';
+  };
+  'weft.schedules.skipnext': {
+    readonly input: {
+      readonly expectedRevision?: number;
+      readonly occurrence?: number;
+      readonly scheduleId: string;
+    };
+    readonly output: unknown;
+    readonly faults: 'Conflict' | 'NotFound' | 'StaleRevision';
+  };
+  'weft.schedules.unskip': {
+    readonly input: {
+      readonly expectedRevision?: number;
+      readonly occurrence: number;
+      readonly scheduleId: string;
+    };
+    readonly output: unknown;
+    readonly faults: 'Conflict' | 'NotFound' | 'StaleRevision';
+  };
   'weft.schedules.update': {
     readonly input: {
       readonly backfill?: unknown;
       readonly cronExpression?: unknown;
       readonly description?: unknown;
       readonly every?: unknown;
+      readonly input?: unknown;
       readonly jitter?: unknown;
+      readonly metadata?: unknown;
       readonly overlap?: unknown;
       readonly revisionPolicy?: unknown;
       readonly scheduleId: string;
+      readonly timeZone?: unknown;
+      readonly workflowType?: unknown;
     };
     readonly output: null;
     readonly faults: 'Conflict' | 'InvalidParams' | 'NotFound';

@@ -3,7 +3,7 @@ import type { ServerWebSocket } from 'bun';
 import { decode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
 import { loadStoredStreamTailSequence } from '../../core/engine/stream-chunk-loading.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import type { ServerContext } from './context.ts';
 
@@ -76,7 +76,7 @@ export async function getHighestStoredWatchSequence(
   engine: Engine,
   workflowId: string,
 ): Promise<number> {
-  const prefix = KEYS.eventPrefix(workflowId);
+  const prefix = KEYS.watchEventPrefix(workflowId);
 
   for await (const [storageKey] of engine.storage.scan(prefix, { reverse: true, limit: 50 })) {
     const sequence = parseSequenceFromEventKey(prefix, storageKey);
@@ -366,8 +366,8 @@ export async function replayWatchEvents(
         ? -1
         : Math.min(requestedResumeFrom, await getHighestStoredWatchSequence(engine, workflowId));
     ws.data.watchLastDeliveredSequence = after;
-    const prefix = KEYS.eventPrefix(workflowId);
-    const scanOptions = after >= 0 ? { gt: KEYS.event(workflowId, after) } : undefined;
+    const prefix = KEYS.watchEventPrefix(workflowId);
+    const scanOptions = after >= 0 ? { gt: KEYS.watchEvent(workflowId, after) } : undefined;
 
     for await (const [storageKey, value] of engine.storage.scan(prefix, scanOptions)) {
       const sequence = parseSequenceFromEventKey(prefix, storageKey);
@@ -426,7 +426,7 @@ function closeWatchSocketForReplayLimit(
   removeWorkflowStreamConnection(context, ws);
 }
 
-function decodeStoredWatchEvent(value: Uint8Array): unknown {
+export function decodeStoredWatchEvent(value: Uint8Array): unknown {
   try {
     return decode(value);
   } catch {
@@ -434,7 +434,7 @@ function decodeStoredWatchEvent(value: Uint8Array): unknown {
   }
 }
 
-function parseSequenceFromEventKey(prefix: string, storageKey: string): number | null {
+export function parseSequenceFromEventKey(prefix: string, storageKey: string): number | null {
   if (!storageKey.startsWith(prefix)) return null;
   const rawSequence = storageKey.slice(prefix.length);
   if (!/^\d+$/.test(rawSequence)) return null;
@@ -442,7 +442,7 @@ function parseSequenceFromEventKey(prefix: string, storageKey: string): number |
   return Number.isSafeInteger(sequence) ? sequence : null;
 }
 
-function isStoredWatchEvent(
+export function isStoredWatchEvent(
   value: unknown,
 ): value is { type: string; timestamp: number; data: Record<string, unknown> } {
   if (typeof value !== 'object' || value === null) return false;

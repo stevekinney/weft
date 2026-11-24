@@ -1,0 +1,68 @@
+import { HANG_GUARD_MILLISECONDS, spawnWithHangGuard } from "../test-support/embedded/testing/src/hang-guard.ts";
+import { outcomeOf, rethrow } from "../test-support/embedded/testing/src/module-scope-scenario.ts";
+import { expect, it } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+async function readHealthAddress(output: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = output.getReader();
+  const decoder = new TextDecoder();
+  let received = '';
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) throw new Error(`CLI exited before readiness: ${received}`);
+      received += decoder.decode(next.value, { stream: true });
+      const match = /Health check: (http:\/\/[^\s]+)\n/.exec(received);
+      if (match?.[1]) return match[1];
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// This scenario starts the source CLI as a real process, which takes seconds on a loaded host, so each scenario runs here at
+// module scope, off Bun's five-second per-test clock; its test rethrows the outcome.
+
+const scenario1 = await outcomeOf(async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'corvidae-cli-start-'));
+  const child = spawnWithHangGuard(
+    [
+      process.execPath,
+      new URL('./cli-main.ts', import.meta.url).pathname,
+      '--port',
+      '0',
+      '--database',
+      ':memory:',
+      '--storage',
+      'memory',
+    ],
+    {
+      env: { ...process.env, NODE_ENV: 'production', WEFT_HOME: directory },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  );
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const address = await Promise.race([
+      readHealthAddress(child.stdout),
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(
+          () => reject(new Error('CLI readiness exceeded the hang guard.')),
+          HANG_GUARD_MILLISECONDS,
+        );
+      }),
+    ]);
+    const response = await fetch(address);
+    expect(response.status).toBe(200);
+  } finally {
+    clearTimeout(deadline);
+    child.kill('SIGTERM');
+    await child.exited;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('starts the source CLI and serves a health request', () => rethrow(scenario1));

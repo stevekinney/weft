@@ -8,16 +8,21 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { encode } from '../../core/codec.ts';
+import { decodeTaskAttemptRecord, taskAttemptPrefix } from '../../core/task-ledger/task-attempt.ts';
 import {
   decodeRemoteTaskRecord,
   encodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskQueued,
 } from '../../core/task-ledger/task-ledger.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { KEYS } from '../../storage/keys.ts';
 import {
   TEST_ACCEPTED_MANIFEST_DIGEST,
   testWorkerManifest,
@@ -26,8 +31,7 @@ import { minimalServeOptions, minimalServerContext } from './server-context.test
 import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
 import { commitTaskLedgerCompletion } from './task-ledger-completion.ts';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import type { ServerContext } from './context.ts';
 
 const createMinimalContext = minimalServerContext;
@@ -147,6 +151,49 @@ describe('dispatchTaskImpl', () => {
     });
 
     expect(context.registry.isAssigned('op-assign')).toBe(true);
+  });
+
+  it('routes around a worker whose socket dropped and whose reconnect grace window is still open', async () => {
+    context = createMinimalContext();
+    options = createMinimalOptions();
+
+    const sentTo: string[] = [];
+    for (const workerId of ['worker-draining', 'worker-ready']) {
+      context.registry.register({
+        manifest: testWorkerManifest(),
+        acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+        id: workerId,
+        queue: 'default',
+        activities: ['doWork'],
+        concurrency: 5,
+      });
+      context.workerSockets.set(workerId, {
+        send: () => {
+          sentTo.push(workerId);
+        },
+      } as never);
+    }
+    // The first worker's socket closed and the server is holding its session for a same-id
+    // re-register, so a frame sent to it would go to a dead socket.
+    const timer = setTimeout(() => {}, 60_000);
+    context.pendingWorkerRequeues.set('worker-draining', { timer, endsAt: Date.now() + 60_000 });
+
+    try {
+      for (const operationId of ['op-grace-1', 'op-grace-2', 'op-grace-3']) {
+        const dispatched = await dispatchTaskImpl(context, options, {
+          operationId,
+          activityName: 'doWork',
+          workflowType: 'testWorkflow',
+          queue: 'default',
+          input: null,
+        });
+        expect(dispatched).toBe(true);
+      }
+
+      expect(sentTo).toEqual(['worker-ready', 'worker-ready', 'worker-ready']);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   it('records workflow affinity after WebSocket dispatch with workflowId', async () => {
@@ -820,5 +867,66 @@ describe('dispatchTaskImpl revision staleness (WFT-20)', () => {
     expect(sentMessages).toHaveLength(1);
     const msg = JSON.parse(sentMessages[0]!);
     expect(msg.workflowRevision).toBe('revision-echoed');
+  });
+
+  it('echoes prior heartbeat details to the worker and records the execution requirement on the claim', async () => {
+    const operationId = 'op-redispatch-details';
+    const storage = new MemoryStorage();
+    const executionRequirement = { deploymentName: 'test-deployment', buildId: 'b1' };
+    const existing: RemoteTaskQueued = {
+      recordVersion: 1,
+      operationId,
+      workflowType: 'testWorkflow',
+      activityName: 'doWork',
+      queue: 'default',
+      input: null,
+      headers: {},
+      visibilityTimeoutMilliseconds: 30_000,
+      createdAt: Date.now(),
+      generation: 0,
+      state: 'queued',
+      attempt: 2,
+      availableAt: Date.now(),
+      firstQueuedAt: Date.now(),
+      lastQueuedAt: Date.now(),
+      retryCount: 1,
+      requeueCount: 0,
+      lastHeartbeatDetails: { processed: 41 },
+      executionRequirement,
+    };
+    await storage.put(taskLedgerKey(operationId), encodeRemoteTaskRecord(existing));
+
+    context = createMinimalContext();
+    const options = createMinimalOptions(storage);
+    const sentMessages: string[] = [];
+    context.registry.register({
+      manifest: testWorkerManifest(),
+      acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+      id: 'worker-redispatch',
+      queue: 'default',
+      activities: ['doWork'],
+      concurrency: 5,
+    });
+    context.workerSockets.set('worker-redispatch', {
+      send: (msg: string) => sentMessages.push(msg),
+    } as never);
+
+    const dispatched = await dispatchTaskImpl(context, options, {
+      operationId,
+      activityName: 'doWork',
+      workflowType: 'testWorkflow',
+      queue: 'default',
+      input: null,
+    });
+
+    expect(dispatched).toBe(true);
+    expect(sentMessages).toHaveLength(1);
+    expect(JSON.parse(sentMessages[0]!).lastHeartbeatDetails).toEqual({ processed: 41 });
+    const attempts: unknown[] = [];
+    for await (const [, value] of options.engine.storage.scan(taskAttemptPrefix(operationId))) {
+      attempts.push(decodeTaskAttemptRecord(value));
+    }
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ attempt: 2, executionRequirement });
   });
 });

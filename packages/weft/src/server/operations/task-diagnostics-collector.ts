@@ -1,8 +1,8 @@
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import {
   decodeRemoteTaskRecord,
   type RemoteTaskRecord,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { Storage } from '../../storage/interface.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
 import type { TaskQueue } from '../task-queue.ts';
 import {
@@ -19,6 +19,26 @@ import type {
 } from './get-task-diagnostics.ts';
 import { matchesExecutionIdentityFilter } from './task-attempt-identity-filter.ts';
 import { addCapacityDiagnostics } from './task-diagnostics-capacity.ts';
+
+const DURATION_UNITS = [
+  [86_400_000, 'day'],
+  [3_600_000, 'hour'],
+  [60_000, 'minute'],
+  [1_000, 'second'],
+] as const;
+
+/**
+ * A duration as the evidence says it to a person (COR-2009): its largest whole unit, rounded
+ * down, such as `2 minutes` or `1 second`, and `less than a second` below one. Never milliseconds.
+ */
+export function durationInWords(milliseconds: number): string {
+  for (const [size, unit] of DURATION_UNITS) {
+    if (milliseconds < size) continue;
+    const count = Math.floor(milliseconds / size);
+    return `${count} ${unit}${count === 1 ? '' : 's'}`;
+  }
+  return 'less than a second';
+}
 
 export async function collectTaskDiagnostics({
   engine,
@@ -125,7 +145,9 @@ function addDelayedDiagnostic(
     retryCount: record.retryCount,
     requeueCount: record.requeueCount,
     availableAt: record.availableAt,
-    evidence: [`Task is delayed until ${record.availableAt} on queue "${record.queue}"`],
+    evidence: [
+      `Task is delayed until ${new Date(record.availableAt).toISOString()} on queue "${record.queue}"`,
+    ],
   });
 }
 
@@ -144,7 +166,9 @@ function addUnadoptedTerminalDiagnostic(
     queue: record.queue,
     terminalAt: record.terminalAt,
     adopted: false,
-    evidence: [`Terminal task has remained unadopted for ${currentTime - record.terminalAt}ms`],
+    evidence: [
+      `Terminal task has remained unadopted for ${durationInWords(currentTime - record.terminalAt)}`,
+    ],
   });
 }
 
@@ -168,7 +192,7 @@ function addQueuedDiagnostics(
     queueLatencyMs,
     lastRequeueReason: record.lastRequeueReason,
     evidence: [
-      `Task has waited ${queueLatencyMs}ms in queue "${record.queue}" without a worker claim`,
+      `Task has waited ${durationInWords(queueLatencyMs)} in queue "${record.queue}" without a worker claim`,
     ],
   });
 }
@@ -196,7 +220,7 @@ function addInflightDiagnostics(
     heartbeatAgeMs,
     lastRequeueReason: record.lastRequeueReason,
     evidence: [
-      `Worker "${record.workerSessionId}" has not sent a heartbeat for ${heartbeatAgeMs}ms on queue "${record.queue}"`,
+      `Worker "${record.workerSessionId}" has not sent a heartbeat for ${durationInWords(heartbeatAgeMs)} on queue "${record.queue}"`,
     ],
   });
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   extractSharedScheduleRestFields,
   parseScheduleRestBodyRequestRecord,
@@ -54,7 +54,9 @@ describe('schedule REST body extraction', () => {
       overlap: undefined,
       backfill: undefined,
       jitter: undefined,
+      timeZone: undefined,
       revisionPolicy: undefined,
+      metadata: undefined,
     });
   });
 
@@ -63,6 +65,7 @@ describe('schedule REST body extraction', () => {
       every: undefined,
       overlap: 'queue',
       jitter: '30s',
+      timeZone: 'America/Los_Angeles',
       revisionPolicy: 'pinned',
     });
 
@@ -73,7 +76,9 @@ describe('schedule REST body extraction', () => {
       overlap: 'queue',
       backfill: undefined,
       jitter: '30s',
+      timeZone: 'America/Los_Angeles',
       revisionPolicy: 'pinned',
+      metadata: undefined,
     });
   });
 });

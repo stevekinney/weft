@@ -9,13 +9,13 @@
  * conditionalBatch is transactionally atomic — MemoryStorage's in-process Map
  * serializes operations and cannot model two engines racing for the same lease.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
-import { BunSQLiteStorage } from '../../storage/bun-sql.ts';
-import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { type Storage, type StorageCapabilities, MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { BunSQLiteStorage } from "../../embedded/storage-bun-sqlite/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { workflow } from '../types.ts';
 import {
   Engine,
@@ -75,6 +75,12 @@ function failNextQueuedStartDrain<TWorkflows extends object, TActivities extends
 
 type CapturedWarning = { name: string; message: string };
 
+/** Give a listener the chance to see a warning before a test asserts that none was emitted. */
+// load-proof: negative window: a warning only ever arrives later under load, never earlier, so asserting its absence after this turn cannot flip
+async function drainWarningDelivery(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 function createLeasedPingEngine(storage: MemoryStorage, getNow: () => number) {
   return Engine.create({
     storage,
@@ -116,7 +122,6 @@ async function withUnconfirmableLeaseRenewal(
     const manager = getInternals(engine).leaseManager;
     expect(manager).not.toBeNull();
     await manager!.renewOnce();
-    await new Promise((resolve) => setImmediate(resolve));
     await runAssertions({ engine, storage, warnings });
   } finally {
     storage.conditionalBatch = originalConditionalBatch;
@@ -360,6 +365,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       // fired before we assert. (No wall-clock sleep — the acquire poll interval is
       // 1s by default, which a 30ms sleep could never reliably outwait.)
       await recover.catch(() => {});
+      // load-proof: negative window: an unhandled-rejection notification only ever arrives later under load, never earlier, so asserting there is none cannot flip
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(unhandled).toEqual([]);
@@ -493,7 +499,12 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       const manager = getInternals(engine).leaseManager;
       expect(manager).not.toBeNull();
       await manager!.renewOnce();
-      await new Promise((resolve) => setImmediate(resolve));
+      await waitForCondition(
+        () => warnings.some((w) => w.name === ENGINE_LEASE_LOST_WARNING_NAME),
+        {
+          label: 'the lease-lost warning to be delivered',
+        },
+      );
     } finally {
       process.off('warning', listener);
     }
@@ -505,7 +516,8 @@ describe("Engine.create({ ownership: 'lease' })", () => {
   });
 
   it('tolerates an unconfirmed lease renewal before expiry without warning or halt', async () => {
-    await withUnconfirmableLeaseRenewal(1_001, ({ engine, warnings }) => {
+    await withUnconfirmableLeaseRenewal(1_001, async ({ engine, warnings }) => {
+      await drainWarningDelivery();
       expect(warnings).toEqual([]);
       expect(getInternals(engine).deposed).toBe(false);
       expect(getInternals(engine).leaseManager).not.toBeNull();
@@ -513,7 +525,11 @@ describe("Engine.create({ ownership: 'lease' })", () => {
   });
 
   it('warns without deposing the engine when renewal becomes unconfirmable after expiry', async () => {
-    await withUnconfirmableLeaseRenewal(2_001, ({ engine, warnings }) => {
+    await withUnconfirmableLeaseRenewal(2_001, async ({ engine, warnings }) => {
+      await waitForCondition(
+        () => warnings.some((warning) => warning.name === ENGINE_LEASE_LOST_WARNING_NAME),
+        { label: 'the lease-lost warning to be delivered' },
+      );
       expect(warnings.some((warning) => warning.name === ENGINE_LEASE_LOST_WARNING_NAME)).toBe(
         true,
       );
@@ -538,7 +554,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     process.on('warning', listener);
     try {
       engine[Symbol.dispose]();
-      await new Promise((resolve) => setImmediate(resolve));
+      await drainWarningDelivery();
     } finally {
       process.off('warning', listener);
     }
@@ -561,7 +577,13 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     process.on('warning', listener);
     try {
       engine[Symbol.dispose]();
-      await new Promise((resolve) => setImmediate(resolve));
+      await waitForCondition(
+        () =>
+          warnings.some(
+            (warning) => warning.name === ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
+          ),
+        { label: 'the synchronous-dispose warning to be delivered' },
+      );
     } finally {
       process.off('warning', listener);
     }
@@ -591,7 +613,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     try {
       second[Symbol.dispose]();
       await recover.catch(() => {});
-      await new Promise((resolve) => setImmediate(resolve));
+      await drainWarningDelivery();
     } finally {
       process.off('warning', listener);
     }
@@ -780,6 +802,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     void shutdown.finally(() => {
       shutdownSettled = true;
     });
+    // load-proof: negative window: shutdown is blocked on a held storage step that only the test can release, so load can only delay it, never complete it
     await new Promise((resolve) => setImmediate(resolve));
     expect(shutdownSettled).toBe(false);
 
@@ -866,6 +889,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // Settle the deliberately non-cooperative body after disposal so the test
     // leaves no retained pending generator promise.
     releaseBody.resolve();
+    // load-proof: nothing load-dependent follows; only in-memory storage is disposed and no assertion reads the released body
     await new Promise((resolve) => setImmediate(resolve));
     storage[Symbol.dispose]?.();
   });
@@ -999,6 +1023,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(await readHolder(storage)).toBeNull();
 
     releaseNonCooperativeBody.resolve();
+    // load-proof: nothing load-dependent follows; only in-memory storage is disposed and no assertion reads the released body
     await new Promise((resolve) => setImmediate(resolve));
     storage[Symbol.dispose]?.();
   });
@@ -1077,6 +1102,25 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('reports a release that throws during deposition teardown as not released', async () => {
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const leaseManager = getInternals(engine).leaseManager;
+    if (leaseManager === null) throw new Error('A lease-mode engine holds a lease manager.');
+    const release = spyOn(leaseManager, 'release').mockRejectedValue(new Error('release failed'));
+
+    getInternals(engine).tearDownAfterDeposition?.();
+
+    // The teardown swallows the rejection, and shutdown reports the release as not done.
+    expect(await engine.shutdown()).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    storage[Symbol.dispose]?.();
+  });
+
   it('preserves an asyncDispose override when shutdown is called concurrently', async () => {
     let overrideCalls = 0;
     class OverrideEngine extends Engine {
@@ -1122,6 +1166,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     void shutdown.finally(() => {
       shutdownSettled = true;
     });
+    // load-proof: negative window: shutdown is blocked on a held storage step that only the test can release, so load can only delay it, never complete it
     await new Promise((resolve) => setImmediate(resolve));
     expect(shutdownSettled).toBe(false);
 

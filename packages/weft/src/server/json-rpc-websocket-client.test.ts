@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { waitForMessage } from './json-rpc-websocket-client.test-support.ts';
 
 /**
@@ -52,6 +52,7 @@ describe('waitForMessage', () => {
   it('rejects after the timeout when no matching frame arrives', async () => {
     const { ws } = fakeWebSocket();
 
+    // hang-guard-self-test: no frame ever matches, so no load can satisfy the wait before it gives up
     expect(await throwingRejectionOf(waitForMessage(ws, () => false, 10))).toThrow(/timed out/i);
   });
 });

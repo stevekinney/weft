@@ -1,11 +1,13 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  isOperationFault,
+  readRestJsonBody,
+} from "../../embedded/backchannel/src/internals.ts";
 import type { ReviewDecision, SubmitReviewOptions } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { assertOperationEngineMethods, isOperationFault } from './operation-helpers.ts';
+import { assertOperationEngineMethods } from './operation-helpers.ts';
 
 const VALID_DECISIONS = [
   'approved',
@@ -16,12 +18,28 @@ const VALID_DECISIONS = [
 const sectionDecisionsSchema = z.record(z.string(), z.enum(['approved', 'rejected']));
 
 const submitReviewDecisionInput = z.object({
-  reviewId: z.string().min(1),
-  decision: z.unknown().optional(),
-  reviewer: z.unknown().optional(),
-  feedback: z.unknown().optional(),
-  sectionDecisions: z.unknown().optional(),
-  workflowId: z.unknown().optional(),
+  reviewId: z.string().min(1).describe('Id of the review request being decided.'),
+  decision: z
+    .unknown()
+    .optional()
+    .describe('Decision to record: "approved", "rejected", or "needs-changes". Required.'),
+  reviewer: z
+    .unknown()
+    .optional()
+    .describe('Identifier of the person or system recording the decision. Required.'),
+  feedback: z.unknown().optional().describe('Free-text feedback recorded with the decision.'),
+  sectionDecisions: z
+    .unknown()
+    .optional()
+    .describe(
+      'Per-section decisions for partial approval, keyed by section name, each "approved" or "rejected".',
+    ),
+  workflowId: z
+    .unknown()
+    .optional()
+    .describe(
+      'Id of the workflow the review belongs to; when given, the review is found by direct lookup instead of a scan.',
+    ),
 });
 const submitReviewDecisionOutput = z.object({
   ok: z.literal(true),
@@ -158,11 +176,12 @@ export const submitReviewDecisionOperation = defineOperation({
   tags: ['Reviews'],
   inputSchema: submitReviewDecisionInput,
   outputSchema: submitReviewDecisionOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['reviews:write'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<SubmitReviewDecisionOutput> => {
+  invoke: async ({ input, host: engine }): Promise<SubmitReviewDecisionOutput> => {
     assertOperationEngineMethods(engine, ['submitReview']);
     const e = engine;
 

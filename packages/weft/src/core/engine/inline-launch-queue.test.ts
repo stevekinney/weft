@@ -1,15 +1,17 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { Engine } from '../engine.ts';
 import { workflow, type WorkflowContext } from '../types.ts';
 import { CURRENT_CHECKPOINT_SCHEMA_VERSION } from '../types/checkpoint.ts';
 import {
   flushQueuedInlineWorkflowStartsDirectly,
+  isEngineHeldForScheduledInlineFlushForTesting,
   queueInlineWorkflowExecutionStart,
 } from './inline-launch-queue.ts';
 import { getInternals } from './internals.ts';
+import { hasQueuedInlineWorkflowStart } from './local-execution.ts';
 
 describe('inline launch queue', () => {
   it('falls back to a timeout flush when no message channel is available', async () => {
@@ -50,13 +52,15 @@ describe('inline launch queue', () => {
         swallowPromiseRejection,
       },
     );
+    // COR-1425: the timeout flush is scheduled, so the engine is held until it runs.
+    expect(isEngineHeldForScheduledInlineFlushForTesting(internals)).toBe(true);
 
-    await yieldToEventLoop();
-    await yieldToEventLoop();
+    await settleInlineLaunches();
 
     expect(swallowPromiseRejection.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(onStarted).toHaveBeenCalledTimes(1);
     expect(internals.queuedInlineWorkflowStartFlushScheduled).toBe(false);
+    expect(isEngineHeldForScheduledInlineFlushForTesting(internals)).toBe(false);
   });
 
   describe("startQueuedInlineWorkflowExecution: ADR 0002 'inline-macrotask-drive' wake kind", () => {
@@ -148,7 +152,7 @@ describe('inline launch queue', () => {
       // still settles — matching the existing skip-path contract.
       expect(started).toBe(false);
       expect(onStarted).toHaveBeenCalledTimes(1);
-      expect(internalsB.queuedInlineWorkflowStartIds.has('wf-successor-owned')).toBe(false);
+      expect(hasQueuedInlineWorkflowStart(internalsB, 'wf-successor-owned')).toBe(false);
     });
 
     it('discards a queued start whose workflowExecutionToken no longer matches the live run (WFT-79)', async () => {
@@ -168,7 +172,7 @@ describe('inline launch queue', () => {
       // The real, live run for this id — `defer: false` awaits its queued
       // macrotask start completing, so by the time this resolves the
       // durably-persisted state carries the REAL token and
-      // `queuedInlineWorkflowStartIds` no longer contains this id.
+      // the id's queued record is gone.
       await engine.start('inline-launch-queue-ownership-parked', null, {
         id: 'wf-replaced-run',
         defer: false,
@@ -223,7 +227,66 @@ describe('inline launch queue', () => {
       // 'workflow:started' fired), yet the liveness callback still settles.
       expect(startedCount).toBe(1);
       expect(onStarted).toHaveBeenCalledTimes(1);
-      expect(internals.queuedInlineWorkflowStartIds.has('wf-replaced-run')).toBe(false);
+      expect(hasQueuedInlineWorkflowStart(internals, 'wf-replaced-run')).toBe(false);
+    });
+
+    it('discards a queued pre-token start once a token-bearing replacement holds the id (COR-1604)', async () => {
+      await using storage = new MemoryStorage();
+      await using engine = await Engine.create({
+        storage,
+        workflows: { 'inline-launch-queue-ownership-parked': parkOnSignal },
+      });
+      let startedCount = 0;
+      engine.addEventListener('workflow:started', () => {
+        startedCount += 1;
+      });
+      const onStarted = mock(() => {});
+      const internals = getInternals(engine);
+
+      // The token-bearing replacement that now holds the id.
+      await engine.start('inline-launch-queue-ownership-parked', null, {
+        id: 'wf-pre-token-replaced',
+        defer: false,
+      });
+      expect(startedCount).toBe(1);
+
+      // A launch queued for the pre-token run the replacement superseded carries no
+      // token, which identifies that run rather than matching every later one.
+      const callbacks = {
+        processPendingUpdatesAfterInlineAdvance: async () => {},
+        swallowPromiseRejection: async (promise: Promise<unknown> | undefined) => {
+          await promise;
+        },
+      };
+      queueInlineWorkflowExecutionStart(
+        internals,
+        {
+          workflowId: 'wf-pre-token-replaced',
+          workflowType: 'inline-launch-queue-ownership-parked',
+          revision: undefined,
+          input: null,
+          checkpoint: {
+            workflowId: 'wf-pre-token-replaced',
+            step: 0,
+            locals: {},
+            accumulatedResults: [],
+            searchAttributes: {},
+            version: '1',
+            schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+            createdAt: 0,
+          },
+          nestingDepth: 0,
+          executionDeadline: undefined,
+          executionStateOwnerId: 'wf-pre-token-replaced-owner',
+          onStarted,
+        },
+        callbacks,
+      );
+      await flushQueuedInlineWorkflowStartsDirectly(internals, callbacks);
+
+      expect(startedCount).toBe(1);
+      expect(onStarted).toHaveBeenCalledTimes(1);
+      expect(hasQueuedInlineWorkflowStart(internals, 'wf-pre-token-replaced')).toBe(false);
     });
   });
 });

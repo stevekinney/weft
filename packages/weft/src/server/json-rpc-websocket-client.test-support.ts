@@ -12,6 +12,7 @@
  * near-identical copy.
  */
 
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
 import type { WeftServer } from './index.ts';
 import type { EventEnvelope } from './workflow-event-feed.ts';
 
@@ -23,7 +24,7 @@ import type { EventEnvelope } from './workflow-event-feed.ts';
 export function waitForMessage(
   ws: WebSocket,
   predicate: (parsed: unknown) => boolean,
-  timeoutMs = 3_000,
+  timeoutMs = HANG_GUARD_MILLISECONDS,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -75,7 +76,7 @@ export function openWebSocket(url: string, token?: string): Promise<WebSocket> {
  *
  * `apiKey` is presented as the upgrade Bearer token; `correlationPrefix`
  * distinguishes the subscribe request id so concurrent suites do not collide
- * on the same correlation id.
+ * on the same correlation id. `timeoutMs` bounds the wait like {@link waitForMessage}'s.
  */
 export async function collectWebSocketDeliveredEnvelopes(
   server: WeftServer,
@@ -83,6 +84,7 @@ export async function collectWebSocketDeliveredEnvelopes(
   expectedCount: number,
   apiKey: string,
   correlationPrefix = 'collect',
+  timeoutMs = HANG_GUARD_MILLISECONDS,
 ): Promise<EventEnvelope[]> {
   const webSocketUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
   const webSocket = await openWebSocket(webSocketUrl, apiKey);
@@ -96,7 +98,7 @@ export async function collectWebSocketDeliveredEnvelopes(
       const timer = setTimeout(() => {
         webSocket.removeEventListener('message', handler);
         reject(new Error('collectWebSocketDeliveredEnvelopes timed out'));
-      }, 3_000);
+      }, timeoutMs);
 
       function finish(value: EventEnvelope[]): void {
         clearTimeout(timer);

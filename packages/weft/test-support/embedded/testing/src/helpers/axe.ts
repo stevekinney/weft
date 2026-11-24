@@ -1,0 +1,106 @@
+import { AxeBuilder } from '@axe-core/playwright';
+import type { Page } from '@playwright/test';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { axeJsonPath, type ArtifactKey } from './artifact-path.ts';
+
+/** Severity assigned to an axe accessibility violation. */
+export type AxeImpact = 'critical' | 'serious' | 'moderate' | 'minor';
+/** One accessibility violation reported by axe. */
+export type AxeViolation = {
+  /** Stable axe rule identifier. */
+  id: string;
+  /** Violation severity. */
+  impact: AxeImpact;
+  /** Human-readable remediation title. */
+  help: string;
+  /** Documentation URL for the rule. */
+  helpUrl: string;
+  /** Description of the failed rule. */
+  description: string;
+  /** Standards tags associated with the rule. */
+  tags: string[];
+  /** DOM nodes that violated the rule. */
+  nodes: Array<{ target: Array<string | string[]>; html: string; failureSummary?: string }>;
+};
+/** Axe violations grouped by severity. */
+export type AxeBuckets = Record<AxeImpact, AxeViolation[]>;
+/** The Axe rule tags every component run uses: WCAG 2.0 and 2.1, levels A and AA. */
+export const WCAG_21_AA_TAGS: readonly string[] = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
+/** The component tags plus the WCAG 2.2 AA rules. The theme builder's browser checks run these. */
+export const WCAG_22_AA_TAGS: readonly string[] = [...WCAG_21_AA_TAGS, 'wcag22aa'];
+
+/** Optional scope for an axe scan. */
+export type AxeOptions = {
+  /** CSS selector or selectors to include in the scan. */
+  include?: string | string[];
+};
+
+const VALID_IMPACTS = new Set<string>(['critical', 'serious', 'moderate', 'minor']);
+
+function isAxeImpact(value: string | null | undefined): value is AxeImpact {
+  return value !== null && value !== undefined && VALID_IMPACTS.has(value);
+}
+
+const EMPTY_BUCKETS = (): AxeBuckets => ({ critical: [], serious: [], moderate: [], minor: [] });
+
+/** Runs axe against a page and writes its result beside the screenshot artifact. */
+export async function runAxe(
+  page: Page,
+  key: ArtifactKey,
+  options?: AxeOptions,
+): Promise<AxeBuckets> {
+  let builder = new AxeBuilder({ page }).withTags([...WCAG_21_AA_TAGS]);
+  const includeSelectors =
+    typeof options?.include === 'string' ? [options.include] : (options?.include ?? []);
+
+  for (const selector of includeSelectors) {
+    builder = builder.include(selector);
+  }
+
+  const result = await builder.analyze();
+
+  const buckets = EMPTY_BUCKETS();
+  for (const v of result.violations) {
+    if (!isAxeImpact(v.impact)) continue;
+    buckets[v.impact].push({
+      id: v.id,
+      impact: v.impact,
+      help: v.help,
+      helpUrl: v.helpUrl,
+      description: v.description,
+      tags: v.tags,
+      nodes: v.nodes.map((n) => ({
+        target: n.target,
+        html: n.html,
+        ...(n.failureSummary !== undefined ? { failureSummary: n.failureSummary } : {}),
+      })),
+    });
+  }
+
+  const path = axeJsonPath(key);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(
+    path,
+    JSON.stringify(
+      {
+        key,
+        url: result.url,
+        timestamp: result.timestamp,
+        testEngine: result.testEngine,
+        testRunner: result.testRunner,
+        buckets,
+        totals: {
+          critical: buckets.critical.length,
+          serious: buckets.serious.length,
+          moderate: buckets.moderate.length,
+          minor: buckets.minor.length,
+        },
+      },
+      null,
+      2,
+    ),
+  );
+
+  return buckets;
+}

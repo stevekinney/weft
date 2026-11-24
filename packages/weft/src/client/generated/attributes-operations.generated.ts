@@ -9,6 +9,6 @@ export type AttributesOperationTypes = {
   'weft.workflows.attributes.set': {
     readonly input: { readonly attributes?: unknown; readonly workflowId: string };
     readonly output: { readonly ok: true };
-    readonly faults: never;
+    readonly faults: 'InvalidParams';
   };
 };

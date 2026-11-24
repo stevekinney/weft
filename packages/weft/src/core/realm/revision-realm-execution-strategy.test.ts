@@ -1,6 +1,6 @@
 /**
  * Strategy-level tests for `RevisionRealmExecutionStrategy` (COR-249's
- * engine integration, R2E), mirroring `worker-execution-strategy.test.ts`'s
+ * engine integration, R2E), mirroring `worker-execution-strategy.integration.test.ts`'s
  * own convention of driving the strategy directly rather than only through
  * a full `Engine`. `revision-realm-execution.test.ts` (engine-level) already
  * proves `startWorkflow`/activation/recovery end to end; this file covers
@@ -9,11 +9,12 @@
  */
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import { createDeferred, flushMicrotasks } from '../../testing/fake-timers.test-support.ts';
+import { createDeferred, flushMicrotasks } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import type { WorkerOutboundMessage } from '../types.ts';
 import { RevisionRealmExecutionStrategy } from './revision-realm-execution-strategy.ts';
 import type { RevisionRealmAcquireOutcome } from './revision-realm-pool.ts';
 import { RevisionRealmRegistry } from './revision-realm-registry.ts';
+import type { RevisionRealm } from './revision-realm.ts';
 
 const ORDER_WORKFLOW_NAME = 'r2e-order-workflow';
 const REVISION = 'revision-a';
@@ -362,6 +363,162 @@ describe('RevisionRealmExecutionStrategy', () => {
         workflowId: 'wf-realm-after-crash',
         result: { ok: true, input: 'ordinary-input' },
       });
+    });
+  });
+
+  describe('failures it reports instead of starting or resuming a workflow', () => {
+    const start = (strategy: RevisionRealmExecutionStrategy, workflowId: string) =>
+      strategy.startWorkflow({
+        workflowId,
+        revision: REVISION,
+        workflowType: ORDER_WORKFLOW_NAME,
+        input: 'input',
+        checkpoint: new ArrayBuffer(0),
+      });
+    /** A realm an acquisition hands back before anything has activated it. */
+    const unactivatedRealm = { activation: null } as unknown as RevisionRealm;
+
+    it('fails a start that has neither an explicit revision nor a pinned one', async () => {
+      const { strategy, messages, untilMessageCount } = newStrategy();
+
+      strategy.startWorkflow({
+        workflowId: 'wf-no-revision',
+        workflowType: ORDER_WORKFLOW_NAME,
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await untilMessageCount(1);
+
+      expect(messages).toEqual([
+        {
+          type: 'failed',
+          workflowId: 'wf-no-revision',
+          error: `Revision realm execution requires a resolved workflow revision for type "${ORDER_WORKFLOW_NAME}", but none was available for workflow "wf-no-revision".`,
+          failureCategory: 'system',
+        },
+      ]);
+    });
+
+    it('fails a start whose revision has no realm configuration, without creating a pool', async () => {
+      const registry = new RevisionRealmRegistry();
+      const strategy = new RevisionRealmExecutionStrategy({
+        registry,
+        resolveRevisionRealmConfig: () => undefined,
+        getWorkflowRevisionPin: () => undefined,
+      });
+      const { messages, untilMessageCount } = collectMessages(strategy);
+
+      start(strategy, 'wf-no-config');
+      await untilMessageCount(1);
+
+      expect(messages).toEqual([
+        {
+          type: 'failed',
+          workflowId: 'wf-no-config',
+          error: `No revision realm configuration for workflow type "${ORDER_WORKFLOW_NAME}" revision "${REVISION}" (options.revisionRealmExecution.resolveRevisionRealmConfig returned undefined).`,
+          failureCategory: 'system',
+        },
+      ]);
+      expect(registry.getPool(ORDER_WORKFLOW_NAME, REVISION)).toBeUndefined();
+    });
+
+    it('fails a start whose realm cannot be acquired, naming the reason and the underlying error when there is one', async () => {
+      const { strategy, registry, messages, untilMessageCount } = newStrategy();
+      const acquire = spyOn(registry, 'acquireForExecution');
+      acquire.mockResolvedValueOnce({ ok: false, reason: 'pool-at-capacity' });
+      acquire.mockResolvedValueOnce({
+        ok: false,
+        reason: 'realm-ready-handshake-failed',
+        error: 'digest mismatch',
+      });
+
+      start(strategy, 'wf-at-capacity');
+      start(strategy, 'wf-handshake');
+      await untilMessageCount(2);
+
+      const prefix = `Could not acquire a revision realm for "${ORDER_WORKFLOW_NAME}" revision "${REVISION}": `;
+      expect(messages).toEqual([
+        {
+          type: 'failed',
+          workflowId: 'wf-at-capacity',
+          error: `${prefix}pool-at-capacity`,
+          failureCategory: 'system',
+        },
+        {
+          type: 'failed',
+          workflowId: 'wf-handshake',
+          error: `${prefix}realm-ready-handshake-failed (digest mismatch)`,
+          failureCategory: 'system',
+        },
+      ]);
+    });
+
+    it('hands back a realm it acquired after being disposed, without running or reporting anything', async () => {
+      const { strategy, registry, messages } = newStrategy();
+      const acquisition = createDeferred<RevisionRealmAcquireOutcome>();
+      spyOn(registry, 'acquireForExecution').mockReturnValue(acquisition.promise);
+      const release = spyOn(registry, 'releaseAfterExecution');
+
+      start(strategy, 'wf-disposed-while-acquiring');
+      strategy[Symbol.dispose]();
+      acquisition.resolve({ ok: true, realm: unactivatedRealm });
+      await flushMicrotasks();
+
+      expect(release).toHaveBeenCalledWith(ORDER_WORKFLOW_NAME, REVISION, unactivatedRealm);
+      expect(messages).toEqual([]);
+    });
+
+    it('releases a realm that was handed back with no activation and fails the workflow', async () => {
+      const { strategy, registry, messages, untilMessageCount } = newStrategy();
+      spyOn(registry, 'acquireForExecution').mockResolvedValue({
+        ok: true,
+        realm: unactivatedRealm,
+      });
+      const release = spyOn(registry, 'releaseAfterExecution');
+
+      start(strategy, 'wf-unactivated');
+      await untilMessageCount(1);
+
+      expect(release).toHaveBeenCalledWith(ORDER_WORKFLOW_NAME, REVISION, unactivatedRealm);
+      expect(messages).toEqual([
+        {
+          type: 'failed',
+          workflowId: 'wf-unactivated',
+          error: 'Revision realm for workflow "wf-unactivated" is not active.',
+          failureCategory: 'system',
+        },
+      ]);
+      // The failed workflow holds no execution, so a later resume finds none either.
+      strategy.resumeWorkflow({
+        workflowId: 'wf-unactivated',
+        checkpoint: new ArrayBuffer(0),
+        operationResult: { status: 'completed', value: null },
+      });
+      expect(messages).toHaveLength(2);
+    });
+
+    it('fails a resume for a workflow it never started, unless it has been disposed', () => {
+      const { strategy, messages } = newStrategy();
+      const resume = () =>
+        strategy.resumeWorkflow({
+          workflowId: 'wf-never-started',
+          checkpoint: new ArrayBuffer(0),
+          operationResult: { status: 'completed', value: null },
+        });
+
+      resume();
+      expect(messages).toEqual([
+        {
+          type: 'failed',
+          workflowId: 'wf-never-started',
+          error: 'No revision realm assigned for workflow: wf-never-started',
+          failureCategory: 'system',
+        },
+      ]);
+
+      strategy[Symbol.dispose]();
+      resume();
+      expect(messages).toHaveLength(1);
     });
   });
 

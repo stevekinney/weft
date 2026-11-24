@@ -1,13 +1,15 @@
-import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS, encodeStorageKeyComponent, storageHas } from '../../../storage/interface.ts';
+import { encodeStorageKeyComponent, storageHas, type BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { CleanupWarningEvent, RemoteActivityCancellationRequestedEvent } from '../../events.ts';
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-records.ts';
 import { releaseLaunchCheckpoint } from '../checkpoint-commit-snapshots.ts';
 import { clearPendingAtomicWorkflowCommitSideEffects } from '../checkpoint-side-effects.ts';
 import type { EngineInternals } from '../internals.ts';
+import { releaseRunSlot } from '../run-concurrency.ts';
 import { settleSleepTimerAcknowledgements } from '../sleep-timer-acknowledgements.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
+import { forgetBranchActivityReceipts } from '../timeline-coordinator-detail.ts';
 import {
   releaseWorkflowConcurrencySlot,
   releaseWorkflowConcurrencySlotForRun,
@@ -221,6 +223,7 @@ export function cleanupWaiters(
   internals.workflowHeaders.delete(workflowId);
   internals.workflowServices.delete(workflowId);
   internals.workflowTypeByWorkflowId.delete(workflowId);
+  releaseRunSlot(internals, workflowId);
 }
 
 /**
@@ -250,6 +253,8 @@ export function evictSuspendedWorkflowWaiters(
   evictSleepResolversWithoutResolving(internals, workflowId);
   evictConditionWaitersWithoutResolving(internals, workflowId);
   cleanupReviewEscalations(internals, workflowId, callbacks);
+  // A suspended run is not executing, so it gives its `runConcurrency` slot back.
+  releaseRunSlot(internals, workflowId);
 }
 
 /**
@@ -336,6 +341,8 @@ async function sweepUnfenced(
   // The "expects services" marker is per-run bookkeeping, not an output artifact,
   // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));
+  // The retrying-activity record is meaningful only while the run is running (COR-2529).
+  await internals.storage.delete(KEYS.activityRetrying(workflowId));
   // The finalizer-state payload (#446) is per-run bookkeeping written by
   // `ctx.setFinalizerState`. A completed/failed workflow never runs its finalizer,
   // so the recorded value would otherwise leak permanently — sweep it here. But a
@@ -396,11 +403,14 @@ export function cleanupTerminalWorkflowMemory(
   workflowId: string,
   callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection' | 'dispatchEvent'>,
 ): void {
+  // Before the terminal event, so a stream's last chunk is announced ahead of the run's end.
+  internals.streamChunkAnnouncer.flushWorkflow(workflowId);
   settleSleepTimerAcknowledgements(internals, workflowId, 'terminal');
   internals.workflowsNeedingTerminalCleanup.delete(workflowId);
   releaseLaunchCheckpoint(internals, workflowId);
   internals.heartbeatDetails.delete(workflowId);
   internals.lastHeartbeatDetailsByStep.delete(workflowId);
+  forgetBranchActivityReceipts(internals, workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {
     if (pending.workflowId === workflowId) {
       internals.pendingAsyncActivities.delete(token);

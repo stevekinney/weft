@@ -11,7 +11,7 @@
  * @module core/application-primitive-attempt-registry
  */
 
-import type { Storage } from '../storage/interface.ts';
+import type { Storage } from "../embedded/storage/src/index.ts";
 
 /**
  * One live attempt in this process: its abort controller plus the callback that

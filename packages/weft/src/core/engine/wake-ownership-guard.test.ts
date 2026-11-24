@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage, type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { Engine } from './index.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
 import { WeftWorkflowWakeDiscardedWarning } from './lease-deposition.ts';

@@ -14,15 +14,15 @@
  */
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage, type Storage } from "../../embedded/storage/src/index.ts";
 import {
   createDeferred,
+  drainMicrotasks,
   expectPromisePending,
   waitForCondition,
-  yieldToEventLoop,
-} from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec/api.ts';
 import { durableActivity, DurableActivityScopeError } from '../context/durable-activity.ts';
 import type { RemoteActivityBroker, RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
@@ -46,6 +46,7 @@ import {
   releaseSuspendedCheckpoint,
 } from './checkpoint-commit-snapshots.ts';
 import {
+  abandonedGenerationRejection,
   abandonWorkflowAfterCheckpointConflict,
   emitCheckpointConflictWarning,
   persistCheckpointAbandoningOnConflict,
@@ -285,7 +286,7 @@ describe('abandoning a workflow after a lost checkpoint compare-and-swap', () =>
       internals,
       new WorkflowCheckpointConflictError('replaced-run', { workflowExecutionToken: firstToken }),
     );
-    await yieldToEventLoop();
+    await drainMicrotasks();
     warning.stop();
     strategy.restore();
 
@@ -337,6 +338,24 @@ describe('abandoning a workflow after a lost checkpoint compare-and-swap', () =>
     await engine[Symbol.asyncDispose]();
     expect(abandonedExecutionAttemptCount(internals)).toBe(0);
     expect(currentExecutionAttempt(internals, 'relaunched')).toBeUndefined();
+  });
+
+  it('reports a generation abandoned without an error as a checkpoint conflict', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    const internals = getInternals(engine);
+    adoptLaunchCheckpoint(internals, 'silent-loss', {
+      workflowExecutionToken: 'generation-1',
+    } as Checkpoint);
+
+    expect(abandonedGenerationRejection(internals, 'silent-loss')).toBeUndefined();
+    expect(abandonExecutionAttempt(internals, 'silent-loss', 'generation-1')).toBe(true);
+
+    const rejection = abandonedGenerationRejection(internals, 'silent-loss');
+    expect(rejection).toBeInstanceOf(WorkflowCheckpointConflictError);
+    expect(rejection).toMatchObject({
+      workflowId: 'silent-loss',
+      workflowExecutionToken: 'generation-1',
+    });
   });
 
   it('retires and rejects a pre-token generation and abandons it under the token-less identity', async () => {
@@ -651,7 +670,7 @@ describe('wakes for an abandoned generation', () => {
 
     await engine.signal('signalled-run', 'go', 'late');
     await engine.signal('signalled-bystander', 'go', 'on time');
-    await yieldToEventLoop();
+    await drainMicrotasks();
 
     expect(markedWaiter).not.toHaveBeenCalled();
     expect(internals.signalWaiters.has('signalled-run:go')).toBe(true);
@@ -674,7 +693,7 @@ describe('wakes for an abandoned generation', () => {
 
     notifyConditionWaiters(internals, 'poked-run');
     notifyConditionWaiters(internals, 'bystander-run');
-    await yieldToEventLoop();
+    await drainMicrotasks();
 
     expect(markedWaiter).not.toHaveBeenCalled();
     expect(bystanderWaiter).toHaveBeenCalledTimes(1);
@@ -1292,7 +1311,7 @@ describe('a lost checkpoint commit for a workflow this engine suspended', () => 
       loseCommit(run.internals, id, undefined);
 
       expect(await rejectionOrPending(run.pending)).toBeInstanceOf(WorkflowCheckpointConflictError);
-      await yieldToEventLoop();
+      await drainMicrotasks();
       expect(warning.warnings.map((warned) => warned.workflowId)).toEqual([id]);
       expect(isGenerationAbandoned(run.internals, id, undefined)).toBe(true);
       expect(abandonedExecutionAttemptCount(run.internals)).toBe(1);
@@ -1335,7 +1354,7 @@ describe('a lost checkpoint commit for a workflow this engine suspended', () => 
       loseCommit(run.internals, id, run.token);
 
       expect(await rejectionOrPending(run.pending)).toBeInstanceOf(WorkflowCheckpointConflictError);
-      await yieldToEventLoop();
+      await drainMicrotasks();
       expect(warning.warnings.map((warned) => warned.workflowId)).toEqual([id]);
       expect(isGenerationAbandoned(run.internals, id, run.token)).toBe(true);
       expect(run.internals.handleCache.has(id)).toBe(false);
@@ -1390,7 +1409,7 @@ describe('a lost checkpoint commit for a workflow this engine suspended', () => 
       // A commit of the generation it launched losing its race afterwards says nothing about
       // the suspended replacement: no abandonment, no warning, no rejected result().
       loseCommit(internals, id, launchedToken);
-      await yieldToEventLoop();
+      await drainMicrotasks();
       expect(warning.warnings).toEqual([]);
       expect(abandonedExecutionAttemptCount(internals)).toBe(0);
       expect(await rejectionOrPending(pending)).toBe('pending');
@@ -1409,7 +1428,7 @@ describe('a lost checkpoint commit for a workflow this engine suspended', () => 
       loseCommit(run.internals, id, undefined);
 
       expect(await rejectionOrPending(run.pending)).toBe('pending');
-      await yieldToEventLoop();
+      await drainMicrotasks();
       expect(warning.warnings).toEqual([]);
       expect(abandonedExecutionAttemptCount(run.internals)).toBe(0);
       expect(run.internals.resultResolvers.has(id)).toBe(true);
@@ -1445,7 +1464,7 @@ describe('a lost checkpoint commit for a workflow this engine suspended', () => 
 
       loseCommit(internals, id, undefined);
 
-      await yieldToEventLoop();
+      await drainMicrotasks();
       expect(warning.warnings).toEqual([]);
       expect(abandonedExecutionAttemptCount(internals)).toBe(0);
     } finally {
@@ -1884,7 +1903,8 @@ describe('rejecting a launch for an id this engine is already running', () => {
       expect(loser.status).toBe('rejected');
       expect((loser as PromiseRejectedResult).reason).toBeInstanceOf(WorkflowAlreadyExistsError);
       // The winner's own services object, not the loser's replacement and not nothing.
-      expect(resolved).toHaveLength(2);
+      // The loser is rejected before its batch commits (COR-1925), so it resolves nothing.
+      expect(resolved).toHaveLength(1);
       expect(internals.workflowServices.get(id)).toBe(resolved[0]);
       expect(internals.workflowsNeedingTerminalCleanup.has(id)).toBe(true);
 
@@ -2111,7 +2131,7 @@ describe('a child this engine abandoned', () => {
     );
 
     waiter.reject(new WorkflowCheckpointConflictError('abandoned-child'));
-    await yieldToEventLoop();
+    await drainMicrotasks();
 
     await expectPromisePending(viewedByParent);
     expect(abandonedExecutionAttemptCount(internals)).toBe(0);

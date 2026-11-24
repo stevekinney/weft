@@ -44,6 +44,7 @@ import { ensureWorkflowCatalogReady, getWorkflowCatalog } from './engine/catalog
 import { MAX_REGISTRY_WORKFLOW_COUNT, RegistryWorkflowCountLimitError } from './registry-limits.ts';
 import { convertSchema, RegistrySchemaConversionError } from './registry-schema-conversion.ts';
 import { buildOneWorkflowManifest } from './registry-workflow-manifest.ts';
+import type { RegisteredWorkflowDefinition } from './types/workflow-registry.ts';
 
 export {
   buildWorkflowManifestForType,
@@ -80,16 +81,15 @@ export { RegistrySchemaConversionError, RegistryWorkflowCountLimitError };
 export const REGISTRY_VERSION = 2;
 
 /**
- * Metadata reported per activity in a registry snapshot.
+ * Metadata reported per engine-registered activity in a registry snapshot.
  *
- * `tags` is intentionally omitted: the registry feeds `weft codegen`, which
- * models activities as TypeScript function signatures. Tags are catalog
- * metadata for documentation/observability surfaces and don't appear on a
- * function type. Workflows include tags because the workflow registry
- * augmentation point (`WorkflowRegistry`) is an interface where extra
- * metadata can be attached structurally; activity names are now typed
- * per-workflow via the builder's `.activities({...})` step, so there is no
- * global activity-type registry to attach metadata to.
+ * Everything here except the schema pair is operational or catalog metadata
+ * (queue, retry, timeout, idempotency, description, tags), so it lives in the
+ * snapshot and never in a workflow's hashed contract: tuning a retry policy
+ * or retagging an activity must not mint a new revision for every workflow
+ * that calls it. `usedBy` names the registered workflows that declare the
+ * activity with `.uses({...})`; those workflows' contracts list it under
+ * `activities`.
  *
  * `weft codegen` turns each of these into one typed activity signature, so the
  * schemas here are what decide whether a caller's arguments typecheck. Read
@@ -113,8 +113,12 @@ export type RegistryActivityEntry = {
   /** Engine assigns a default queue when none is specified, so this is always populated. */
   queue: string;
   description?: string;
+  tags?: ReadonlyArray<string>;
   retry?: ActivityMetadata['retry'];
   timeout?: ActivityMetadata['timeout'];
+  idempotent?: boolean;
+  /** Registered workflows that declare this activity with `.uses({...})`, sorted; omitted when none do. */
+  usedBy?: ReadonlyArray<string>;
 };
 
 /**
@@ -261,9 +265,13 @@ export async function buildRegistrySnapshot(
   }
   const sortedManifests = manifests.toSorted(compareWorkflowManifests);
 
+  const usedBy = collectActivityUsers(sortedWorkflows);
   const activities = Object.create(null) as Record<string, RegistryActivityEntry>;
   for (const metadata of sortedActivities) {
-    activities[metadata.name] = buildActivityEntry(metadata);
+    const entry = buildActivityEntry(metadata);
+    const users = usedBy.get(metadata.name);
+    if (users !== undefined) entry.usedBy = users;
+    activities[metadata.name] = entry;
   }
 
   const now = options?.now ?? Date.now;
@@ -278,8 +286,28 @@ export async function buildRegistrySnapshot(
 }
 
 /**
+ * Map each engine-provided activity name to the workflows that declare it
+ * with `.uses({...})`. `workflows` is already sorted by type, so each list is
+ * too.
+ */
+function collectActivityUsers(
+  workflows: readonly RegisteredWorkflowDefinition[],
+): Map<string, string[]> {
+  const usedBy = new Map<string, string[]>();
+  for (const definition of workflows) {
+    for (const activityName of Object.keys(definition.uses ?? {})) {
+      const users = usedBy.get(activityName);
+      if (users === undefined) usedBy.set(activityName, [definition.type]);
+      else users.push(definition.type);
+    }
+  }
+  return usedBy;
+}
+
+/**
  * Convert one activity's catalog metadata to its `RegistryActivityEntry`
- * projection (schema pair plus queue/description/retry/timeout). Exported
+ * projection (schema pair plus queue/description/tags/retry/timeout/
+ * idempotent). Exported
  * so build tooling that resolves a single activity outside a full
  * {@link buildRegistrySnapshot} pass — see
  * `worker/manifest/registry-contract-builder.ts`'s workflow-scoped-first
@@ -312,6 +340,12 @@ export function buildActivityEntry(metadata: ActivityMetadata): RegistryActivity
   }
   if (metadata.timeout !== undefined) {
     entry.timeout = metadata.timeout;
+  }
+  if (metadata.tags !== undefined && metadata.tags.length > 0) {
+    entry.tags = [...metadata.tags];
+  }
+  if (metadata.idempotent !== undefined) {
+    entry.idempotent = metadata.idempotent;
   }
   return entry;
 }

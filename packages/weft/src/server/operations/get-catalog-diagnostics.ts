@@ -19,10 +19,10 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { Engine, getWorkflowRevisionDiagnostics } from '../../core/engine.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const workflowRevisionReferenceCountsSchema = z
   .object({
@@ -38,8 +38,8 @@ const workflowRevisionReferenceCountsSchema = z
 
 const getCatalogDiagnosticsInput = z
   .object({
-    name: z.string().min(1),
-    revision: z.string().min(1),
+    name: z.string().min(1).describe('Workflow name of the catalog entry to inspect.'),
+    revision: z.string().min(1).describe('Revision of the catalog entry to inspect.'),
   })
   .strict();
 
@@ -114,7 +114,7 @@ export const getCatalogDiagnosticsOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine, input }): Promise<GetCatalogDiagnosticsOutput> => {
+  invoke: async ({ host: engine, input }): Promise<GetCatalogDiagnosticsOutput> => {
     if (!(engine instanceof Engine)) {
       throw new TypeError('Catalog diagnostics requires a concrete Engine instance.');
     }
@@ -137,5 +137,5 @@ export const getCatalogDiagnosticsRestBinding: UnknownRestBinding = {
     revision: pathParams['revision'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
-  shapeFault: shapeOperationFaultAsJson,
+  shapeFault: shapeWeftOperationFaultAsJson,
 };

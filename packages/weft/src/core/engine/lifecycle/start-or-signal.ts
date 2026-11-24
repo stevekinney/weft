@@ -1,14 +1,21 @@
-import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
+import { requireStorageCapability } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import {
   assertIdAndIdempotencyKeyExclusive,
   assertValidIdempotencyKey,
   assertValidOnTerminalConflict,
   StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
-import type { StartOptions, StartOrSignalOptions, StartOrSignalSignal } from '../../types.ts';
+import type {
+  StartOptions,
+  StartOrSignalOptions,
+  StartOrSignalSignal,
+  WorkflowState,
+} from '../../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
+import { loadWorkflowState } from '../storage-io.ts';
 import { type LifecycleCallbacks } from './shared.ts';
 import { StartIdempotencyRaceLostError } from './start-commit-errors.ts';
 import {
@@ -134,6 +141,28 @@ export async function startWithIdempotency(
       await requireWinnerId(internals, idempotencyKey),
     ),
   );
+}
+
+/**
+ * Read-only lookup behind {@link Engine.getByIdempotencyKey}: the state of the run a start with
+ * `idempotencyKey` created, or `null` when no start with that key has committed. It validates the
+ * key like a start does and never starts, signals, or writes anything. A key whose run has been
+ * purged throws {@link IdempotencyKeyPurgedError}, the answer a start with that key gives.
+ */
+export async function getRunByIdempotencyKey(
+  internals: EngineInternals,
+  idempotencyKey: string,
+): Promise<WorkflowState | null> {
+  assertValidIdempotencyKey(idempotencyKey, 'idempotencyKey');
+  const workflowId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
+  if (workflowId === undefined) {
+    return null;
+  }
+  const state = await loadWorkflowState(internals, workflowId);
+  if (state === null) {
+    throw new IdempotencyKeyPurgedError(workflowId);
+  }
+  return state;
 }
 
 /**

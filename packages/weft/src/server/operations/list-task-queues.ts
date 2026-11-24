@@ -22,12 +22,12 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkerRegistry, WorkerSummary } from '../../worker/registry.ts';
-import { shapeOperationFaultAsJson } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import type { SchedulingPolicy, TaskQueueSummary } from '../task-queue-types.ts';
 import type { TaskQueue } from '../task-queue.ts';
+import { shapeWeftOperationFaultAsJson } from '../weft-operation-fault.ts';
 
 const listTaskQueuesInput = z.object({});
 
@@ -90,6 +90,10 @@ export function createListTaskQueuesOperation(options?: ListTaskQueuesOptions) {
     name: 'weft.task.queues.list',
     mcpExposable: false,
     summary: 'List task queues with backlog, waiting pollers, and per-queue saturation',
+    description:
+      'List every task queue that has pending tasks, waiting pollers, or connected ' +
+      'workers, with its backlog, oldest-queued age, waiting long-poll pollers, in- ' +
+      'flight task count, connected worker count, and scheduling policy. Read-only.',
     destructive: false,
     tags: ['System'],
     inputSchema: listTaskQueuesInput,
@@ -214,6 +218,6 @@ export function createListTaskQueuesRestBinding(): UnknownRestBinding {
     inputSources: {},
     extractInput: async () => ({}),
     success: { kind: 'json', status: 200 },
-    shapeFault: shapeOperationFaultAsJson,
+    shapeFault: shapeWeftOperationFaultAsJson,
   };
 }

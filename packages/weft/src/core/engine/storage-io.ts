@@ -1,11 +1,9 @@
 import {
-  KEYS,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
-import { encode } from '../codec.ts';
-import { buildTimerBatchOperations } from '../scheduler.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
 import {
@@ -19,10 +17,11 @@ import {
 } from './fenced-write.ts';
 import { getWorkflowExecutionStartedAt } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
-import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
-import { createScheduleTimerId, decodeWorkflowStartHeaders } from './state-utilities.ts';
+import { isScheduleReadCondition, ScheduleReadConditionLostError } from './schedule-state-read.ts';
+import { buildScheduleStateOperations } from './schedule-write-operations.ts';
+import { decodeWorkflowStartHeaders } from './state-utilities.ts';
+import { retryTerminalWorkflowStateWrite } from './terminal-write-retry.ts';
 import { decodeWorkflowState } from './validation.ts';
-import { decodeScheduleState } from './validation/schedule-decode.ts';
 import {
   buildWorkflowClaimExternalTerminalRotationTransition,
   type WorkflowClaimTransitionFragment,
@@ -141,6 +140,10 @@ type WorkflowStateCommitOptions = {
    * side effects it took, so the caller can re-decide and commit again.
    */
   extraConditions?: ConditionalBatchCondition[];
+  /** Retry a refused write in process, as this terminal write; read only by the self commit. */
+  retryRefusedWrite?: 'completion' | 'failure';
+  /** Rebuild the operations over a fresher record of the same run; read only with a retry. */
+  rebuildOperations?: (fresh: WorkflowState) => BatchOperation[];
 };
 
 /**
@@ -157,6 +160,8 @@ function buildWorkflowStateCommit(
 ): {
   operations: BatchOperation[];
   conditions: ConditionalBatchCondition[];
+  /** The staged side-effect operations the commit folded in; a rebuilt batch carries them too. */
+  sideEffectOperations: BatchOperation[];
   hasPendingSideEffects: boolean;
   restoreSideEffects: () => void;
 } {
@@ -167,17 +172,15 @@ function buildWorkflowStateCommit(
         internals.checkpoints?.get(workflowId)?.workflowExecutionToken,
       )
     : undefined;
-  const operationsWithSideEffects =
-    pendingSideEffects === undefined
-      ? operations
-      : [...operations, ...pendingSideEffects.operations];
+  const sideEffectOperations = pendingSideEffects?.operations ?? [];
   const storageSupportsConditionalBatch = internals.storage.capabilities().conditionalBatch;
   const conditions = storageSupportsConditionalBatch
     ? [...(pendingSideEffects?.conditions ?? []), ...(options.extraConditions ?? [])]
     : [];
   return {
-    operations: operationsWithSideEffects,
+    operations: [...operations, ...sideEffectOperations],
     conditions,
+    sideEffectOperations,
     hasPendingSideEffects: pendingSideEffects !== undefined,
     restoreSideEffects: () => {
       if (pendingSideEffects !== undefined) {
@@ -236,18 +239,35 @@ export async function commitSelfWorkflowStateOperations(
   options: WorkflowStateCommitOptions = {},
 ): Promise<void> {
   const commit = buildWorkflowStateCommit(internals, state.id, operations, options);
+  const onLostRace = () =>
+    new Error(
+      `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
+    );
 
   try {
-    await commitFencedEngineWrite(
-      internals,
-      state.id,
-      commit.operations,
-      commit.conditions,
-      () =>
-        new Error(
-          `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
-        ),
-    );
+    try {
+      await commitFencedEngineWrite(
+        internals,
+        state.id,
+        commit.operations,
+        commit.conditions,
+        onLostRace,
+      );
+    } catch (error) {
+      // A refused write is retried in process when asked: from this catch, so no extra promise turn.
+      if (options.retryRefusedWrite === undefined) throw error;
+      await retryTerminalWorkflowStateWrite(
+        internals,
+        state,
+        options.retryRefusedWrite,
+        commit.operations,
+        commit.conditions,
+        error,
+        onLostRace,
+        options.rebuildOperations,
+        commit.sideEffectOperations,
+      );
+    }
   } catch (error) {
     commit.restoreSideEffects();
     throw error;
@@ -306,70 +326,6 @@ export async function commitExternalTerminalWorkflowStateOperations(
   }
 }
 
-/** Load and decode persisted schedule state by schedule ID. */
-export async function loadScheduleState(
-  internals: EngineInternals,
-  scheduleId: string,
-): Promise<ScheduleState | null> {
-  const bytes = await internals.storage.get(KEYS.schedule(scheduleId));
-  return bytes ? decodeScheduleState(bytes) : null;
-}
-
-/** Load a schedule state. */
-export async function requireScheduleState(
-  internals: EngineInternals,
-  scheduleId: string,
-): Promise<ScheduleState> {
-  const state = await loadScheduleState(internals, scheduleId);
-  if (!state) {
-    throw new Error(`Schedule "${scheduleId}" not found`);
-  }
-  return state;
-}
-
-function buildPreviousScheduleTimerDeleteOperations(
-  previousState: ScheduleState | undefined,
-): BatchOperation[] {
-  if (previousState?.status !== 'active' || previousState.nextFireAt === null) return [];
-  return [
-    {
-      type: 'delete',
-      key: KEYS.scheduleTick(
-        resolveEffectiveScheduleFireAt(previousState, previousState.nextFireAt),
-        previousState.id,
-      ),
-    },
-  ];
-}
-
-function buildNextScheduleTimerOperations(
-  state: ScheduleState,
-  includeTimer: boolean,
-): BatchOperation[] {
-  if (!includeTimer || state.status !== 'active' || state.nextFireAt === null) return [];
-  return buildTimerBatchOperations({
-    id: createScheduleTimerId(state.id),
-    workflowId: state.id,
-    fireAt: resolveEffectiveScheduleFireAt(state, state.nextFireAt),
-    kind: 'schedule',
-  });
-}
-
-function buildScheduleTimerReplacementOperations(
-  state: ScheduleState,
-  includeTimer: boolean,
-  previousState: ScheduleState | undefined,
-): BatchOperation[] {
-  const deleteOperations = buildPreviousScheduleTimerDeleteOperations(previousState);
-  const nextTimerOperations = buildNextScheduleTimerOperations(state, includeTimer);
-  if (nextTimerOperations.length > 0) return [...deleteOperations, ...nextTimerOperations];
-  if (previousState === undefined) return deleteOperations;
-  return [
-    ...deleteOperations,
-    { type: 'delete', key: `timer-idx:${createScheduleTimerId(state.id)}` },
-  ];
-}
-
 /**
  * Persist schedule state and optionally write the next schedule timer.
  *
@@ -383,8 +339,14 @@ function buildScheduleTimerReplacementOperations(
  * supplies the thrown error instead of this function's own generic
  * lost-precondition error, so the caller sees an actionable, typed failure
  * (e.g. `WorkflowRevisionUnavailableError`) rather than a bare "lost its
- * precondition" message. Every existing caller passes neither option and gets
- * byte-for-byte the pre-WFT-20 commit shape.
+ * precondition" message. A write that passes neither option and no schedule read
+ * condition (a create) gets byte-for-byte the pre-WFT-20 commit shape.
+ *
+ * COR-1594: a read-then-write adds {@link scheduleReadConditions} to `extraConditions`, which makes
+ * the write conditional on the schedule key's exact stored bytes. When that condition is the one
+ * lost, this throws {@link ScheduleReadConditionLostError} and not `onExtraConditionsLost`, which
+ * speaks only for the caller's own conditions: the writer re-reads and decides again. Resolves
+ * with the bytes written, which the next write of the same writer is conditioned on.
  */
 export async function writeScheduleState(
   internals: EngineInternals,
@@ -396,17 +358,9 @@ export async function writeScheduleState(
     extraConditions?: ConditionalBatchCondition[];
     onExtraConditionsLost?: () => Error;
   },
-): Promise<void> {
-  const operations: BatchOperation[] = [
-    { type: 'put', key: KEYS.schedule(state.id), value: encode(state) },
-  ];
-
-  const includeTimer = options?.includeTimer ?? state.status === 'active';
-  operations.push(
-    ...buildScheduleTimerReplacementOperations(state, includeTimer, options?.replaceTimerFrom),
-  );
-
-  operations.push(...(options?.additionalOperations ?? []));
+): Promise<Uint8Array> {
+  const { bytes, record, following } = buildScheduleStateOperations(state, options);
+  const operations: BatchOperation[] = [record, ...following];
 
   const extraConditions = options?.extraConditions ?? [];
 
@@ -421,7 +375,7 @@ export async function writeScheduleState(
       extraConditions,
       options?.onExtraConditionsLost,
     );
-    return;
+    return bytes;
   }
 
   await commitFencedEngineWrite(
@@ -431,6 +385,7 @@ export async function writeScheduleState(
     [],
     () => new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`),
   );
+  return bytes;
 }
 
 /**
@@ -457,9 +412,17 @@ async function commitScheduleStateWithExtraConditions(
   if (committed) {
     return;
   }
-  for (const condition of extraConditions) {
+  // The engine's own read condition is judged first, and told from a caller's by identity: it is
+  // the writer's to retry, and a caller's typed error must not stand in for it. A caller's
+  // condition on any key, the schedule's own included, is the caller's.
+  const ordered = [
+    ...extraConditions.filter(isScheduleReadCondition),
+    ...extraConditions.filter((condition) => !isScheduleReadCondition(condition)),
+  ];
+  for (const condition of ordered) {
     const currentValue = await internals.storage.get(condition.key);
     if (!storageValuesEqual(currentValue, condition.expectedValue)) {
+      if (isScheduleReadCondition(condition)) throw new ScheduleReadConditionLostError(state.id);
       throw (
         onExtraConditionsLost?.() ??
         new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`)

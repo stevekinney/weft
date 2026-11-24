@@ -14,8 +14,8 @@
  */
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { WorkflowState } from '../types.ts';
 import { bufferSignalPayloads, type SignalCallbacks } from './signals.ts';
 import { encodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -38,6 +38,7 @@ function createHarness(registry: unknown) {
   const waiter = mock(() => {});
   const resumeParkedInlineWorkflow = mock(async () => {});
   const internals = {
+    registrations: new Map(),
     storage: new MemoryStorage(),
     workflowClaimRegistry: registry,
     signalWaiters: new Map<string, () => void>([[WAITER_KEY, waiter]]),
@@ -155,6 +156,7 @@ describe('signal delivery invokes only the waiter it actually removed', () => {
     } as any;
 
     const internals = {
+      registrations: new Map(),
       storage,
       // A tracked epoch matching the durable holder makes the check proceed,
       // so the only thing that can stop the wake is the release gate.

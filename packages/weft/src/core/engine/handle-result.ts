@@ -1,10 +1,20 @@
-import { abandonedGenerationConflict } from './checkpoint-conflict-abandon.ts';
+import type { WorkflowState } from '../types.ts';
+import { abandonedGenerationRejection } from './checkpoint-conflict-abandon.ts';
 import type { WorkflowResultWaiter } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { copyResultCommitter, recordResultCommitter } from './result-committer.ts';
+import {
+  bindResultWaiterToRun,
+  heldRunForResultWaiter,
+  pendingTerminalSettlementFor,
+  rejectReplacedResultWaiter,
+  waiterBelongsToRun,
+  waitersBelongToSameRun,
+} from './result-waiter-run.ts';
 import { deriveWorkflowResultFromState, loadWorkflowState } from './storage-io.ts';
+import { isTerminalWorkflowStatus } from './validation.ts';
 
 /** What a result waiter rejects with for a workflow that is not (or no longer) in storage. */
 export function workflowNotFoundInStorageError(workflowId: string): Error {
@@ -25,7 +35,16 @@ export function createWorkflowResultWaiter(
   workflowId: string,
 ): WorkflowResultWaiter {
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-  const waiter = { promise, resolve, reject };
+  // Bound to the run this engine holds for the id now. A run this engine holds nothing for is
+  // bound from the first durable read instead (see `bootstrapWorkflowResultResolver`).
+  const run = heldRunForResultWaiter(internals, workflowId);
+  const waiter: WorkflowResultWaiter = {
+    promise,
+    resolve,
+    reject,
+    boundToRun: run !== undefined,
+    workflowExecutionToken: run?.workflowExecutionToken,
+  };
   internals.resultResolvers.set(workflowId, waiter);
   void promise.catch(() => {});
   return waiter;
@@ -37,14 +56,24 @@ export function getWorkflowResultPromise(
 ): Promise<unknown> {
   const existingWaiter = internals.resultResolvers.get(workflowId);
   if (existingWaiter) {
-    return existingWaiter.promise;
+    // A waiter left behind by an older run of this id must not answer for the run this engine
+    // holds now: retire it as replaced and register a fresh one below.
+    if (
+      waiterBelongsToRun(
+        existingWaiter,
+        heldRunForResultWaiter(internals, workflowId)?.workflowExecutionToken,
+      )
+    ) {
+      return existingWaiter.promise;
+    }
+    rejectReplacedResultWaiter(internals, workflowId, existingWaiter);
   }
 
   // This engine abandoned the generation it holds after a lost checkpoint race, live or
   // suspended: nothing local will settle a fresh waiter, so reject now (no storage read).
-  const conflict = abandonedGenerationConflict(internals, workflowId);
-  if (conflict !== undefined) {
-    const rejected = Promise.reject(conflict);
+  const abandonment = abandonedGenerationRejection(internals, workflowId);
+  if (abandonment !== undefined) {
+    const rejected = Promise.reject(abandonment);
     void rejected.catch(() => {});
     return rejected;
   }
@@ -284,9 +313,10 @@ async function deferToLocalTerminalDeliveryIfPending(
 }
 
 /**
- * Combines the two settle-time guards every terminal-outcome branch of
- * {@link bootstrapWorkflowResultResolver} needs (WFT-79 F1 and F2) into one
- * call, keeping that function's cyclomatic complexity down. Returns
+ * Combines the settle-time guards every terminal-outcome branch of
+ * {@link bootstrapWorkflowResultResolver} needs (WFT-79 F1 and F2, and a
+ * terminated run's pending settlement, COR-1597) into one call, keeping that
+ * function's cyclomatic complexity down. Returns
  * `'proceed'` when the caller should go ahead and settle `waiter` itself;
  * otherwise returns the {@link ResultResolutionOutcome} the caller must
  * return immediately without touching `waiter` again.
@@ -295,11 +325,60 @@ async function prepareToSettleTerminalWaiter(
   internals: EngineInternals,
   workflowId: string,
   waiter: WorkflowResultWaiter,
-): Promise<'proceed' | Extract<ResultResolutionOutcome, 'settled'>> {
+): Promise<'proceed' | ResultResolutionOutcome> {
+  // A terminated run's result waits for the activity it still has in flight (COR-1597). Asked
+  // after the deferral below rather than before it, because the terminal commit can land while
+  // that deferral yields; the claim has been released by now, so it would not hold the waiter.
   if (await deferToLocalTerminalDeliveryIfPending(internals, workflowId, waiter)) {
     return 'settled';
   }
+  const pending = pendingTerminalSettlementFor(internals, workflowId, waiter);
+  if (pending !== undefined) {
+    // A read that found no record (a purge removed it) left the waiter unbound. Bind it to the
+    // run being settled, so the settlement finds and rejects it when the activity lands.
+    bindResultWaiterToRun(waiter, pending.workflowExecutionToken);
+    return 'pending';
+  }
   return 'proceed';
+}
+
+/**
+ * Bind `waiter` to the run the record under its id belongs to when it is not bound yet, then
+ * reject it as replaced if the record is a newer run's terminal outcome: a `start-new`
+ * replacement, possibly on another engine, purged the run this waiter was created for, so that
+ * run's outcome is gone and the replacement's is not this waiter's to report. A replacement that
+ * has not ended leaves the waiter pending; the poll settles it once the record is terminal, or
+ * this engine's own terminal path does if the replacement ends here. Returns whether it rejected
+ * the waiter.
+ */
+function rejectIfRunReplaced(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+  state: WorkflowState | null,
+): boolean {
+  if (state === null) return false;
+  bindResultWaiterToRun(waiter, state.workflowExecutionToken);
+  if (waiterBelongsToRun(waiter, state.workflowExecutionToken)) return false;
+  if (!isTerminalWorkflowStatus(state.status)) return false;
+  rejectReplacedResultWaiter(internals, workflowId, waiter);
+  return true;
+}
+
+/**
+ * Whether `waiter` was settled here because it no longer speaks for the id: its run was replaced
+ * by a newer one (rejected), or a replacement waiter for the same run took over (linked).
+ */
+function settleWhenRunSuperseded(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+  state: WorkflowState | null,
+): boolean {
+  return (
+    rejectIfRunReplaced(internals, workflowId, waiter, state) ||
+    linkToReplacementWaiter(internals, workflowId, waiter)
+  );
 }
 
 export async function bootstrapWorkflowResultResolver(
@@ -314,7 +393,7 @@ export async function bootstrapWorkflowResultResolver(
     return settleOrRetryOnTransientReadFailure(internals, workflowId, waiter, error);
   }
 
-  if (linkToReplacementWaiter(internals, workflowId, waiter)) {
+  if (settleWhenRunSuperseded(internals, workflowId, waiter, state)) {
     return 'settled';
   }
 
@@ -371,6 +450,11 @@ function linkToReplacementWaiter(
   const currentWaiter = internals.resultResolvers.get(workflowId);
   if (currentWaiter === undefined || currentWaiter === waiter) {
     return false;
+  }
+  // A replacement waiter for a different run settles with that run's outcome, not this one's.
+  if (!waitersBelongToSameRun(currentWaiter, waiter)) {
+    rejectReplacedResultWaiter(internals, workflowId, waiter);
+    return true;
   }
 
   void currentWaiter.promise.then(

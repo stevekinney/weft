@@ -1,4 +1,5 @@
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
+import { type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { isRecord } from '../debug-output.ts';
 import type { WorkflowFinalizerStatus, WorkflowState } from '../types.ts';

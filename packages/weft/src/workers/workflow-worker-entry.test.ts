@@ -10,6 +10,7 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
 import { WORKER_PROTOCOL_VERSION } from '../core/worker-protocol.ts';
 import type { WorkerRealmReadyMessage } from '../core/worker-realm-readiness.ts';
 import { computeWorkerManifestDigest } from '../worker/manifest/index.ts';
@@ -31,7 +32,10 @@ const TEST_WORKER_WORKFLOW_TYPES = [
   'wait-signal-then-complete',
 ].toSorted();
 
-function waitForFirstMessage(worker: Worker, timeoutMilliseconds = 2000): Promise<unknown> {
+function waitForFirstMessage(
+  worker: Worker,
+  timeoutMilliseconds = HANG_GUARD_MILLISECONDS,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error(`Timed out after ${timeoutMilliseconds}ms waiting for the first message`));

@@ -15,6 +15,9 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { sleepForTesting, waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import type { TaskResultDeadLetteredEvent } from '../../core/events.ts';
 import {
   decodeRemoteTaskRecord,
@@ -24,11 +27,8 @@ import {
   type RemoteTaskLeased,
   type RemoteTaskTerminalResolved,
 } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { manifestForActivities } from '../../worker/registry-fixtures.test-support.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { useObservableActivityHeartbeatsForTesting } from './activity-heartbeat-test-hooks.ts';
 import {
   FailingTerminalCommitStorage,
@@ -99,7 +99,7 @@ function registerMessageJson(
  * registration. Poll for that side effect instead of a fixed sleep.
  */
 async function waitForRegistrationSideEffect(predicate: () => boolean): Promise<void> {
-  await waitForCondition(predicate, { timeoutMs: 1_000, label: 'registration side effect' });
+  await waitForCondition(predicate, { label: 'registration side effect' });
 }
 
 function workerPrincipal() {
@@ -172,7 +172,7 @@ async function waitForResolvedTerminalRecord(
       const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
       return record !== null && record.state === 'terminal';
     },
-    { timeoutMs: 1000, intervalMs: 10, label },
+    { intervalMs: 10, label },
   );
   const record = decodeRemoteTaskRecord(await storage.get(taskLedgerKey(operationId)));
   if (!isRemoteTaskTerminalResolved(record)) {
@@ -601,6 +601,7 @@ describe('handleWorkerWebSocketMessage', () => {
 
       // Give the pending digest time to resolve and the post-await commit
       // logic time to run (or, correctly, not run).
+      // load-proof: negative window: asserts nothing is sent or registered after the socket closed mid-digest; load can only delay the commit, never revive the socket
       await sleepForTesting(50);
 
       expect(ws.sentMessages).toHaveLength(0);
@@ -754,7 +755,6 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       await waitForCondition(() => errorSpy.mock.calls.length > 0, {
-        timeoutMs: 1000,
         label: 'register handler rejection to be logged',
       });
 
@@ -1046,7 +1046,6 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       await waitForCondition(async () => errorSpy.mock.calls.length > 0, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'taskResult resolution failure to be logged',
       });
@@ -1108,7 +1107,6 @@ describe('handleWorkerWebSocketMessage', () => {
       // console.error — the worker gets a `taskResultAck` with disposition
       // `dead-lettered` instead of an opaque silence.
       await waitForCondition(async () => ws.sentMessages.length > sentBeforeResult, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'lost-CAS completion commit to be acknowledged',
       });
@@ -1190,7 +1188,6 @@ describe('handleWorkerWebSocketMessage', () => {
       // failure is now acknowledged with disposition `dead-lettered` instead
       // of logged as a raw console.error.
       await waitForCondition(async () => ws.sentMessages.length > sentBeforeResult + 1, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'lost-CAS oversized-rejection commit to be acknowledged',
       });
@@ -1263,7 +1260,6 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       await waitForCondition(async () => ws.sentMessages.length > sentBeforeResult, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'unassigned taskResult to be rejected',
       });
@@ -1352,7 +1348,6 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       await waitForCondition(async () => wsIntruder.sentMessages.length > sentBeforeResult, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'worker-mismatch taskResult to be rejected',
       });
@@ -1445,7 +1440,6 @@ describe('handleWorkerWebSocketMessage', () => {
       handleWorkerWebSocketMessage(context, options, ws as never, taskResultFrame, NOOP_CLEANUP);
 
       await waitForCondition(async () => ws.sentMessages.length > sentBeforeResend, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'resend to be acknowledged',
       });
@@ -1531,7 +1525,6 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       await waitForCondition(async () => ws.sentMessages.length > sentBeforeConflict, {
-        timeoutMs: 1000,
         intervalMs: 10,
         label: 'conflicting content to be rejected',
       });
@@ -1556,7 +1549,7 @@ describe('handleWorkerWebSocketMessage', () => {
     // fire-and-forget — the worker is never blocked on it, and no protocol
     // frame acknowledges it — so a caller needing to know the write actually
     // landed (or didn't) has no signal to await except this test-only hook.
-    // These pin the hook's own contract; `remote-worker-reconnection.test.ts`
+    // These pin the hook's own contract; `remote-worker-reconnection.integration.test.ts`
     // is the consumer that replaces a fixed-budget ledger poll with it.
     it('reports outcome "committed" once the durable lease-renewal write lands', async () => {
       const context = minimalServerContext();
@@ -1952,17 +1945,16 @@ describe('handleWorkerWebSocketMessage', () => {
       const context = minimalServerContext();
       const options = minimalServeOptions();
 
-      // Faithfully model the real close-handler state: the OLD socket is still in
-      // `workerSockets` (it is not removed until the grace timer fires or the new
-      // socket overwrites it), AND a pending requeue entry exists. With a stale
-      // entry present, the duplicate-active guard's `existingSocket !== ws` branch
-      // is true — so the ONLY thing letting this registration through is the
-      // `isGracePeriodReconnect` bypass. (Without the stale entry the test would
-      // still pass even if the bypass were removed, so it would not pin it.)
+      // Model a stale map entry defensively. The real close handler removes the
+      // closed socket immediately now, but admission must remain safe if a
+      // caller has retained the old entry while the grace proof is pending.
       const staleSocket = createFakeWs();
       context.workerSockets.set('w-reconnect', staleSocket as never);
       const timerHandle = setTimeout(() => {}, 60_000);
-      context.pendingWorkerRequeues.set('w-reconnect', timerHandle);
+      context.pendingWorkerRequeues.set('w-reconnect', {
+        timer: timerHandle,
+        endsAt: Date.now() + 60_000,
+      });
 
       // Reconnecting socket registers under the same workerId.
       const ws = createFakeWs();

@@ -18,9 +18,9 @@
  * @module core/engine/event-log-compaction
  */
 
+import type { BatchOperation, Storage } from "../../embedded/storage/src/index.ts";
 import { hashBytes } from '../../runtime/portable.ts';
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { isWorkflowLogEntry } from '../event-log-shared.ts';
 import {

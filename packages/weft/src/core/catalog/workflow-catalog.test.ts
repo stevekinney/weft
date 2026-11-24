@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { buildWorkflowContract } from '../contract/build.ts';
 import { buildWorkflowRevisionManifest } from '../contract/manifest.ts';
 import type { WorkflowRevisionManifest } from '../contract/types.ts';
@@ -175,6 +175,28 @@ describe('WorkflowCatalog.install', () => {
         catalog.install(manifest, fakeDefinition('checkout'), { removalGeneration: null }),
       ),
     ).toThrow(WorkflowCatalogConflictError);
+  });
+
+  it('adopts the entry a concurrent writer installed when this install loses its CAS to it', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const manifest = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // The peer's identical write lands first: apply it, then report this caller's CAS as lost.
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    let lostOnce = false;
+    storage.conditionalBatch = async (conditions, operations) => {
+      if (lostOnce) return originalConditionalBatch(conditions, operations);
+      lostOnce = true;
+      await originalConditionalBatch(conditions, operations);
+      return false;
+    };
+
+    const entry = await catalog.install(manifest, fakeDefinition('checkout'));
+
+    expect(entry.manifest.revision).toBe('pinned-1');
+    expect(catalog.getEntry('checkout', 'pinned-1')).toBe(entry);
+    expect(catalog.listRevisions('checkout')).toHaveLength(1);
   });
 
   it('defensively rejects an invalid workflow name even for a hand-built manifest', async () => {
@@ -390,6 +412,30 @@ describe('WorkflowCatalog.activateRegistered', () => {
 });
 
 describe('WorkflowCatalog.activateCandidate', () => {
+  it('fails with WorkflowRevisionNotInstalledError when a peer removes the candidate right after it is installed', async () => {
+    const storage = new MemoryStorage();
+    const catalog = new WorkflowCatalog(storage);
+    const candidate = await manifestFor('checkout', '1.0.0', { revision: 'pinned-1' });
+
+    // `install()` reads the entry once (absent) and writes it; the next read is
+    // `activateCandidate()`'s own, by which time the peer's removal has finished.
+    const candidateKey = KEYS.catalogEntry('checkout', 'pinned-1');
+    const originalGet = storage.get.bind(storage);
+    let candidateReads = 0;
+    storage.get = async (key) => {
+      if (key === candidateKey) {
+        candidateReads += 1;
+        if (candidateReads === 2) return null;
+      }
+      return originalGet(key);
+    };
+
+    expect(await throwingRejectionOf(catalog.activateCandidate('checkout', candidate))).toThrow(
+      WorkflowRevisionNotInstalledError,
+    );
+    expect(await storage.get(KEYS.catalogActive('checkout'))).toBeNull();
+  });
+
   it('bypasses the compatibility check for the first-ever activation of a name', async () => {
     const storage = new MemoryStorage();
     const catalog = new WorkflowCatalog(storage);

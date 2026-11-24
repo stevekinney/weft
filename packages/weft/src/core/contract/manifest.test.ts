@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { buildWorkflowContract } from './build.ts';
 import { MAX_CONTRACT_MESSAGE_COUNT, MAX_NORMALIZED_CONTRACT_BYTES } from './limits.ts';
 import { parseWorkflowRevisionManifest } from './manifest-parse.ts';

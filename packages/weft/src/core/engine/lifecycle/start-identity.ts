@@ -1,4 +1,5 @@
-import { KEYS, type BatchOperation } from '../../../storage/interface.ts';
+import { type BatchOperation } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import type { RunIdentity } from '../execution-attempts.ts';
 
 /** The generation and holder marker a start batch wrote for `workflowId`; `null` when it wrote none. */

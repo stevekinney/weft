@@ -1,13 +1,20 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { Engine } from '../core/engine.ts';
+
+import { DEFAULT_SSE_HEARTBEAT_INTERVAL_MS } from "../embedded/backchannel/src/internals.ts";
+import { SERVER_IDLE_TIMEOUT_MARGIN_SECONDS, SERVER_IDLE_TIMEOUT_SECONDS } from './idle-timeout.ts';
 import {
   minimalServeOptions,
   minimalServerContext,
 } from './runtime/server-context.test-support.ts';
+import { MAX_POLL_TIMEOUT } from './runtime/task-polling.ts';
 import {
   assertAuthenticationPosture,
   buildBunServeConfig,
   buildFetchHandler,
+  buildServerContext,
   clampCancellationGracePeriod,
   clampWorkerReconnectGracePeriod,
   registerStackDisposers,
@@ -208,7 +215,7 @@ describe('MCP origin configuration posture', () => {
     try {
       resolveNetworkConfig({
         ...minimalServeOptions(),
-        auth: { apiKeys: ['test-key'] },
+        auth: { apiKeys: ['test-key'], defaultApiKeyScopes: ['workflows:read'] },
         publicOrigin: 'https://api.example.com',
       });
       expect(warningSpy).not.toHaveBeenCalledWith(
@@ -227,7 +234,7 @@ describe('MCP origin configuration posture', () => {
     try {
       resolveNetworkConfig({
         ...minimalServeOptions(),
-        auth: { apiKeys: ['test-key'] },
+        auth: { apiKeys: ['test-key'], defaultApiKeyScopes: ['workflows:read'] },
         trustedHosts: ['api.example.com'],
       });
       expect(warningSpy).not.toHaveBeenCalledWith(
@@ -246,7 +253,11 @@ describe('registerStackDisposers', () => {
     const fetchHandler = buildFetchHandler(
       { current: null },
       minimalServerContext(),
-      resolveNetworkConfig(minimalServeOptions()).serverOptions,
+      resolveNetworkConfig({
+        ...minimalServeOptions(),
+        unauthenticatedAccess: 'allow',
+        trustedHosts: ['localhost'],
+      }).serverOptions,
     );
 
     const response = await fetchHandler(new Request('http://localhost/health'));
@@ -254,6 +265,35 @@ describe('registerStackDisposers', () => {
     expect(response).toBeInstanceOf(Response);
     expect(response?.status).toBe(503);
     expect(await response?.text()).toBe('Server not ready');
+  });
+
+  it('keeps a connection open longer than the longest silence it has to survive', () => {
+    const config = buildBunServeConfig(
+      7233,
+      '127.0.0.1',
+      false,
+      {},
+      undefined,
+      async () => new Response('ok'),
+      { open() {}, message() {}, close() {} },
+    );
+    expect(config.idleTimeout).toBe(SERVER_IDLE_TIMEOUT_SECONDS);
+    // Bun's default of 10 seconds cut a stream between two 15 second pings.
+    const longestSilenceSeconds =
+      Math.max(DEFAULT_SSE_HEARTBEAT_INTERVAL_MS, MAX_POLL_TIMEOUT) / 1000;
+    expect(SERVER_IDLE_TIMEOUT_SECONDS).toBe(
+      Math.ceil(longestSilenceSeconds) + SERVER_IDLE_TIMEOUT_MARGIN_SECONDS,
+    );
+    // Each silent interval stays clear of the cut by the margin, so growing either constant past
+    // the idle timeout fails here rather than as a stream cut in a browser.
+    expect(SERVER_IDLE_TIMEOUT_SECONDS * 1000).toBeGreaterThanOrEqual(
+      DEFAULT_SSE_HEARTBEAT_INTERVAL_MS + SERVER_IDLE_TIMEOUT_MARGIN_SECONDS * 1000,
+    );
+    expect(SERVER_IDLE_TIMEOUT_SECONDS * 1000).toBeGreaterThanOrEqual(
+      MAX_POLL_TIMEOUT + SERVER_IDLE_TIMEOUT_MARGIN_SECONDS * 1000,
+    );
+    // Bun accepts at most 255 seconds.
+    expect(SERVER_IDLE_TIMEOUT_SECONDS).toBeLessThanOrEqual(255);
   });
 
   it('adds tls to the Bun serve config only when tls options exist', () => {
@@ -330,7 +370,7 @@ describe('registerStackDisposers', () => {
 
     // Capture the registered disposers rather than driving a full server
     // teardown: the other disposers touch collaborators (workflowEventFeed,
-    // mcpSessionManager, the engine) that a minimal context does not provide.
+    // mcpEndpoint, the engine) that a minimal context does not provide.
     // We only need to prove the timer-cleanup disposer — registered last, so
     // LIFO-disposed first — calls taskQueue[Symbol.dispose].
     const deferred: Array<() => void | Promise<void>> = [];
@@ -378,7 +418,7 @@ describe('registerStackDisposers', () => {
       options,
       {
         cleanupWorkflow() {},
-        dispose() {},
+        dispose: () => Promise.resolve(),
       },
       () => {},
     );
@@ -422,7 +462,7 @@ describe('registerStackDisposers', () => {
       options,
       {
         cleanupWorkflow() {},
-        dispose() {},
+        dispose: () => Promise.resolve(),
       },
       () => {},
     );
@@ -440,3 +480,89 @@ describe('registerStackDisposers', () => {
 // Startup task-ledger recovery (formerly `restoreInflightTasks`, scanning
 // the retired `op:inflight:` keyspace) is now `runTaskLedgerRecovery` in
 // `runtime/task-ledger-recovery.ts` — see that module's own test file.
+
+describe('buildServerContext task queue policy', () => {
+  async function schedulingPolicyFor(
+    schedulingPolicy: 'fifo' | 'lifo' | undefined,
+  ): Promise<string> {
+    using engine = new Engine({ storage: new MemoryStorage() });
+    const configuration = resolveNetworkConfig({
+      engine,
+      port: 0,
+      unauthenticatedAccess: 'allow',
+      trustedHosts: ['localhost'],
+      ...(schedulingPolicy === undefined ? {} : { schedulingPolicy }),
+    });
+    const context = buildServerContext(
+      configuration.serverOptions,
+      configuration.serverMetricsCollector,
+    );
+    await context.taskLedgerRecovery.ready;
+    return context.taskQueue.schedulingPolicy;
+  }
+
+  it('builds the task queue with the configured scheduling policy', async () => {
+    expect(await schedulingPolicyFor('fifo')).toBe('fifo');
+  });
+
+  it('defaults the task queue to priority scheduling', async () => {
+    expect(await schedulingPolicyFor(undefined)).toBe('priority');
+  });
+});
+
+describe('buildServerContext engine events (COR-1724)', () => {
+  it('raises worker:registration-rejected on the engine when the registry records a rejection', async () => {
+    using engine = new Engine({ storage: new MemoryStorage() });
+    const configuration = resolveNetworkConfig({
+      engine,
+      port: 0,
+      unauthenticatedAccess: 'allow',
+      trustedHosts: ['localhost'],
+    });
+    const context = buildServerContext(
+      configuration.serverOptions,
+      configuration.serverMetricsCollector,
+    );
+    await context.taskLedgerRecovery.ready;
+    const seen: Array<[string | undefined, string]> = [];
+    engine.addEventListener('worker:registration-rejected', (event) => {
+      seen.push([event.workerId, event.code]);
+    });
+
+    context.registry.recordRejection({
+      code: 'registration_rejected',
+      workerId: 'w-9',
+      rejectedAt: 1,
+    });
+
+    expect(seen).toEqual([['w-9', 'registration_rejected']]);
+  });
+
+  it('raises queue:depth-changed on the engine when the server task queue gains a pending task', async () => {
+    using engine = new Engine({ storage: new MemoryStorage() });
+    const configuration = resolveNetworkConfig({
+      engine,
+      port: 0,
+      unauthenticatedAccess: 'allow',
+      trustedHosts: ['localhost'],
+    });
+    const context = buildServerContext(
+      configuration.serverOptions,
+      configuration.serverMetricsCollector,
+    );
+    await context.taskLedgerRecovery.ready;
+    const seen: Array<[string, number]> = [];
+    engine.addEventListener('queue:depth-changed', (event) => {
+      seen.push([event.queue, event.depth]);
+    });
+
+    context.taskQueue.enqueue('payments', {
+      operationId: 'op-1',
+      activityName: 'charge',
+      input: {},
+    });
+    context.taskQueue[Symbol.dispose]();
+
+    expect(seen).toEqual([['payments', 1]]);
+  });
+});

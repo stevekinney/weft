@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { normalizeListFilter } from '../list-filter-validation.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -22,7 +23,7 @@ const workerUrl = new URL('../../workers/test-browser-worker.ts', import.meta.ur
 
 /** Drain microtasks so a deferred inline start advances. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 /** Read a workflow's current status (or undefined if it does not exist). */

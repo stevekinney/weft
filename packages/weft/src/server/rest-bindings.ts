@@ -14,16 +14,23 @@
  * @module server/rest-bindings
  */
 
-import type { ConformanceTargetRunner } from '../conformance/targets.ts';
-import type { MetricsCollector } from '../observability/metrics.ts';
-import type { Storage } from '../storage/interface.ts';
-import type { WorkerDeploymentCatalog } from '../worker/deployment-routing.ts';
-import type { WorkerRegistry } from '../worker/registry.ts';
 import {
   createOperationRegistry,
   type OperationRegistry,
   type RegistrableOperation,
-} from './operation-catalog.ts';
+  type UnknownRestBinding,
+} from "../embedded/backchannel/src/internals.ts";
+import type { Storage } from "../embedded/storage/src/index.ts";
+import type { ConformanceTargetRunner } from '../conformance/targets.ts';
+import type { RegistryAgnosticEngine } from '../core/engine.ts';
+import type { RemoteTaskQueued } from '../core/task-ledger/task-ledger-types.ts';
+import type { MetricsCollector } from '../observability/metrics.ts';
+import type { WorkerDeploymentCatalog } from '../worker/deployment-routing.ts';
+import type { WorkerRegistry } from '../worker/registry.ts';
+import {
+  createCompareWorkflowOperation,
+  type WorkflowReadAuthorizer,
+} from './operations/compare-workflow.ts';
 import {
   createListConformanceTargetsOperation,
   createRunConformanceReportOperation,
@@ -32,6 +39,11 @@ import {
   runConformanceReportOperation,
   runConformanceReportRestBinding,
 } from './operations/conformance.ts';
+import {
+  createForgetWorkerOperation,
+  createForgetWorkerRestBinding,
+  forgetWorkerOperation,
+} from './operations/forget-worker.ts';
 import {
   createGetSystemMetricsOperation,
   createGetSystemMetricsRestBinding,
@@ -44,6 +56,7 @@ import {
   createGetWorkerDiagnosticsOperation,
   createGetWorkerDiagnosticsRestBinding,
   getWorkerDiagnosticsOperation,
+  type WorkerSessionTiming,
 } from './operations/get-worker-diagnostics.ts';
 import {
   createListTaskQueuesOperation,
@@ -60,18 +73,22 @@ import {
   createListWorkersRestBinding,
   listWorkersOperation,
 } from './operations/list-workers.ts';
+import { createRetryTaskDeadLetterOperation } from './operations/retry-task-dead-letter.ts';
+import { createStartOrSignalWorkflowOperation } from './operations/start-or-signal-workflow.ts';
 import { createStartWorkflowOperation } from './operations/start-workflow.ts';
 import { STATIC_OPERATIONS } from './operations/static-operations.ts';
 import { STATIC_REST_BINDINGS } from './operations/static-rest-bindings.ts';
 import {
   createPreviewWorkerDeploymentRoutingOperation,
   createPromoteWorkerDeploymentOperation,
+  createRemoveWorkerDeploymentVersionOperation,
   createRollbackWorkerDeploymentOperation,
   createSetWorkerDeploymentRoutingOperation,
   createWorkerDeploymentDiagnosticsOperation,
   workerDeploymentDiagnosticsRestBinding,
   workerDeploymentPreviewRestBinding,
   workerDeploymentPromoteRestBinding,
+  workerDeploymentRemoveRestBinding,
   workerDeploymentRollbackRestBinding,
   workerDeploymentRoutingRestBinding,
 } from './operations/worker-deployment-routing.ts';
@@ -90,23 +107,8 @@ import {
   drainWorkerOperation,
 } from './operations/worker-drain.ts';
 import { createWorkerStartOverridePreviewOperation } from './operations/worker-start-override-preview.ts';
-import type { RestBinding } from './rest-binding.ts';
 import type { TaskQueue } from './task-queue.ts';
-
-/**
- * The router stores heterogeneous bindings whose `Input`/`Output` pairs
- * all differ. `RestBinding<Input, Output>` is strictly-typed at the
- * author boundary (so `defineOperation` + binding factories catch
- * mistakes), but at the router level those generics are irrelevant —
- * every binding produces a `Response` regardless of its output type.
- *
- * `RestBinding<any, any>` is the idiomatic way to express "a binding
- * with SOME Input/Output pair the router doesn't care about." A stricter
- * `unknown, unknown` form fails under `exactOptionalPropertyTypes`
- * because `shapeSuccess: (Output) => Response` cannot be safely widened
- * to `(unknown) => Response` (function parameters are contravariant).
- */
-export type UnknownRestBinding = RestBinding<any, any>;
+import { weftFaultPolicy } from './weft-fault-policy.ts';
 
 /**
  * Static REST bindings for all operations that do not need per-server
@@ -130,6 +132,7 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
     createListWorkersRestBinding(),
     createDrainWorkerRestBinding(),
     createClearWorkerDrainRestBinding(),
+    createForgetWorkerRestBinding(),
     createDrainDeploymentRestBinding(),
     createClearDeploymentDrainRestBinding(),
     createListTaskQueuesRestBinding(),
@@ -140,6 +143,7 @@ export function createLiveRestBindings(): ReadonlyArray<UnknownRestBinding> {
     workerDeploymentPromoteRestBinding,
     workerDeploymentRollbackRestBinding,
     workerDeploymentPreviewRestBinding,
+    workerDeploymentRemoveRestBinding,
     listConformanceTargetsRestBinding,
     runConformanceReportRestBinding,
   ];
@@ -162,10 +166,22 @@ export type LiveOperationRegistryOptions = {
   metricsCollector?: MetricsCollector;
   workerRegistry?: WorkerRegistry;
   workerDeploymentCatalog?: WorkerDeploymentCatalog;
+  /** Receives the events operations raise after a mutation commits; `serve()` passes the engine's `dispatchEvent`. */
+  dispatchEvent?: (event: Event) => void;
   storage?: Storage;
+  /**
+   * Hand a task queued by `weft.tasks.deadletters.retry` to the dispatcher at
+   * once; `serve()` supplies it. Without it the retried record waits for the
+   * ledger sweep, which dispatches a queued record nothing is tracking.
+   */
+  redispatchQueuedTask?: (record: RemoteTaskQueued) => void;
   taskQueue?: TaskQueue;
   clock?: () => number;
+  /** Where `weft.workers.diagnostics` reads each worker's reconnect-grace and session-lease instants. */
+  workerSessionTiming?: WorkerSessionTiming;
   workerStartOverrideSigningSecret?: string;
+  /** Per-run read gate `weft.workflows.compare` asks for a fork and its source; `serve()` passes `authorizeWorkflowRead`. */
+  authorizeWorkflowRead?: WorkflowReadAuthorizer;
   /**
    * Runs the operator-registered targets behind `weft.conformance.targets` and
    * `weft.conformance.report`. `serve()` always supplies one (empty when no
@@ -185,7 +201,7 @@ export type LiveOperationRegistryOptions = {
    * a foreign operation cannot shadow one of Weft's — it fails construction
    * instead, before a port is bound.
    */
-  additionalOperations?: ReadonlyArray<RegistrableOperation>;
+  additionalOperations?: ReadonlyArray<RegistrableOperation<RegistryAgnosticEngine>>;
 };
 
 function buildSystemMetricsOperation(options: LiveOperationRegistryOptions) {
@@ -213,17 +229,39 @@ function buildClearWorkerDrainOperationForRegistry(options: LiveOperationRegistr
   return createClearWorkerDrainOperation({ workerRegistry: options.workerRegistry });
 }
 
+function buildForgetWorkerOperationForRegistry(options: LiveOperationRegistryOptions) {
+  if (options.workerRegistry === undefined) return forgetWorkerOperation;
+  return createForgetWorkerOperation({ workerRegistry: options.workerRegistry });
+}
+
 function buildDrainDeploymentOperationForRegistry(options: LiveOperationRegistryOptions) {
   if (options.workerRegistry === undefined) return drainDeploymentOperation;
   return createDrainDeploymentOperation({
     workerRegistry: options.workerRegistry,
+    ...(options.dispatchEvent === undefined ? {} : { dispatchEvent: options.dispatchEvent }),
+    ...(options.workerDeploymentCatalog === undefined
+      ? {}
+      : { catalog: options.workerDeploymentCatalog }),
     ...(options.clock !== undefined ? { clock: options.clock } : {}),
   });
 }
 
 function buildClearDeploymentDrainOperationForRegistry(options: LiveOperationRegistryOptions) {
   if (options.workerRegistry === undefined) return clearDeploymentDrainOperation;
-  return createClearDeploymentDrainOperation({ workerRegistry: options.workerRegistry });
+  return createClearDeploymentDrainOperation({
+    workerRegistry: options.workerRegistry,
+    ...(options.dispatchEvent === undefined ? {} : { dispatchEvent: options.dispatchEvent }),
+    ...(options.workerDeploymentCatalog === undefined
+      ? {}
+      : { catalog: options.workerDeploymentCatalog }),
+  });
+}
+
+function buildRetryTaskDeadLetterOperationForRegistry(options: LiveOperationRegistryOptions) {
+  return createRetryTaskDeadLetterOperation({
+    metricsCollector: options.metricsCollector,
+    redispatchQueuedTask: options.redispatchQueuedTask,
+  });
 }
 
 function buildListTaskQueuesOperationForRegistry(options: LiveOperationRegistryOptions) {
@@ -253,6 +291,9 @@ function buildWorkerDiagnosticsOperationForRegistry(options: LiveOperationRegist
   return createGetWorkerDiagnosticsOperation({
     workerRegistry: options.workerRegistry,
     ...(options.clock !== undefined ? { clock: options.clock } : {}),
+    ...(options.workerSessionTiming !== undefined
+      ? { sessionTiming: options.workerSessionTiming }
+      : {}),
   });
 }
 
@@ -278,22 +319,24 @@ function buildConformanceOperations(options: LiveOperationRegistryOptions) {
 
 function buildWorkerDeploymentRoutingOperations(options: LiveOperationRegistryOptions) {
   const catalog = options.workerDeploymentCatalog;
+  const mutationOptions = {
+    ...(catalog === undefined ? {} : { catalog }),
+    ...(options.workerRegistry === undefined ? {} : { workerRegistry: options.workerRegistry }),
+    ...(options.dispatchEvent === undefined ? {} : { dispatchEvent: options.dispatchEvent }),
+  };
   return [
-    catalog === undefined
-      ? createSetWorkerDeploymentRoutingOperation()
-      : createSetWorkerDeploymentRoutingOperation({ catalog }),
-    catalog === undefined
-      ? createPromoteWorkerDeploymentOperation()
-      : createPromoteWorkerDeploymentOperation({ catalog }),
-    catalog === undefined
-      ? createRollbackWorkerDeploymentOperation()
-      : createRollbackWorkerDeploymentOperation({ catalog }),
+    createSetWorkerDeploymentRoutingOperation(mutationOptions),
+    createPromoteWorkerDeploymentOperation(mutationOptions),
+    createRollbackWorkerDeploymentOperation(mutationOptions),
     catalog === undefined
       ? createWorkerDeploymentDiagnosticsOperation()
       : createWorkerDeploymentDiagnosticsOperation({ catalog }),
     catalog === undefined
       ? createPreviewWorkerDeploymentRoutingOperation()
       : createPreviewWorkerDeploymentRoutingOperation({ catalog }),
+    catalog === undefined
+      ? createRemoveWorkerDeploymentVersionOperation()
+      : createRemoveWorkerDeploymentVersionOperation({ catalog }),
   ];
 }
 
@@ -305,6 +348,17 @@ function buildWorkerStartOverridePreviewOperation(options: LiveOperationRegistry
       : { serverSecret: options.workerStartOverrideSigningSecret }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
+}
+
+function buildStartOrSignalWorkflowOperationForRegistry(options: LiveOperationRegistryOptions) {
+  const { workerStartOverrideSigningSecret } = options;
+  const signing =
+    workerStartOverrideSigningSecret === undefined ? {} : { workerStartOverrideSigningSecret };
+  return createStartOrSignalWorkflowOperation(signing);
+}
+
+function buildCompareWorkflowOperationForRegistry(options: LiveOperationRegistryOptions) {
+  return createCompareWorkflowOperation({ authorizeWorkflowRead: options.authorizeWorkflowRead });
 }
 
 function buildStartWorkflowOperationForRegistry(options: LiveOperationRegistryOptions) {
@@ -339,26 +393,36 @@ export function createLiveOperationRegistry(
   options?: LiveOperationRegistryOptions,
 ): OperationRegistry {
   const resolved: LiveOperationRegistryOptions = options ?? {};
-  return createOperationRegistry([
-    ...STATIC_OPERATIONS.map((operation) =>
-      operation.name === 'weft.workflows.start'
-        ? buildStartWorkflowOperationForRegistry(resolved)
-        : operation.name === 'weft.worker.startoverrides.preview'
-          ? buildWorkerStartOverridePreviewOperation(resolved)
-          : operation,
-    ),
-    buildTaskDiagnosticsOperationForRegistry(resolved),
-    buildSystemMetricsOperation(resolved),
-    buildListWorkersOperationForRegistry(resolved),
-    buildDrainWorkerOperationForRegistry(resolved),
-    buildClearWorkerDrainOperationForRegistry(resolved),
-    buildDrainDeploymentOperationForRegistry(resolved),
-    buildClearDeploymentDrainOperationForRegistry(resolved),
-    buildListTaskQueuesOperationForRegistry(resolved),
-    buildWorkerDiagnosticsOperationForRegistry(resolved),
-    buildWorkerRegistrationRejectionsOperationForRegistry(resolved),
-    ...buildWorkerDeploymentRoutingOperations(resolved),
-    ...buildConformanceOperations(resolved),
-    ...(resolved.additionalOperations ?? []),
-  ]);
+  return createOperationRegistry<RegistryAgnosticEngine>(
+    [
+      ...STATIC_OPERATIONS.map((operation) =>
+        operation.name === 'weft.workflows.start'
+          ? buildStartWorkflowOperationForRegistry(resolved)
+          : operation.name === 'weft.workflows.startorsignal'
+            ? buildStartOrSignalWorkflowOperationForRegistry(resolved)
+            : operation.name === 'weft.worker.startoverrides.preview'
+              ? buildWorkerStartOverridePreviewOperation(resolved)
+              : operation.name === 'weft.tasks.deadletters.retry'
+                ? buildRetryTaskDeadLetterOperationForRegistry(resolved)
+                : operation.name === 'weft.workflows.compare'
+                  ? buildCompareWorkflowOperationForRegistry(resolved)
+                  : operation,
+      ),
+      buildTaskDiagnosticsOperationForRegistry(resolved),
+      buildSystemMetricsOperation(resolved),
+      buildListWorkersOperationForRegistry(resolved),
+      buildDrainWorkerOperationForRegistry(resolved),
+      buildClearWorkerDrainOperationForRegistry(resolved),
+      buildForgetWorkerOperationForRegistry(resolved),
+      buildDrainDeploymentOperationForRegistry(resolved),
+      buildClearDeploymentDrainOperationForRegistry(resolved),
+      buildListTaskQueuesOperationForRegistry(resolved),
+      buildWorkerDiagnosticsOperationForRegistry(resolved),
+      buildWorkerRegistrationRejectionsOperationForRegistry(resolved),
+      ...buildWorkerDeploymentRoutingOperations(resolved),
+      ...buildConformanceOperations(resolved),
+      ...(resolved.additionalOperations ?? []),
+    ],
+    { faultPolicy: weftFaultPolicy },
+  );
 }

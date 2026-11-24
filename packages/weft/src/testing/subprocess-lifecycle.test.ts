@@ -12,7 +12,12 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { stopProcess, type RunningSubprocess } from './subprocess-lifecycle.ts';
+import {
+  appendCapturedOutput,
+  isExpectedSignalExit,
+  stopProcess,
+  type RunningSubprocess,
+} from './subprocess-lifecycle.ts';
 
 function fakeUnresponsiveProcess(): { process: RunningSubprocess; killCalls: string[] } {
   const killCalls: string[] = [];
@@ -39,5 +44,40 @@ describe('stopProcess — escalated SIGKILL whose exited promise also rejects', 
     // The initial signal, then the SIGKILL escalation once the (rejecting)
     // wait for exit failed and the process still hadn't terminated.
     expect(killCalls).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+});
+
+describe('appendCapturedOutput', () => {
+  it('appends while the buffer is within its bound', () => {
+    expect(appendCapturedOutput('abc', 'def')).toBe('abcdef');
+  });
+
+  it('keeps only the newest output once the buffer would exceed its bound', () => {
+    const bound = 32_768;
+    const next = appendCapturedOutput('a'.repeat(bound), 'tail');
+
+    expect(next).toHaveLength(bound);
+    expect(next.endsWith('aaatail')).toBe(true);
+    expect(next.startsWith('a')).toBe(true);
+  });
+});
+
+describe('isExpectedSignalExit', () => {
+  const exitedWithoutSignal = { signalCode: null } as unknown as RunningSubprocess;
+
+  it.each([
+    ['SIGKILL', 137],
+    ['SIGTERM', 143],
+    ['SIGINT', 130],
+  ] as const)('accepts the shell exit code a %s death reports', (signal, exitCode) => {
+    expect(isExpectedSignalExit(exitedWithoutSignal, signal, exitCode)).toBe(true);
+    expect(isExpectedSignalExit(exitedWithoutSignal, signal, exitCode + 1)).toBe(false);
+  });
+
+  it('trusts the reported signal over the exit code when the process died from one', () => {
+    const killed = { signalCode: 'SIGKILL' } as unknown as RunningSubprocess;
+
+    expect(isExpectedSignalExit(killed, 'SIGKILL', 0)).toBe(true);
+    expect(isExpectedSignalExit(killed, 'SIGTERM', 143)).toBe(false);
   });
 });

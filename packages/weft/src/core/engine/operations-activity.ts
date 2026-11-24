@@ -1,5 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { parsePerAttemptTimeoutMs } from '../context/activity-schedule-to-close.ts';
+import { ActivityStartedEvent } from '../events.ts';
+import { tagWorkflowEventGeneration } from '../events/workflow-event-generation.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityContext, ActivityVerificationResult, OperationOutcome } from '../types.ts';
@@ -12,12 +14,12 @@ import {
 import { resolvePerAttemptTimeout, withPerAttemptTimeout } from './activity-per-attempt-timeout.ts';
 import {
   buildActivityReconciliationReference,
+  buildActivityReconciliationTransitionSideEffects,
   buildActivityVerificationContext,
   commitActivityReconciliationTransitionWithFencedWrite,
   createCompletedActivityReconciliationRecord,
   resolveActivityIdempotencyKey,
   resolveStartedActivityReconciliationRecord,
-  stageActivityReconciliationTransitionWithAtomicWorkflowCommit,
   validateActivityResultForReconciliation,
   type ActivityReconciliationMetadata,
 } from './activity-reconciliation.ts';
@@ -28,6 +30,11 @@ import {
   parkDeferredAsyncActivity,
 } from './async-activity-completion.ts';
 import { deriveAsyncActivityToken } from './async-activity-records.ts';
+import {
+  shareActivityReceiptTransition,
+  stageOperationSideEffects,
+} from './checkpoint-side-effects.ts';
+import { currentExecutionAttempt, type ExecutionAttempt } from './execution-attempts.ts';
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
@@ -35,6 +42,11 @@ import {
   workflowExecutionTokenForWorkflow,
   type CapturedRejectionReason,
 } from './strategy-helpers.ts';
+import {
+  activityLifecycleScope,
+  recordBranchActivityReceipt,
+  recordTimelineTaskIdentity,
+} from './timeline-coordinator-detail.ts';
 
 export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknown) &
   ActivityReconciliationMetadata & {
@@ -46,6 +58,17 @@ export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknow
   };
 
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
+
+/** Concurrent branches share a receipt only within the same execution attempt. */
+type KeyedActivityResult = {
+  readonly value: unknown;
+  readonly receipt?: ReturnType<typeof buildActivityReconciliationTransitionSideEffects>;
+};
+
+const keyedActivityResults = new WeakMap<
+  ExecutionAttempt,
+  Map<string, Promise<KeyedActivityResult>>
+>();
 
 /**
  * Per-call execution options for one activity operation. Distinct from the
@@ -210,6 +233,7 @@ function invokeRemoteActivity(
   }
   const activityStateKey = getActivityStateKey(operation);
   const token = deriveAsyncActivityToken(workflowId, activityStateKey, attempt);
+  recordTimelineTaskIdentity(internals, workflowId, token);
   const workflowType = requireWorkflowTypeForRemoteDispatch(internals, workflowId);
   // A per-call `timeout` overrides the broker's own configured default
   // (`EngineOwnedRemoteActivityBroker`'s `defaults.visibilityTimeoutMilliseconds`) —
@@ -313,7 +337,7 @@ export async function executeActivity(
   // configured" check, so remote unavailability can never silently fall
   // through to a different mode (acceptance criterion 9).
   const isRemoteMode = Boolean(internals.remoteActivityBroker) && allowRemoteDispatch;
-  const invokeActivity: (
+  const invokeActivityImplementation: (
     activityName: string,
     input: unknown,
     headers: Map<string, string>,
@@ -355,6 +379,44 @@ export async function executeActivity(
             attempt,
             attemptAbortController,
           );
+
+  // Remote attempts report their lifecycle from the task ledger instead.
+  const lifecycleScope = isRemoteMode
+    ? undefined
+    : activityLifecycleScope(internals, workflowId, operation.operationId);
+  let startedAt: number | undefined;
+  const recordBranchCompletion = (): void => {
+    if (lifecycleScope !== 'branch' || startedAt === undefined) return;
+    recordBranchActivityReceipt(internals, workflowId, {
+      operationId: operation.operationId,
+      workflowExecutionToken: operation.workflowExecutionToken,
+      activityName: operation.activityName,
+      duration: Math.max(0, internals.options.getNow() - startedAt),
+    });
+  };
+
+  const invokeActivity = (
+    activityName: string,
+    input: unknown,
+    headers: Map<string, string>,
+  ): unknown => {
+    if (lifecycleScope !== undefined) {
+      // Only a branch needs its own start time; the timeline times a top-level one.
+      if (lifecycleScope === 'branch') startedAt = internals.options.getNow();
+      internals.engine?.dispatchEvent(
+        tagWorkflowEventGeneration(
+          new ActivityStartedEvent(
+            operation.operationId,
+            workflowId,
+            operation.activityName,
+            attempt,
+          ),
+          operation.workflowExecutionToken,
+        ),
+      );
+    }
+    return invokeActivityImplementation(activityName, input, headers);
+  };
 
   const composedActivity = callbacks.getComposedActivityInterceptor();
   const executeWithActivityInterceptors = async (
@@ -403,6 +465,7 @@ export async function executeActivity(
     const generator = composedWorkflow.activity(interception, execute);
     const value = await driveWorkflowInterceptorGenerator(generator);
     copyActivityHeadersToOperation(operation, interception.headers);
+    recordBranchCompletion();
     return value;
   }
 
@@ -413,6 +476,7 @@ export async function executeActivity(
     headers,
   );
   copyActivityHeadersToOperation(operation, headers);
+  recordBranchCompletion();
   return result;
 }
 
@@ -429,83 +493,36 @@ export async function executeActivityOperationResult(
   const idempotencyKey = resolveActivityIdempotencyKey(activity, operation);
   const operationAttempt = getActivityAttempt(operation);
   if (idempotencyKey !== undefined) {
+    // A replay of the same durable run has a new attempt. It must reconcile the stored receipt.
+    const executionAttempt = currentExecutionAttempt(internals, workflowId);
     const reference = await buildActivityReconciliationReference(
       workflowId,
       operation.activityName,
       idempotencyKey,
     );
-    const started = await resolveStartedActivityReconciliationRecord(
-      internals,
-      workflowId,
-      operation,
-      reference,
-      activity,
-      idempotencyKey,
-      operationAttempt,
-    );
-    if ('completedResult' in started) {
-      validateActivityResultForReconciliation(
-        started.completedResult,
-        internals.options.payloadSizePolicy.maxBytes,
-      );
-      return started.completedResult;
-    }
-    const result = await executeActivity(
-      internals,
-      workflowId,
-      operation,
-      callbacks,
-      started.attempt,
-      coordinatorSignal,
-      executionOptions.allowRemoteDispatch ?? true,
-    );
-    validateActivityResultForReconciliation(result, internals.options.payloadSizePolicy.maxBytes);
-    await finalizeActivityResult(
-      internals,
-      workflowId,
-      operation,
-      result,
-      activity,
-      idempotencyKey,
-      started.attempt,
-      speculativeState,
-      true,
-    );
-    const completedRecord = createCompletedActivityReconciliationRecord(
-      started,
-      result,
-      internals.options.getNow(),
-    );
-    if (executionOptions.reconciliationCompletion === 'immediate-fenced') {
-      const finishImmediateReconciliationCommit =
-        executionOptions.beforeImmediateReconciliationCommit?.();
-      try {
-        await commitActivityReconciliationTransitionWithFencedWrite(
-          internals,
-          workflowId,
-          reference,
-          started,
-          completedRecord,
-        );
-      } finally {
-        finishImmediateReconciliationCommit?.();
-      }
-    } else {
-      stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
+    const execute = () =>
+      executeKeyedActivityOperationResult(
         internals,
         workflowId,
+        operation,
+        callbacks,
+        activity,
+        idempotencyKey,
+        operationAttempt,
         reference,
-        started,
-        completedRecord,
+        coordinatorSignal,
+        speculativeState,
+        executionOptions,
       );
+    const outcome = await (executionAttempt === undefined ||
+    executionAttempt.abandoned ||
+    executionOptions.reconciliationCompletion === 'immediate-fenced'
+      ? execute()
+      : runKeyedActivityOnce(executionAttempt, reference.key, execute));
+    if (outcome.receipt !== undefined) {
+      stageOperationSideEffects(internals, workflowId, operation, outcome.receipt);
     }
-    // Step succeeded durably: drop its tracked heartbeat. Guarded on the
-    // non-speculative path only — a speculative step can still roll back and
-    // re-run, so it relies on terminal cleanup to clear instead.
-    if (!speculativeState) {
-      clearLastHeartbeatForStep(internals, workflowId, getActivityStateKey(operation));
-    }
-    return result;
+    return outcome.value;
   }
 
   const result = await executeActivity(
@@ -530,7 +547,6 @@ export async function executeActivityOperationResult(
     operationAttempt,
     speculativeState,
   );
-
   // Step succeeded durably: drop its tracked heartbeat. Guarded on the
   // non-speculative path only — a speculative step can still roll back and
   // re-run, so it relies on terminal cleanup to clear instead.
@@ -538,6 +554,109 @@ export async function executeActivityOperationResult(
     clearLastHeartbeatForStep(internals, workflowId, getActivityStateKey(operation));
   }
 
+  return result;
+}
+
+async function executeKeyedActivityOperationResult(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: ActivityOperation,
+  callbacks: ActivityOperationCallbacks,
+  activity: ActivityFunctionWithMetadata | undefined,
+  idempotencyKey: string,
+  operationAttempt: number,
+  reference: Awaited<ReturnType<typeof buildActivityReconciliationReference>>,
+  coordinatorSignal: AbortSignal | undefined,
+  speculativeState: SpeculativeExecutionState | undefined,
+  executionOptions: ActivityOperationExecutionOptions,
+): Promise<KeyedActivityResult> {
+  const started = await resolveStartedActivityReconciliationRecord(
+    internals,
+    workflowId,
+    operation,
+    reference,
+    activity,
+    idempotencyKey,
+    operationAttempt,
+  );
+  if ('completedResult' in started) {
+    validateActivityResultForReconciliation(
+      started.completedResult,
+      internals.options.payloadSizePolicy.maxBytes,
+    );
+    return { value: started.completedResult };
+  }
+  const result = await executeActivity(
+    internals,
+    workflowId,
+    operation,
+    callbacks,
+    started.attempt,
+    coordinatorSignal,
+    executionOptions.allowRemoteDispatch ?? true,
+  );
+
+  validateActivityResultForReconciliation(result, internals.options.payloadSizePolicy.maxBytes);
+  await finalizeActivityResult(
+    internals,
+    workflowId,
+    operation,
+    result,
+    activity,
+    idempotencyKey,
+    started.attempt,
+    speculativeState,
+    true,
+  );
+  const completedRecord = createCompletedActivityReconciliationRecord(
+    started,
+    result,
+    internals.options.getNow(),
+  );
+  let receipt: KeyedActivityResult['receipt'];
+  if (executionOptions.reconciliationCompletion === 'immediate-fenced') {
+    const finishImmediateReconciliationCommit =
+      executionOptions.beforeImmediateReconciliationCommit?.();
+    try {
+      await commitActivityReconciliationTransitionWithFencedWrite(
+        internals,
+        workflowId,
+        reference,
+        started,
+        completedRecord,
+      );
+    } finally {
+      finishImmediateReconciliationCommit?.();
+    }
+  } else {
+    receipt = buildActivityReconciliationTransitionSideEffects(reference, started, completedRecord);
+  }
+  if (!speculativeState) {
+    clearLastHeartbeatForStep(internals, workflowId, getActivityStateKey(operation));
+  }
+  return receipt === undefined ? { value: result } : { value: result, receipt };
+}
+
+function runKeyedActivityOnce(
+  attempt: ExecutionAttempt,
+  key: string,
+  execute: () => Promise<KeyedActivityResult>,
+): Promise<KeyedActivityResult> {
+  let activities = keyedActivityResults.get(attempt);
+  if (activities === undefined) {
+    activities = new Map();
+    keyedActivityResults.set(attempt, activities);
+  }
+  const active = activities.get(key);
+  if (active !== undefined) return active;
+  const result = execute().then((outcome) => {
+    if (outcome.receipt !== undefined) shareActivityReceiptTransition(outcome.receipt);
+    return outcome;
+  });
+  activities.set(key, result);
+  void result.catch(() => {
+    if (activities.get(key) === result) activities.delete(key);
+  });
   return result;
 }
 

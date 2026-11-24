@@ -1,18 +1,22 @@
 import type { ServerWebSocket } from 'bun';
 
-import type { FleetEventFeed } from './fleet-event-feed.ts';
+import { anonymousPrincipal } from "../embedded/backchannel/src/index.ts";
 import {
   createJsonRpcWebSocketSession,
+  workspaceEmitter,
+  type ConnectionLease,
+  type JsonRpcSocketData,
   type JsonRpcWebSocketSession,
-} from './json-rpc-websocket.ts';
-import type { OperationRegistry } from './operation-catalog.ts';
-import { anonymousPrincipal, type Principal } from './principal.ts';
+  type OperationRegistry,
+} from "../embedded/backchannel/src/internals.ts";
+import type { FleetEventFeed } from './fleet-event-feed.ts';
+import { createWeftDiscoverDocument } from './weft-documents.ts';
 import type { WorkflowEventFeed } from './workflow-event-feed.ts';
 
 export type ConnectionType = 'worker' | 'stream' | 'watch' | 'generic' | 'jsonrpc';
 
-export interface WebSocketData {
-  pathname: string;
+/** What Weft's engine-hosted server keeps on each socket: the session's state and Weft's own. */
+export interface WebSocketData extends JsonRpcSocketData {
   connectionType: ConnectionType;
   workflowId?: string;
   resumeFrom?: number;
@@ -27,25 +31,7 @@ export interface WebSocketData {
   watchReplayInProgress?: boolean;
   pendingWatchMessages?: Array<{ sequence: number; message: string }>;
   workflowStreamConnectionAccepted?: boolean;
-  principal?: Principal;
-  jsonRpcSession?: JsonRpcWebSocketSession;
-}
-
-export function handleJsonRpcWebSocketMessage(
-  ws: Pick<ServerWebSocket<WebSocketData>, 'data' | 'close'>,
-  rawMessage: string | Buffer,
-): void {
-  const session = ws.data.jsonRpcSession;
-  if (!session) {
-    console.error('[weft] /jsonrpc WS frame received with no session attached — closing');
-    ws.close(1011, 'no jsonrpc session attached');
-    return;
-  }
-
-  const text = typeof rawMessage === 'string' ? rawMessage : new TextDecoder().decode(rawMessage);
-  session.handleMessage(text).catch((error) => {
-    console.error('[weft] /jsonrpc WS message error', error);
-  });
+  workflowWebSocketConnectionLease?: ConnectionLease;
 }
 
 export function openJsonRpcWebSocketSession(options: {
@@ -54,6 +40,8 @@ export function openJsonRpcWebSocketSession(options: {
   engine: unknown;
   feed: WorkflowEventFeed;
   fleetFeed?: FleetEventFeed;
+  acquireWorkflowSubscription?: () => ConnectionLease;
+  acquireFleetSubscription?: () => ConnectionLease;
   activeSessions: Set<JsonRpcWebSocketSession>;
 }): void {
   try {
@@ -61,9 +49,16 @@ export function openJsonRpcWebSocketSession(options: {
       registry: options.registry,
       engine: options.engine,
       principal: options.ws.data.principal ?? anonymousPrincipal(),
-      emitter: { send: (message) => options.ws.send(message) },
+      emitter: workspaceEmitter(options.ws),
       feed: options.feed,
+      discoverDocument: createWeftDiscoverDocument(options.registry, options.engine),
       ...(options.fleetFeed !== undefined ? { fleetFeed: options.fleetFeed } : {}),
+      ...(options.acquireWorkflowSubscription !== undefined
+        ? { acquireWorkflowSubscription: options.acquireWorkflowSubscription }
+        : {}),
+      ...(options.acquireFleetSubscription !== undefined
+        ? { acquireFleetSubscription: options.acquireFleetSubscription }
+        : {}),
       transport: 'jsonRpcWebSocket',
     });
     options.ws.data.jsonRpcSession = session;
@@ -72,19 +67,6 @@ export function openJsonRpcWebSocketSession(options: {
     console.error('[weft] /jsonrpc WS session construction failed', error);
     options.ws.close(1011, 'session construction failed');
   }
-}
-
-export function closeJsonRpcWebSocketSession(options: {
-  session: JsonRpcWebSocketSession | undefined;
-  activeSessions: Set<JsonRpcWebSocketSession>;
-}): void {
-  const { session, activeSessions } = options;
-  if (!session) return;
-
-  activeSessions.delete(session);
-  void session.close().catch((error) => {
-    console.error('[weft] /jsonrpc WS session close error', error);
-  });
 }
 
 export async function closeJsonRpcSessionsForShutdown(

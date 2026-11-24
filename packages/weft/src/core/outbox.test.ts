@@ -9,9 +9,9 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import { ApplicationDeliveryValidationError } from './outbox-guards.ts';
 import {
@@ -63,6 +63,25 @@ describe('Outbox construction', () => {
     expect(outbox.ownerId).toBe('agent-7');
     expect(outbox.storage).toBeInstanceOf(MemoryStorage);
     outbox.dispose();
+  });
+
+  it('exposes its adapter and default attempt timeout', () => {
+    const adapter = { send: async () => ({ status: 'acknowledged' as const }) };
+    const storage = new MemoryStorage();
+    const configured = new Outbox({
+      storage,
+      namespace: 'n',
+      ownerId: 'o',
+      adapter,
+      attemptTimeoutMs: 45_000,
+    });
+    expect(configured.adapter).toBe(adapter);
+    expect(configured.attemptTimeoutMs).toBe(45_000);
+    configured.dispose();
+    const bare = new Outbox({ storage, namespace: 'n', ownerId: 'p' });
+    expect(bare.adapter).toBeUndefined();
+    expect(bare.attemptTimeoutMs).toBe(300_000);
+    bare.dispose();
   });
 
   it.each([
@@ -285,8 +304,7 @@ describe('Outbox adapter runner', () => {
     let stateDuringSend: string | undefined;
     const release = adapter.block();
     const pending = outbox.deliverNext();
-    // Let the claim and the attempting commit land, then observe the record.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Wait for the send to reach the adapter (the claim and the attempting commit have landed), then observe the record.
     while (adapter.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     const observer = createOutboxFixture({ storage, clock }).outbox;
     stateDuringSend = await fieldOf(observer.receipt(deliveryId), 'state');

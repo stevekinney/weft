@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import { principalFromUnauthenticatedLocal } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { decode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
 import { DynamicWorkflowSourceUnavailableError } from '../../core/engine/dynamic-source-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../../core/engine/revision-errors.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { anonymousPrincipal } from '../principal.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 import { updateScheduleOperation, updateScheduleRestBinding } from './update-schedule.ts';
 
@@ -24,6 +28,12 @@ function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
   engine.register(echoWorkflow);
   return engine;
+}
+
+/** The time zone a stored schedule is read in. */
+async function zoneOf(engine: Engine, scheduleId: string): Promise<string | undefined> {
+  const summary = await engine.getSchedule(scheduleId);
+  return summary?.timeZone;
 }
 
 const registry = createOperationRegistry([updateScheduleOperation]);
@@ -70,6 +80,124 @@ describe('weft.schedules.update', () => {
         jitterMs: 10_000,
       }),
     );
+  });
+
+  it('moves a schedule to another workflow type and input, and refuses a type that is not a name', async () => {
+    engine = createEngine();
+    engine.register(
+      workflow({ name: 'other' }).execute(async function* () {
+        return 'other';
+      }),
+    );
+    await engine.schedule('echo', { text: 'old' }, '0 * * * *', { id: 'schedule-moved' });
+
+    const moved = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/schedule-moved', {
+        cronExpression: '0 * * * *',
+        workflowType: 'other',
+        input: { text: 'new' },
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(moved.status).toBe(204);
+    expect(await engine.getSchedule('schedule-moved')).toEqual(
+      expect.objectContaining({ workflowType: 'other' }),
+    );
+    const stored = decode(
+      (await engine.storage.get(KEYS.schedule('schedule-moved'))) as Uint8Array,
+    ) as { input: unknown };
+    expect(stored.input).toEqual({ text: 'new' });
+
+    const refused = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/schedule-moved', {
+        cronExpression: '0 * * * *',
+        workflowType: 7,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(refused.status).toBe(400);
+    expect(await engine.getSchedule('schedule-moved')).toEqual(
+      expect.objectContaining({ workflowType: 'other', revision: 2 }),
+    );
+  });
+
+  it('replaces the metadata when given, keeps it when omitted, and refuses one that is not a plain JSON object', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'schedule-metadata',
+      metadata: { owner: 'ada' },
+    });
+    const update = (body: Record<string, unknown>) =>
+      handleRequest(
+        jsonRequest('PATCH', '/v1/schedules/schedule-metadata', {
+          cronExpression: '0 * * * *',
+          ...body,
+        }),
+        engine!,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+    const metadataNow = async () => {
+      const summary = await engine!.getSchedule('schedule-metadata');
+      return summary?.metadata;
+    };
+    const renamed = await update({ description: 'renamed' });
+    expect(renamed.status).toBe(204);
+    expect(await metadataNow()).toEqual({ owner: 'ada' });
+
+    const replaced = await update({ metadata: { owner: 'grace' } });
+    expect(replaced.status).toBe(204);
+    expect(await metadataNow()).toEqual({ owner: 'grace' });
+
+    for (const metadata of ['grace', 7, ['a'], null]) {
+      const response = await update({ metadata });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: 'Field "metadata" must be a plain JSON object',
+        retryable: false,
+      });
+    }
+    expect(await metadataNow()).toEqual({ owner: 'grace' });
+  });
+
+  it('changes the time zone when given, keeps it when omitted, and refuses an unknown one', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 9 * * *', {
+      id: 'zoned',
+      timeZone: 'America/Los_Angeles',
+    });
+
+    const kept = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/zoned', { cronExpression: '0 10 * * *' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(kept.status).toBe(204);
+    expect(await zoneOf(engine, 'zoned')).toBe('America/Los_Angeles');
+
+    const changed = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/zoned', {
+        cronExpression: '0 10 * * *',
+        timeZone: 'Europe/Berlin',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(changed.status).toBe(204);
+    expect(await zoneOf(engine, 'zoned')).toBe('Europe/Berlin');
+
+    const refused = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/zoned', {
+        cronExpression: '0 10 * * *',
+        timeZone: 'Mars/Olympus',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(refused.status).toBe(400);
+    expect(await zoneOf(engine, 'zoned')).toBe('Europe/Berlin');
   });
 
   it('keeps the path identifier and partial update fields at the binding boundary', async () => {
@@ -120,7 +248,11 @@ describe('weft.schedules.update', () => {
           },
         }),
       }),
-      { registry, engine, principal: anonymousPrincipal() },
+      {
+        registry,
+        host: engine,
+        principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+      },
     );
 
     expect(response.status).toBe(200);
@@ -155,6 +287,7 @@ describe('weft.schedules.update', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "description" must be a string',
+      retryable: false,
     });
     expect(await engine.getSchedule('schedule-update-null-description')).toEqual(
       expect.objectContaining({
@@ -223,7 +356,7 @@ describe('weft.schedules.update', () => {
       );
 
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: invalidOption.error });
+      expect(await response.json()).toEqual({ error: invalidOption.error, retryable: false });
     }
 
     expect(await engine.getSchedule('schedule-update-invalid-options')).toEqual(
@@ -252,7 +385,11 @@ describe('weft.schedules.update', () => {
           },
         }),
       }),
-      { registry, engine, principal: anonymousPrincipal() },
+      {
+        registry,
+        host: engine,
+        principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+      },
     );
 
     expect(response.status).toBe(200);
@@ -288,7 +425,11 @@ describe('weft.schedules.update', () => {
           },
         }),
       }),
-      { registry, engine, principal: anonymousPrincipal() },
+      {
+        registry,
+        host: engine,
+        principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+      },
     );
 
     expect(response.status).toBe(200);
@@ -324,7 +465,11 @@ describe('weft.schedules.update', () => {
             },
           }),
         }),
-        { registry, engine, principal: anonymousPrincipal() },
+        {
+          registry,
+          host: engine,
+          principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+        },
       );
 
       expect(response.status).toBe(200);
@@ -349,7 +494,7 @@ describe('weft.schedules.update', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+    expect(await response.json()).toEqual({ error: 'Invalid JSON body', retryable: false });
   });
 
   it('returns 400 when the request body is JSON null', async () => {
@@ -364,7 +509,10 @@ describe('weft.schedules.update', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+    expect(await response.json()).toEqual({
+      error: 'Request body must be a JSON object',
+      retryable: false,
+    });
   });
 
   it('returns 400 with "Missing required field: cronExpression or every" when body is a JSON array', async () => {
@@ -381,6 +529,7 @@ describe('weft.schedules.update', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required field: cronExpression or every',
+      retryable: false,
     });
   });
 
@@ -397,6 +546,7 @@ describe('weft.schedules.update', () => {
     expect(await response.json()).toEqual({
       error: 'Schedule "missing-schedule" not found',
       data: { resource: 'schedule', identifier: 'missing-schedule' },
+      retryable: false,
     });
   });
 
@@ -416,7 +566,7 @@ describe('weft.schedules.update', () => {
       );
 
       expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ error: 'Schedule already exists' });
+      expect(await response.json()).toEqual({ error: 'Schedule already exists', retryable: false });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;
     }
@@ -444,6 +594,7 @@ describe('weft.schedules.update', () => {
       expect(await response.json()).toEqual({
         error: expect.stringContaining('revision-gone'),
         weftCode: 'WorkflowRevisionUnavailableError',
+        retryable: false,
       });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;
@@ -506,7 +657,7 @@ describe('weft.schedules.update', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;
     }
@@ -565,6 +716,7 @@ describe('weft.schedules.update DynamicWorkflowSourceUnavailableError wire mappi
       expect(JSON.parse(text)).toEqual({
         error: expectedMessage,
         weftCode: 'DynamicWorkflowSourceUnavailableError',
+        retryable: false,
       });
       expect(text).not.toContain('/etc/secrets/token=abc123');
     });
@@ -590,7 +742,11 @@ describe('weft.schedules.update DynamicWorkflowSourceUnavailableError wire mappi
             },
           }),
         }),
-        { registry, engine, principal: anonymousPrincipal() },
+        {
+          registry,
+          host: engine,
+          principal: principalFromUnauthenticatedLocal(WEFT_SCOPE_VOCABULARY),
+        },
       );
       const text = await response.text();
 
@@ -601,7 +757,12 @@ describe('weft.schedules.update DynamicWorkflowSourceUnavailableError wire mappi
         error: {
           code: -32021,
           message: expectedMessage,
-          data: { reason: testCase.reason, weftCode: 'Conflict', httpStatus: 409 },
+          data: {
+            reason: testCase.reason,
+            weftCode: 'Conflict',
+            httpStatus: 409,
+            retryable: false,
+          },
         },
       });
       expect(text).not.toContain('/etc/secrets/token=abc123');

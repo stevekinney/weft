@@ -1,9 +1,10 @@
+import { restoreRealTimers, useFakeTimers } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { afterEach, describe, expect, it } from 'bun:test';
-import { restoreRealTimers, sleepForTesting, useFakeTimers } from './fake-timers.test-support.ts';
+import { settleInlineLaunches } from './inline-launch-settle.test-support.ts';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { activity, type WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import { TestEngine } from './test-engine.ts';
 
 // ---------------------------------------------------------------------------
@@ -11,7 +12,7 @@ import { TestEngine } from './test-engine.ts';
 // ---------------------------------------------------------------------------
 
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +188,30 @@ describe('TestEngine', () => {
       timeout: '5s',
     });
 
+    engine[Symbol.dispose]();
+  });
+
+  it('runs the real activity when a surrogate that outlived its mock is called', async () => {
+    class SurrogateInspectingEngine extends TestEngine {
+      surrogateFor(name: string): ((input?: unknown) => unknown) | undefined {
+        return this.resolveRegisteredActivity(name);
+      }
+    }
+    const engine = new SurrogateInspectingEngine();
+    const fetchAccount = activity({
+      name: 'fetchAccount',
+      execute: async (input: unknown) => `real:${String(input)}`,
+    });
+    engine.register(fetchAccount);
+    engine.mock(fetchAccount, async (input: unknown) => `mock:${String(input)}`);
+    const surrogate = engine.surrogateFor('fetchAccount');
+    if (surrogate === undefined) throw new Error('expected the mock surrogate to be registered');
+    expect(await surrogate('a')).toBe('mock:a');
+
+    // A caller that resolved the surrogate before the mock was restored still holds it.
+    engine.mocks.restoreAll();
+
+    expect(await surrogate('a')).toBe('real:a');
     engine[Symbol.dispose]();
   });
 

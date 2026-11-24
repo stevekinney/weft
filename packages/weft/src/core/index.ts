@@ -1,5 +1,8 @@
-export { ActivityRegistry } from './activity-registry.ts';
-export type { ActivityMetadata, ActivityRegistrationOptions } from './activity-registry.ts';
+export {
+  ActivityRegistry,
+  type ActivityMetadata,
+  type ActivityRegistrationOptions,
+} from './activity-registry.ts';
 export {
   AtomicState,
   AtomicStateChangeEvent,
@@ -7,16 +10,14 @@ export {
   AtomicStateConflictEvent,
   AtomicStateExhaustedEvent,
   OBSERVABLE_SYMBOL,
-} from './atomic-state.ts';
-export type {
-  AtomicStateCommitResult,
-  AtomicStateEvent,
-  AtomicStateObserver,
-  AtomicStateOptions,
-  AtomicStateScope,
-  AtomicStateSnapshot,
-  AtomicStateSubscription,
-  SleepFunction,
+  type AtomicStateCommitResult,
+  type AtomicStateEvent,
+  type AtomicStateObserver,
+  type AtomicStateOptions,
+  type AtomicStateScope,
+  type AtomicStateSnapshot,
+  type AtomicStateSubscription,
+  type SleepFunction,
 } from './atomic-state.ts';
 export {
   advanceCheckpoint,
@@ -32,41 +33,44 @@ export {
   validateCloneable,
   type SerializerHandlers,
 } from './codec.ts';
-export { createBunCompressor, createCompressor } from './compression.ts';
-export type { CompressionAlgorithm, CompressionOptions, Compressor } from './compression.ts';
+export {
+  createBunCompressor,
+  createCompressor,
+  type CompressionAlgorithm,
+  type CompressionOptions,
+  type Compressor,
+} from './compression.ts';
 export {
   DurableMutex,
   DurableRateLimiter,
   DurableSemaphore,
   initialLockRecord,
+  type AcquireAttempt,
+  type AcquireWithSlot,
+  type CasSlot,
+  type DurableRateLimiterOptions,
+  type DurableSemaphoreOptions,
+  type LockHolder,
+  type LockRecord,
+  type LockWaiter,
+  type RenewWithSlot,
+  type TokenBucketRecord,
 } from './concurrency.ts';
-export type {
-  AcquireAttempt,
-  AcquireWithSlot,
-  CasSlot,
-  DurableRateLimiterOptions,
-  DurableSemaphoreOptions,
-  LockHolder,
-  LockRecord,
-  LockWaiter,
-  RenewWithSlot,
-  TokenBucketRecord,
-} from './concurrency.ts';
-export { constraint } from './constraint.ts';
-export type {
-  ConstraintCheckState,
-  ConstraintDefinition,
-  ConstraintViolation,
+export {
+  constraint,
+  type ConstraintCheckState,
+  type ConstraintDefinition,
+  type ConstraintViolation,
 } from './constraint.ts';
-export { Context } from './context.ts';
-export type {
-  ContextOperationRequest,
-  ContextOptions,
-  OffloadReference,
-  SagaStep,
-  StoredStreamChunk,
-  StreamReference,
-  StreamSink,
+export {
+  Context,
+  type ContextOperationRequest,
+  type ContextOptions,
+  type OffloadReference,
+  type SagaStep,
+  type StoredStreamChunk,
+  type StreamReference,
+  type StreamSink,
 } from './context.ts';
 export {
   ActivityPerAttemptTimeoutError,
@@ -79,8 +83,13 @@ export {
 } from './context/durable-activity.ts';
 export { BranchTopologyChangedError } from './context/parallel-cache-entry.ts';
 export type { UpdateHandlerOptions } from './context/updates.ts';
-export { EffectLog, EffectReplayConflictError, computeSemanticHash } from './effect-log/index.ts';
-export type { EffectLogLike, EffectRecord } from './effect-log/index.ts';
+export {
+  EffectLog,
+  EffectReplayConflictError,
+  computeSemanticHash,
+  type EffectLogLike,
+  type EffectRecord,
+} from './effect-log/index.ts';
 export {
   ActivityAsyncPendingEvent,
   ActivityCompletedEvent,
@@ -92,6 +101,9 @@ export {
   CheckpointSizeWarningEvent,
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
+  LeaseHealthChangedEvent,
+  QueueDepthChangedEvent,
+  RealmStateChangedEvent,
   RemoteActivityCancellationRequestedEvent,
   RemoteActivityQueuedEvent,
   ScheduleAttemptedEvent,
@@ -100,12 +112,16 @@ export {
   ScheduleSkippedEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,
+  SignalWaitingEvent,
   StorageSizeReportedEvent,
+  StreamChunkEvent,
   TaskAttemptTransitionEvent,
   TaskResultDeadLetteredEvent,
   TaskResultDeliveryEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,
+  WorkerDeploymentChangedEvent,
+  WorkerRegistrationRejectedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowDefinitionRegisteredEvent,
@@ -125,55 +141,53 @@ export {
   WorkflowSuspendedEvent,
   WorkflowTeardownEvent,
   WorkflowTimedOutEvent,
+  type LeaseHealthStatus,
+  type ScheduleMissedFireReason,
+  type TypedEventTarget,
+  type WeftEventMap,
+  type WorkerDeploymentDrainState,
+  type WorkflowRecoverySkippedReason,
+  type WorkflowTeardownStatus,
 } from './events.ts';
-export type {
-  TypedEventTarget,
-  WeftEventMap,
-  WorkflowRecoverySkippedReason,
-  WorkflowTeardownStatus,
-} from './events.ts';
-export {
-  FAULT_CODE_TO_FAILURE_CATEGORY,
-  failureCategoryForFaultCode,
-  isFaultCode,
-} from './fault-code.ts';
-export type { FaultCode } from './fault-code.ts';
+export { FAULT_CODE_TO_FAILURE_CATEGORY, failureCategoryForFaultCode } from './fault-code.ts';
 export {
   composeActivityInterceptors,
   composeWorkflowInterceptors,
   interceptor,
+  type ActivityExecutionInterception,
+  type ActivityInterception,
+  type ActivityInterceptor,
+  type ChildWorkflowInterception,
+  type ComposedActivityInterceptor,
+  type ComposedWorkflowInterceptor,
+  type Interceptor,
+  type QueryInterception,
+  type SignalInterception,
+  type SignalReceivedInterception,
+  type SleepInterception,
+  type WorkflowInterceptor,
+  type WorkflowStartInterception,
 } from './interceptor.ts';
-export type {
-  ActivityExecutionInterception,
-  ActivityInterception,
-  ActivityInterceptor,
-  ChildWorkflowInterception,
-  ComposedActivityInterceptor,
-  ComposedWorkflowInterceptor,
-  Interceptor,
-  QueryInterception,
-  SignalInterception,
-  SignalReceivedInterception,
-  SleepInterception,
-  WorkflowInterceptor,
-  WorkflowStartInterception,
-} from './interceptor.ts';
-export { isJSONValue, normalizeJSONValue } from './json.ts';
-export type { JSONPrimitive, JSONValue } from './json.ts';
+export { isJSONValue, normalizeJSONValue, type JSONPrimitive, type JSONValue } from './json.ts';
 export { PayloadSizeExceededError } from './payload-size.ts';
-export { ReviewCompletedEvent, ReviewRequestedEvent } from './review/events.ts';
-export type { WeftReviewEventMap } from './review/events.ts';
-export { ReviewCoordinator, ReviewTimeoutError } from './review/index.ts';
-export type {
-  EscalationAction,
-  EscalationStep,
-  HumanReviewOptions,
-  HumanReviewResult,
-  ReviewCoordinatorOptions,
-  ReviewDecisionRecord,
-  ReviewOptions,
-  ReviewRequest,
+export {
+  ReviewCompletedEvent,
+  ReviewRequestedEvent,
+  type WeftReviewEventMap,
+} from './review/events.ts';
+export {
+  ReviewCoordinator,
+  ReviewTimeoutError,
+  type EscalationAction,
+  type EscalationStep,
+  type HumanReviewOptions,
+  type HumanReviewResult,
+  type ReviewCoordinatorOptions,
+  type ReviewDecisionRecord,
+  type ReviewOptions,
+  type ReviewRequest,
 } from './review/index.ts';
+export { canonicalTimeZone, isValidTimeZone } from './schedule.ts';
 export { Scheduler, calculateBackoff, parseDuration } from './scheduler.ts';
 export {
   buildIndexOperations,
@@ -199,12 +213,10 @@ export {
   checkVersionCompatibility,
   diffCheckpointShapes,
   inferShape,
-} from './versioning.ts';
-export type {
-  FieldDiff,
-  ShapeDescriptor,
-  ShapeDiffOptions,
-  WorkflowWorkerVersioningPolicy,
+  type FieldDiff,
+  type ShapeDescriptor,
+  type ShapeDiffOptions,
+  type WorkflowWorkerVersioningPolicy,
 } from './versioning.ts';
 export {
   WeftError,
@@ -212,5 +224,18 @@ export {
   isWeftErrorCode,
   isWeftErrorLike,
   isWeftFault,
+  type WeftErrorCode,
 } from './weft-error.ts';
-export type { WeftErrorCode } from './weft-error.ts';
+export {
+  DEFAULT_MAXIMUM_LOG_LINES_PER_RUN,
+  DEFAULT_MAXIMUM_LOG_LINE_BYTES,
+  MAXIMUM_LOG_LINES_PER_RUN_LIMIT,
+  WORKFLOW_LOG_TRUNCATION_MARKER,
+  type WorkflowLogLine,
+  type WorkflowLogsResult,
+} from './workflow-log-codec.ts';
+export {
+  createWorkflowLogStore,
+  type WorkflowLogStore,
+  type WorkflowLogStoreOptions,
+} from './workflow-log-store.ts';

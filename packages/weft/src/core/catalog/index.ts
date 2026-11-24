@@ -55,12 +55,18 @@ export type {
 } from './types.ts';
 export { WorkflowCatalog, type ActivateCandidateOptions } from './workflow-catalog.ts';
 export {
-  WorkflowRefreshCoordinator,
-  type WorkflowRefreshArtifact,
-  type WorkflowRefreshCoordinatorOptions,
-  type WorkflowRefreshDiagnostics,
-  type WorkflowRefreshOptions,
-  type WorkflowRefreshResponse,
-  type WorkflowRefreshResult,
-  type WorkflowRefreshSource,
-} from './workflow-refresh.ts';
+  WorkflowRefreshError,
+  type WorkflowRefreshFailureReason,
+} from './workflow-refresh-failure.ts';
+export type {
+  WorkflowRefreshArtifact,
+  WorkflowRefreshCoordinatorOptions,
+  WorkflowRefreshDiagnostics,
+  WorkflowRefreshOptions,
+  WorkflowRefreshPollingStatus,
+  WorkflowRefreshResponse,
+  WorkflowRefreshResult,
+  WorkflowRefreshSource,
+  WorkflowRefreshStatus,
+} from './workflow-refresh-types.ts';
+export { WorkflowRefreshCoordinator } from './workflow-refresh.ts';

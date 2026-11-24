@@ -20,9 +20,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { encodeStorageKeyComponent } from '../../storage/interface.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { encodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { encode } from '../codec.ts';
 import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
@@ -415,6 +415,24 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     ).toThrow('signal scan failed');
   });
 
+  it('settles with the first branch result as it is when no winner wrapper is given', async () => {
+    const internals = createSignalInternals(createSequencedStorage('unused', []));
+    const operations = [
+      { type: 'sleep', operationId: 'first', duration: 10, scheduledFireAt: 0 },
+      { type: 'sleep', operationId: 'second', duration: 20, scheduledFireAt: 0 },
+    ] as const;
+
+    const winner = await executeRaceSubOperations(
+      internals,
+      'unwrapped-race',
+      operations,
+      (operation) =>
+        operation.operationId === 'first' ? Promise.resolve('first') : new Promise(() => {}),
+    );
+
+    expect(winner).toBe('first');
+  });
+
   it('race([waitForSignal, sleep]) — signal wins and the workflow sees its payload', async () => {
     await using engine = new Engine();
     engine.register(
@@ -511,6 +529,7 @@ describe('#679 ctx.raceKeyed winner metadata', () => {
       assertValidRaceBranchNames({
         type: 'race',
         operationId: 'malformed-keyed-race',
+        step: 0,
         operations: [],
         branchNames: ['event'],
       }),
@@ -805,7 +824,6 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     // Wait until the waiter is registered, then abort the engine mid-wait with a
     // distinct reason so we can assert the branch surfaces THAT reason.
     await waitForCondition(() => internals.signalWaiters.has('wf-mid-abort:ev'), {
-      timeoutMs: 2000,
       label: 'wait-signal waiter registered before engine abort',
     });
     const teardownReason = new Error('engine disposed mid-wait');
@@ -843,7 +861,6 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
     // The all has NOT settled despite the failing branch: a waiter is parked on
     // 'ev' and the workflow is still running.
     await waitForCondition(() => getInternals(engine).signalWaiters.has('all-unbounded:ev'), {
-      timeoutMs: 2000,
       label: 'wait-signal branch registered its waiter',
     });
     const stillRunning = await engine.get('all-unbounded');
@@ -873,7 +890,6 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
 
     const handle = await engine.start('all-deferred-finalize', null, { id: 'adf' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('adf:ev'), {
-      timeoutMs: 2000,
       label: 'wait-signal branch registered its waiter',
     });
     await engine.signal('adf', 'ev', 'ev-payload');
@@ -882,7 +898,6 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
     // for the slow activity, so the durable `sig:` record must NOT be consumed yet.
     const internals = getInternals(engine);
     await waitForCondition(() => !internals.signalWaiters.has('adf:ev'), {
-      timeoutMs: 2000,
       label: 'wait-signal branch woke and resolved with an (unfinalized) envelope',
     });
     const stillBuffered = await peekSignal(internals, 'adf', 'ev');
@@ -923,7 +938,6 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
 
     const handle = await engine.start('nested-all-wins', null, { id: 'naw' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('naw:ev'), {
-      timeoutMs: 2000,
       label: 'nested wait-signal registered',
     });
     await engine.signal('naw', 'ev', 'ev-payload');
@@ -963,6 +977,50 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
     const result = (await handle.result()) as { first: unknown; second: unknown };
     expect(result.first).toBe('fast-won');
     expect(result.second).toBe('late-ev');
+  });
+
+  it('nested ctx.allSettled under ctx.all finalizes its signal envelope into the outcome', async () => {
+    // all([ allSettled([ waitForSignal ]) ]). The nested settled executor wraps the
+    // fulfilled envelope in an outcome; the outer coordinator must walk into it,
+    // consume the signal once, and hand the workflow the payload.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-settled-signal' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.all([ctx.allSettled([ctx.waitForSignal<string>('ev')])]);
+      }),
+    );
+
+    const handle = await engine.start('nested-settled-signal', null, { id: 'nss' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('nss:ev'), {
+      label: 'nested settled wait-signal registered',
+    });
+    await engine.signal('nss', 'ev', 'ev-payload');
+    expect(await handle.result()).toEqual([[{ status: 'fulfilled', value: 'ev-payload' }]]);
+    const after = await peekSignal(getInternals(engine), 'nss', 'ev');
+    expect(after.found).toBe(false);
+  });
+
+  it('nested ctx.allSettled that LOSES the outer race consumes nothing', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-settled-loses' })
+        .activities({ fast: async () => 'fast-won' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const first = yield* ctx.race([
+            ctx.run('fast'),
+            ctx.allSettled([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]),
+          ]);
+          const second = yield* ctx.waitForSignal<string>('ev');
+          return { first, second };
+        }),
+    );
+
+    const handle = await engine.start('nested-settled-loses', null, { id: 'nsl' });
+    await engine[ENGINE_WAIT_FOR_PARKED_WORKFLOW_FOR_TESTING]('nsl');
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+    await engine.signal('nsl', 'ev', 'late-ev');
+
+    expect(await handle.result()).toEqual({ first: 'fast-won', second: 'late-ev' });
   });
 
   it('nested ctx.race that LOSES the outer race with late delivery does not orphan the signal', async () => {
@@ -1014,7 +1072,6 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
 
     const handle = await engine.start('all-with-nested-race', null, { id: 'awnr' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('awnr:ev'), {
-      timeoutMs: 2000,
       label: 'nested wait-signal registered',
     });
     await engine.signal('awnr', 'ev', 'ev-payload');
@@ -1044,7 +1101,6 @@ describe('#456 nested wait-signal branches (envelope propagation through nested 
 
     const handle = await engine.start('nested-race-wins', null, { id: 'nrw' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('nrw:ev'), {
-      timeoutMs: 2000,
       label: 'nested wait-signal registered',
     });
     await engine.signal('nrw', 'ev', 'ev-wins');
@@ -1136,7 +1192,6 @@ describe('#456 wait-signal branches inside ctx.speculate finalize their envelope
 
     const handle = await engine.start('speculate-race-signal', null, { id: 'srs' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('srs:ev'), {
-      timeoutMs: 2000,
       label: 'speculative wait-signal branch registered its waiter',
     });
     await engine.signal('srs', 'ev', 'ev-payload');
@@ -1173,7 +1228,6 @@ describe('#456 wait-signal branches inside ctx.speculate finalize their envelope
 
     const handle = await engine.start('speculate-all-signal', null, { id: 'sas' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('sas:ev'), {
-      timeoutMs: 2000,
       label: 'speculative all wait-signal branch registered its waiter',
     });
     await engine.signal('sas', 'ev', 'ev-payload');
@@ -1224,7 +1278,6 @@ describe('#456 wait-signal branches inside ctx.speculate finalize their envelope
 
     const handle = await engine.start('speculate-rollback-signal', null, { id: 'srb' });
     await waitForCondition(() => getInternals(engine).signalWaiters.has('srb:ev'), {
-      timeoutMs: 2000,
       label: 'speculative wait-signal branch registered its waiter',
     });
     await engine.signal('srb', 'ev', 'ev-payload');

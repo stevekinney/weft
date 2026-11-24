@@ -9,8 +9,8 @@
  * @module core/event-log-verify
  */
 
-import type { Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import type { Storage } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode } from './codec.ts';
 import { type EventLogWatermark, readEventLogWatermark } from './engine/event-log-compaction.ts';
 import {

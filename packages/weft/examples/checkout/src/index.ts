@@ -1,4 +1,5 @@
-import { BunSQLiteStorage, Engine, activity, workflow } from '@lostgradient/weft';
+import { BunSQLiteStorage } from "../../../src/embedded/storage-bun-sqlite/src/index.ts";
+import { Engine, activity, workflow } from '@lostgradient/weft';
 import { resolveExampleEnvironment } from '../../environment-configuration.ts';
 
 export interface CheckoutItem {

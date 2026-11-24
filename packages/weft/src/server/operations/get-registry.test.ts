@@ -1,3 +1,4 @@
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 /**
  * `weft.system.registry` operation + REST binding — unit tests.
  *
@@ -16,15 +17,18 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { z } from 'zod';
 
+import {
+  defineOperation,
+  principalFromApiKey,
+  principalFromJwtClaims,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { MAX_CONTRACT_IDENTIFIER_BYTES } from '../../core/contract/index.ts';
 import { Engine } from '../../core/engine.ts';
 import { activity, query, signal, update, workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { getRegistryOperation, getRegistryRestBinding } from './get-registry.ts';
 
@@ -358,7 +362,7 @@ describe('GET /v1/registry — authorization', () => {
       {},
       {
         principal: { method: 'unauthenticated' },
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -377,8 +381,11 @@ describe('GET /v1/registry — authorization', () => {
       'weft.system.registry',
       {},
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'workflows:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -398,8 +405,11 @@ describe('GET /v1/registry — authorization', () => {
       'weft.system.registry',
       {},
       {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'system:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { sub: 'user', scope: 'system:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -420,7 +430,7 @@ describe('GET /v1/registry — authorization', () => {
     expect(
       await throwingRejectionOf(
         getRegistryOperation.invoke({
-          engine: {},
+          host: {},
           principal: { method: 'unauthenticated' },
           transport: 'jsonRpcStdio',
           input: {},
@@ -469,7 +479,7 @@ describe('GET /v1/registry — error shaping', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('returns 500 with "Internal server error" and logs workflowType/reason when a contract exceeds a WFT-5 limit', async () => {
@@ -500,7 +510,7 @@ describe('GET /v1/registry — error shaping', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message, detail] = errorSpy.mock.calls[0] as [string, { workflowType: string }];
@@ -538,7 +548,7 @@ describe('GET /v1/registry — error shaping', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message, detail] = errorSpy.mock.calls[0] as [string, { count: number }];
@@ -569,7 +579,7 @@ describe('GET /v1/registry — error shaping', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('shapes a Forbidden fault as 403 via the REST fault shaper', async () => {
@@ -591,7 +601,7 @@ describe('GET /v1/registry — error shaping', () => {
     );
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ error: 'insufficient scope' });
+    expect(await response.json()).toEqual({ error: 'insufficient scope', retryable: false });
   });
 
   it('shapes an Unauthorized fault as 401 via the REST fault shaper', async () => {
@@ -613,7 +623,7 @@ describe('GET /v1/registry — error shaping', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'no credentials' });
+    expect(await response.json()).toEqual({ error: 'no credentials', retryable: false });
   });
 
   it('validates registry envelope members without rebuilding null-prototype maps', () => {

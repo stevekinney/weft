@@ -3,8 +3,9 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { rejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { executeValidate } from './index.ts';
-import { expandGlobEntryPaths } from './utilities.ts';
+import { expandGlobEntryPaths, splitGlobPattern } from './utilities.ts';
 
 describe('executeValidate', () => {
   it('expands a single glob to its matching files in alphabetical order', async () => {
@@ -191,5 +192,66 @@ describe('executeValidate', () => {
     } finally {
       rmSync(workspacePath, { recursive: true, force: true });
     }
+  });
+
+  it('does not descend into subdirectories for a pattern that cannot match a nested path', async () => {
+    const workspacePath = join(tmpdir(), `weft-flat-glob-${crypto.randomUUID()}`);
+
+    try {
+      mkdirSync(join(workspacePath, 'nested'), { recursive: true });
+      await Bun.write(join(workspacePath, 'top.ts'), 'export const top = true;');
+      await Bun.write(join(workspacePath, 'nested', 'inner.ts'), 'export const inner = true;');
+
+      expect(await expandGlobEntryPaths([join(workspacePath, '*.ts')])).toEqual([
+        join(workspacePath, 'top.ts'),
+      ]);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it('rethrows a directory read failure other than a missing scan root', async () => {
+    const workspacePath = join(tmpdir(), `weft-file-scan-root-${crypto.randomUUID()}`);
+
+    try {
+      mkdirSync(workspacePath, { recursive: true });
+      const scanRootThatIsAFile = join(workspacePath, 'not-a-directory');
+      await Bun.write(scanRootThatIsAFile, 'plain file');
+
+      expect(
+        await rejectionOf(expandGlobEntryPaths([join(scanRootThatIsAFile, '*.ts')])),
+      ).toMatchObject({ code: 'ENOTDIR' });
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a missing scan root as an unexpanded entry path', async () => {
+    const missingPattern = join(tmpdir(), `weft-missing-root-${crypto.randomUUID()}`, '*.ts');
+
+    expect(await expandGlobEntryPaths([missingPattern])).toEqual([missingPattern]);
+  });
+});
+
+describe('splitGlobPattern', () => {
+  it('scans the filesystem root for a pattern directly under it', () => {
+    expect(splitGlobPattern('/*.ts')).toEqual({ scanRoot: '/', pattern: '*.ts' });
+  });
+
+  it('keeps the separator on a Windows drive root so the scan root stays absolute', () => {
+    expect(splitGlobPattern('C:/*.ts')).toEqual({ scanRoot: 'C:/', pattern: '*.ts' });
+    expect(splitGlobPattern('C:\\*.ts')).toEqual({ scanRoot: 'C:/', pattern: '*.ts' });
+  });
+
+  it('splits a nested pattern at the last separator before the first wildcard', () => {
+    expect(splitGlobPattern('src/**/*.ts')).toEqual({ scanRoot: 'src', pattern: '**/*.ts' });
+    expect(splitGlobPattern('C:/projects/*.ts')).toEqual({
+      scanRoot: 'C:/projects',
+      pattern: '*.ts',
+    });
+  });
+
+  it('treats a pattern without a separator as relative to the current directory', () => {
+    expect(splitGlobPattern('*.ts')).toEqual({ scanRoot: '.', pattern: '*.ts' });
   });
 });

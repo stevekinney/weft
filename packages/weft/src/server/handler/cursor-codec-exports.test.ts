@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { decodeCursor, encodeCursor } from '@lostgradient/weft';
+import { decodeCursor, encodeCursor } from "../../embedded/backchannel/src/index.ts";
 
 import * as handlerSurface from './index.ts';
 
@@ -13,8 +13,8 @@ describe('fleet-feed cursor codec public surface', () => {
     expect(decodeCursor('not-a-cursor')).toBeNull();
   });
 
-  it('re-exports the same codec from the server handler surface', () => {
-    expect(handlerSurface.encodeCursor).toBe(encodeCursor);
-    expect(handlerSurface.decodeCursor).toBe(decodeCursor);
+  it('leaves the codec to @lostgradient/backchannel: the server handler surface does not export it', () => {
+    expect(Reflect.has(handlerSurface, 'encodeCursor')).toBe(false);
+    expect(Reflect.has(handlerSurface, 'decodeCursor')).toBe(false);
   });
 });

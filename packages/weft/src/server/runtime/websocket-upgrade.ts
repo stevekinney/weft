@@ -1,14 +1,16 @@
-import type { AuthContext } from '../authentication.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { authContextToPrincipal } from '../handler.ts';
+import { type AuthorizationScope, authContextToPrincipal } from "../../embedded/backchannel/src/index.ts";
+import {
+  type AuthContext,
+  isAuthenticated,
+  isOriginAllowed,
+  JSON_RPC_PATH,
+  parseOptionalSequenceCursor,
+} from "../../embedded/backchannel/src/internals.ts";
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 import type { ServeOptions } from '../index.ts';
 import { finalizeWebSocketUpgrade } from '../json-rpc-transport-helpers.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import { isAuthenticated } from '../principal.ts';
-import { JSON_RPC_PATH } from '../route-model.ts';
-import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
 import type { ServerContext } from './context.ts';
-import { isOriginAllowed } from './cors.ts';
 
 export const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
 
@@ -116,7 +118,7 @@ function resolvePrincipalForUpgrade(
   }
   let principal: WebSocketData['principal'];
   try {
-    principal = authContextToPrincipal(authContext);
+    principal = authContextToPrincipal(authContext, WEFT_SCOPE_VOCABULARY);
   } catch (error) {
     console.error('[weft] WebSocket upgrade principal resolution failed', error);
     return { ok: false, response: new Response('Authentication context invalid', { status: 401 }) };

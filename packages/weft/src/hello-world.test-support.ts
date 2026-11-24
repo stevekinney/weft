@@ -4,7 +4,7 @@
  * The consumer-facing version lives in `examples/hello-world/` and imports from
  * the published `@lostgradient/weft` package. This module deliberately keeps its own copy that
  * imports the engine relatively (`./index.ts`) so in-repo tests
- * (`src/examples.test.ts`) and the CLI smoke harness (`scripts/cli-smoke-main.ts`)
+ * (`src/examples.integration.test.ts`) and the CLI smoke harness (`scripts/cli-smoke-main.ts`)
  * load it without the example workspace's `@lostgradient/weft` resolution — which is only
  * present after that workspace is `bun install`ed and is therefore unavailable in
  * the root `tsc`/`bun test` jobs. Re-exporting from the example instead drags

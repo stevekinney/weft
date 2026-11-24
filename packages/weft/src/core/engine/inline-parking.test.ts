@@ -1,9 +1,9 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec/api.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowState } from '../types.ts';
@@ -63,7 +63,11 @@ describe('engine inline parking helpers', () => {
     const resolveResumeDisposition = mock(async () => 'resumable' as const);
 
     await resumeParkedInlineWorkflow(
-      { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
+      {
+        parkedInlineWorkflows,
+        resumesAwaitingAdoption: new Map(),
+        storage: new MemoryStorage(),
+      } as never,
       'workflow-not-parked',
       createCallbacks({ getParkedWorkflowResumeDisposition: resolveResumeDisposition }),
     );
@@ -78,7 +82,11 @@ describe('engine inline parking helpers', () => {
     expect(
       await throwingRejectionOf(
         resumeParkedInlineWorkflow(
-          { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
+          {
+            parkedInlineWorkflows,
+            resumesAwaitingAdoption: new Map(),
+            storage: new MemoryStorage(),
+          } as never,
           workflowId,
           createCallbacks({
             getParkedWorkflowResumeDisposition: async () => 'resumable',
@@ -97,7 +105,11 @@ describe('engine inline parking helpers', () => {
     expect(
       await throwingRejectionOf(
         resumeParkedInlineWorkflow(
-          { parkedInlineWorkflows, storage: new MemoryStorage() } as never,
+          {
+            parkedInlineWorkflows,
+            resumesAwaitingAdoption: new Map(),
+            storage: new MemoryStorage(),
+          } as never,
           workflowId,
           createCallbacks({
             getParkedWorkflowResumeDisposition: async () => 'corrupt',
@@ -183,6 +195,7 @@ describe('engine inline parking helpers', () => {
       getInternals(engine),
       {
         type: 'checkpoint',
+        pendingStepIndex: 0,
         workflowId,
         checkpoint: new ArrayBuffer(0),
         operationRequest: {} as never,

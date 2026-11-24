@@ -183,8 +183,8 @@ describe('help text', () => {
     expect(SCHEDULE_HELP_TEXT).toContain('schedule resume');
     expect(SCHEDULE_HELP_TEXT).toContain('schedule cancel');
     expect(SCHEDULE_HELP_TEXT).toContain('--storage');
-    expect(SCHEDULE_HELP_TEXT).toContain('sqlite, lmdb');
-    expect(SCHEDULE_HELP_TEXT).not.toContain('sqlite, lmdb, memory');
+    expect(SCHEDULE_HELP_TEXT).toContain('Storage backend: sqlite');
+    expect(SCHEDULE_HELP_TEXT).not.toContain('sqlite, memory');
     expect(SCHEDULE_HELP_TEXT).toContain('--workflows');
     expect(SCHEDULE_HELP_TEXT).toContain('--jitter');
   });
@@ -198,9 +198,8 @@ describe('help text', () => {
   });
 
   it('HELP_TEXT lists all storage backends', () => {
-    expect(HELP_TEXT).toContain('sqlite');
-    expect(HELP_TEXT).toContain('lmdb');
-    expect(HELP_TEXT).toContain('memory');
+    expect(HELP_TEXT).toContain('Storage backend: sqlite, memory');
+    expect(HELP_TEXT).not.toContain('lmdb');
   });
 });
 

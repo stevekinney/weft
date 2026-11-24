@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { defineOperation, type OperationFault } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import {
   AggregateDistinctKeyCapExceededError,
   AggregateOptionsValidationError,
@@ -13,9 +15,6 @@ import {
 import { WorkflowListScanCapExceededError } from '../../core/engine/workflow-indexes.ts';
 import { ListFilterValidationError } from '../../core/list-filter-validation-error.ts';
 import { listFilterObjectSchema, normalizeListFilter } from '../../core/list-filter-validation.ts';
-import { type OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { extractListFilterFromQuery } from './list-filter-query-extractor.ts';
 import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
@@ -45,15 +44,22 @@ export const aggregateWorkflowsOperation = defineOperation({
   name: 'weft.workflows.aggregate',
   mcpExposable: false,
   summary: 'Aggregate workflows by a single dimension',
+  description:
+    'Count workflows by one dimension (status, type, failure category, or a search ' +
+    'attribute), optionally restricted by the same filters as `weft.workflows.list`. ' +
+    'Returns the total, the groups with their counts, and whether the group list was ' +
+    'truncated. Read-only. Faults with Unprocessable for an invalid filter or when ' +
+    'the grouping would exceed the distinct-key cap.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: aggregateWorkflowsInput,
   outputSchema: aggregateWorkflowsOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   producibleFaults: ['Unprocessable'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<AggregateWorkflowsOutput> => {
+  invoke: async ({ input, host: engine }): Promise<AggregateWorkflowsOutput> => {
     assertOperationEngineMethods(engine, ['aggregate']);
     const engineHandle = engine;
     const { groupBy, limit, ...filterFields } = input;
@@ -148,6 +154,9 @@ export const aggregateWorkflowsRestBinding: UnknownRestBinding = {
     scheduleId: { kind: 'query', queryParam: 'schedule_id' },
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
     idPrefix: { kind: 'query', queryParam: 'id_prefix' },
+    failureCategory: { kind: 'query', queryParam: 'failure_category', repeating: true },
+    failedStep: { kind: 'query', queryParam: 'failed_step' },
+    retrying: { kind: 'query', queryParam: 'retrying' },
     limit: { kind: 'query', queryParam: 'limit' },
     groupBy: { kind: 'query', queryParam: 'group_by' },
   },

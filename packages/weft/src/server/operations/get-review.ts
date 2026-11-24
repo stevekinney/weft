@@ -1,14 +1,13 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { ReviewRequest } from '../../core/review/index.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getReviewInput = z.object({
-  workflowId: z.string().min(1),
-  reviewId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow the review belongs to.'),
+  reviewId: z.string().min(1).describe('Id of the review request to read.'),
 });
 const getReviewOutput = z.unknown();
 
@@ -27,11 +26,12 @@ export const getReviewOperation = defineOperation({
   tags: ['Reviews'],
   inputSchema: getReviewInput,
   outputSchema: getReviewOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['reviews:read'] } },
+  discoverable: true,
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetReviewOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetReviewOutput> => {
     assertOperationEngineMethods(engine, ['getReview']);
     const e = engine;
     const review = await e.getReview(input.workflowId, input.reviewId);

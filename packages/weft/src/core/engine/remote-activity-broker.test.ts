@@ -16,9 +16,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { PersistedDataCorruptError } from '../persisted-data-incompatible-error.ts';
 import type { RemoteActivityTaskRequest } from '../remote-activity-broker.ts';
@@ -160,5 +160,73 @@ describe('EngineOwnedRemoteActivityBroker malformed-record handling (COR-219)', 
       workflowRevision: 'revision-1',
       activityContractHash: 'sha256:refund',
     });
+  });
+});
+
+describe('EngineOwnedRemoteActivityBroker enqueue edge cases', () => {
+  it('rejects an input that is not JSON-serializable', async () => {
+    const broker = new EngineOwnedRemoteActivityBroker(new MemoryStorage(), {}, () => {});
+
+    const error = await rejectionOf(
+      broker.enqueue(fixtureRequest({ operationId: 'op-bigint', input: 10n })),
+    );
+
+    expect(String(error)).toContain('non-JSON-serializable input');
+  });
+
+  it('carries the workflow revision and schedule-to-close deadline into the queued task', async () => {
+    const storage = new MemoryStorage();
+    const broker = new EngineOwnedRemoteActivityBroker(storage, {}, () => {});
+
+    await broker.enqueue(
+      fixtureRequest({
+        operationId: 'op-optional-fields',
+        workflowRevision: 'revision-1',
+        scheduleToCloseDeadline: 1_700_000_000_000,
+      }),
+    );
+
+    const record = decodeRemoteTaskRecord(
+      (await storage.get(taskLedgerKey('op-optional-fields'))) ?? new Uint8Array(),
+    );
+    expect(record).toMatchObject({
+      workflowRevision: 'revision-1',
+      scheduleToCloseDeadline: 1_700_000_000_000,
+    });
+  });
+
+  it('fails the enqueue when the create is refused and no record exists afterwards', async () => {
+    class RefusingStorage extends MemoryStorage {
+      override async conditionalBatch(): Promise<boolean> {
+        return false;
+      }
+    }
+    const broker = new EngineOwnedRemoteActivityBroker(new RefusingStorage(), {}, () => {});
+
+    const error = await rejectionOf(broker.enqueue(fixtureRequest({ operationId: 'op-refused' })));
+
+    expect(String(error)).toContain('Failed to durably enqueue remote activity task "op-refused"');
+  });
+
+  it('treats a create that lost to a concurrent writer as an idempotent replay', async () => {
+    const seed = new MemoryStorage();
+    await new EngineOwnedRemoteActivityBroker(seed, {}, () => {}).enqueue(
+      fixtureRequest({ operationId: 'op-raced' }),
+    );
+    const winnerBytes = (await seed.get(taskLedgerKey('op-raced')))!;
+    class RacingStorage extends MemoryStorage {
+      override async conditionalBatch(): Promise<boolean> {
+        await this.put(taskLedgerKey('op-raced'), winnerBytes);
+        return false;
+      }
+    }
+    let enqueuedCount = 0;
+    const broker = new EngineOwnedRemoteActivityBroker(new RacingStorage(), {}, () => {
+      enqueuedCount += 1;
+    });
+
+    await broker.enqueue(fixtureRequest({ operationId: 'op-raced' }));
+
+    expect(enqueuedCount).toBe(0);
   });
 });

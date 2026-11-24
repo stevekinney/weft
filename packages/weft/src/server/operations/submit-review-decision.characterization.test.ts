@@ -19,12 +19,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import {
   submitReviewDecisionOperation,
   submitReviewDecisionRestBinding,
@@ -65,6 +64,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required fields: decision, reviewer',
+      retryable: false,
     });
   });
 
@@ -78,6 +78,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required fields: decision, reviewer',
+      retryable: false,
     });
   });
 
@@ -92,6 +93,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required fields: decision, reviewer',
+      retryable: false,
     });
   });
 
@@ -107,6 +109,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Invalid decision "maybe". Must be one of: approved, rejected, needs-changes',
+      retryable: false,
     });
   });
 
@@ -121,6 +124,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "feedback" must be a string when provided',
+      retryable: false,
     });
   });
 
@@ -135,6 +139,7 @@ describe('submit-review-decision — validation precedence', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Missing required fields: decision, reviewer',
+      retryable: false,
     });
   });
 });

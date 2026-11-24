@@ -9,13 +9,12 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { ScheduleSummary } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getScheduleInput = z.object({
-  scheduleId: z.string().min(1),
+  scheduleId: z.string().min(1).describe('Id of the schedule to read.'),
 });
 
 const getScheduleOutput = z.unknown();
@@ -35,12 +34,12 @@ export const getScheduleOperation = defineOperation({
   tags: ['Schedules'],
   inputSchema: getScheduleInput,
   outputSchema: getScheduleOutput,
-  access: { kind: 'authenticated' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['schedules:read'] } },
   producibleFaults: ['NotFound', 'Conflict'],
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetScheduleOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetScheduleOutput> => {
     assertOperationEngineMethods(engine, ['getSchedule']);
     const e = engine;
     const schedule = await e.getSchedule(input.scheduleId);

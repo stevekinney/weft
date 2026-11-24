@@ -1,14 +1,15 @@
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { AsyncActivityTokenNotFoundError, Engine } from '../core/engine.ts';
 import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
 import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { MemoryStorage } from '../storage/memory.ts';
 import {
   CONTRACT_PAYLOAD_CAP_BYTES,
   nextAsyncPendingToken,
 } from '../testing/async-activity.test-support.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
@@ -70,7 +71,7 @@ async function waitForWorkflowStatus(
   workflowId: string,
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended',
 ): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for await (const _turn of awakeTurns()) {
     const state = await engine.get(workflowId);
     if (state?.status === status) {
       return;
@@ -299,7 +300,11 @@ describe('LocalClient', () => {
 
       // Cancelling an already-completed workflow is fine on some engines,
       // but let's at least verify the method is callable
-      expect(await client.cancel('cancel-me')).toBeUndefined();
+      expect(await client.cancel('cancel-me')).toEqual({
+        workflowId: 'cancel-me',
+        status: 'already-terminal',
+        terminalStatus: 'completed',
+      });
     });
   });
 
@@ -308,7 +313,11 @@ describe('LocalClient', () => {
       const handle = await client.start('echo', 'data');
       await handle.result();
       // Should not throw on a completed workflow
-      expect(await handle.cancel()).toBeUndefined();
+      expect(await handle.cancel()).toEqual({
+        workflowId: handle.id,
+        status: 'already-terminal',
+        terminalStatus: 'completed',
+      });
     });
   });
 
@@ -558,7 +567,10 @@ describe('LocalClient', () => {
 describe('LocalClient delegation surface', () => {
   it('centralizes workflow and schedule handle delegation through shared client-backed helpers', async () => {
     const workflowClient = {
-      cancel: mock(async () => undefined),
+      cancel: mock(async () => ({
+        workflowId: 'shared-workflow',
+        status: 'cancel-requested' as const,
+      })),
       suspend: mock(async () => undefined),
       resume: mock(async () => ({ id: 'shared-workflow' }) as unknown as ClientHandle),
       signal: mock(async () => undefined),
@@ -630,12 +642,14 @@ describe('LocalClient delegation surface', () => {
       status: 'active',
       overlap: 'skip',
       backfill: false,
+      timeZone: 'UTC',
       revisionPolicy: 'active-at-fire',
       createdAt: 1,
       updatedAt: 1,
       nextFireAt: 2,
       missedFireCount: 0,
       skippedCount: 0,
+      revision: 1,
       queuedRuns: [],
     };
 

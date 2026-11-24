@@ -602,11 +602,16 @@ export class RemoteWorker implements Disposable {
    * cancellation reason the server committed before sending this control —
    * it becomes the aborted activity's `AbortSignal.reason` and, from there,
    * its reported `taskResult` error (see `#executeTask`'s catch branch).
+   * The matching attempt's automatic heartbeat interval is cleared at once
+   * (COR-2295), so an activity that ignores its signal stops heartbeating
+   * while its controller stays tracked for the late `taskResult`.
    */
   #handleCancel(operationId: string, attemptToken: string, reason: string | undefined): void {
-    const controller = this.#taskAbortControllers.get(operationId, attemptToken);
-    if (controller === undefined) return;
-    controller.abort(reason ?? DEFAULT_CANCELLED_TASK_ERROR);
+    this.#taskAbortControllers.cancel(
+      operationId,
+      attemptToken,
+      reason ?? DEFAULT_CANCELLED_TASK_ERROR,
+    );
   }
 
   /**
@@ -694,7 +699,9 @@ export class RemoteWorker implements Disposable {
     }
 
     // Echo the per-dispatch attempt token back to the server so it can reject a
-    const activityFunction = this.#activityTable[task.activityName];
+    const activityFunction = Object.hasOwn(this.#activityTable, task.activityName)
+      ? this.#activityTable[task.activityName]
+      : undefined;
     if (activityFunction === undefined) {
       this.#sendTaskResult({
         type: 'taskResult',

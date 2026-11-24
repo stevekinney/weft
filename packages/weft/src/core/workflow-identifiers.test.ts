@@ -34,6 +34,21 @@ describe('assertValidWorkflowId', () => {
   });
 });
 
+describe('control character boundaries', () => {
+  it('rejects NUL, the last C0 control character and DEL, and accepts the characters around them', () => {
+    expect(isDecodableWorkflowId('a\u0000b')).toBe(false);
+    expect(isDecodableWorkflowId('a\u001fb')).toBe(false);
+    expect(isDecodableWorkflowId('a\u007fb')).toBe(false);
+    expect(isDecodableWorkflowId('a b')).toBe(true);
+    expect(isDecodableWorkflowId('a~b')).toBe(true);
+    expect(isDecodableWorkflowId('a\u0080b')).toBe(true);
+  });
+
+  it('accepts characters outside the Basic Multilingual Plane', () => {
+    expect(isDecodableWorkflowId('order-\u{1F4E6}-1')).toBe(true);
+  });
+});
+
 describe('isDecodableWorkflowId', () => {
   it('accepts an ordinary id', () => {
     expect(isDecodableWorkflowId('workflow-123')).toBe(true);

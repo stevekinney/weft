@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { deserializeCheckpoint, serializeCheckpoint } from '../core/checkpoint.ts';
 import { readCheckpointReplayPayload } from '../core/engine/checkpoint-replay.ts';
+import { WorkflowNotFoundError } from '../core/engine/errors.ts';
 import type { OperationRequest, WorkerOutboundMessage } from '../core/types.ts';
 import {
   cleanupWorkflowRunnerState,
@@ -116,6 +117,43 @@ describe('handleRunMessage', () => {
 
     expect(result.type).toBe('failed');
     expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('timeout');
+  });
+
+  it('carries the code of a Weft error the workflow threw, as the inline strategy does', async () => {
+    const context = createWorkflowRunnerContext();
+
+    async function* codedWorkflow() {
+      throw new WorkflowNotFoundError('missing-run');
+    }
+
+    const result = await handleRunMessage(
+      context,
+      { workflowId: 'wf-coded', workflowType: 'coded', input: null },
+      () => codedWorkflow,
+    );
+
+    expect(result).toMatchObject({
+      type: 'failed',
+      workflowId: 'wf-coded',
+      errorCode: 'WorkflowNotFoundError',
+    });
+  });
+
+  it('leaves the code off a failure that is not a Weft error', async () => {
+    const context = createWorkflowRunnerContext();
+
+    async function* plainWorkflow() {
+      throw new Error('plain');
+    }
+
+    const result = await handleRunMessage(
+      context,
+      { workflowId: 'wf-plain', workflowType: 'plain', input: null },
+      () => plainWorkflow,
+    );
+
+    expect(result.type).toBe('failed');
+    expect(Object.hasOwn(result, 'errorCode')).toBe(false);
   });
 
   it('returns a checkpoint when the generator yields an operation request', async () => {
@@ -333,6 +371,33 @@ describe('handleRunMessage', () => {
     });
   });
 
+  it('pins a workflow version through the run message replay state', async () => {
+    const context = createWorkflowRunnerContext();
+
+    async function* versionedWorkflow(
+      ctx: { getVersion(changeId: string, min: number, max: number): Generator<unknown, number> },
+      _input: unknown,
+    ) {
+      return yield* ctx.getVersion('shipping-v2', 1, 3);
+    }
+
+    const result = await handleRunMessage(
+      context,
+      { workflowId: 'wf-get-version', workflowType: 'version-test', input: null },
+      () => versionedWorkflow,
+    );
+
+    expect(result.type).toBe('checkpoint');
+    if (result.type !== 'checkpoint') return;
+    expect(result.operationRequest).toMatchObject({
+      type: 'get-version',
+      changeId: 'shipping-v2',
+      minSupported: 1,
+      maxSupported: 3,
+      version: 3,
+    });
+  });
+
   it('routes worker-side workflow state through operation requests', async () => {
     const context = createWorkflowRunnerContext();
 
@@ -547,6 +612,40 @@ describe('handleResumeMessage', () => {
 
     expect(result.type).toBe('failed');
     expect((result as { error: string }).error).toContain('wf-nonexistent');
+  });
+
+  it('carries the code of a Weft error the workflow threw after a resume', async () => {
+    const context = createWorkflowRunnerContext();
+    const operationRequest: OperationRequest = {
+      id: 'op-coded',
+      workflowId: 'wf-resume-coded',
+      kind: 'activity',
+      queue: 'default',
+      attempt: 1,
+      retryPolicy: { maxAttempts: 1, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
+      scheduledAt: Date.now(),
+    };
+
+    async function* codedAfterResume() {
+      yield operationRequest;
+      throw new WorkflowNotFoundError('missing-run');
+    }
+
+    await handleRunMessage(
+      context,
+      { workflowId: 'wf-resume-coded', workflowType: 'coded', input: null },
+      () => codedAfterResume,
+    );
+    const result = await handleResumeMessage(context, {
+      workflowId: 'wf-resume-coded',
+      result: null,
+    });
+
+    expect(result).toMatchObject({
+      type: 'failed',
+      workflowId: 'wf-resume-coded',
+      errorCode: 'WorkflowNotFoundError',
+    });
   });
 
   it('throws the operation error into the generator when operationResult is failed', async () => {

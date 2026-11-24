@@ -181,6 +181,23 @@ describe('definitionSchemaToJsonSchema', () => {
       );
     });
 
+    it('reports the package as not installed, keeping the resolver error as the cause', () => {
+      const resolverError = new Error("Cannot find package '@valibot/to-json-schema'");
+      let thrown: unknown;
+      try {
+        loadValibotConverter(() => {
+          throw resolverError;
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('`@valibot/to-json-schema` is not installed');
+      expect((thrown as Error).message).toContain(String(resolverError));
+      expect((thrown as Error).cause).toBe(resolverError);
+    });
+
     it('returns the loaded Valibot converter when the module exports toJsonSchema', () => {
       const toJsonSchema = () => ({ type: 'object' });
 

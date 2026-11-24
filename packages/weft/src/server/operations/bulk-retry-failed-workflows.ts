@@ -1,16 +1,15 @@
+import { invalidParamsFault, type UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { bulkRetryFailedOutputSchema } from './bulk-output-schemas.ts';
 import {
   assertOperationEngineMethods,
   engineFailureFault,
   faultMessage,
-  invalidParamsFault,
   readOptionalJsonBody,
 } from './operation-helpers.ts';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
 import { BulkOperationConfirmationError } from '../../core/engine.ts';
 import type { BulkOperationDryRunResult, BulkRetryFailedResult } from '../../core/types.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { parseBulkListFilterFromBody } from './bulk-filter-body.ts';
 import { bulkListFilterInputSchema, type BulkListFilterInput } from './bulk-filter-input.ts';
 import {
@@ -20,7 +19,10 @@ import {
   parseBulkOperationControlFromBody,
   type BulkOperationControlInput,
 } from './bulk-operation-controls.ts';
-import { validatedListFilterFromBulkInput } from './bulk-operation-helpers.ts';
+import {
+  staleConfirmationFault,
+  validatedListFilterFromBulkInput,
+} from './bulk-operation-helpers.ts';
 
 const bulkRetryFailedWorkflowsInput = bulkListFilterInputSchema.merge(
   bulkOperationControlInputSchema,
@@ -33,14 +35,20 @@ export const bulkRetryFailedWorkflowsOperation = defineOperation({
   name: 'weft.workflows.bulk.retryfailed',
   mcpExposable: false,
   summary: 'Retry failed workflows in bulk',
+  description:
+    'Retry every failed workflow that matches the filter. Run it first with `dryRun: ' +
+    'true` to preview the matches and receive a `confirmationToken`, then repeat the ' +
+    'same filter with that token to commit; a commit whose token no longer matches is ' +
+    'refused with `Conflict`, so run the preview again. Requires workflows:admin.',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkRetryFailedWorkflowsInput,
   outputSchema: bulkRetryFailedOutputSchema,
+  producibleFaults: ['Conflict'],
   access: bulkOperatorAccessPolicy,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<BulkRetryFailedWorkflowsOutput> => {
+  invoke: async ({ input, host: engine, principal }): Promise<BulkRetryFailedWorkflowsOutput> => {
     assertOperationEngineMethods(engine, ['retryFailedAll']);
     const e = engine;
 
@@ -56,7 +64,7 @@ export const bulkRetryFailedWorkflowsOperation = defineOperation({
       return await e.retryFailedAll(filter, operationOptions);
     } catch (error) {
       if (error instanceof BulkOperationConfirmationError) {
-        throw invalidParamsFault(error.message);
+        throw staleConfirmationFault(error);
       }
       throw engineFailureFault(faultMessage(error));
     }

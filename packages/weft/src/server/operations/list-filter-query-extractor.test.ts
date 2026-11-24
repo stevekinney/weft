@@ -58,6 +58,17 @@ describe('extractListFilterFromQuery', () => {
     });
   });
 
+  it('extracts failed_step and retrying, and leaves any other retrying text for validation', () => {
+    expect(extractListFilterFromQuery(urlWith({ failed_step: 'charge-card' }))).toEqual({
+      failedStep: 'charge-card',
+    });
+    expect(extractListFilterFromQuery(urlWith({ retrying: 'true' }))).toEqual({ retrying: true });
+    expect(extractListFilterFromQuery(urlWith({ retrying: 'false' }))).toEqual({ retrying: false });
+    expect(extractListFilterFromQuery(urlWith({ retrying: 'maybe' }))).toEqual({
+      retrying: 'maybe',
+    });
+  });
+
   it('returns an empty filter when no parameters are set', () => {
     expect(extractListFilterFromQuery(urlWith({}))).toEqual({});
   });

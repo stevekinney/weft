@@ -12,9 +12,9 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkflowRevisionRecord } from '../../core/catalog/index.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationWorkflowMethods } from './operation-helpers.ts';
 import {
   readWorkflowCatalogRestBody,
@@ -55,7 +55,7 @@ export const installWorkflowRevisionOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<InstallWorkflowRevisionOutput> => {
+  invoke: async ({ input, host: engine }): Promise<InstallWorkflowRevisionOutput> => {
     assertOperationWorkflowMethods(engine, ['install']);
     const e = engine;
     const manifest = await validateManifestField(input.manifest);

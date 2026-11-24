@@ -8,8 +8,8 @@
 
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
+import { MemoryStorage } from "../../../embedded/storage/src/index.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import { encode } from '../../codec.ts';
 import { DevelopmentWarningEvent } from '../../events.ts';
 import type { ScheduleState, WorkflowServicesResolverInfo, WorkflowState } from '../../types.ts';
@@ -49,12 +49,14 @@ function makeScheduleState(
     status: 'active',
     overlap: options.overlap ?? 'skip',
     backfill: false,
+    timeZone: 'UTC',
     revisionPolicy: 'active-at-fire',
     createdAt: 1,
     updatedAt: 1,
     nextFireAt: options.nextFireAt ?? 60_001,
     missedFireCount: 0,
     skippedCount: 0,
+    revision: 1,
     queuedRuns: options.queuedRuns ?? [],
     ...(options.currentWorkflowId !== undefined
       ? { currentWorkflowId: options.currentWorkflowId }

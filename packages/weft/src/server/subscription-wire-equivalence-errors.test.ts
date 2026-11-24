@@ -17,17 +17,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
+import { defineOperation, principalFromApiKey } from "../embedded/backchannel/src/index.ts";
 import {
   createJsonRpcWebSocketSession,
-  type JsonRpcWebSocketEmitter,
-} from './json-rpc-websocket.ts';
-import {
   createOperationRegistry,
   SubscriptionElementValidationError,
-} from './operation-catalog.ts';
-import { defineOperation } from './operation-registry.ts';
-import { principalFromApiKey } from './principal.ts';
+  type JsonRpcWebSocketEmitter,
+} from "../embedded/backchannel/src/internals.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { jsonRecord, propertyRecord } from './protocol.test-support.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
@@ -108,6 +106,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
       transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
       unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
       invoke: async () => ({
+        subscriptionId: 'sub_wire_error',
         envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: '0' },
         iterable: (async function* () {
           // Any yield triggers element-validation failure since
@@ -189,6 +188,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
       transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
       unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
       invoke: async () => ({
+        subscriptionId: 'sub_wire_error',
         envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: '0' },
         iterable: {
           [Symbol.asyncIterator]() {
@@ -257,10 +257,10 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
   });
 });
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('timed out waiting for predicate');
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for await (const _turn of awakeTurns()) {
+    if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+  throw new Error('timed out waiting for predicate');
 }

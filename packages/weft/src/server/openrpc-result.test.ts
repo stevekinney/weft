@@ -15,33 +15,24 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import { record, records } from './protocol.test-support.ts';
 
-import { generateOpenRpcDocument } from './openrpc.ts';
-import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
-import type { ParameterizedAccessHint } from './operation-catalog/types.ts';
-import type { UnarySchemaOperationDefinition } from './operation-registry.ts';
-import { defineOperation } from './operation-registry.ts';
+import { type UnarySchemaOperationDefinition, defineOperation } from "../embedded/backchannel/src/index.ts";
+import {
+  type OperationRegistry,
+  type ParameterizedAccessHint,
+  createOperationRegistry,
+  generateOpenRpcDocument,
+} from "../embedded/backchannel/src/internals.ts";
 
+/** A defaulted field is optional on the input side and always present on the output side. */
 function directionalSchema(): z.ZodType {
-  const schema = z.custom<unknown>();
-  Object.defineProperty(schema, '~standard', {
-    configurable: true,
-    value: {
-      version: 1,
-      vendor: 'openrpc-output-direction',
-      jsonSchema: {
-        input: () => ({ type: 'object', properties: { beforeParse: { type: 'string' } } }),
-        output: () => ({ type: 'string' }),
-      },
-    },
-  });
-  return schema;
+  return z.object({ count: z.number().default(0) });
 }
 
 function makeOp(overrides: {
   readonly name: string;
   readonly inputSchema?: z.ZodObject;
   readonly outputSchema?: z.ZodType;
-  readonly access?: import('./authorization.ts').AccessPolicy;
+  readonly access?: import("../embedded/backchannel/src/internals.ts").AccessPolicy;
   readonly discoverable?: boolean;
   readonly mcpExposable?: boolean;
   readonly mcpTool?: { readonly workflowType: string };
@@ -76,7 +67,7 @@ function makeOp(overrides: {
 }
 
 export function createRegistryDouble(
-  operations: ReadonlyArray<import('./operation-catalog.ts').ErasedOperation>,
+  operations: ReadonlyArray<import("../embedded/backchannel/src/internals.ts").ErasedOperation>,
 ): OperationRegistry {
   return {
     get(name) {
@@ -115,7 +106,7 @@ describe('generateOpenRpcDocument — result, tags, nested shapes', () => {
       throw new Error('expected directional method');
     }
     const result = record(method['result'], 'method result');
-    expect(result).toMatchObject({ schema: { type: 'string' } });
+    expect(result).toMatchObject({ schema: { required: ['count'] } });
   });
 
   it('emits a result ContentDescriptor with name, required, and schema', () => {

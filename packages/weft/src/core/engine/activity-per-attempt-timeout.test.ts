@@ -12,8 +12,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   ActivityPerAttemptTimeoutError,
   MAX_PER_ATTEMPT_TIMEOUT_MS,
@@ -270,7 +270,6 @@ describe('#494 per-attempt timeout', () => {
 
     const handle = await engine.start('cancel-mid-attempt-wf', null, { id: 'cancel-mid-1' });
     await waitForCondition(() => activityStarted, {
-      timeoutMs: 2000,
       label: 'activity started before cancel',
     });
     // Subscribe to the result BEFORE cancelling so the rejection is observed, not an
@@ -284,7 +283,6 @@ describe('#494 per-attempt timeout', () => {
 
     // Workflow cancellation propagated through the composite signal to the activity.
     await waitForCondition(() => signalAborted, {
-      timeoutMs: 2000,
       label: 'activity signal aborted on workflow cancel',
     });
     expect(signalAborted).toBe(true);

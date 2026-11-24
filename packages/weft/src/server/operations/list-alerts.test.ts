@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  executeOperation,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { ALERT_METRICS } from '../../alerting/types.ts';
 import { Engine } from '../../core/engine.ts';
 import { WorkflowFailedEvent } from '../../core/events.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { listAlertsOperation, listAlertsRestBinding } from './list-alerts.ts';
 
 function createEngine(): Engine {
@@ -59,7 +62,7 @@ describe('weft.alerts.list', () => {
       {},
       {
         principal: authContext().authContext.principal,
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([listAlertsOperation]),
       },
@@ -110,7 +113,7 @@ describe('weft.alerts.list', () => {
 
     const response = await handleJsonRpcHttpRequest(jsonRpcRequest(), {
       registry: createOperationRegistry([listAlertsOperation]),
-      engine,
+      host: engine,
       principal: authContext().authContext.principal,
     });
 

@@ -40,6 +40,7 @@ import {
   type WorkflowRefreshOptions,
   type WorkflowRefreshResult,
   type WorkflowRefreshSource,
+  type WorkflowRefreshStatus,
   type WorkflowRevisionRecord,
 } from '../catalog/index.ts';
 import type { WorkflowCompatibilityPolicy } from '../contract/compatibility.ts';
@@ -172,6 +173,13 @@ export interface EngineWorkflowsNamespace {
   refresh(name: string, options?: WorkflowRefreshOptions): Promise<WorkflowRefreshResult>;
   /** Read refresh diagnostics for one workflow or every registered source. */
   refreshDiagnostics(name?: string): readonly WorkflowRefreshDiagnostics[];
+  /**
+   * Every registered refresh source (a never-checked one reads `idle`) with
+   * its diagnostics, and the polling policy and next check while polling
+   * runs. Unlike `refreshDiagnostics()`, which lists only sources that have
+   * been checked.
+   */
+  refreshStatus(): WorkflowRefreshStatus;
   /** Start bounded opt-in refresh polling. */
   startRefreshPolling(): Promise<void>;
   /** Run one refresh maintenance cycle, including manual-background-task hosts. */
@@ -284,10 +292,27 @@ export function createEngineWorkflowsNamespace(engine: Engine): EngineWorkflowsN
     },
     refresh: async (name, options) => {
       await ensureCatalogReady(engine);
-      return getRefreshCoordinator(engine).refresh(name, options);
+      // Like `install`, translate the catalog's internal tombstone error to the public
+      // `WorkflowRevisionUnavailableError`: `core/catalog/**` must not import `core/engine/**`,
+      // and the operation maps the public error to its declared Conflict.
+      return getRefreshCoordinator(engine)
+        .refresh(name, options)
+        .catch((error: unknown) => {
+          if (!(error instanceof WorkflowRevisionTombstonedError)) throw error;
+          throw new WorkflowRevisionUnavailableError(
+            error.workflowName,
+            error.revision,
+            'not-installed',
+          );
+        });
     },
     refreshDiagnostics: (name) =>
       getInternals(engine).workflowRefreshCoordinator?.diagnostics(name) ?? [],
+    refreshStatus: () =>
+      getInternals(engine).workflowRefreshCoordinator?.status() ?? {
+        sources: [],
+        polling: undefined,
+      },
     startRefreshPolling: async () => {
       await ensureCatalogReady(engine);
       getRefreshCoordinator(engine).startPolling();

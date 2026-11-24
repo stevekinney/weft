@@ -3,13 +3,14 @@ import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts
 import type { AttributeFilter, ListFilter } from '../../core/types.ts';
 import { parseOptionalFailureCategoryFilter } from './failure-category-filter.ts';
 
+import { invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import {
   isJsonSearchAttributeValue,
   normalizeBulkListFilter,
   parseOptionalTimeRange,
   type BulkListFilterDraft,
 } from './bulk-filter-input.ts';
-import { faultMessage, invalidParamsFault } from './operation-helpers.ts';
+import { faultMessage } from './operation-helpers.ts';
 
 function parseAttributeFiltersFromBody(value: unknown): AttributeFilter[] {
   if (!Array.isArray(value)) {
@@ -76,7 +77,8 @@ function parseFilterStatus(value: unknown): BulkListFilterDraft['status'] {
 
 function parseOptionalFilterString(
   value: unknown,
-  fieldName: 'type' | 'scheduleId' | 'parentWorkflowId' | 'parentWorkflowExecutionToken',
+  fieldName:
+    'type' | 'scheduleId' | 'parentWorkflowId' | 'parentWorkflowExecutionToken' | 'failedStep',
 ): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -115,8 +117,8 @@ function parseOptionalFilterNumber(
 /**
  * Ordered parsers for each filter dimension in `parseBulkListFilterFromBody`.
  * Precedence is visible in source order: status → type → tags → attributes →
- * limit → offset → idPrefix → failureCategory → createdAt →
- * updatedAt → executionDeadline.
+ * limit → offset → idPrefix → failureCategory → failedStep → retrying →
+ * createdAt → updatedAt → executionDeadline.
  */
 const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
   (filter: BulkListFilterDraft, record: object) => void
@@ -175,6 +177,18 @@ const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
       Reflect.get(record, 'failureCategory'),
     );
     if (failureCategory !== undefined) filter.failureCategory = failureCategory;
+  },
+  (filter, record) => {
+    const failedStep = parseOptionalFilterString(Reflect.get(record, 'failedStep'), 'failedStep');
+    // An empty label names no step: refused, as the list schema refuses it, never read as "any".
+    if (failedStep === '') throw new Error('Field "filter.failedStep" must be a non-empty string');
+    if (failedStep !== undefined) filter.failedStep = failedStep;
+  },
+  (filter, record) => {
+    const retrying: unknown = Reflect.get(record, 'retrying');
+    if (retrying === undefined) return;
+    if (typeof retrying !== 'boolean') throw new Error('Field "filter.retrying" must be a boolean');
+    filter.retrying = retrying;
   },
   (filter, record) => {
     const createdAt = parseOptionalTimeRange(Reflect.get(record, 'createdAt'));

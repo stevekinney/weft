@@ -1,5 +1,4 @@
-import type { Storage } from '../../storage/interface.ts';
-import { tryDecodeStorageKeyComponent } from '../../storage/interface.ts';
+import { type Storage, tryDecodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
 import { decode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
 import { isTimerEntry } from './timer-batch.ts';

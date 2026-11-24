@@ -15,6 +15,7 @@ export type EngineCleanupIntervalDisposalTracker = {
    * garbage-collected without `[Symbol.dispose]()`. Null when detection is off.
    */
   secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
+  storageSizeReportInterval: ReturnType<typeof setInterval> | null;
   testToken: symbol | undefined;
 };
 
@@ -34,6 +35,10 @@ function finalizeEngineCleanupIntervalTracker(tracker: EngineCleanupIntervalDisp
   if (tracker.secondInstanceDetectionInterval !== null) {
     clearInterval(tracker.secondInstanceDetectionInterval);
     tracker.secondInstanceDetectionInterval = null;
+  }
+  if (tracker.storageSizeReportInterval !== null) {
+    clearInterval(tracker.storageSizeReportInterval);
+    tracker.storageSizeReportInterval = null;
   }
 
   if (!tracker.disposed && shouldEmitEngineLeakWarning()) {

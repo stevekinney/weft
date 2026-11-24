@@ -14,13 +14,13 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../core/engine.ts';
 import type { RemoteTaskRecord } from '../core/task-ledger/task-ledger.ts';
 import { decodeRemoteTaskRecord } from '../core/task-ledger/task-ledger.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { activity, workflow } from '../core/types.ts';
-import { waitForCondition } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { LongPollWorker } from '../worker/long-poll.ts';
 import { serve, type WeftServer } from './index.ts';
 
@@ -102,7 +102,7 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'leased';
       },
-      { timeoutMs: 5_000, intervalMs: 25, label: 'task to be claimed via long-poll' },
+      { intervalMs: 25, label: 'task to be claimed via long-poll' },
     ).then(() => readOnlyTaskLedgerRecord(engine!));
 
     expect(leasedRecord?.state).toBe('leased');
@@ -225,7 +225,7 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'leased';
       },
-      { timeoutMs: 5_000, intervalMs: 25, label: 'task to be leased via long-poll' },
+      { intervalMs: 25, label: 'task to be leased via long-poll' },
     );
 
     await engine.cancel(handle.id);
@@ -237,7 +237,6 @@ describe('remote activity execution via LongPollWorker (COR-219)', () => {
         return record !== null && record.state === 'terminal' && record.disposition === 'cancelled';
       },
       {
-        timeoutMs: 5_000,
         intervalMs: 25,
         label: "durable task to resolve as cancelled via the worker's cooperative response",
       },

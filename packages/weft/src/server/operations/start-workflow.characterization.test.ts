@@ -23,12 +23,11 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { jsonRequest } from './operation-test-helpers.test-support.ts';
 import { startWorkflowOperation, startWorkflowRestBinding } from './start-workflow.ts';
 
@@ -65,7 +64,10 @@ describe('start-workflow — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 
   // --- adjacent pair: type before id ---
@@ -77,7 +79,10 @@ describe('start-workflow — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 
   // --- adjacent pair: id before executionTimeout ---
@@ -158,6 +163,9 @@ describe('start-workflow — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 });

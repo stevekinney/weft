@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { anonymousPrincipal } from '../principal.ts';
+import { anonymousPrincipal } from "../../embedded/backchannel/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -20,6 +20,7 @@ describe('single-workflow control operation helpers', () => {
       // Matches the real weft.workflows.cancel classification, and asserts the
       // factory plumbs `destructive` straight through to the definition.
       destructive: true,
+      scope: 'workflows:write',
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.undefined(),
@@ -34,7 +35,7 @@ describe('single-workflow control operation helpers', () => {
 
     const result = operation.invoke({
       input: { workflowId: 'missing-workflow' },
-      engine: {},
+      host: {},
       principal: anonymousPrincipal(),
       transport: 'http-rest',
     });
@@ -51,6 +52,7 @@ describe('single-workflow control operation helpers', () => {
       name: 'weft.workflows.resume',
       summary: 'Resume a suspended workflow',
       destructive: false,
+      scope: 'workflows:write',
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.object({ id: z.string() }),
@@ -71,7 +73,7 @@ describe('single-workflow control operation helpers', () => {
 
     const result = operation.invoke({
       input: { workflowId: 'completed-workflow' },
-      engine: {},
+      host: {},
       principal: anonymousPrincipal(),
       transport: 'http-rest',
     });

@@ -1,41 +1,43 @@
-import type { Engine } from '../../core/engine.ts';
-import type { WeftErrorCode } from '../../core/weft-error.ts';
-import type { Storage } from '../../storage/interface.ts';
+import type { OperationFault } from "../../embedded/backchannel/src/index.ts";
 import {
-  shapeRestFaultAsJson,
-  type OperationFault,
+  invalidParamsFault,
+  isOperationFault,
+  readRestTextBody,
   type RestFaultResponseOptions,
-} from '../operation-fault.ts';
-import type { RestInputContext } from '../rest-binding.ts';
-import { readRestTextBody } from '../rest-body.ts';
+  type RestInputContext,
+} from "../../embedded/backchannel/src/internals.ts";
+import type { Storage } from "../../embedded/storage/src/index.ts";
+import { UndeclaredWorkflowMessageError, type Engine } from '../../core/engine.ts';
+import { WorkerDeploymentVersionRemovedError } from '../../worker/deployment-version-removed-error.ts';
+import { shapeWeftRestFaultAsJson } from '../weft-operation-fault.ts';
+import { WORKER_CONFLICT_REASONS } from './worker-conflict-reasons.ts';
 
-/** Type guard distinguishing an `OperationFault` from a value type. */
-export function isOperationFault(value: unknown): value is OperationFault {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'code' in value &&
-    'message' in value &&
-    'data' in value
-  );
+/**
+ * The `Conflict` a start answers when its worker start-override token cannot
+ * authorize it (expired, already used, for another workflow, stale against the
+ * accepted binding, or unverifiable). The reason is a stable machine-readable
+ * string, not the message, so a client branches on it.
+ */
+export function workerStartOverrideRejectedFault(message: string): OperationFault {
+  return {
+    code: 'Conflict',
+    message,
+    data: { reason: WORKER_CONFLICT_REASONS.overrideTokenRejected },
+  };
 }
 
 /**
- * Construct an `InvalidParams` fault with the `{ issues: [] }` data
- * shape. This is the canonical 400-class fault for caller-input validation
- * errors raised inside `invoke()` or `extractInput()`.
- *
- * Pass `weftCode` only when a typed `WeftError` is in hand (e.g. a caught
- * `WorkflowNotRegisteredError`) so REST clients can branch on it through
- * `isWeftFault`. It is omitted entirely when absent — never written as
- * `weftCode: undefined` — so the dozens of generic validation callers keep
- * their exact `{ issues: [] }` data shape.
+ * The `Conflict` an operation that binds work to a deployment build answers when the build has been
+ * removed (`version-removed`), or `undefined` when `error` is not that error. A start, a restart, a
+ * fork, a child, an automatic upgrade, the retry of a failed run and a task-ledger entry all end
+ * here.
  */
-export function invalidParamsFault(message: string, weftCode?: WeftErrorCode): OperationFault {
+export function workerVersionRemovedFault(error: unknown): OperationFault | undefined {
+  if (!(error instanceof WorkerDeploymentVersionRemovedError)) return undefined;
   return {
-    code: 'InvalidParams',
-    message,
-    data: weftCode === undefined ? { issues: [] } : { issues: [], weftCode },
+    code: 'Conflict',
+    message: error.message,
+    data: { reason: WORKER_CONFLICT_REASONS.versionRemoved },
   };
 }
 
@@ -53,7 +55,7 @@ export function shapeRestFault(
   fault: OperationFault,
   options?: RestFaultResponseOptions,
 ): Response {
-  return shapeRestFaultAsJson(fault, options);
+  return shapeWeftRestFaultAsJson(fault, options);
 }
 
 export function faultMessage(error: unknown): string {
@@ -66,6 +68,16 @@ export function unprocessableFault(message: string): OperationFault {
     message,
     data: { reason: message },
   };
+}
+
+/**
+ * The `Unprocessable` a signal, update, or query answers when the workflow
+ * declared messages of that kind and this name is not one of them, or
+ * `undefined` when `error` is not that rejection.
+ */
+export function undeclaredMessageFault(error: unknown): OperationFault | undefined {
+  if (!(error instanceof UndeclaredWorkflowMessageError)) return undefined;
+  return unprocessableFault(error.message);
 }
 
 export function engineFailureFault(message: string): OperationFault {

@@ -35,10 +35,12 @@ export { CodegenEmitError } from './codegen-emit-keywords.ts';
 // code-unit order). Registry keys are workflow/activity identifiers
 // and never contain astral codepoints in practice, so the difference
 // from true Unicode codepoint order doesn't matter.
+//
+// Its one caller sorts the declared property keys plus the required keys no property declares,
+// which are distinct by construction (`Object.keys` is unique and the extras are filtered
+// against the declared set), so two equal strings never meet and no equal result exists.
 function codepointCompare(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
+  return a < b ? -1 : 1;
 }
 
 /**

@@ -1,8 +1,8 @@
-import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../../embedded/storage/src/index.ts";
 import type { WorkerStartOverrideConsumption } from '../../../worker/start-override-preview.ts';
 import { buildWorkflowWorkerStartOverrideConsumption } from '../../../worker/start-override-preview.ts';
 import type { WorkflowWorkerBinding } from '../../../worker/versioning-policy.ts';
-import { StartWorkflowValidationError } from '../../start-workflow-validation.ts';
+import { WorkerStartOverrideRejectedError } from '../../start-workflow-validation.ts';
 import type { StartWorkflowOptions, WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 
@@ -30,7 +30,7 @@ export function prepareWorkerStartOverrideConsumption(
           now: internals.options.getNow(),
         });
   if (consumption === null) {
-    throw new StartWorkflowValidationError(
+    throw new WorkerStartOverrideRejectedError(
       'options.workerStartOverridePreview is expired, reused, scoped to a different workflow, stale, or incompatible with the accepted worker binding.',
     );
   }

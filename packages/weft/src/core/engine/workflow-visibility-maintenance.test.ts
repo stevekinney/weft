@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, setSystemTime } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { runWorkflowVisibilityBackfill } from '../../../scripts/lib/workflow-visibility-backfill.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { workflow } from '../types/workflow-function.ts';

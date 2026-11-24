@@ -25,6 +25,7 @@ type WorkflowContractDraft = {
   updates?: Readonly<Record<string, RegistryMessageEntry>>;
   queries?: Readonly<Record<string, RegistryMessageEntry>>;
   activities?: Readonly<Record<string, WorkflowActivityContract>>;
+  usedActivities?: Readonly<Record<string, WorkflowActivityContract>>;
   finalizer?: RegistryMessageEntry;
 };
 
@@ -62,13 +63,16 @@ function applyDraftMessages(draft: WorkflowContractDraft, entry: RegistryWorkflo
  * (`Engine.listWorkflowActivityDefinitions`), never the flat,
  * workflow-independent `RegistrySnapshot.activities` catalog. Omitted
  * (rather than `{}`) when empty, matching this module's "absent fields
- * omitted" convention.
+ * omitted" convention. `usedActivities`, the engine-provided activities the
+ * workflow declares with `.uses({...})`, becomes the draft's `usedActivities`
+ * under the same rule.
  */
 export function toWorkflowContractDraft(
   workflowType: string,
   workflowVersion: string,
   entry: RegistryWorkflowEntry,
   workflowScopedActivities: Readonly<Record<string, WorkflowActivityContract>>,
+  usedActivities: Readonly<Record<string, WorkflowActivityContract>>,
 ): WorkflowContract {
   const draft: WorkflowContractDraft = { name: workflowType, workflowVersion };
   applyDraftSchemas(draft, entry);
@@ -76,6 +80,9 @@ export function toWorkflowContractDraft(
   if (entry.finalizer !== undefined) draft.finalizer = entry.finalizer;
   if (Object.keys(workflowScopedActivities).length > 0) {
     draft.activities = workflowScopedActivities;
+  }
+  if (Object.keys(usedActivities).length > 0) {
+    draft.usedActivities = usedActivities;
   }
   return draft;
 }

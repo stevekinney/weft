@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { Principal } from "../../embedded/backchannel/src/index.ts";
+import { type AccessPolicy, invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import type {
   BulkOperationCommitOptions,
   BulkOperationDryRunOptions,
@@ -9,15 +11,32 @@ import {
   MAX_BULK_CONFIRMATION_TOKEN_LENGTH,
   MAX_BULK_OPERATION_REQUEST_ID_LENGTH,
 } from '../../core/types/bulk.ts';
-import type { AccessPolicy } from '../authorization.ts';
-import type { Principal } from '../principal.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
 
 export const bulkOperationControlInputSchema = z.object({
-  dryRun: z.boolean().optional(),
-  confirmationToken: z.string().min(1).max(MAX_BULK_CONFIRMATION_TOKEN_LENGTH).optional(),
-  requestId: z.string().min(1).max(MAX_BULK_OPERATION_REQUEST_ID_LENGTH).optional(),
-  bulkConcurrency: z.number().int().min(1).optional(),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe(
+      'When true, preview the matching workflows and return a confirmationToken without changing anything.',
+    ),
+  confirmationToken: z
+    .string()
+    .min(1)
+    .max(MAX_BULK_CONFIRMATION_TOKEN_LENGTH)
+    .optional()
+    .describe('Token returned by the dry run of the same request; required to commit.'),
+  requestId: z
+    .string()
+    .min(1)
+    .max(MAX_BULK_OPERATION_REQUEST_ID_LENGTH)
+    .optional()
+    .describe('Caller-chosen id that identifies this bulk request.'),
+  bulkConcurrency: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('Number of matched workflows to process at once.'),
 });
 
 export type BulkOperationControlInput = z.infer<typeof bulkOperationControlInputSchema>;

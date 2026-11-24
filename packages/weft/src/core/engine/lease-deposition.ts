@@ -29,6 +29,7 @@
  */
 
 import type { EngineInternals } from './internals.ts';
+import { dispatchLeaseHealthIfChanged } from './lease-health-events.ts';
 
 /**
  * The `name` of the `process` warning emitted when an engine configured with
@@ -80,6 +81,7 @@ export function handleDeposition(internals: EngineInternals): void {
       'enforcement in place.',
     ENGINE_LEASE_LOST_WARNING_NAME,
   );
+  dispatchLeaseHealthIfChanged(internals);
 
   // Defer teardown off the current commit's stack. Running it inline would be
   // re-entrant teardown while a generator is mid-advance, clearing maps the

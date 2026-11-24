@@ -1,23 +1,18 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import type { WorkflowEvent } from '../core/types.ts';
-import { setPortableRuntimeTestOverridesForTesting } from '../runtime/portable.ts';
-import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { WorkflowEventSubscription } from './event-stream.ts';
 import {
   openClientEventSubscription,
   type WorkflowEventStreamHost,
 } from './open-event-subscription.ts';
-import {
-  parseServerSentEventChunk,
-  SseWorkflowEventSubscription,
-  workflowEventsSseUrl,
-} from './sse-event-stream.ts';
+import { SseWorkflowEventSubscription, workflowEventsSseUrl } from './sse-event-stream.ts';
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  setPortableRuntimeTestOverridesForTesting();
 });
 
 function eventStreamResponse(body: string): Response {
@@ -89,23 +84,6 @@ describe('workflowEventsSseUrl', () => {
       'http://localhost:7233/v1/workflows/a%2Fb/events/sse',
     );
     expect(workflowEventsSseUrl('/weft', 'wf-1')).toBe('/weft/v1/workflows/wf-1/events/sse');
-  });
-});
-
-describe('parseServerSentEventChunk', () => {
-  it('parses multiline data, comments, ids, and named events', () => {
-    const parsed = parseServerSentEventChunk(
-      ': ignored\nid: 7\nevent: workflow:started\ndata: first\ndata: second\n\n',
-    );
-
-    expect(parsed.frames).toEqual([
-      {
-        id: '7',
-        event: 'workflow:started',
-        data: 'first\nsecond',
-      },
-    ]);
-    expect(parsed.remainder).toBe('');
   });
 });
 
@@ -447,13 +425,7 @@ describe('SseWorkflowEventSubscription', () => {
     subscription.close();
   });
 
-  it('auto transport prefers SSE on non-Bun runtimes when auth headers would be dropped', async () => {
-    setPortableRuntimeTestOverridesForTesting({
-      bun: undefined,
-      process: undefined,
-      window: {} as typeof globalThis.window,
-      document: undefined,
-    });
+  it('auto transport prefers SSE when auth headers are configured and the WebSocket is not declared header-carrying', async () => {
     const requests: Array<{ url: string; headers: Headers }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push({ url: requestUrl(input), headers: new Headers(init?.headers) });
@@ -478,7 +450,7 @@ describe('SseWorkflowEventSubscription', () => {
 
     await subscription.whenConnected();
     await waitForCondition(() => received.length > 0, {
-      label: 'non-Bun SSE auto fallback event delivered',
+      label: 'undeclared-WebSocket SSE auto fallback event delivered',
     });
 
     expect(requests).toHaveLength(1);
@@ -486,6 +458,55 @@ describe('SseWorkflowEventSubscription', () => {
     expect(requests[0]?.headers.get('authorization')).toBe('Bearer token');
     expect(received.map((event) => event.type)).toEqual(['workflow:completed']);
     subscription.close();
+  });
+
+  it('auto transport keeps the WebSocket channel when the caller declares it header-carrying', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    const constructed: Array<{ url: string; options: unknown }> = [];
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      value: class {
+        constructor(url: string, options?: unknown) {
+          constructed.push({ url, options });
+        }
+        addEventListener(): void {}
+        close(): void {}
+      },
+    });
+    globalThis.fetch = (async () => {
+      throw new Error('a declared header-carrying WebSocket must not fall back to SSE');
+    }) as unknown as typeof fetch;
+    const host: WorkflowEventStreamHost = {
+      baseUrl: 'http://localhost:7233',
+      headers: { Authorization: 'Bearer token' },
+      async getEvents() {
+        return [];
+      },
+    };
+
+    try {
+      const subscription = openClientEventSubscription(
+        host,
+        { eventTransport: 'auto', webSocketCarriesHeaders: true },
+        'wf-ws',
+        () => {},
+        true,
+      );
+      expect(subscription).toBeInstanceOf(WorkflowEventSubscription);
+      expect(constructed).toEqual([
+        {
+          url: 'ws://localhost:7233/v1/workflows/wf-ws/watch',
+          options: { headers: { Authorization: 'Bearer token' } },
+        },
+      ]);
+      subscription.close();
+    } finally {
+      if (descriptor === undefined) {
+        delete (globalThis as { WebSocket?: unknown }).WebSocket;
+      } else {
+        Object.defineProperty(globalThis, 'WebSocket', descriptor);
+      }
+    }
   });
 
   it('exhausts reconnects for repeated empty event-stream responses', async () => {
@@ -628,5 +649,53 @@ describe('SseWorkflowEventSubscription', () => {
         true,
       ),
     ).toThrow('unexpected constructor bug');
+  });
+});
+
+describe('SseWorkflowEventSubscription network failures', () => {
+  it('retries a fetch that fails and gives up after the reconnect budget', async () => {
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount += 1;
+      throw new TypeError('network down');
+    }) as unknown as typeof fetch;
+
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      () => {},
+      { maxReconnectAttempts: 2, reconnectBackoffMs: 0 },
+    );
+
+    await waitForCondition(() => subscription.closeReason === 'reconnect-exhausted', {
+      label: 'failing SSE fetch exhausted its reconnects',
+    });
+
+    expect(callCount).toBe(3);
+  });
+
+  it('cancels a pending reconnect when closed during the backoff', async () => {
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount += 1;
+      throw new TypeError('network down');
+    }) as unknown as typeof fetch;
+
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      () => {},
+      { reconnectBackoffMs: 60_000 },
+    );
+    await waitForCondition(() => callCount === 1, { label: 'first SSE fetch attempt' });
+    // The failed fetch schedules its reconnect on the next microtask turn.
+    await Promise.resolve();
+
+    subscription.close();
+
+    expect(subscription.closeReason).toBe('client-closed');
+    expect(callCount).toBe(1);
   });
 });

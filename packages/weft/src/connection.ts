@@ -25,8 +25,9 @@
  * @module connection
  */
 
+import { parse as parseToml } from 'smol-toml';
 import { resolveCliEnvironment } from './runtime/environment-configuration.ts';
-import { isBunRuntime, readEnvironmentVariable, tryLoadNodeBuiltin } from './runtime/portable.ts';
+import { readEnvironmentVariable, tryLoadNodeBuiltin } from './runtime/portable.ts';
 
 /**
  * Inputs accepted by {@link resolveConnection}.
@@ -234,7 +235,11 @@ function resolveConnectionContext(options: ConnectionOptions): ConnectionContext
   const configuration = readWeftConfiguration();
   const profileName =
     options.profile ?? resolveCliEnvironment().weftProfile ?? configuration.defaultProfile;
-  const profile = profileName === undefined ? undefined : configuration.profiles?.[profileName];
+  const profiles = configuration.profiles;
+  const profile =
+    profileName === undefined || profiles === undefined || !Object.hasOwn(profiles, profileName)
+      ? undefined
+      : profiles[profileName];
   const runLockfile = options.includeRunLockfile === false ? undefined : readRunLockfile();
   return {
     options,
@@ -281,10 +286,6 @@ export async function writeRunLockfile(server: string): Promise<void> {
   }
   await fsPromises.mkdir(weftHome(), { recursive: true });
   const contents = `${JSON.stringify({ server }, null, 2)}\n`;
-  if (isBunRuntime()) {
-    await Bun.write(runLockfilePath(), contents);
-    return;
-  }
   await fsPromises.writeFile(runLockfilePath(), contents, 'utf8');
 }
 
@@ -299,16 +300,13 @@ export async function removeRunLockfile(server: string): Promise<void> {
 }
 
 function readWeftConfiguration(): WeftConfiguration {
-  // `Bun.TOML` is Bun-only, so config-file resolution additionally requires
-  // Bun (not just any runtime `node:fs` happens to be reachable from).
-  if (!isBunRuntime()) return {};
   const fs = loadFsModule();
   if (fs === undefined) return {};
   const path = configurationPath();
   if (!fs.existsSync(path)) return {};
   let parsed: unknown;
   try {
-    parsed = Bun.TOML.parse(fs.readFileSync(path, 'utf8'));
+    parsed = parseToml(fs.readFileSync(path, 'utf8'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new ConnectionConfigurationError(

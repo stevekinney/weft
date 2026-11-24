@@ -134,29 +134,21 @@ async function createConsumerProject(
 
 async function runBunConsumerSmoke(consumerDirectory: string): Promise<void> {
   const script = [
-    `import { Engine, LocalClient, MemoryStorage, workflow } from '${packageName}';`,
-    `import { WorkflowStartedEvent as RootWorkflowStartedEvent, WorkflowResumedEvent as RootWorkflowResumedEvent, WorkflowCompletedEvent as RootWorkflowCompletedEvent, WorkflowFailedEvent as RootWorkflowFailedEvent, WorkflowCancelledEvent as RootWorkflowCancelledEvent, WorkflowTimedOutEvent as RootWorkflowTimedOutEvent, WorkflowSuspendedEvent as RootWorkflowSuspendedEvent, WorkflowTeardownEvent as RootWorkflowTeardownEvent } from '${packageName}';`,
-    `import { isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent } from '${packageName}/client';`,
-    `import { TestEngine } from '${packageName}/testing';`,
-    `import * as storage from '${packageName}/storage';`,
-    `import { runBasicStorageContract } from '${packageName}/storage/testing';`,
-    `import { SQLiteStorage } from '${packageName}/storage/sqlite';`,
-    `import { createFetchHandler } from '${packageName}/service-worker';`,
-    `import { TaskQueue, WorkerRegistry } from '${packageName}/server';`,
-    `import { parseWorkerToServerMessage } from '${packageName}/worker-protocol';`,
-    `import { createMcpSessionManager } from '${packageName}/mcp';`,
-    `import { createObservabilityInterceptors } from '${packageName}/observability';`,
-    `import { validateStandardSchema } from '${packageName}/json-schema';`,
-    'for (const value of [Engine, MemoryStorage, workflow, LocalClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent, TestEngine, storage.MemoryStorage, runBasicStorageContract, SQLiteStorage, createFetchHandler, TaskQueue, WorkerRegistry, parseWorkerToServerMessage, createMcpSessionManager, createObservabilityInterceptors, validateStandardSchema]) {',
-    "  if (value === undefined) throw new Error('missing Bun consumer export');",
+    `import { Engine, LocalClient, canonicalTimeZone, workflow } from '${packageName}';`,
+    `import { MemoryStorage } from '${packageName}/storage';`,
+    `import { BunSQLiteStorage } from '${packageName}/storage/bun-sqlite';`,
+    `import { IndexedDBStorage } from '${packageName}/storage/indexeddb';`,
+    `import { RemoteWorker, defineWorker } from '${packageName}/worker';`,
+    `import { defineWorker as defineAuthoredWorker } from '${packageName}/worker/authoring';`,
+    `import { defineWorker as defineGeneratedWorker } from '${packageName}/worker/generated-authoring';`,
+    `import { createA2AHandler, createA2APeerClient } from '${packageName}/a2a';`,
+    'for (const value of [Engine, LocalClient, MemoryStorage, IndexedDBStorage, workflow, RemoteWorker, defineWorker, defineAuthoredWorker, defineGeneratedWorker, createA2AHandler, createA2APeerClient]) {',
+    "  if (typeof value !== 'function') throw new Error('missing Bun consumer export');",
     '}',
-    "if (!isFaultCode('NotFound')) throw new Error('expected client isFaultCode export to recognize NotFound');",
-    "if (WorkflowStartedEvent.type !== 'workflow:started' || WorkflowResumedEvent.type !== 'workflow:resumed' || WorkflowCompletedEvent.type !== 'workflow:completed' || WorkflowFailedEvent.type !== 'workflow:failed' || WorkflowCancelledEvent.type !== 'workflow:cancelled' || WorkflowTimedOutEvent.type !== 'workflow:timed-out' || WorkflowSuspendedEvent.type !== 'workflow:suspended' || WorkflowTeardownEvent.type !== 'workflow:teardown') throw new Error('unexpected client lifecycle event type');",
-    "if (WorkflowStartedEvent !== RootWorkflowStartedEvent || WorkflowResumedEvent !== RootWorkflowResumedEvent || WorkflowCompletedEvent !== RootWorkflowCompletedEvent || WorkflowFailedEvent !== RootWorkflowFailedEvent || WorkflowCancelledEvent !== RootWorkflowCancelledEvent || WorkflowTimedOutEvent !== RootWorkflowTimedOutEvent || WorkflowSuspendedEvent !== RootWorkflowSuspendedEvent || WorkflowTeardownEvent !== RootWorkflowTeardownEvent) throw new Error('expected root and client lifecycle event constructors to be identical');",
-    "if (SQLiteStorage.name !== 'BunSQLiteStorage') throw new Error(`expected Bun SQLite export, got ${SQLiteStorage.name}`);",
-    'const taskQueue = new TaskQueue();',
-    "if (!(taskQueue instanceof TaskQueue)) throw new Error('expected constructable TaskQueue export');",
-    'taskQueue[Symbol.dispose]();',
+    "if (canonicalTimeZone('UTC') !== 'UTC') throw new Error('unexpected canonical time zone');",
+    'using storage = new BunSQLiteStorage(":memory:");',
+    'await using engine = await Engine.create({ storage });',
+    "if (engine.storage !== storage) throw new Error('engine rejected the published Bun SQLite adapter');",
   ].join('\n');
   runCommand(
     'Bun consumer imports public package surface',
@@ -180,7 +172,7 @@ async function runBunConsumerSmoke(consumerDirectory: string): Promise<void> {
 async function runServeEngineSmoke(consumerDirectory: string): Promise<void> {
   const script = [
     `import { Engine, workflow } from '${packageName}';`,
-    `import { serve } from '${packageName}/server';`,
+    `import { serve } from '${packageName}';`,
     "const wf = workflow({ name: 'ping' }).execute(async function* () { return 'pong'; });",
     'const engine = await Engine.create({ workflows: { ping: wf } });',
     'const server = serve({ engine, port: 0 });',
@@ -377,19 +369,19 @@ async function runNodeConsumerSmoke(consumerDirectory: string): Promise<void> {
   }
   const { executable: nodeExecutable, env: nodeEnv } = resolvedNode;
   const script = [
-    `import { Engine, MemoryStorage, WorkflowStartedEvent as RootWorkflowStartedEvent, WorkflowResumedEvent as RootWorkflowResumedEvent, WorkflowCompletedEvent as RootWorkflowCompletedEvent, WorkflowFailedEvent as RootWorkflowFailedEvent, WorkflowCancelledEvent as RootWorkflowCancelledEvent, WorkflowTimedOutEvent as RootWorkflowTimedOutEvent, WorkflowSuspendedEvent as RootWorkflowSuspendedEvent, WorkflowTeardownEvent as RootWorkflowTeardownEvent } from '${packageName}';`,
-    `import { HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent } from '${packageName}/client';`,
-    `import { MemoryStorage as SubpathMemoryStorage } from '${packageName}/storage/memory';`,
-    `import { SQLiteStorage } from '${packageName}/storage/sqlite';`,
-    `import { handleRequest } from '${packageName}/server/handler';`,
-    `import { parseWorkerToServerMessage } from '${packageName}/worker-protocol';`,
-    'for (const value of [Engine, MemoryStorage, HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent, SubpathMemoryStorage, SQLiteStorage, handleRequest, parseWorkerToServerMessage]) {',
-    "  if (value === undefined) throw new Error('missing Node consumer export');",
+    `import { Engine, HttpClient, handleRequest, workflow } from '${packageName}';`,
+    `import { MemoryStorage } from '${packageName}/storage';`,
+    `import { RemoteWorker } from '${packageName}/worker';`,
+    'for (const value of [Engine, HttpClient, handleRequest, workflow, MemoryStorage, RemoteWorker]) {',
+    "  if (typeof value !== 'function') throw new Error('missing Node consumer export');",
     '}',
-    "if (!isFaultCode('NotFound')) throw new Error('expected client isFaultCode export to recognize NotFound');",
-    "if (WorkflowStartedEvent.type !== 'workflow:started' || WorkflowResumedEvent.type !== 'workflow:resumed' || WorkflowCompletedEvent.type !== 'workflow:completed' || WorkflowFailedEvent.type !== 'workflow:failed' || WorkflowCancelledEvent.type !== 'workflow:cancelled' || WorkflowTimedOutEvent.type !== 'workflow:timed-out' || WorkflowSuspendedEvent.type !== 'workflow:suspended' || WorkflowTeardownEvent.type !== 'workflow:teardown') throw new Error('unexpected client lifecycle event type');",
-    "if (WorkflowStartedEvent !== RootWorkflowStartedEvent || WorkflowResumedEvent !== RootWorkflowResumedEvent || WorkflowCompletedEvent !== RootWorkflowCompletedEvent || WorkflowFailedEvent !== RootWorkflowFailedEvent || WorkflowCancelledEvent !== RootWorkflowCancelledEvent || WorkflowTimedOutEvent !== RootWorkflowTimedOutEvent || WorkflowSuspendedEvent !== RootWorkflowSuspendedEvent || WorkflowTeardownEvent !== RootWorkflowTeardownEvent) throw new Error('expected root and client lifecycle event constructors to be identical');",
-    "if (SQLiteStorage.name !== 'NodeSQLiteStorage') throw new Error(`expected Node SQLite export, got ${SQLiteStorage.name}`);",
+    'const storage = new MemoryStorage();',
+    'const engine = await Engine.create({ storage });',
+    'try {',
+    "  if (engine.storage !== storage) throw new Error('engine rejected the published memory adapter');",
+    '} finally {',
+    '  await engine[Symbol.asyncDispose]();',
+    '}',
   ].join('\n');
   runCommand(
     'Node.js consumer imports portable public package surface',
@@ -405,12 +397,10 @@ async function runBrowserBundleSmoke(consumerDirectory: string): Promise<void> {
   await Bun.write(
     entrypoint,
     [
-      `import { HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent } from '${packageName}/client';`,
-      `import { createFetchHandler } from '${packageName}/service-worker';`,
+      `import { HttpClient, createFetchHandler, handleRequest } from '${packageName}';`,
+      `import { MemoryStorage } from '${packageName}/storage';`,
       `import { IndexedDBStorage } from '${packageName}/storage/indexeddb';`,
-      `import { HTTPStorage } from '${packageName}/storage/http';`,
-      `import { handleRequest } from '${packageName}/server/handler';`,
-      'export { HttpClient, isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent, createFetchHandler, IndexedDBStorage, HTTPStorage, handleRequest };',
+      'export { HttpClient, createFetchHandler, MemoryStorage, IndexedDBStorage, handleRequest };',
     ].join('\n'),
   );
 
@@ -465,14 +455,14 @@ async function runBrowserBundleSmoke(consumerDirectory: string): Promise<void> {
  */
 async function runEventFeedIntegrationSmoke(consumerDirectory: string): Promise<void> {
   const script = [
-    `import { Engine, MemoryStorage, workflow } from '${packageName}';`,
+    `import { Engine, workflow } from '${packageName}';`,
+    `import { MemoryStorage } from '${packageName}/storage';`,
     `import {`,
     `  createEngineEventFeedBackend,`,
     `  createFleetEventFeed,`,
     `  createWorkflowEventFeed,`,
     `  handleRequest,`,
-    `} from '${packageName}/server/handler';`,
-    `import { principalFromApiKey } from '${packageName}/mcp';`,
+    `} from '${packageName}';`,
     '',
     '// `Engine` starts background timers (scheduler polling, retention) that',
     '// keep this `--eval` child process alive, so `Bun.spawnSync` on the parent',
@@ -531,7 +521,7 @@ async function runEventFeedIntegrationSmoke(consumerDirectory: string): Promise<
     '',
     '    const authContext = {',
     "      method: 'api-key',",
-    "      principal: principalFromApiKey({ subject: 'consumer', scopes: ['events:read'] }),",
+    "      principal: { method: 'api-key', subject: 'consumer', scopes: new Set(['events:read']), hasScope(scope) { return this.scopes.has(scope); } },",
     '    };',
     '',
     '    const workflowResponse = await handleRequest(',
@@ -591,7 +581,7 @@ async function runTypeScriptConsumerSmoke(consumerDirectory: string): Promise<vo
     join(consumerDirectory, 'consumer.ts'),
     [
       `import type { Engine } from '${packageName}';`,
-      `import { isFaultCode, WorkflowStartedEvent, WorkflowResumedEvent, WorkflowCompletedEvent, WorkflowFailedEvent, WorkflowCancelledEvent, WorkflowTimedOutEvent, WorkflowSuspendedEvent, WorkflowTeardownEvent, type FaultCode, type WeftClient } from '${packageName}/client';`,
+      `import type { WeftClient } from '${packageName}';`,
       `declare module '${packageName}' {`,
       '  interface WorkflowRegistry {',
       '    welcome: { input: { name: string }; output: { greeting: string } };',
@@ -599,13 +589,6 @@ async function runTypeScriptConsumerSmoke(consumerDirectory: string): Promise<vo
       '}',
       'declare const engine: Engine;',
       'declare const client: WeftClient;',
-      'declare const unknownCode: unknown;',
-      'if (isFaultCode(unknownCode)) {',
-      '  const knownCode: FaultCode = unknownCode;',
-      '  knownCode.toUpperCase();',
-      '}',
-      'const lifecycleTypes = [WorkflowStartedEvent.type, WorkflowResumedEvent.type, WorkflowCompletedEvent.type, WorkflowFailedEvent.type, WorkflowCancelledEvent.type, WorkflowTimedOutEvent.type, WorkflowSuspendedEvent.type, WorkflowTeardownEvent.type] as const;',
-      'void lifecycleTypes;',
       'async function checkEngine(): Promise<void> {',
       "  const handle = await engine.start('welcome', { name: 'Steve' });",
       '  const output = await handle.result();',
@@ -651,21 +634,6 @@ async function runStrictStorageBarrelTypeScriptSmoke(consumerDirectory: string):
     throw new Error('strict storage-barrel consumer unexpectedly installed the optional lmdb peer');
   }
 
-  const lmdbDeclaration = await Bun.file(
-    join(
-      consumerDirectory,
-      'node_modules',
-      '@lostgradient',
-      'weft',
-      'dist',
-      'storage',
-      'lmdb.d.ts',
-    ),
-  ).text();
-  if (/\b(?:from|import\s*\()\s*['"]lmdb['"]/.test(lmdbDeclaration)) {
-    throw new Error('dist/storage/lmdb.d.ts references the optional lmdb peer');
-  }
-
   await Bun.write(
     join(consumerDirectory, 'strict-storage-consumer.ts'),
     [`import { MemoryStorage } from '${packageName}/storage';`, 'void MemoryStorage;'].join('\n'),
@@ -692,7 +660,7 @@ async function runStrictStorageBarrelTypeScriptSmoke(consumerDirectory: string):
   );
 
   runCommand(
-    'strict TypeScript consumer imports the zero-native-dependency storage barrel without lmdb',
+    'strict TypeScript consumer imports the portable storage package without native adapters',
     [
       join(consumerDirectory, 'node_modules/.bin/tsc'),
       '--noEmit',

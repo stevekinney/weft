@@ -12,7 +12,7 @@
  * @module storage/ownership-keys
  */
 
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 
 /**
  * Per-workflow ownership claim keys plus the store-wide ownership-mode marker.

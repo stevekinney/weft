@@ -28,6 +28,7 @@
  * @module server/runtime/task-result-view
  */
 
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import { commitTaskLedgerTransition } from '../../core/task-ledger/task-ledger-runtime.ts';
 import { markWorkflowResultAdopted } from '../../core/task-ledger/task-ledger-transitions.ts';
 import {
@@ -36,7 +37,6 @@ import {
   type RemoteTaskDeadLettered,
   type RemoteTaskTerminal,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { Storage } from '../../storage/interface.ts';
 import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 
 /**
@@ -45,7 +45,8 @@ import { sha256Hex } from '../../worker/manifest/content-digest.ts';
  * @example
  * ```ts
  * import { serve, type TaskResultView } from '@lostgradient/weft';
- * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { Engine } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * await using server = serve({ engine, port: 0 });

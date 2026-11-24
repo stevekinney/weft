@@ -65,11 +65,12 @@ export function buildWorkerExecutionIdentity(
     activityName: string;
   }>,
 ): WorkerExecutionIdentity | undefined {
-  const workflow = source.manifest.workflows[source.workflowType];
-  if (workflow === undefined) return undefined;
+  const workflows = source.manifest.workflows;
+  if (!Object.hasOwn(workflows, source.workflowType)) return undefined;
+  const workflow = workflows[source.workflowType]!;
 
-  const activity = workflow.activities[source.activityName];
-  if (activity === undefined) return undefined;
+  if (!Object.hasOwn(workflow.activities, source.activityName)) return undefined;
+  const activity = workflow.activities[source.activityName]!;
 
   return {
     workerId: source.workerId,

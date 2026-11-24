@@ -1,6 +1,7 @@
 import type { DefinitionSchema } from './definition-schema.ts';
 import type { QueryDefinition, SignalDefinition, UpdateDefinition } from './message-handles.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
+import type { UsedActivityDefinition } from './workflow-builder-helpers.ts';
 import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 
 /**
@@ -35,6 +36,13 @@ export interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknow
   updates?: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
   /** Statically registered query definitions keyed by their public names. */
   queries?: Readonly<Record<string, Readonly<QueryDefinition<unknown>>>>;
+  /**
+   * Engine-provided activities the workflow declared with `.uses()`, keyed by
+   * name: schema metadata only. The workflow's contract lists them alongside
+   * its `.activities()` entries; dispatch resolves them from the engine's
+   * registry.
+   */
+  uses?: Readonly<Record<string, UsedActivityDefinition>>;
   /** Optional search attribute schema used for indexing and runtime validation. */
   searchAttributes?: SearchAttributeSchema;
   /** Optional start admission policy for this workflow type. */

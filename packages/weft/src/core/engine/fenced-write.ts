@@ -33,12 +33,14 @@
  * This module is allow-listed for import only from `src/core/engine/**`.
  */
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS, storageConditionalBatch } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { prepareSharedActivityReceiptTransitions } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { decodeEpoch } from './lease-codec.ts';
 import { emitWorkflowClaimLostWarning, handleDeposition } from './lease-deposition.ts';
 import { EngineDeposedError, EngineLeaseNotHeldError } from './lease-errors.ts';
+import { adapterCall, adapterConditionalBatch } from './storage-write-retry.ts';
 
 /**
  * Reject an engine-owned work entry point (start, startOrSignal, fork, resume)
@@ -95,7 +97,23 @@ const untrackedWrite: FencedWriteTracker = (write) => write;
  *   `workflowId: null`): unchanged from Step 2 — see {@link
  *   resolveFenceEpochOrHalt}.
  */
-async function fencedCommit(
+function fencedCommit(
+  internals: EngineInternals,
+  workflowId: string | null,
+  operations: BatchOperation[],
+  conditions: ConditionalBatchCondition[],
+  trackWrite: FencedWriteTracker = untrackedWrite,
+): Promise<FencedCommitResult> {
+  const shared = prepareSharedActivityReceiptTransitions(internals.storage, operations, conditions);
+  if (shared === undefined) {
+    return writeFencedBatch(internals, workflowId, operations, conditions, trackWrite);
+  }
+  return shared.then((prepared) =>
+    writeFencedBatch(internals, workflowId, prepared.operations, prepared.conditions, trackWrite),
+  );
+}
+
+async function writeFencedBatch(
   internals: EngineInternals,
   workflowId: string | null,
   operations: BatchOperation[],
@@ -113,11 +131,11 @@ async function fencedCommit(
     // byte-for-byte the pre-ADR shape — plain batch when there are no base
     // conditions, conditionalBatch otherwise. No epoch condition.
     if (baseConditions.length === 0) {
-      await trackWrite(internals.storage.batch(operations));
+      await trackWrite(adapterCall(() => internals.storage.batch(operations)));
       return 'committed';
     }
     const committed = await trackWrite(
-      storageConditionalBatch(internals.storage, baseConditions, operations),
+      adapterConditionalBatch(internals.storage, baseConditions, operations),
     );
     return committed ? 'committed' : 'lost-race';
   }
@@ -127,7 +145,7 @@ async function fencedCommit(
     { key: KEYS.leaseEpoch(), expectedValue: epochBytes },
   ];
   const committed = await trackWrite(
-    storageConditionalBatch(internals.storage, conditions, operations),
+    adapterConditionalBatch(internals.storage, conditions, operations),
   );
   if (committed) return 'committed';
 
@@ -210,7 +228,7 @@ async function fencedCommitForWorkflow(
     { key: KEYS.workflowOwnerEpoch(workflowId), expectedValue: epochBytes },
   ];
   const committed = await trackWrite(
-    storageConditionalBatch(internals.storage, conditions, operations),
+    adapterConditionalBatch(internals.storage, conditions, operations),
   );
   if (committed) return 'committed';
 
@@ -275,6 +293,37 @@ export async function commitFencedEngineWrite(
   if (result === 'lost-race') {
     throw onLostRace();
   }
+}
+
+/**
+ * Commit an engine-generated durable write that carries no preconditions of its own, fenced on the
+ * applicable epoch exactly as {@link commitFencedEngineWrite} fences it. With no base condition the
+ * epoch is the only thing a commit can lose, and losing it is a deposition, which halts and throws
+ * {@link EngineDeposedError}. A commit that fails with the epoch still held is therefore a storage
+ * adapter reporting a lost compare-and-swap it should not have, and it throws a plain `Error`
+ * naming `description`, so a caller's retry semantics apply as they do for any lost race.
+ *
+ * @param internals - the engine internals
+ * @param workflowId - see {@link commitFencedEngineWrite}
+ * @param operations - the durable operations to commit atomically
+ * @param description - what the write does, which starts the lost-race error's message
+ * @param trackWrite - see {@link commitFencedEngineWrite}
+ */
+export async function commitFencedEngineWriteWithoutPreconditions(
+  internals: EngineInternals,
+  workflowId: string | null,
+  operations: BatchOperation[],
+  description: string,
+  trackWrite?: FencedWriteTracker,
+): Promise<void> {
+  await commitFencedEngineWrite(
+    internals,
+    workflowId,
+    operations,
+    [],
+    () => new Error(`${description} lost its CAS race.`),
+    trackWrite,
+  );
 }
 
 /**

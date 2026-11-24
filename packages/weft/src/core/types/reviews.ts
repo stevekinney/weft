@@ -144,6 +144,10 @@ export interface CompletedReviewEntry extends ReviewDecisionRecord {
   allowPartial: boolean;
   timeout?: number;
   webhookUrl?: string;
+  /** The step of the workflow that asked, when the request kept it (COR-2426). */
+  step?: string;
+  /** What the workflow's author said to the reviewer, when the request kept it (COR-2426). */
+  message?: string;
   createdAt: number;
 }
 

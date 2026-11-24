@@ -13,7 +13,7 @@
  * @module core/engine/catalog-removal
  */
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import {
   decrementNestedRevisionCount,
   finalizeCatalogTombstone,

@@ -27,8 +27,8 @@
  * @module core/engine/workflow-claim-transitions
  */
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   decodeEpoch,
   decodeWorkflowClaimHolder,

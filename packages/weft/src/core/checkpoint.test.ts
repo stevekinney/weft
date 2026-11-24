@@ -625,6 +625,55 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
     }
   });
 
+  it('keeps a valid `forkCopiedSignatureSteps` list and reads an absent one as absent (COR-1924)', () => {
+    const { encode } = require('./codec.ts');
+    const base = {
+      workflowId: 'wf-fork-copied',
+      step: 0,
+      locals: {},
+      accumulatedResults: [],
+      searchAttributes: {},
+      version: '1.0.0',
+      schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+      createdAt: Date.now(),
+    };
+
+    expect(deserializeCheckpoint(encode(base)).forkCopiedSignatureSteps).toBeUndefined();
+    expect(
+      deserializeCheckpoint(encode({ ...base, forkCopiedSignatureSteps: [0, 3] }))
+        .forkCopiedSignatureSteps,
+    ).toEqual([0, 3]);
+  });
+
+  it('throws when `forkCopiedSignatureSteps` is not a list of non-negative integers (COR-1924)', () => {
+    const { encode } = require('./codec.ts');
+    const cases: unknown[] = [
+      '3',
+      3,
+      {},
+      ['3'],
+      [-1],
+      [1.5],
+      [Number.MAX_SAFE_INTEGER + 1],
+      [null],
+    ];
+    for (const invalidSteps of cases) {
+      const bytes = encode({
+        workflowId: 'wf-invalid-fork-copied',
+        step: 0,
+        locals: {},
+        accumulatedResults: [],
+        searchAttributes: {},
+        version: '1.0.0',
+        schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+        createdAt: Date.now(),
+        forkCopiedSignatureSteps: invalidSteps,
+      });
+
+      expect(() => deserializeCheckpoint(bytes)).toThrow('forkCopiedSignatureSteps');
+    }
+  });
+
   it('throws when Worker replay signatures have invalid entries', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({

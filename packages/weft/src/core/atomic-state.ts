@@ -1,6 +1,10 @@
+import {
+  requireStorageCapability,
+  storageConditionalBatch,
+  type Storage,
+} from "../embedded/storage/src/index.ts";
 import { sleep as portableSleep } from '../runtime/portable.ts';
-import type { Storage } from '../storage/interface.ts';
-import { KEYS, requireStorageCapability, storageConditionalBatch } from '../storage/interface.ts';
+import { KEYS } from '../storage/keys.ts';
 import {
   AtomicStateChangeEvent,
   AtomicStateConflictEvent,
@@ -47,7 +51,7 @@ const RESERVED_ATOMIC_STATE_KEYS = new Set(['__proto__', 'constructor', 'prototy
  * @example
  * ```ts
  * import { AtomicState, AtomicStateConflictError } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const state = new AtomicState<number>(storage, 'state:workflow-scope:default:counter', {
@@ -226,7 +230,7 @@ function notifyObserver<T>(observer: AtomicStateObserver<T>, event: AtomicStateE
  * @example
  * ```ts
  * import { AtomicState } from '@lostgradient/weft';
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * const storage = new MemoryStorage();
  * const counter = new AtomicState<number>(storage, 'state:workflow-scope:default:count', { initial: 0 });

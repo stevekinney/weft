@@ -1,4 +1,5 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { AUTHORIZATION_SCOPES } from '../authorization-scopes.ts';
 /**
  * Agent feature parity tests.
  *
@@ -7,15 +8,15 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
  * (server mode). No agent capability is server-only or library-only.
  */
 
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { StreamReference } from '../core/context.ts';
 import { Engine } from '../core/engine.ts';
 import { ReviewCoordinator } from '../core/review/index.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { handleRequest } from '../server/handler.ts';
-import { principalFromApiKey } from '../server/principal.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../server/local-user-request.test-support.ts';
 import { HttpClient } from './index.ts';
 import type { WeftClient } from './interface.ts';
 import { LocalClient } from './local.ts';
@@ -136,7 +137,13 @@ function agentFeatureTests(getClient: () => WeftClient, getEngine: () => Engine,
       const handle = await client.start('streaming', null);
       // Workflow pauses on a signal after streaming so chunks are still in
       // storage (cleanup runs on terminal state).
-      await sleepForTesting(20);
+      await waitForCondition(
+        async () => {
+          const storedChunks = await client.getStreamChunks(handle.id, 'report');
+          return storedChunks.length === 3;
+        },
+        { label: 'the streamed chunks to be stored' },
+      );
 
       const chunks = await client.getStreamChunks(handle.id, 'report');
       expect(chunks).toHaveLength(3);
@@ -229,7 +236,7 @@ describe('Agent feature parity: HttpClient (server mode)', () => {
             method: 'api-key',
             principal: principalFromApiKey({
               subject: 'agent-feature-parity',
-              scopes: ['reviews:read'],
+              scopes: AUTHORIZATION_SCOPES,
             }),
           },
         });

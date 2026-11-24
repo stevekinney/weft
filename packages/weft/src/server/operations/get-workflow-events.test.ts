@@ -4,15 +4,13 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { EventLog } from '../../core/event-log.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { getWorkflowEventsOperation, getWorkflowEventsRestBinding } from './get-workflow-events.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
@@ -77,6 +75,7 @@ describe('weft.workflows.events.list', () => {
     expect(await response.json()).toEqual({
       error: 'Workflow "does-not-exist" not found',
       data: { resource: 'workflow', identifier: 'does-not-exist' },
+      retryable: false,
     });
 
     engine[Symbol.dispose]();
@@ -108,7 +107,7 @@ describe('weft.workflows.events.list', () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
 
     engine[Symbol.dispose]();
   });

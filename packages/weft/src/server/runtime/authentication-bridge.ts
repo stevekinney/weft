@@ -1,22 +1,32 @@
 import type { ServerWebSocket } from 'bun';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
 
+import { type AuthConfig, authContextToPrincipal } from "../../embedded/backchannel/src/index.ts";
+import {
+  type AuthContext,
+  type OpenApiSecuritySchemeName,
+  API_PREFIX,
+  JSON_RPC_PATH,
+  MCP_STREAMABLE_HTTP_PATH,
+  buildPreflightResponse,
+  closeJsonRpcWebSocketSession,
+  decorateResponseWithCors,
+  handleJsonRpcWebSocketMessage,
+  isPreflightRequest,
+} from "../../embedded/backchannel/src/internals.ts";
 import type { Engine, RegistryAgnosticEngine } from '../../core/engine.ts';
 import { handleMcpHttpRequest } from '../../mcp/http.ts';
 import type { PrometheusExporter } from '../../observability/metrics.ts';
-import type { AuthConfig, AuthContext } from '../authentication.ts';
-import type { HandlerOptions } from '../handler.ts';
-import { authContextToPrincipal, handleRequest } from '../handler.ts';
+import { type HandlerOptions, handleRequest } from '../handler.ts';
 import { handleJsonRpcHttpRequestSafely } from '../json-rpc-transport-helpers.ts';
+import { type WebSocketData, openJsonRpcWebSocketSession } from '../json-rpc-websocket-runtime.ts';
 import {
-  closeJsonRpcWebSocketSession,
-  handleJsonRpcWebSocketMessage,
-  openJsonRpcWebSocketSession,
-  type WebSocketData,
-} from '../json-rpc-websocket-runtime.ts';
-import type { OpenApiSecuritySchemeName } from '../openapi.ts';
-import { API_PREFIX, JSON_RPC_PATH, MCP_STREAMABLE_HTTP_PATH } from '../route-model.ts';
-import type { ServerContext } from './context.ts';
-import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
+  type ServerContext,
+  acquireFleetSseConnection,
+  acquireFleetWebSocketConnection,
+  acquireWorkflowSseConnection,
+  acquireWorkflowWebSocketConnection,
+} from './context.ts';
 import { gateRequest } from './request-gate.ts';
 import { handleTaskHeartbeatRequest, handleTaskPollRequest } from './task-polling.ts';
 import { handleTaskResultRequest } from './task-result-submission.ts';
@@ -42,7 +52,7 @@ type ServerFetchOptions = {
   // registry-erased `Engine` behavior.
   engine: RegistryAgnosticEngine;
   prometheusExporter?: PrometheusExporter;
-  discoveryInfo?: import('../discovery-info.ts').DiscoveryInfo;
+  discoveryInfo?: import("../../embedded/backchannel/src/index.ts").DiscoveryInfo;
   publicOrigin?: string;
   trustedHosts?: ReadonlyArray<string>;
   maxRequestBodyBytes?: number;
@@ -110,7 +120,7 @@ function resolveTaskPrincipal(
     (!url.pathname.startsWith('/v1/tasks/') && !url.pathname.startsWith('/v1/worker-sessions'))
   )
     return undefined;
-  return authContextToPrincipal(authContext);
+  return authContextToPrincipal(authContext, WEFT_SCOPE_VOCABULARY);
 }
 
 export async function handleServerFetchRequest(
@@ -184,11 +194,10 @@ async function dispatchServerFetchRequest(
   if (url.pathname === MCP_STREAMABLE_HTTP_PATH) {
     return handleMcpHttpRequest({
       request,
-      engine: options.engine,
-      sessionManager: context.mcpSessionManager,
+      endpoint: context.mcpEndpoint,
       authRequired: context.authenticatorPromise !== null,
       ...(authentication.authContext !== undefined
-        ? { principal: authContextToPrincipal(authentication.authContext) }
+        ? { principal: authContextToPrincipal(authentication.authContext, WEFT_SCOPE_VOCABULARY) }
         : {}),
       ...(options.publicOrigin !== undefined ? { publicOrigin: options.publicOrigin } : {}),
       ...(options.trustedHosts !== undefined ? { trustedHosts: options.trustedHosts } : {}),
@@ -295,10 +304,12 @@ function buildHandlerOptions(
       : {}),
     operationRegistry: context.liveOperationRegistry,
     restBindings: context.liveRestBindings,
-    workflowEventFeed: context.workflowEventFeed,
+    workflowEventFeed: context.watchEventFeed,
     fleetEventFeed: context.fleetEventFeed,
     acquireWorkflowStreamConnection: (workflowId) =>
       acquireWorkflowStreamConnection(context, workflowId),
+    acquireFleetEventSubscriber: () => acquireFleetSseConnection(context),
+    acquireWorkflowEventSubscriber: () => acquireWorkflowSseConnection(context),
     supportedAuthenticationSchemes: context.supportedAuthenticationSchemes,
   };
 }
@@ -319,6 +330,7 @@ export function createServerWebSocketHandlers(
         return;
       }
       if (connectionType === 'watch' && workflowId) {
+        ws.data.workflowWebSocketConnectionLease = acquireWorkflowWebSocketConnection(context);
         ws.data.watchReplayInProgress = true;
         ws.data.pendingWatchMessages = [];
         void replayWatchEvents(context, options.engine as Engine, ws, workflowId); // see ServerFetchOptions.engine's JSDoc / #708
@@ -344,6 +356,7 @@ export function createServerWebSocketHandlers(
         if (!addStreamSocket(context, workflowId, ws)) {
           return;
         }
+        ws.data.workflowWebSocketConnectionLease = acquireWorkflowWebSocketConnection(context);
         void replayTokenStream(context, options.engine as Engine, ws, workflowId); // see ServerFetchOptions.engine's JSDoc / #708
       }
 
@@ -354,6 +367,8 @@ export function createServerWebSocketHandlers(
           engine: options.engine,
           feed: context.workflowEventFeed,
           fleetFeed: context.fleetEventFeed,
+          acquireWorkflowSubscription: () => acquireWorkflowWebSocketConnection(context),
+          acquireFleetSubscription: () => acquireFleetWebSocketConnection(context),
           activeSessions: context.activeJsonRpcSessions,
         });
         return;
@@ -397,6 +412,9 @@ export function createServerWebSocketHandlers(
         removeWatchSocket(context, ws);
         removeWorkflowStreamConnection(context, ws);
       }
+
+      ws.data.workflowWebSocketConnectionLease?.release();
+      delete ws.data.workflowWebSocketConnectionLease;
 
       const workerId = ws.data.workerId;
       if (workerId) {
@@ -443,17 +461,28 @@ export function createServerWebSocketHandlers(
         // any earlier than the timer firing (or the proof succeeding) would
         // silently make every reconnect look unproven.
         const existing = context.pendingWorkerRequeues.get(workerId);
-        if (existing !== undefined) clearTimeout(existing);
+        if (existing !== undefined) clearTimeout(existing.timer);
+
+        // A closed socket is no longer a live worker connection even while its
+        // registry entry remains available for reconnect proof. Remove the
+        // transport from the live-socket map now; the pending entry and
+        // registry identity preserve the grace-period reconnect semantics.
+        context.workerSockets.delete(workerId);
+        context.connectionCounts.workers = context.workerSockets.size;
+        context.refreshConnectionMetrics();
 
         const timer = setTimeout(() => {
           context.pendingWorkerRequeues.delete(workerId);
           // Re-verify: another register may have completed during the grace
-          // period. If so, the fresh socket replaces `workerSockets[workerId]`
-          // and the timer becomes a no-op.
-          if (context.workerSockets.get(workerId) !== ws) return;
+          // period. If so, the fresh socket is back in `workerSockets` and the
+          // timer becomes a no-op.
+          if (context.workerSockets.has(workerId)) return;
           void runWorkerDisconnectRequeue(context, options, workerId, cleanupWorkflowIndex);
         }, context.workerReconnectGracePeriodMs);
-        context.pendingWorkerRequeues.set(workerId, timer);
+        context.pendingWorkerRequeues.set(workerId, {
+          timer,
+          endsAt: Date.now() + context.workerReconnectGracePeriodMs,
+        });
       }
     },
   };

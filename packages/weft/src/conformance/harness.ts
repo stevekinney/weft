@@ -16,6 +16,7 @@
  * @module conformance/harness
  */
 
+import type { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { decode } from '../core/codec/api.ts';
 import {
   isRemoteTaskTerminalCancelled,
@@ -23,7 +24,6 @@ import {
   taskLedgerKey,
 } from '../core/task-ledger/task-ledger.ts';
 import type { WeftServer } from '../server/index.ts';
-import type { MemoryStorage } from '../storage/memory.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol-version.ts';
 
 export const CONFORMANCE_QUEUE = 'conformance';

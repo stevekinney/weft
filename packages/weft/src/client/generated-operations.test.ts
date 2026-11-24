@@ -12,6 +12,8 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { encodeScheduleRunMetadata } from '../core/engine/schedule-run-metadata.ts';
@@ -25,9 +27,7 @@ import {
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { serve, type WeftServer } from '../server/index.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../storage/keys.ts';
 import {
   CATALOG_OPERATION_NAMES,
   CLIENT_OPERATION_NAMES,
@@ -408,7 +408,9 @@ describe('HttpClient catalog operations', () => {
         retryCount: 1,
         requeueCount: 1,
         availableAt: delayed.availableAt,
-        evidence: [`Task is delayed until ${delayed.availableAt} on queue "payments"`],
+        evidence: [
+          `Task is delayed until ${new Date(delayed.availableAt).toISOString()} on queue "payments"`,
+        ],
       });
       expect(result.items).toContainEqual(
         expect.objectContaining({

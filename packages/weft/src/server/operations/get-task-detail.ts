@@ -48,6 +48,9 @@
 
 import type { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import {
   decodeTaskAttemptRecord,
   taskAttemptPrefix,
@@ -65,11 +68,8 @@ import {
   type RemoteTaskRecord,
   type RemoteTaskTerminal,
 } from '../../core/task-ledger/task-ledger.ts';
-import type { Storage } from '../../storage/interface.ts';
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
 import { raiseFault } from '../operation-catalog/raise-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
   executionIdentitySchema,
   executionRequirementSchema,
@@ -417,6 +417,11 @@ export const getTaskDetailOperation = defineOperation({
   name: 'weft.tasks.get',
   mcpExposable: false,
   summary: "Get one task's full durable ledger state",
+  description:
+    'Read the full durable ledger record of one task by operation id: its dispatch envelope, current state, priority, headers, retry ' +
+    'availability, adoption, and retention evidence. Read-only. Faults with NotFound ' +
+    'when no such task exists and EngineFailure when the stored record cannot be ' +
+    'decoded.',
   destructive: false,
   tags: ['Observability'],
   inputSchema: getTaskDetailInput,
@@ -429,7 +434,7 @@ export const getTaskDetailOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetTaskDetailOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetTaskDetailOutput> => {
     const storage = requireOperationStorage(engine, ['get', 'scan']);
     const raw = await storage.get(taskLedgerKey(input.operationId));
     if (raw === null) {

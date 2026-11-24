@@ -17,22 +17,39 @@
  */
 
 import {
-  CATALOG_OPERATION_NAMES,
   CatalogClientError,
-  createCatalogWeftClient,
-  httpJsonRpcTransport,
+  createCatalogClient,
+  type CatalogFetch,
+} from "../embedded/backchannel/src/client/index.ts";
+import { httpJsonRpcTransport } from '../client/weft-connection-transport.ts';
+import {
+  CATALOG_OPERATION_NAMES,
   type CatalogOperationName,
   type CatalogOperationTypes,
   type ConnectionOptions,
 } from '../index.ts';
-import { messageOf } from './output.ts';
+import {
+  cliFault,
+  faultFromTransportFailure,
+  faultFromWireError,
+  type CliFault,
+} from './cli-fault.ts';
 
-/** Successful or failed result of a catalog operation call, never thrown. */
+/**
+ * Successful or failed result of a catalog operation call, never thrown. A failure carries its
+ * {@link CliFault} (`code`, `message`, `retryable`, `remediation`) beside the `kind` that decides
+ * the exit code.
+ */
 export type CatalogCallResult<Output> =
   | { readonly ok: true; readonly value: Output }
-  | { readonly ok: false; readonly kind: 'connection'; readonly message: string }
-  | { readonly ok: false; readonly kind: 'compat'; readonly message: string }
-  | { readonly ok: false; readonly kind: 'operation'; readonly message: string };
+  | ({ readonly ok: false; readonly kind: 'connection' } & CliFault)
+  | ({ readonly ok: false; readonly kind: 'compat' } & CliFault)
+  | ({
+      readonly ok: false;
+      readonly kind: 'operation';
+      /** Present and `true` when the server answered with its `NotFound` fault. */
+      readonly notFound?: true;
+    } & CliFault);
 
 /**
  * Invoke a single catalog operation through the generated typed client and
@@ -45,12 +62,21 @@ export async function callCatalogOperation<Name extends CatalogOperationName>(
   operationName: Name,
   input: CatalogOperationTypes[Name]['input'],
 ): Promise<CatalogCallResult<CatalogOperationTypes[Name]['output']>> {
-  const client = createCatalogWeftClient<CatalogOperationTypes>(
+  const client = createCatalogClient<CatalogOperationTypes>(
     CATALOG_OPERATION_NAMES,
     httpJsonRpcTransport(connection),
   );
+  // The transport drops the HTTP status of an answer that is not JSON-RPC (an authentication
+  // challenge, a proxy error); the call's own `fetch` sees it, so a refused credential is told
+  // from a server that is down.
+  let lastHttpStatus: number | undefined;
+  const recordingFetch: CatalogFetch = async (request, init) => {
+    const response = await fetch(request, init);
+    lastHttpStatus = response.status;
+    return response;
+  };
   try {
-    const value = await client[operationName](input);
+    const value = await client[operationName](input, { fetch: recordingFetch });
     return { ok: true, value };
   } catch (error) {
     if (error instanceof CatalogClientError) {
@@ -58,13 +84,38 @@ export async function callCatalogOperation<Name extends CatalogOperationName>(
         return {
           ok: false,
           kind: 'compat',
-          message: `operation ${operationName} is not available on this server; the server is older than this CLI. Run 'weft server info' to compare versions, or upgrade the server`,
+          ...cliFault(
+            'MethodNotFound',
+            `operation ${operationName} is not available on this server; the server is older than this CLI`,
+            "Run 'weft server info' to compare versions, or upgrade the server",
+          ),
         };
       }
-      return { ok: false, kind: 'operation', message: error.message };
+      return {
+        ok: false,
+        kind: 'operation',
+        ...faultFromWireError(error.message, error.data),
+        ...(isNotFoundFaultData(error.data) ? { notFound: true as const } : {}),
+      };
     }
-    return { ok: false, kind: 'connection', message: messageOf(error) };
+    return {
+      ok: false,
+      kind: 'connection',
+      ...faultFromTransportFailure({ error, httpStatus: lastHttpStatus }),
+    };
   }
+}
+
+/**
+ * Exit code of a command whose target does not exist: the server answered with its `NotFound`
+ * fault. Apart from the other failures (1) so a script can tell "no such workflow" from "the
+ * operation failed".
+ */
+export const NOT_FOUND_EXIT_CODE = 5;
+
+/** Whether a fault's `data` is the server's `NotFound` fault, whose `weftCode` is the coarse fault code. */
+function isNotFoundFaultData(data: unknown): boolean {
+  return typeof data === 'object' && data !== null && Reflect.get(data, 'weftCode') === 'NotFound';
 }
 
 /** Exit code for a {@link CatalogCallResult} failure, by failure kind. */

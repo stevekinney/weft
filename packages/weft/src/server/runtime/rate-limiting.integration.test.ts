@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import type { AuthAuditEvent } from "../../embedded/backchannel/src/index.ts";
+import { signJWT } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import type { AuthAuditEvent } from '../authentication.ts';
-import { signJWT } from '../authentication.ts';
+import { workflow, type WorkflowContext } from '../../core/types.ts';
 import { serve, type WeftServer } from '../index.ts';
 import { gateRequest } from './request-gate.ts';
 import { minimalServerContext } from './server-context.test-support.ts';
@@ -42,7 +41,7 @@ describe('serve() with rate limiting', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: [TEST_API_KEY] },
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workflows:read'] },
       rateLimit: { maxRequests: 3, windowMs: 60_000 },
     });
 
@@ -69,12 +68,42 @@ describe('serve() with rate limiting', () => {
     expect(body.error).toBe('Too Many Requests');
   });
 
+  it('answers a throttle in the RateLimited shape: data.retryAfterSeconds matches Retry-After', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workflows:read'] },
+      rateLimit: { maxRequests: 1, windowMs: 60_000 },
+    });
+
+    const allowed = await fetch(`${server.url}/v1/workflows`, {
+      headers: { 'X-API-Key': TEST_API_KEY },
+    });
+    await allowed.body?.cancel();
+    const throttled = await fetch(`${server.url}/v1/workflows`, {
+      headers: { 'X-API-Key': TEST_API_KEY },
+    });
+
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('Content-Type')).toBe('application/json');
+    expect(throttled.headers.get('X-RateLimit-Remaining')).toBe('0');
+    const retryAfterHeader = Number(throttled.headers.get('Retry-After'));
+    const body = (await throttled.json()) as {
+      error: string;
+      data?: { retryAfterSeconds?: number };
+    };
+    expect(body.error).toBe('Too Many Requests');
+    expect(body.data?.retryAfterSeconds).toBeGreaterThan(0);
+    expect(Math.ceil(body.data?.retryAfterSeconds ?? Number.NaN)).toBe(retryAfterHeader);
+  });
+
   it('exempts public paths (health) from rate limiting when auth is configured', async () => {
     engine = createEngine();
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: [TEST_API_KEY] },
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workflows:read'] },
       rateLimit: { maxRequests: 1, windowMs: 60_000 },
     });
 
@@ -105,7 +134,11 @@ describe('serve() with rate limiting', () => {
 
   it('does not rate-limit when rateLimit is omitted', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, auth: { apiKeys: [TEST_API_KEY] } });
+    server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workflows:read'] },
+    });
 
     for (let i = 0; i < 10; i++) {
       const response = await fetch(`${server.url}/v1/workflows`, {
@@ -166,7 +199,7 @@ describe('serve() with rate limiting', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: [TEST_API_KEY] },
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workflows:read'] },
       rateLimit: { maxRequests: 2, windowMs: 60_000 },
     });
 
@@ -270,7 +303,11 @@ describe('serve() auth audit trail', () => {
     server = serve({
       engine,
       port: 0,
-      auth: { apiKeys: [TEST_API_KEY], auditSink: (event) => events.push(event) },
+      auth: {
+        apiKeys: [TEST_API_KEY],
+        defaultApiKeyScopes: ['workflows:read'],
+        auditSink: (event) => events.push(event),
+      },
     });
 
     const health = await fetch(`${server.url}/v1/health`);

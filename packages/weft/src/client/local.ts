@@ -8,6 +8,7 @@
  * @module client/local
  */
 
+import { createCatalogClient } from "../embedded/backchannel/src/client/index.ts";
 import type { Engine } from '../core/engine.ts';
 import {
   runtimeWorkflowEngine,
@@ -20,6 +21,7 @@ import type {
   BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
+  CancelWorkflowResult,
   CoordinatedUpdateResult,
   DefaultActivityTypes,
   DefaultWorkflowRegistry,
@@ -65,7 +67,7 @@ import {
   type ClientOperationTypes,
   type ClientOperations,
 } from './generated/operation-client.generated.ts';
-import { inProcessCatalogTransport } from './in-process-operations.ts';
+import { weftInProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
@@ -75,7 +77,6 @@ import type {
 } from './interface.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 import { LocalHandle, LocalScheduleHandle } from './local-handles.ts';
-import { createCatalogWeftClient } from './operation-client-runtime.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 // ---------------------------------------------------------------------------
@@ -87,7 +88,8 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowContext } from '@lostgradient/weft';
+ * import { workflow, Engine, LocalClient, type WorkflowContext } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(
@@ -144,9 +146,9 @@ export class LocalClient<
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
       completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
     };
-    this.operations = createCatalogWeftClient<ClientOperationTypes>(
+    this.operations = createCatalogClient<ClientOperationTypes>(
       CLIENT_OPERATION_NAMES,
-      inProcessCatalogTransport(
+      weftInProcessCatalogTransport(
         this.#rawEngine,
         new Set(Object.keys(CLIENT_REST_OPERATION_BINDINGS)),
       ),
@@ -259,7 +261,7 @@ export class LocalClient<
     return this.#engine.listSchedules(filter);
   }
 
-  async cancel(id: string): Promise<void> {
+  async cancel(id: string): Promise<CancelWorkflowResult> {
     return this.#engine.cancel(id);
   }
 

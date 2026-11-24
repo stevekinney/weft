@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import type { OperationRegistry } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { handleRequest } from './handler.ts';
 import { handleJsonRpcHttpRequestSafely } from './json-rpc-transport-helpers.ts';
-import type { OperationRegistry } from './operation-catalog.ts';
+import { handleRequestAsLocalUser as handleRequest } from './local-user-request.test-support.ts';
 import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
 
 type OpenRpcMethodDocument = {

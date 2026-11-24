@@ -18,6 +18,8 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { Engine } from '../../core/engine.ts';
 import {
   buildRegistrySnapshot,
@@ -27,8 +29,6 @@ import {
   type RegistrySnapshot,
   RegistryWorkflowCountLimitError,
 } from '../../core/registry-snapshot.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 
 const getRegistryInput = z.object({});
 
@@ -76,7 +76,7 @@ export const getRegistryOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine }): Promise<GetRegistryOutput> => {
+  invoke: async ({ host: engine }): Promise<GetRegistryOutput> => {
     try {
       if (!(engine instanceof Engine)) {
         throw new TypeError('Registry snapshot requires a concrete Engine instance.');

@@ -1,12 +1,14 @@
+import { sleepForTesting, waitForRealTimersForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import {
-  sleepForTesting,
-  waitForRealTimersForTesting,
-} from '../testing/fake-timers.test-support.ts';
 
-import { KEYS, type BatchOperation, type ScanOptions, type Storage } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import {
+  type BatchOperation,
+  type ScanOptions,
+  type Storage,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { Engine } from './engine.ts';
 import {
   coerceStartWorkflowTags,
@@ -236,6 +238,7 @@ describe('workflow tags', () => {
         id: 'durable-tags',
         tags: ['alpha'],
       });
+      // load-proof: handle.addTags and removeTags await the engine's own durable write, so they do not depend on the workflow having parked; the yield is surplus
       await sleepForTesting(10);
 
       await handle.addTags('beta', 'alpha');
@@ -308,6 +311,7 @@ describe('workflow tags', () => {
         id: 'tag-limit-after-add',
         tags: Array.from({ length: MAX_WORKFLOW_TAGS - 1 }, (_, index) => `tag-${index}`),
       });
+      // load-proof: handle.addTags and removeTags await the engine's own durable write, so they do not depend on the workflow having parked; the yield is surplus
       await sleepForTesting(10);
 
       expect(await throwingRejectionOf(handle.addTags('overflow-a', 'overflow-b'))).toThrow(
@@ -335,6 +339,7 @@ describe('workflow tags', () => {
         id: 'tag-validation-context',
         tags: ['alpha'],
       });
+      // load-proof: handle.addTags and removeTags await the engine's own durable write, so they do not depend on the workflow having parked; the yield is surplus
       await sleepForTesting(10);
 
       expect(await throwingRejectionOf(handle.addTags(''))).toThrow(
@@ -359,6 +364,7 @@ describe('workflow tags', () => {
         id: workflowId,
         tags: ['alpha'],
       });
+      // load-proof: handle.addTags and removeTags await the engine's own durable write, so they do not depend on the workflow having parked; the yield is surplus
       await sleepForTesting(10);
 
       const addTagsPromise = handle.addTags('beta');
@@ -418,6 +424,7 @@ describe('workflow tags', () => {
         tags: ['nightly'],
         searchAttributes: { priority: 'high' },
       });
+      // load-proof: start() awaits the engine's own durable write of the tags and search attributes before it returns, so the reads below see them whether or not the workflow has parked; the yield is surplus
       await sleepForTesting(10);
 
       const attributes = await engine.getAttributes('tag-distinction');

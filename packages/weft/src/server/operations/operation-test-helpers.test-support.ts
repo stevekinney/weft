@@ -1,6 +1,7 @@
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { HANG_GUARD_MILLISECONDS } from "../../../test-support/embedded/testing/src/hang-guard.ts";
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowStatus } from '../../core/types.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
 type WaitForWorkflowStatusOptions = {
   intervalMilliseconds?: number;
@@ -8,7 +9,7 @@ type WaitForWorkflowStatusOptions = {
 };
 
 const DEFAULT_STATUS_POLL_INTERVAL_MILLISECONDS = 5;
-const DEFAULT_STATUS_TIMEOUT_MILLISECONDS = 500;
+const DEFAULT_STATUS_TIMEOUT_MILLISECONDS = HANG_GUARD_MILLISECONDS;
 
 /** Build a localhost request with an optional JSON body for operation tests. */
 export function jsonRequest(method: string, path: string, body?: unknown): Request {

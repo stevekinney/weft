@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { captureWorkflowLogConsoleWithMethods } from '../../testing/workflow-log-capture.test-support.ts';
-import { Context } from '../context.ts';
+import { Context, endResumeReplay } from '../context.ts';
 import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 import { getInternals } from './internals.ts';
 import { createWorkflowLogger, type WorkflowLoggerBindings } from './workflow-logger.ts';
@@ -21,6 +21,7 @@ describe('createWorkflowLogger (shared factory)', () => {
       workflowType: 'demo',
       isReplaying: () => false,
       now: () => 1_700_000_000_000,
+      step: () => 3,
       ...overrides,
     };
   }
@@ -40,6 +41,16 @@ describe('createWorkflowLogger (shared factory)', () => {
     }
     expect(captured.records[0]!.record).toMatchObject({ level: 'debug', message: 'd' });
     expect(captured.records[3]!.record).toMatchObject({ level: 'error', message: 'e' });
+  });
+
+  it('stamps the step the body is about to run, read fresh on each call', () => {
+    let step = 0;
+    const logger = createWorkflowLogger(bindings({ step: () => step }));
+    logger.info('before the first step');
+    step = 2;
+    logger.info('before the third step');
+
+    expect(captured.records.map(({ record }) => record.step)).toEqual([0, 2]);
   });
 
   it('nests caller attributes so they cannot shadow envelope fields', () => {
@@ -176,6 +187,42 @@ describe('Context.log (inline replay-safety)', () => {
     context.log.info('live again');
     expect(captured.records).toHaveLength(1);
     expect(captured.records[0]!.record.message).toBe('live again');
+  });
+
+  it('delivers an uncached position marked replayed while a relaunched run repeats up to its park, then unmarked', () => {
+    // A resumed run parked at step 1: step 0 is cached, step 1 is not. Everything it logs before
+    // the body first hands an operation back was logged by the execution it continues.
+    const context = createContext({ resumed: true });
+    context.accumulatedResults.set(0, 'cached');
+    getInternals(context).stepIndex = 1;
+    context.log.info('logged before the park by the first life');
+    expect(captured.records.map((entry) => [entry.record.message, entry.record.replayed])).toEqual([
+      ['logged before the park by the first life', true],
+    ]);
+
+    endResumeReplay(context);
+    context.log.info('new work past the park');
+    expect(captured.records.map((entry) => [entry.record.message, entry.record.replayed])).toEqual([
+      ['logged before the park by the first life', true],
+      ['new work past the park', undefined],
+    ]);
+  });
+
+  it('still suppresses a cached position on a relaunched run', () => {
+    const context = createContext({ resumed: true });
+    context.accumulatedResults.set(0, 'cached');
+    getInternals(context).stepIndex = 0;
+    context.log.info('cached');
+    expect(captured.records).toHaveLength(0);
+  });
+
+  it('does not mark an uncached position on a context that was not relaunched', () => {
+    const context = createContext();
+    context.accumulatedResults.set(0, 'cached');
+    getInternals(context).stepIndex = 1;
+    context.log.info('first life, at the frontier');
+    expect(captured.records).toHaveLength(1);
+    expect(captured.records[0]!.record.replayed).toBeUndefined();
   });
 
   it('reads the RAW accumulatedResults field — a fresh context never allocates a map via the probe', () => {

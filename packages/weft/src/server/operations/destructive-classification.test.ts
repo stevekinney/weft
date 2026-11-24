@@ -16,10 +16,12 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type RegistrableOperation,
+  createOperationRegistry,
+} from "../../embedded/backchannel/src/internals.ts";
 import { z } from 'zod';
-import type { RegistrableOperation } from '../operation-catalog.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { defineOperation } from '../operation-registry.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 
 /**
@@ -51,6 +53,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.worker.deployments.setrouting': true,
   'weft.worker.deployments.promote': true,
   'weft.worker.deployments.rollback': true,
+  'weft.worker.deployments.remove': true,
   'weft.worker.deployments.diagnostics': false,
   'weft.worker.deployments.preview': false,
   'weft.worker.startoverrides.preview': false,
@@ -81,6 +84,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.tags.remove': false,
   'weft.workflows.checkpoints.get': false,
   'weft.workflows.checkpoints.list': false,
+  'weft.workflows.compare': false,
   // WFT-11: workflow catalog promotion — install/get/list are read/write
   // metadata, not workflow-affecting; activate flips which revision the
   // registry advertises as active, so it is destructive.
@@ -89,6 +93,8 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.revisions.get': false,
   'weft.workflows.revisions.list': false,
   'weft.workflows.revisions.preload': false,
+  'weft.workflows.refresh': true,
+  'weft.workflows.refresh.diagnostics': false,
   'weft.workflows.active.get': false,
   'weft.workflows.events.sse': false,
   'weft.workflows.streams.chunks': false,
@@ -97,6 +103,8 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.events.subscribe': false,
   'weft.workflows.events': false,
   'weft.updates.result.get': false,
+  'weft.workflows.updates.list': false,
+  'weft.workflows.logs.list': false,
   'weft.retention.get': false,
   'weft.reviews.get': false,
   'weft.reviews.list': false,
@@ -106,6 +114,10 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.schedules.list': false,
   'weft.schedules.pause': false,
   'weft.schedules.resume': false,
+  'weft.schedules.skipnext': false,
+  'weft.schedules.unskip': false,
+  'weft.schedules.runnow': false,
+  'weft.schedules.missed': false,
   'weft.system.registry': false,
   'weft.system.metrics': false,
   'weft.system.lease': false,
@@ -114,21 +126,27 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.catalog.diagnostics': false,
   'weft.realms.diagnostics': false,
   'weft.catalog.sources.list': false,
+  'weft.workflows.definitions.list': false,
+  'weft.workflows.definitions.get': false,
   'weft.tasks.diagnostics': false,
   'weft.tasks.diagnostics.deadletters.clear': true,
   'weft.tasks.get': false,
   'weft.tasks.deliveries': false,
   'weft.tasks.deadletters.get': false,
+  'weft.tasks.deadletters.retry': true,
   'weft.workers.diagnostics': false,
   'weft.workers.rejections': false,
   'weft.conformance.targets': false,
   'weft.conformance.report': false,
   'weft.workers.list': false,
   'weft.workers.resume': false,
+  'weft.workers.forget': false,
   'weft.worker.deployments.resume': false,
   'weft.task.queues.list': false,
+  'weft.task.queues.tasks': false,
   'weft.storage.capabilities': false,
   'weft.storage.get': false,
+  'weft.storage.preview': false,
   'weft.storage.scan': false,
 };
 

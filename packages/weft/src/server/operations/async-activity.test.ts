@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
+import { type AuthorizationScope, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { AsyncActivityTokenNotFoundError, Engine } from '../../core/engine.ts';
-import type { ActivityContext, WorkflowContext } from '../../core/types.ts';
-import { activity, workflow } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  type ActivityContext,
+  type WorkflowContext,
+  activity,
+  workflow,
+} from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import {
   completeAsyncActivityOperation,
   completeAsyncActivityRestBinding,
@@ -101,7 +104,7 @@ describe('weft.workflows.activities.pending.list', () => {
       const result = await executeOperation(
         'weft.workflows.activities.pending.list',
         { workflowId: handle.id, limit: 1 },
-        { engine, registry, principal, transport },
+        { host: engine, registry, principal, transport },
       );
       expect(result).toEqual({
         ok: true,
@@ -166,6 +169,7 @@ describe('weft.workflows.activities.pending.list', () => {
     expect(await missingWorkflow.json()).toEqual({
       error: 'Workflow "missing" not found',
       data: { resource: 'workflow', identifier: 'missing' },
+      retryable: false,
     });
   });
 });
@@ -323,7 +327,7 @@ describe('weft.activities.complete', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.completeAsyncActivity = original;
     }
@@ -410,7 +414,7 @@ describe('weft.activities.fail', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.failAsyncActivity = original;
     }

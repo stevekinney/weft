@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { defineOperation } from '../operation-registry.ts';
-import { createOperationRegistry } from './registry.ts';
-import type { PipelineTraceMarker } from './types.ts';
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type PipelineTraceMarker,
+  createOperationRegistry,
+} from "../../embedded/backchannel/src/internals.ts";
 
 const EXPECTED_PIPELINE_TRACE: PipelineTraceMarker[] = [
   'looked-up',
@@ -94,7 +96,7 @@ describe('operation dispatch audit — HTTP-handler integration', () => {
 async function createHttpTraceFixture() {
   const { handleRequest } = await import('../handler.ts');
   const { Engine } = await import('../../core/engine.ts');
-  const { MemoryStorage } = await import('../../storage/memory.ts');
+  const { MemoryStorage } = await import("../../embedded/storage/src/index.ts");
 
   const registry = createOperationRegistry([createTraceOperation()]);
   const traceBinding = {

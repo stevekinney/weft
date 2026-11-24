@@ -2,7 +2,8 @@
  * Shared "fold `acquire` into an enabling write" helper for ADR 0002's
  * CLAIM-ACQUIRING entry points this stage owns: workflow start
  * (`lifecycle/start-commit.ts` — the create batch), delayed-start timer fire
- * (`operations-time.ts`), and bulk retry reactivation (`bulk-operations.ts`).
+ * (`operations-time.ts`), bulk retry reactivation (`bulk-operations.ts`), and
+ * fork's create batch (`lifecycle/fork-build-binding.ts`, COR-2635).
  * Scheduled runs and child-workflow launches funnel through `startWorkflow`
  * (`lifecycle/start.ts`) and inherit the fold from there — see
  * [ADR 0002 § Entry point classification](../../../documentation/contributing/architecture-decisions/0002-multiengine-per-workflow-ownership.md#entry-point-classification),
@@ -36,13 +37,13 @@
  */
 
 import {
-  KEYS,
   requireStorageCapability,
   storageConditionalBatch,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import type { EngineInternals } from './internals.ts';
 import { WorkflowClaimUnavailableError } from './lease-errors.ts';
 import { decodeWorkflowClaimHolder } from './workflow-claim-codec.ts';
@@ -161,6 +162,12 @@ export async function commitWithWorkflowClaimFold(
   operations: BatchOperation[],
   conditions: ConditionalBatchCondition[],
   featureName: string,
+  /**
+   * Runs in the same synchronous turn as `recordFoldedAcquire`, once the batch has committed, for
+   * a caller that must record something beside the claim before anything else can observe the
+   * claim held (a delayed start's launching marker, COR-1625).
+   */
+  onCommitted?: () => void,
 ): Promise<WorkflowClaimFoldCommitResult> {
   requireStorageCapability(internals.storage, 'conditionalBatch', featureName);
   const committed = await storageConditionalBatch(
@@ -170,6 +177,7 @@ export async function commitWithWorkflowClaimFold(
   );
   if (committed) {
     fold.registry.recordFoldedAcquire(fold.workflowId, fold.preparation);
+    onCommitted?.();
     return { status: 'committed' };
   }
   return {

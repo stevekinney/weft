@@ -5,12 +5,12 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
-  KEYS,
+  MemoryStorage,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../../storage/interface.ts';
-import { MemoryStorage } from '../../../storage/memory.ts';
-import { createDeferred } from '../../../testing/fake-timers.test-support.ts';
+} from "../../../embedded/storage/src/index.ts";
+import { createDeferred } from "../../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../../storage/keys.ts';
 import type { Checkpoint } from '../../types.ts';
 import { parkedOnSignal } from '../checkpoint-conflict.test-support.ts';
 import { Engine } from '../index.ts';

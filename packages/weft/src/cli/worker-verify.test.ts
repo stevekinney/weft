@@ -238,3 +238,60 @@ describe('executeWorkerVerify', () => {
     });
   });
 });
+
+describe('executeWorkerVerify input failures and JSON success', () => {
+  it('reports a manifest file that does not exist', async () => {
+    const dir = makeTempDir();
+    const manifest = join(dir, 'missing-manifest.json');
+    const result = await executeWorkerVerify({ manifest, from: join(dir, 'registry.json') });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(`worker verify: manifest not found at '${manifest}'`);
+  });
+
+  it('reports a registry snapshot file that does not exist', async () => {
+    const paths = await writeFixtureFiles(makeTempDir());
+    const registry = join(makeTempDir(), 'missing-registry.json');
+    const result = await executeWorkerVerify({ manifest: paths.manifest, from: registry });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(`worker verify: registry snapshot not found at '${registry}'`);
+  });
+
+  it('rejects an invalid registry snapshot under the worker verify prefix', async () => {
+    const paths = await writeFixtureFiles(makeTempDir());
+    writeJson(paths.registry, { registryVersion: 'not-a-version' });
+    const result = await executeWorkerVerify({ manifest: paths.manifest, from: paths.registry });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toStartWith('worker verify: ');
+    expect(result.stderr).not.toContain('codegen:');
+  });
+
+  it('writes a JSON error object when the registry snapshot is invalid and JSON output is requested', async () => {
+    const paths = await writeFixtureFiles(makeTempDir());
+    writeJson(paths.registry, { registryVersion: 'not-a-version' });
+    const result = await executeWorkerVerify({
+      manifest: paths.manifest,
+      from: paths.registry,
+      json: true,
+    });
+
+    expect(result.exitCode).toBe(1);
+    const failure = parseStderrJson(result.stderr) as { ok: boolean; error: string };
+    expect(failure.ok).toBe(false);
+    expect(failure.error).toStartWith('worker verify: ');
+  });
+
+  it('writes a JSON success object with no diagnostics when the manifest matches', async () => {
+    const paths = await writeFixtureFiles(makeTempDir());
+    const result = await executeWorkerVerify({
+      manifest: paths.manifest,
+      from: paths.registry,
+      json: true,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, diagnostics: [] });
+  });
+});

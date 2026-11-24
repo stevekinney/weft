@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it, spyOn } from 'bun:test';
 
+import * as handlerModule from "../embedded/backchannel/src/index.ts";
+import * as jsonRpcHttpModule from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import * as handlerModule from './handler.ts';
-import * as jsonRpcHttpModule from './json-rpc-http.ts';
 import {
   finalizeWebSocketUpgrade,
   handleJsonRpcHttpRequestSafely,

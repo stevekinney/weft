@@ -1,11 +1,17 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { SignalDeliveredEvent } from '../events.ts';
 import type { EngineInternals } from './internals.ts';
 import type { CoordinationOperationCallbacks } from './operations-coordination.ts';
+import {
+  captureSignalWaitRun,
+  clearSignalWait,
+  recordSignalWaitBegan,
+  type SignalWaitRun,
+} from './signal-wait-tracking.ts';
 import {
   consumeSignalWithAtomicWorkflowCommit,
   registerSignalWaiter,
   releaseSignalWaiter,
-  untrackWaiterKey,
 } from './signals.ts';
 import { isCurrentOperation } from './strategy-helpers.ts';
 
@@ -45,6 +51,7 @@ export async function processWaitSignalOperation(
   const abortSignal = internals.abortController.signal;
   const workflowExecutionToken =
     internals.durableInlineOperations?.get(workflowId)?.workflowExecutionToken;
+  const run = captureSignalWaitRun(internals, workflowId);
   const waiterKey = `${workflowId}:${operation.signalName}`;
   // The waiter this loop registered and no signal has consumed yet. If a
   // buffered-signal scan then throws, the waiter must be released here, or it
@@ -67,9 +74,11 @@ export async function processWaitSignalOperation(
         workflowExecutionToken,
       );
       if (existingPayload.found) {
-        completeWaitSignalOperation(
+        await completeWaitSignalOperation(
+          internals,
           callbacks,
           workflowId,
+          run,
           operation,
           existingPayload.payload,
           workflowExecutionToken,
@@ -88,11 +97,15 @@ export async function processWaitSignalOperation(
         return;
 
       const { promise, resolve } = Promise.withResolvers<void>();
-      registerSignalWaiter(internals, workflowId, waiterKey, resolve);
-      pendingWaiterResolve = resolve;
+      const resolveAndReport = () => {
+        internals.engine.dispatchEvent(new SignalDeliveredEvent(workflowId, operation.signalName));
+        resolve();
+      };
+      registerSignalWaiter(internals, workflowId, waiterKey, resolveAndReport);
+      pendingWaiterResolve = resolveAndReport;
 
       if (abortSignal.aborted) {
-        releaseSignalWaiter(internals, workflowId, waiterKey, resolve);
+        releaseSignalWaiter(internals, workflowId, waiterKey, resolveAndReport);
         return;
       }
 
@@ -101,7 +114,7 @@ export async function processWaitSignalOperation(
         workflowId,
         operation.signalName,
         () =>
-          internals.signalWaiters.get(waiterKey) === resolve &&
+          internals.signalWaiters.get(waiterKey) === resolveAndReport &&
           isTrackedCurrentOperation(
             internals,
             workflowId,
@@ -111,11 +124,12 @@ export async function processWaitSignalOperation(
         workflowExecutionToken,
       );
       if (bufferedPayload.found) {
-        return completeBufferedWaitSignal(
+        return await completeBufferedWaitSignal(
           internals,
           workflowId,
+          run,
           waiterKey,
-          resolve,
+          resolveAndReport,
           operation,
           bufferedPayload.payload,
           callbacks,
@@ -132,6 +146,17 @@ export async function processWaitSignalOperation(
         )
       )
         return;
+
+      // The wait has begun: no signal was buffered. Record it durably before
+      // parking on the promise. A delivery that lands meanwhile releases the
+      // waiter first, and the record then leaves the name out.
+      await recordSignalWaitBegan(
+        internals,
+        workflowId,
+        run,
+        operation.signalName,
+        () => internals.signalWaiters.get(waiterKey) === resolveAndReport,
+      );
 
       // Delivery removes the waiter before resolving its promise. A missing
       // entry here can mean the signal arrived during the buffered scan, so
@@ -166,28 +191,44 @@ function isTrackedCurrentOperation(
   );
 }
 
-function completeWaitSignalOperation(
+/**
+ * Complete a wait whose signal was consumed. The name leaves the durable
+ * `waitingForSignals` list first, so it is gone before the workflow's next
+ * checkpoint. That also covers a wait listed before a restart, whose signal
+ * the recovered run finds already buffered.
+ */
+async function completeWaitSignalOperation(
+  internals: EngineInternals,
   callbacks: Pick<CoordinationOperationCallbacks, 'completeOperation'>,
   workflowId: string,
+  run: SignalWaitRun,
   operation: WaitSignalOperation,
   value: unknown,
   workflowExecutionToken: string | undefined,
-): void {
+): Promise<void> {
+  await clearSignalWait(internals, workflowId, run, operation.signalName);
   callbacks.completeOperation(workflowId, value, operation.operationId, workflowExecutionToken);
 }
 
-function completeBufferedWaitSignal(
+async function completeBufferedWaitSignal(
   internals: EngineInternals,
   workflowId: string,
+  run: SignalWaitRun,
   waiterKey: string,
   resolve: () => void,
   operation: WaitSignalOperation,
   value: unknown,
   callbacks: Pick<CoordinationOperationCallbacks, 'completeOperation'>,
   workflowExecutionToken: string | undefined,
-): void {
-  if (internals.signalWaiters.get(waiterKey) !== resolve) return;
-  internals.signalWaiters.delete(waiterKey);
-  untrackWaiterKey(internals.signalWaitersByWorkflow, workflowId, waiterKey);
-  completeWaitSignalOperation(callbacks, workflowId, operation, value, workflowExecutionToken);
+): Promise<void> {
+  if (!releaseSignalWaiter(internals, workflowId, waiterKey, resolve)) return;
+  await completeWaitSignalOperation(
+    internals,
+    callbacks,
+    workflowId,
+    run,
+    operation,
+    value,
+    workflowExecutionToken,
+  );
 }

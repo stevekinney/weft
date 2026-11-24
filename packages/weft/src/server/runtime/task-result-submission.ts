@@ -1,11 +1,16 @@
+import { type Principal } from "../../embedded/backchannel/src/index.ts";
+import {
+  isAuthenticated,
+  readRestJsonBody,
+  type RestBodyReadOptions,
+} from "../../embedded/backchannel/src/internals.ts";
 import {
   decodeRemoteTaskRecord,
   taskLedgerKey,
   type RemoteTaskRecord,
 } from '../../core/task-ledger/task-ledger.ts';
 import type { ServeOptions } from '../index.ts';
-import { isAuthenticated, type Principal } from '../principal.ts';
-import { readRestJsonBody, type RestBodyReadOptions } from '../rest-body.ts';
+import type { TaskResult } from '../task-queue-types.ts';
 import type { ServerContext } from './context.ts';
 import type {
   TaskLedgerCompletionFailureReason,
@@ -90,8 +95,7 @@ export async function awaitTaskLedgerRecovery(context: ServerContext): Promise<R
 }
 
 /**
- * Validate and extract typed fields from a parsed task-result body.
- * Returns the validated result or a 400 Response if validation fails.
+ * Validate a parsed task-result body: the result, or a 400 Response if it is invalid.
  */
 function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskResult | Response {
   const operationId = body['operationId'];
@@ -130,10 +134,9 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
  * Every reason `handleTaskResultRequest` can permanently reject a `taskResult`
  * submission for, surfaced on the `403`/`413` response body's `reason` field
  * (COR-237) so a caller — including `LongPollWorker`'s own result-delivery
- * logic — does not have to pattern-match `error` text to tell the classes
- * apart. `TaskResultAuthorizationFailure` covers the shared identity gate
- * both transports go through; `'queue-mismatch'` and `'revision-mismatch'`
- * are long-poll-specific preconditions checked before/alongside it;
+ * logic — need not pattern-match `error` text. `TaskResultAuthorizationFailure`
+ * covers the shared identity gate both transports go through; `'queue-mismatch'` and
+ * `'revision-mismatch'` are long-poll-specific preconditions checked beside it;
  * `TaskLedgerCompletionFailureReason` (currently only `'conflicting-content'`)
  * is the one named ledger-commit outcome from below that gate.
  */
@@ -209,6 +212,27 @@ function isLongPollCompletionAuthorized(
 }
 
 /**
+ * Release what a long-poll claim holds once its attempt is over: the task
+ * queue's tracking of the id and the registry's in-flight entry (the worker's
+ * slot), as the WebSocket transport does for every result. A dead letter is not
+ * a delivered result, so the queue is released without `complete()`, which
+ * would signal a completion to whatever waits on the task.
+ */
+function releaseLongPollAttempt(
+  context: ServerContext,
+  disposition: TaskResultDisposition,
+  result: TaskResult,
+): void {
+  if (disposition === 'dead-lettered') {
+    context.taskQueue.release(result.operationId);
+  } else {
+    context.taskQueue.complete(result);
+  }
+  context.registry?.completeTask(result.operationId);
+  recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+}
+
+/**
  * Apply a validated task result through the shared result-application
  * implementation (`applyWorkerTaskResult`, COR-240 acceptance criterion 12),
  * then update the in-memory bookkeeping the durable write does not own —
@@ -245,18 +269,9 @@ async function applyTaskResult(
     };
   }
 
-  // Dead-lettered is terminal-ish: no further heartbeat/visibility extension
-  // will arrive for this operation, so stop tracking its deadline either
-  // way. taskQueue.complete() is deliberately skipped for a dead letter —
-  // that signals a normal delivered result to whatever is waiting, and a
-  // dead letter is the opposite: the result could not be durably applied as
-  // completed/failed.
+  // No further heartbeat/visibility extension will arrive, dead letter or not.
   context.deadlineTracker.remove(operationId);
-  if (applied.disposition !== 'dead-lettered') {
-    context.taskQueue.complete({ operationId, status, value, error });
-    context.registry?.completeTask(operationId);
-    recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
-  }
+  releaseLongPollAttempt(context, applied.disposition, { operationId, status, value, error });
 
   return { ok: true, disposition: applied.disposition };
 }
@@ -351,6 +366,16 @@ async function applyOversizedTaskResult(
     },
     result.workerId,
   );
+  // Release before the history write: a retry committed once the dead letter
+  // is durable is dispatched at once, and is refused while the id is held.
+  if (rejected.ok) {
+    context.deadlineTracker.remove(result.operationId);
+    releaseLongPollAttempt(context, rejected.disposition, {
+      operationId: result.operationId,
+      status: 'failed',
+      error: payloadError.message,
+    });
+  }
   await recordLongPollDelivery(
     options,
     result,
@@ -362,18 +387,7 @@ async function applyOversizedTaskResult(
           reason: `${payloadError.message} — ${rejected.reason}`,
         },
   );
-  if (rejected.ok) {
-    context.deadlineTracker.remove(result.operationId);
-    if (rejected.disposition !== 'dead-lettered') {
-      context.taskQueue.complete({
-        operationId: result.operationId,
-        status: 'failed',
-        error: payloadError.message,
-      });
-      recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
-    }
-    return;
-  }
+  if (rejected.ok) return;
   console.error(
     `[weft] Failed to persist oversized task result rejection for task "${result.operationId}":`,
     rejected.reason,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation } from '../storage/interface.ts';
+import type { BatchOperation } from "../embedded/storage/src/index.ts";
 import {
   MAX_ENCODED_VALUE_BYTES,
   buildIndexOperations,
@@ -98,6 +98,13 @@ describe('search-attributes', () => {
       const original = new Date('2024-03-15T10:30:00.000Z');
       const encoded = encodeAttributeValue(original);
       const decoded = decodeAttributeValue(encoded, 'datetime');
+      expect(decoded).toBeInstanceOf(Date);
+      expect((decoded as Date).toISOString()).toBe(original.toISOString());
+    });
+
+    it('decodes the date-time spelling of the date type the same as datetime', () => {
+      const original = new Date('2024-03-15T10:30:00.000Z');
+      const decoded = decodeAttributeValue(encodeAttributeValue(original), 'date-time');
       expect(decoded).toBeInstanceOf(Date);
       expect((decoded as Date).toISOString()).toBe(original.toISOString());
     });

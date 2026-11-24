@@ -13,16 +13,15 @@ import { describe, expect, it } from 'bun:test';
 
 import { collectKeys } from '../testing/storage-backends.test-support.ts';
 
-import type { Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { MemoryStorage, type Storage } from "../embedded/storage/src/index.ts";
 import {
   advanceTimersByTime,
   flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { computePayloadDigest } from './application-payload-digest.ts';
 import { WaitBudgetElapsedError } from './application-primitive-abort.ts';
 import {
@@ -1240,6 +1239,7 @@ describe('fifth-round hardening', () => {
 
   it('rejects a wait deadline outside the safe-integer range', async () => {
     const { mailbox } = createMailboxFixture({ now: () => Number.MAX_SAFE_INTEGER - 5_000 });
+    // load-proof: the deadline is rejected before any wait starts, so no load can change the outcome
     expect(await throwingRejectionOf(mailbox.waitForAvailable({ timeoutMs: 10_000 }))).toThrow(
       /safe-integer millisecond range/,
     );
@@ -1703,6 +1703,7 @@ describe('ninth-round hardening', () => {
       }
       return value;
     };
+    // load-proof: the injected clock is advanced past the deadline by the read itself, so no real time passes
     expect(await mailbox.waitForAvailable({ timeoutMs: 1_000 })).toBe(false);
     mailbox.dispose();
   });
@@ -2180,6 +2181,7 @@ describe('thirteenth-round hardening', () => {
       }
       return originalGet(key);
     };
+    // load-proof: the signal aborts in a microtask while the read stalls, so the deadline is never reached
     expect(await mailbox.waitForAvailable({ timeoutMs: 10_000, signal: controller.signal })).toBe(
       false,
     );
@@ -2201,6 +2203,7 @@ describe('thirteenth-round hardening', () => {
       }
       return originalGet(key);
     };
+    // load-proof: the mailbox is disposed while the read stalls, so the deadline is never reached
     expect(await mailbox.waitForAvailable({ timeoutMs: 10_000 })).toBe(false);
   });
 
@@ -3005,5 +3008,19 @@ describe('eighteenth-round hardening, continued', () => {
     expect(claim.signal.aborted).toBe(true);
     remote.dispose();
     local.dispose();
+  });
+});
+
+describe('mailbox test helpers fail loudly', () => {
+  it('names the unexpected outcome when a helper does not get the result it expects', async () => {
+    const { mailbox } = createMailboxFixture();
+    expect(await throwingRejectionOf(claimOne(mailbox))).toThrow(
+      'Expected a claim, received "empty".',
+    );
+    await admitOne(mailbox, { idempotencyKey: 'once' });
+    expect(await throwingRejectionOf(admitOne(mailbox, { idempotencyKey: 'once' }))).toThrow(
+      'Expected an admitted command, received "duplicate".',
+    );
+    mailbox.dispose();
   });
 });

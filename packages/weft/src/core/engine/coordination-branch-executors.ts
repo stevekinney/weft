@@ -1,6 +1,14 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { SignalDeliveredEvent } from '../events.ts';
 import { createDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
+import type { SideEffectHold } from './held-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
+import {
+  captureSignalWaitRun,
+  clearSignalWait,
+  recordSignalWaitBegan,
+  trackSignalWaitClear,
+} from './signal-wait-tracking.ts';
 import {
   consumeSignalWithAtomicWorkflowCommit,
   peekSignal,
@@ -134,7 +142,7 @@ export function executeSleepSubOperation(
  * survives for a later `waitForSignal` or a replay.
  *
  * Reads are non-destructive {@link peekSignal}s until the coordinator finalizes;
- * the identity-guarded release (`expectedResolve === deliver`) ensures a loser
+ * the identity-guarded release (`expectedResolve === deliverAndReport`) ensures a loser
  * never clobbers another waiter (e.g. a later top-level `waitForSignal`) that
  * reused the shared `${workflowId}:${signalName}` key.
  */
@@ -148,6 +156,7 @@ export function executeWaitSignalSubOperation(
 
   const { signalName } = operation;
   const workflowExecutionToken = workflowExecutionTokenForWorkflow(internals, workflowId);
+  const run = captureSignalWaitRun(internals, workflowId);
   const waiterKey = `${workflowId}:${signalName}`;
   const engineAbort = internals.abortController.signal;
 
@@ -155,6 +164,10 @@ export function executeWaitSignalSubOperation(
     let settled = false;
     let registered = false;
     const { promise: delivered, resolve: deliver } = Promise.withResolvers<void>();
+    const deliverAndReport = () => {
+      internals.engine.dispatchEvent(new SignalDeliveredEvent(workflowId, signalName));
+      deliver();
+    };
 
     // Remove BOTH abort listeners on every exit so a race-loser abort from
     // `signal` does not leave the `engineAbort` listener (and its closure)
@@ -167,13 +180,14 @@ export function executeWaitSignalSubOperation(
     // The deferred consume the coordinator runs on the winning path. Wrapped in
     // an envelope so a losing branch (which never reaches finalize) cannot delete
     // the durable record.
-    const finalize = async (): Promise<unknown> => {
+    const finalize = async (hold?: SideEffectHold): Promise<unknown> => {
       const consumed = await consumeSignalWithAtomicWorkflowCommit(
         internals,
         workflowId,
         signalName,
         () => isCurrentWorkflowExecutionToken(internals, workflowId, workflowExecutionToken),
         workflowExecutionToken,
+        hold,
       );
       return consumed.found ? consumed.payload : undefined;
     };
@@ -186,8 +200,17 @@ export function executeWaitSignalSubOperation(
       // Only release if we registered it, and only our own waiter (identity
       // guard), so we never clobber a waiter that reused this key.
       if (registered) {
-        releaseSignalWaiter(internals, workflowId, waiterKey, deliver);
+        releaseSignalWaiter(internals, workflowId, waiterKey, deliverAndReport);
       }
+      // The race settled without this signal, so the wait is over: drop it from
+      // the durable `waitingForSignals` list. Nothing awaits this branch any
+      // more, so the write runs on its own; it changes nothing when the engine
+      // is shutting down, because then the wait is still outstanding durably.
+      trackSignalWaitClear(
+        internals,
+        workflowId,
+        clearSignalWait(internals, workflowId, run, signalName),
+      );
       // Prefer the race-loser `signal`'s reason; fall back to the engine-abort
       // reason on teardown (mirrors `executeSleepSubOperation`) so a disposed
       // engine surfaces its own abort reason rather than a generic Error.
@@ -203,12 +226,20 @@ export function executeWaitSignalSubOperation(
       resolve(createDeferredConsumeEnvelope(finalize));
     };
 
+    // The signal is here, so this branch's wait is over. Drop it from the
+    // durable list before resolving, so it is gone before the coordinator's
+    // next checkpoint (this also covers a wait listed before a restart).
+    const winAfterClearingWait = async () => {
+      await clearSignalWait(internals, workflowId, run, signalName);
+      win();
+    };
+
     const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
       cleanup();
       if (registered) {
-        releaseSignalWaiter(internals, workflowId, waiterKey, deliver);
+        releaseSignalWaiter(internals, workflowId, waiterKey, deliverAndReport);
       }
       reject(error);
     };
@@ -235,27 +266,39 @@ export function executeWaitSignalSubOperation(
       const existing = await peekSignal(internals, workflowId, signalName);
       if (settled) return;
       if (existing.found) {
-        win();
+        await winAfterClearingWait();
         return;
       }
 
-      registerSignalWaiter(internals, workflowId, waiterKey, deliver);
+      registerSignalWaiter(internals, workflowId, waiterKey, deliverAndReport);
       registered = true;
 
       const buffered = await peekSignal(internals, workflowId, signalName);
       if (settled) return;
       if (buffered.found) {
-        releaseSignalWaiter(internals, workflowId, waiterKey, deliver);
-        win();
+        releaseSignalWaiter(internals, workflowId, waiterKey, deliverAndReport);
+        await winAfterClearingWait();
         return;
       }
+
+      // No signal was buffered, so the wait has begun: record it durably. A
+      // delivery or a lost race that lands meanwhile ends the wait first, and
+      // the record then leaves the name out.
+      await recordSignalWaitBegan(
+        internals,
+        workflowId,
+        run,
+        signalName,
+        () => !settled && internals.signalWaiters.get(waiterKey) === deliverAndReport,
+      );
+      if (settled) return;
 
       // Wait for delivery to wake this waiter (deliverBufferedSignals releases
       // the waiter then calls deliver(); it does NOT consume the durable record),
       // then resolve with the deferred-consume envelope.
       await delivered;
       if (settled) return;
-      win();
+      await winAfterClearingWait();
     })().catch(fail);
   });
 }

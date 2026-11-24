@@ -16,7 +16,7 @@ import {
   tryDecodeStorageKeyComponent,
   type ScanOptions,
   type Storage,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
 import type { FailureCategory, WorkflowStatus } from '../types/identity.ts';
 import type { TimeRange } from '../types/list-options.ts';
 import { workflowVisibilityUpdatedBucket } from './workflow-indexes.ts';

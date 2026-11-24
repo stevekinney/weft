@@ -27,6 +27,17 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  MemoryStorage,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+} from "../embedded/storage/src/index.ts";
+import {
+  restoreRealTimers,
+  useFakeTimers,
+  waitForCondition,
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { decodeTaskAttemptRecord, taskAttemptKey } from '../core/task-ledger/task-attempt.ts';
 import {
   beginCompletion,
@@ -43,14 +54,6 @@ import {
   type RemoteTaskQueued,
   type RemoteTaskRecord,
 } from '../core/task-ledger/task-ledger.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import {
-  restoreRealTimers,
-  useFakeTimers,
-  waitForCondition,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import {

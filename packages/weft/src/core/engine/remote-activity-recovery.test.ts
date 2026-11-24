@@ -23,15 +23,11 @@
  */
 import { afterEach, describe, expect, it, mock, setSystemTime } from 'bun:test';
 
+import { createDeferred, waitForCondition, waitForever } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { serve, type ServeOptions, type WeftServer } from '../../server/index.ts';
 import { commitTaskLedgerCompletion } from '../../server/runtime/task-ledger-completion.ts';
 import { useManualTaskReconciliationForTesting } from '../../server/runtime/task-reconciliation.ts';
-import {
-  createDeferred,
-  waitForCondition,
-  waitForever,
-} from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
 import { RemoteWorker } from '../../worker/index.ts';
 import type { RemoteActivityBroker } from '../remote-activity-broker.ts';
 import { commitTaskLedgerTransition } from '../task-ledger/task-ledger-runtime.ts';
@@ -95,7 +91,7 @@ describe('remote activity recovery (COR-152)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
 
     // "Durably queued" is not a dead end once infrastructure DOES appear —
@@ -179,7 +175,7 @@ describe('remote activity recovery (COR-152)', () => {
         }
         return false;
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
     if (queuedOperationId === undefined) throw new Error('expected a queued operationId');
 
@@ -263,7 +259,7 @@ describe('remote activity recovery (COR-152)', () => {
         const record = await readOnlyTaskLedgerRecord(engine!);
         return record !== null && record.state === 'queued';
       },
-      { timeoutMs: 2_000, intervalMs: 10, label: 'task to reach durable queued state' },
+      { intervalMs: 10, label: 'task to reach durable queued state' },
     );
 
     const resultBeforeDispose = handle.result();

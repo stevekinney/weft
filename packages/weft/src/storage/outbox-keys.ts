@@ -12,7 +12,7 @@
  * @module storage/outbox-keys
  */
 
-import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from './key-encoding.ts';
+import { encodeStorageKeyComponent, formatSortableStorageTimestamp } from "../embedded/storage/src/index.ts";
 
 /**
  * Outbox header, delivery record, time-keyed due index, sequence-ordered

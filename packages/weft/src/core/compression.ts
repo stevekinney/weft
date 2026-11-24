@@ -6,7 +6,28 @@
  * @module core/compression
  */
 
-import { gunzipSync, gzipSync, tryLoadNodeZlib } from '../runtime/portable.ts';
+import { tryLoadNodeZlib } from '../runtime/portable.ts';
+
+// ---------------------------------------------------------------------------
+// Gzip — the platform's CompressionStream / DecompressionStream, which Bun, Node, and browsers all
+// provide, so the choice of runtime never enters the codec.
+// ---------------------------------------------------------------------------
+
+async function runThroughStream(
+  data: Uint8Array,
+  stream: CompressionStream | DecompressionStream,
+): Promise<Uint8Array> {
+  const piped = new Blob([new Uint8Array(data)]).stream().pipeThrough(stream);
+  return new Uint8Array(await new Response(piped).arrayBuffer());
+}
+
+function gzipCompress(data: Uint8Array): Promise<Uint8Array> {
+  return runThroughStream(data, new CompressionStream('gzip'));
+}
+
+function gzipDecompress(data: Uint8Array): Promise<Uint8Array> {
+  return runThroughStream(data, new DecompressionStream('gzip'));
+}
 
 // ---------------------------------------------------------------------------
 // Brotli — lazy-loaded from node:zlib via the portable runtime layer.
@@ -131,9 +152,9 @@ const HEADER_SIZE = 2;
 // ---------------------------------------------------------------------------
 
 /**
- * Create a compressor backed by the portable runtime layer.
+ * Create a compressor. An alias of {@link createCompressor}.
  *
- * - `gzip`: uses Bun's native gzip when available, otherwise `node:zlib`
+ * - `gzip`: the platform's `CompressionStream`, the same in Bun, Node, and browsers
  * - `brotli`: uses `node:zlib` brotli (available in both Bun and Node)
  * - `none`: pass-through (no compression)
  *
@@ -152,8 +173,8 @@ export function createBunCompressor(algorithm: CompressionAlgorithm): Compressor
 }
 
 /**
- * Create a compressor. Preferred portable factory — delegates to the runtime
- * abstraction layer for gzip and brotli implementations.
+ * Create a compressor. Preferred portable factory — gzip uses the platform's
+ * `CompressionStream` and brotli uses `node:zlib`.
  *
  * @example
  * ```ts
@@ -164,7 +185,7 @@ export function createBunCompressor(algorithm: CompressionAlgorithm): Compressor
  * const none = createCompressor('none');
  *
  * const payload = new TextEncoder().encode('workflow state'.repeat(50));
- * const compressed = gzip.compress(payload);
+ * const compressed = await gzip.compress(payload);
  * console.log(compressed instanceof Uint8Array); // true
  * ```
  */
@@ -173,8 +194,8 @@ export function createCompressor(algorithm: CompressionAlgorithm): Compressor {
     case 'gzip':
       return {
         algorithm: 'gzip',
-        compress(data: Uint8Array): Uint8Array {
-          return gzipSync(data);
+        compress(data: Uint8Array): Promise<Uint8Array> {
+          return gzipCompress(data);
         },
       };
 
@@ -273,7 +294,7 @@ export async function decompressPayload(data: Uint8Array): Promise<Uint8Array> {
       return body;
 
     case ALGORITHM_GZIP:
-      return gunzipSync(body);
+      return gzipDecompress(body);
 
     case ALGORITHM_BROTLI:
       return brotliDecompressSync(body);

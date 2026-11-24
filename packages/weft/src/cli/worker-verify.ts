@@ -59,7 +59,9 @@ async function collectActivityDrift(
   const diagnostics: string[] = [];
   const expectedActivities = expected.activities ?? {};
   for (const activityName of Object.keys(actual.activities).toSorted()) {
-    const expectedActivity = expectedActivities[activityName];
+    const expectedActivity = Object.hasOwn(expectedActivities, activityName)
+      ? expectedActivities[activityName]
+      : undefined;
     const actualActivity = actual.activities[activityName]!;
     if (expectedActivity === undefined) {
       diagnostics.push(`extra activity "${workflowName}.${activityName}"`);
@@ -71,7 +73,7 @@ async function collectActivityDrift(
     }
   }
   for (const activityName of Object.keys(expectedActivities).toSorted()) {
-    if (actual.activities[activityName] === undefined) {
+    if (!Object.hasOwn(actual.activities, activityName)) {
       diagnostics.push(`missing activity "${workflowName}.${activityName}"`);
     }
   }
@@ -85,7 +87,9 @@ async function collectManifestDrift(
   const diagnostics: string[] = [];
   const registryWorkflows = registry.workflows;
   for (const workflowName of Object.keys(manifest.workflows).toSorted()) {
-    const expected = registryWorkflows[workflowName];
+    const expected = Object.hasOwn(registryWorkflows, workflowName)
+      ? registryWorkflows[workflowName]
+      : undefined;
     const actual = manifest.workflows[workflowName]!;
     if (expected === undefined) {
       diagnostics.push(`extra workflow "${workflowName}"`);
@@ -95,7 +99,7 @@ async function collectManifestDrift(
     diagnostics.push(...(await collectActivityDrift(workflowName, actual, expected)));
   }
   for (const workflowName of Object.keys(registryWorkflows).toSorted()) {
-    if (manifest.workflows[workflowName] === undefined) {
+    if (!Object.hasOwn(manifest.workflows, workflowName)) {
       diagnostics.push(`missing workflow "${workflowName}"`);
     }
   }

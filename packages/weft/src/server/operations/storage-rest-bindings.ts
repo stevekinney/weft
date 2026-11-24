@@ -1,10 +1,15 @@
-import { copyBytesToArrayBuffer } from '../../core/byte-arrays.ts';
-import type { RestInputContext } from '../rest-binding.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestBodyBounded, readRestJsonBody } from '../rest-body.ts';
-import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
+import {
+  type RestInputContext,
+  type UnknownRestBinding,
+  copyBytesToArrayBuffer,
+  invalidParamsFault,
+  isOperationFault,
+  readRestBodyBounded,
+  readRestJsonBody,
+} from "../../embedded/backchannel/src/internals.ts";
 import type {
   StorageConditionalBatchOutput,
+  StoragePreviewOutput,
   StorageScanInput,
   StorageScanOutput,
 } from './storage-schemas.ts';
@@ -113,6 +118,20 @@ export const storageGetRestBinding: UnknownRestBinding = {
   extractInput: async (_request, pathParams) => ({ key: storageKeyFromPath(pathParams) }),
   success: { kind: 'streaming', mediaType: 'application/octet-stream' },
   shapeSuccess: (output: Uint8Array | null) => createBinaryResponse(output),
+};
+
+export const storagePreviewRestBinding: UnknownRestBinding = {
+  method: 'GET',
+  path: '/v1/storage/-/preview',
+  pathParamNames: [],
+  operationName: 'weft.storage.preview',
+  inputSources: {
+    key: { kind: 'query', queryParam: 'key' },
+  },
+  extractInput: async (request) => ({ key: new URL(request.url).searchParams.get('key') ?? '' }),
+  success: { kind: 'json', status: 200 },
+  shapeSuccess: (output: StoragePreviewOutput) =>
+    output === null ? new Response(null, { status: 404 }) : Response.json(output),
 };
 
 export const storagePutRestBinding: UnknownRestBinding = {

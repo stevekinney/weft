@@ -3,7 +3,10 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createWeftClient, Engine, serve } from '../index.ts';
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import type { WorkflowContext } from '../index.ts';
+import { createWeftClient, Engine, serve, workflow } from '../index.ts';
+import { isParkedOn, statusOf } from '../testing/run-observation.test-support.ts';
 import { executeApi, normalizeValidatedInput } from './api.ts';
 
 describe('api command', () => {
@@ -43,6 +46,106 @@ describe('api command', () => {
       await server.stop();
       engine[Symbol.dispose]();
     }
+  });
+
+  it('--dry-run sets dryRun on an operation whose input has it, without --yes for a destructive one', async () => {
+    const engine = new Engine();
+    const server = serve({ engine, port: 0 });
+    try {
+      const result = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.purge',
+        server: server.url,
+        input: '{}',
+        list: false,
+        yes: false,
+        dryRun: true,
+        help: false,
+        json: true,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        dryRun: true,
+        action: 'purge',
+        matched: 0,
+      });
+    } finally {
+      await server.stop();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('--dry-run wins over a dryRun the input carries', async () => {
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'parked' }).execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal('go');
+      }),
+    );
+    const server = serve({ engine, port: 0 });
+    try {
+      await engine.start('parked', null, { id: 'wf-parked' });
+      await waitForCondition(() => isParkedOn(engine, 'wf-parked', 'go'), {
+        label: 'the workflow to park on the go signal',
+      });
+      const result = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.cancel',
+        server: server.url,
+        input: '{"workflowId":"wf-parked","dryRun":false}',
+        list: false,
+        yes: false,
+        dryRun: true,
+        help: false,
+        json: true,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        dryRun: true,
+        workflowId: 'wf-parked',
+        status: 'running',
+        cancellable: true,
+      });
+      expect(await statusOf(engine, 'wf-parked')).toBe('running');
+    } finally {
+      await server.stop();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('--dry-run is a usage error naming an operation whose input has no dryRun field', async () => {
+    const result = await executeApi({
+      command: 'api',
+      operationName: 'weft.workflows.list',
+      input: '{}',
+      list: false,
+      yes: false,
+      dryRun: true,
+      help: false,
+      json: false,
+    });
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain('weft.workflows.list');
+    expect(result.stderr).toContain('--dry-run');
+  });
+
+  it('still requires --yes for a destructive operation that is not a dry run', async () => {
+    const result = await executeApi({
+      command: 'api',
+      operationName: 'weft.workflows.purge',
+      input: '{}',
+      list: false,
+      yes: false,
+      dryRun: false,
+      help: false,
+      json: false,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('pass --yes');
   });
 
   it('invokes a unary catalog operation through the generated typed client', async () => {

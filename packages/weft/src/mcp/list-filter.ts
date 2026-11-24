@@ -24,7 +24,9 @@ export function parseMcpListFilter(value: unknown): McpListFilterParseResult {
   const tags = parseStringArray(value['tags'], 'tags');
   const limit = parseNonNegativeInteger(value['limit'], 'limit');
   const offset = parseNonNegativeInteger(value['offset'], 'offset');
-  const failure = firstFailure([status, type, tags, limit, offset]);
+  const failedStep = parseNonEmptyString(value['failedStep'], 'failedStep');
+  const retrying = parseOptionalBoolean(value['retrying'], 'retrying');
+  const failure = firstFailure([status, type, tags, limit, offset, failedStep, retrying]);
   if (failure !== undefined) return failure;
   return {
     ok: true,
@@ -34,6 +36,8 @@ export function parseMcpListFilter(value: unknown): McpListFilterParseResult {
       tags: parsedValue(tags),
       limit: parsedValue(limit),
       offset: parsedValue(offset),
+      failedStep: parsedValue(failedStep),
+      retrying: parsedValue(retrying),
     }),
   };
 }
@@ -53,6 +57,10 @@ export function parseMcpListFilterFromSearchParams(
   if (limit !== null) record['limit'] = Number(limit);
   const offset = searchParams.get('offset');
   if (offset !== null) record['offset'] = Number(offset);
+  const failedStep = searchParams.get('failed_step');
+  if (failedStep !== null) record['failedStep'] = failedStep;
+  const retrying = searchParams.get('retrying');
+  if (retrying !== null) record['retrying'] = booleanQueryValue(retrying);
   return parseMcpListFilter(record);
 }
 
@@ -80,6 +88,28 @@ function parseOptionalString(value: unknown, field: string): FieldParseResult<st
   if (value === undefined) return { ok: true };
   if (typeof value !== 'string')
     return { ok: false, message: `List filter ${field} must be a string` };
+  return { ok: true, value };
+}
+
+/** `true` and `false` as booleans; any other text unchanged, so validation refuses it. */
+function booleanQueryValue(text: string): boolean | string {
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  return text;
+}
+
+/** A string that names something, so an empty one is refused rather than matching nothing. */
+function parseNonEmptyString(value: unknown, field: string): FieldParseResult<string> {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== 'string' || value === '')
+    return { ok: false, message: `List filter ${field} must be a non-empty string` };
+  return { ok: true, value };
+}
+
+function parseOptionalBoolean(value: unknown, field: string): FieldParseResult<boolean> {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== 'boolean')
+    return { ok: false, message: `List filter ${field} must be true or false` };
   return { ok: true, value };
 }
 
@@ -123,6 +153,8 @@ function compactListFilter(fields: {
   readonly tags: string[] | undefined;
   readonly limit: number | undefined;
   readonly offset: number | undefined;
+  readonly failedStep: string | undefined;
+  readonly retrying: boolean | undefined;
 }): ListFilter {
   const filter: ListFilter = {};
   if (fields.status !== undefined) filter.status = fields.status;
@@ -130,6 +162,8 @@ function compactListFilter(fields: {
   if (fields.tags !== undefined) filter.tags = fields.tags;
   if (fields.limit !== undefined) filter.limit = fields.limit;
   if (fields.offset !== undefined) filter.offset = fields.offset;
+  if (fields.failedStep !== undefined) filter.failedStep = fields.failedStep;
+  if (fields.retrying !== undefined) filter.retrying = fields.retrying;
   return filter;
 }
 

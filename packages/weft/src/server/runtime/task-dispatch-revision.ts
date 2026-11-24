@@ -7,8 +7,9 @@
  * @module server/runtime/task-dispatch-revision
  */
 
+import { type ConditionalBatchCondition } from "../../embedded/storage/src/index.ts";
 import { decodeWorkflowState } from '../../core/engine/validation.ts';
-import { KEYS, type ConditionalBatchCondition } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/keys.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 
 /**

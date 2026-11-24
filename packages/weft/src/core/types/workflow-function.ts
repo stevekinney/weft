@@ -1,7 +1,9 @@
 import { validateWorkflowOrActivityName } from './name-grammar.ts';
-import type { SearchAttributeSchema } from './search-attributes.ts';
-import type { ActivityMap, QueryMap, SignalMap, UpdateMap } from './workflow-builder-helpers.ts';
-import { WorkflowBuilderImpl, type WorkflowBuilderOptions } from './workflow-builder-runtime.ts';
+import {
+  type SharedWorkflowEntries,
+  WorkflowBuilderImpl,
+  type WorkflowBuilderOptions,
+} from './workflow-builder-runtime.ts';
 import type { InitialBuilderState, WorkflowBuilder } from './workflow-builder.ts';
 import type { WorkflowContext } from './workflow-context.ts';
 
@@ -459,22 +461,29 @@ export interface WorkflowReduceOptions extends AwaitChildWorkflowOptions {
 export function workflow<const TName extends string>(
   options: WorkflowBuilderOptions<TName>,
 ): WorkflowBuilder<TName, {}, {}, {}, {}, {}, InitialBuilderState> {
+  return createWorkflowBuilder(options) as unknown as WorkflowBuilder<
+    TName,
+    {},
+    {},
+    {},
+    {},
+    {},
+    InitialBuilderState
+  >;
+}
+
+/**
+ * Validate the workflow name and construct the runtime builder, seeded with
+ * any entries `createWorkflowFactory` shares. The caller casts the result to
+ * the phantom-flag-typed {@link WorkflowBuilder} it promises.
+ */
+export function createWorkflowBuilder<TName extends string>(
+  options: WorkflowBuilderOptions<TName>,
+  shared?: SharedWorkflowEntries,
+): WorkflowBuilderImpl<TName> {
   if (!options.name) {
     throw new Error('workflow() requires an options object with a name.');
   }
   validateWorkflowOrActivityName(options.name, 'workflow');
-
-  const builder = new WorkflowBuilderImpl(options);
-  // The class implements the structural shape `WorkflowBuilder` describes; the
-  // assertion is the cast boundary that lets the runtime class satisfy the
-  // phantom-flag-typed interface without leaking the implementation type.
-  return builder as unknown as WorkflowBuilder<
-    TName,
-    ActivityMap,
-    SignalMap,
-    UpdateMap,
-    QueryMap,
-    SearchAttributeSchema,
-    InitialBuilderState
-  >;
+  return new WorkflowBuilderImpl(options, shared);
 }

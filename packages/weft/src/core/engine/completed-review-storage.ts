@@ -1,5 +1,10 @@
-import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS, encodeStorageKeyComponent, storageKeys } from '../../storage/interface.ts';
+import {
+  type BatchOperation,
+  type Storage,
+  encodeStorageKeyComponent,
+  storageKeys,
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
 import type { CompletedReviewEntry, ReviewListFilter } from '../types.ts';

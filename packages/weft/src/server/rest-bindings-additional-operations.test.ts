@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import { defineOperation } from './operation-registry.ts';
+import { defineOperation } from "../embedded/backchannel/src/index.ts";
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 
 /**

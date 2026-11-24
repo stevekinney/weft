@@ -9,8 +9,11 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../../embedded/storage/src/index.ts";
 import { workflow, type WorkflowContext } from '../types.ts';
 import { Engine } from './index.ts';
 

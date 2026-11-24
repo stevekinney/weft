@@ -61,10 +61,28 @@ export type CodegenOptions = {
 type CodegenConnection = { baseUrl: string; token: string | undefined };
 
 /**
+ * The two emitters {@link executeCodegen} chooses between. A test-only seam: the real emitters
+ * throw only {@link CodegenEmitError} for any registry snapshot that passes validation, so a
+ * test substitutes one to reach the catch-all for an unexpected emitter failure.
+ */
+export type CodegenEmitters = {
+  readonly registry: typeof emitRegistryDeclaration;
+  readonly worker: typeof emitWorkerImplementationModule;
+};
+
+const DEFAULT_CODEGEN_EMITTERS: CodegenEmitters = {
+  registry: emitRegistryDeclaration,
+  worker: emitWorkerImplementationModule,
+};
+
+/**
  * Run the codegen pipeline end-to-end. Returns a {@link CommandOutput}
  * describing the result. Never rejects for user-caused failures.
  */
-export async function executeCodegen(options: CodegenOptions): Promise<CommandOutput> {
+export async function executeCodegen(
+  options: CodegenOptions,
+  emitters: CodegenEmitters = DEFAULT_CODEGEN_EMITTERS,
+): Promise<CommandOutput> {
   const snapshotResult = await loadSnapshot(options);
   if (!snapshotResult.ok) return formatFailure(snapshotResult.error, options);
 
@@ -76,8 +94,8 @@ export async function executeCodegen(options: CodegenOptions): Promise<CommandOu
   try {
     content =
       options.target === 'worker'
-        ? emitWorkerImplementationModule(workflows, codegenPackageName)
-        : emitRegistryDeclaration(workflows, codegenPackageName);
+        ? emitters.worker(workflows, codegenPackageName)
+        : emitters.registry(workflows, codegenPackageName);
   } catch (error) {
     if (error instanceof CodegenEmitError || error instanceof CodegenPackageNameError) {
       return formatFailure(`codegen: ${error.message}`, options);
@@ -263,13 +281,11 @@ async function loadSnapshotFromServer(
   token: string | undefined,
   timeoutMs: number,
 ): Promise<Result<unknown>> {
-  let resolvedUrl: URL;
-  try {
-    resolvedUrl = composeRegistryUrl(serverUrl);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: `codegen: invalid server URL '${serverUrl}': ${message}` };
-  }
+  // `serverUrl` is the serialization of a `URL` that `resolveConnection` already parsed
+  // (`loadSnapshot` passes `connection.server.toString()`), and a serialized URL always parses
+  // again, so composing the registry URL cannot throw. A malformed server never reaches here:
+  // `resolveCodegenConnection` reports it as `codegen: Invalid server URL`.
+  const resolvedUrl = composeRegistryUrl(serverUrl);
 
   let response: Response;
   try {

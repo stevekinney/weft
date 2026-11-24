@@ -49,7 +49,9 @@
  * @module server/operations/get-task-deliveries
  */
 
-import type { FaultCode } from '../../core/fault-code.ts';
+import { defineOperation, type FaultCode } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import { decodeTaskAttemptRecord, taskAttemptPrefix } from '../../core/task-ledger/task-attempt.ts';
 import {
   decodeRemoteTaskRecord,
@@ -63,11 +65,8 @@ import {
   taskResultDeliveryKey,
   type TaskResultDeliveryEntry,
 } from '../../core/task-ledger/task-result-delivery.ts';
-import type { Storage } from '../../storage/interface.ts';
 import { sha256Hex } from '../../worker/manifest/content-digest.ts';
 import { raiseFault } from '../operation-catalog/raise-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { requireOperationStorage } from './operation-helpers.ts';
 import {
   getTaskDeadLetterInput,
@@ -190,7 +189,7 @@ export const getTaskResultDeliveriesOperation = defineOperation({
   discoverable: true,
   transports: taskDeliveryTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetTaskResultDeliveriesOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetTaskResultDeliveriesOutput> => {
     const storage = requireOperationStorage(engine, ['get', 'scan']);
     await readLedgerRecord(getTaskResultDeliveriesOperation, storage, input.operationId);
     const history = decodeTaskResultDeliveryHistory(
@@ -236,7 +235,7 @@ export const getTaskDeadLetterOperation = defineOperation({
   discoverable: true,
   transports: taskDeliveryTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetTaskDeadLetterOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetTaskDeadLetterOutput> => {
     const storage = requireOperationStorage(engine, ['get']);
     const record = await readLedgerRecord(getTaskDeadLetterOperation, storage, input.operationId);
     if (record.state !== 'deadLettered') {

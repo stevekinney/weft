@@ -22,14 +22,19 @@ export function workerMatchesRequirement(
     deployment.artifactDigest !== requirement.artifactDigest
   )
     return false;
-  return Object.values(worker.manifest.workflows).some(
-    (workflow) =>
-      (requirement.workflowRevision === undefined ||
-        workflow.workflowRevision === requirement.workflowRevision) &&
-      workflow.activities[activityName] !== undefined &&
-      (requirement.activityContractHash === undefined ||
-        workflow.activities[activityName]?.contractHash === requirement.activityContractHash),
-  );
+  return Object.values(worker.manifest.workflows).some((workflow) => {
+    if (
+      requirement.workflowRevision !== undefined &&
+      workflow.workflowRevision !== requirement.workflowRevision
+    ) {
+      return false;
+    }
+    if (!Object.hasOwn(workflow.activities, activityName)) return false;
+    return (
+      requirement.activityContractHash === undefined ||
+      workflow.activities[activityName]?.contractHash === requirement.activityContractHash
+    );
+  });
 }
 
 /**

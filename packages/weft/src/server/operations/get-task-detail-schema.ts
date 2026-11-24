@@ -22,7 +22,8 @@ export const getTaskDetailInput = z.object({
     .min(1)
     .refine((value) => utf8ByteLength(value) <= MAX_TASK_IDENTIFIER_BYTES, {
       message: `operationId exceeds the ledger's ${MAX_TASK_IDENTIFIER_BYTES}-byte identifier limit`,
-    }),
+    })
+    .describe('Id of the task operation whose ledger record is read.'),
 });
 
 const durationSchema = z.union([z.number(), z.string()]);

@@ -1,4 +1,5 @@
-import { KEYS, type Storage } from '../../storage/interface.ts';
+import { type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { isWorkflowLogEntry } from '../event-log-shared.ts';
 import type {
@@ -110,6 +111,10 @@ export async function hydrateCheckpointReplayState(
     const decoded = decode(entryBytes);
     if (!isWorkflowLogEntry(decoded)) continue;
     const entry = decoded;
+    // Only a checkpoint's own event carries a checkpoint step. Other events can carry a `step` of
+    // their own (a file workflow's `file-workflow:*` events name the document step), which is no
+    // checkpoint step: read as one it could end the scan before a later checkpoint's payload.
+    if (entry.type !== 'workflow:checkpoint') continue;
     const checkpointStep = getCheckpointEventStep(entry.payload);
     if (checkpointStep === undefined) continue;
     if (checkpointStep > checkpoint.step) break;

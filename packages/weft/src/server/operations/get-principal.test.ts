@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { WEFT_SCOPE_VOCABULARY } from '../../authorization-scopes.ts';
+import { getPrincipalOperation } from './get-principal.ts';
 
+import {
+  anonymousPrincipal,
+  principalFromApiKey,
+  principalFromJwtClaims,
+} from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  executeOperation,
+  getPrincipalRestBinding,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { handleJsonRpcHttpRequest } from '../json-rpc-http.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { anonymousPrincipal, principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
-import { getPrincipalOperation, getPrincipalRestBinding } from './get-principal.ts';
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -48,7 +57,7 @@ describe('weft.system.principal', () => {
       {},
       {
         principal: apiKeyAuthContext().authContext.principal,
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([getPrincipalOperation]),
       },
@@ -63,6 +72,64 @@ describe('weft.system.principal', () => {
     });
   });
 
+  it('reports the resolved workspace identity through JSON-RPC without sharing capability storage', async () => {
+    engine = createEngine();
+    const workspace = Object.freeze({
+      version: 1 as const,
+      workspaceId: 'workspace-one',
+      actorId: 'actor-one',
+      actorKind: 'user' as const,
+      owner: 'opaque-owner-one',
+      membershipRevision: 'revision-one',
+      capabilities: Object.freeze(['workspace:use', 'workspace:manage'] as const),
+    });
+    const principal = { ...apiKeyAuthContext().authContext.principal, workspace };
+    const output = await executeOperation(
+      'weft.system.principal',
+      {},
+      {
+        principal,
+        host: engine,
+        transport: 'jsonRpcStdio',
+        registry: createOperationRegistry([getPrincipalOperation]),
+      },
+    );
+    expect(output.ok).toBe(true);
+    if (!output.ok) throw new Error('expected workspace introspection to succeed');
+    const value = output.value;
+    if (typeof value !== 'object' || value === null || !('workspace' in value)) {
+      throw new Error('expected a workspace identity in the principal response');
+    }
+    const reportedWorkspace = value.workspace;
+    expect(reportedWorkspace).toEqual(workspace);
+    expect(reportedWorkspace).not.toBe(workspace);
+    if (
+      typeof reportedWorkspace !== 'object' ||
+      reportedWorkspace === null ||
+      !('capabilities' in reportedWorkspace)
+    ) {
+      throw new Error('expected workspace capabilities in the principal response');
+    }
+    expect(reportedWorkspace.capabilities).not.toBe(workspace.capabilities);
+
+    const response = await handleJsonRpcHttpRequest(jsonRpcRequest(), {
+      registry: createOperationRegistry([getPrincipalOperation]),
+      host: engine,
+      principal,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        method: 'api-key',
+        subject: 'introspection-caller',
+        scopes: ['events:read', 'system:read', 'workflows:read'],
+        workspace,
+      },
+    });
+  });
+
   it('reports an anonymous caller as unauthenticated with no scopes instead of failing', async () => {
     engine = createEngine();
 
@@ -71,7 +138,7 @@ describe('weft.system.principal', () => {
       {},
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([getPrincipalOperation]),
       },
@@ -95,8 +162,11 @@ describe('weft.system.principal', () => {
       {
         // A JWT without a `sub` claim is the legitimate subjectless
         // construction path (`principalFromApiKey` requires a subject).
-        principal: principalFromJwtClaims({ scope: 'system:read' }),
-        engine,
+        principal: principalFromJwtClaims(
+          { scope: 'system:read' },
+          { scopeVocabulary: WEFT_SCOPE_VOCABULARY },
+        ),
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: createOperationRegistry([getPrincipalOperation]),
       },
@@ -149,7 +219,7 @@ describe('weft.system.principal', () => {
 
     const response = await handleJsonRpcHttpRequest(jsonRpcRequest(), {
       registry: createOperationRegistry([getPrincipalOperation]),
-      engine,
+      host: engine,
       principal: apiKeyAuthContext().authContext.principal,
     });
 

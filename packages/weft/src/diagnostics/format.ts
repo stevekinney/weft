@@ -168,7 +168,8 @@ function appendRecommendationsSection(
  *
  * @example
  * ```ts
- * import { MemoryStorage, collectDiagnostics, formatDiagnosticReport } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { collectDiagnostics, formatDiagnosticReport } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const report = await collectDiagnostics(storage, ':memory:');

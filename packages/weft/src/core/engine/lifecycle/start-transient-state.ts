@@ -74,6 +74,13 @@ export type StartTransientState = {
    * resolved value that is itself `undefined` is still installed.
    */
   readonly services?: { readonly value: unknown };
+  /**
+   * Resolves the run's services once its create batch has committed (COR-1925), for a caller whose
+   * resolution has side effects that a start which never commits must not leave behind (a task
+   * admission, an audit entry). Resolves `undefined` when there are none to hold. A launch that is
+   * rejected never calls it, and its result is held as `services` is.
+   */
+  readonly resolveServices?: () => Promise<{ readonly value: unknown } | undefined>;
 };
 
 /** What {@link installRunTransientState} installs a run's services and cleanup membership from. */
@@ -130,4 +137,20 @@ export function installRunTransientState(
   ) {
     internals.workflowsNeedingTerminalCleanup.add(workflowId);
   }
+}
+
+/**
+ * Resolve the services a start deferred (`transientState.resolveServices`) and hold them as the
+ * run's `ctx.services`. Runs after the create batch has committed and before the run begins, so a
+ * start that lost its batch never resolves them. A disposed engine holds nothing, as at adoption.
+ */
+export async function installDeferredRunServices(
+  internals: EngineInternals,
+  workflowId: string,
+  transientState: StartTransientState | undefined,
+): Promise<void> {
+  if (transientState?.resolveServices === undefined) return;
+  const services = await transientState.resolveServices();
+  if (services === undefined || internals.disposed) return;
+  internals.workflowServices.set(workflowId, services.value);
 }

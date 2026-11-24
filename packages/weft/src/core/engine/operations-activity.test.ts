@@ -1,18 +1,21 @@
 import { describe, expect, it, mock } from 'bun:test';
 
 import {
-  KEYS,
+  MemoryStorage,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
   type StorageCapabilities,
-} from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
+import { ActivityStartedEvent } from '../events.ts';
+import { getWorkflowEventGeneration } from '../events/workflow-event-generation.ts';
 import type { ActivityInterception } from '../interceptor.ts';
 import { getActivityFunctionWithMetadata, resolveActivityFunction } from './activity-resolution.ts';
+import { beginExecutionAttempt } from './execution-attempts.ts';
 import {
   executeActivity,
   executeActivityOperationResult,
@@ -46,6 +49,11 @@ function createCallbacks(
     },
     ...overrides,
   };
+}
+
+/** Records `activity-operation` as the workflow's top-level durable operation. */
+function topLevelActivityOperation(type = 'activity') {
+  return new Map([['workflow-id', { operationId: 'activity-operation', type }]]);
 }
 
 function createInternals(overrides: Record<string, unknown> = {}) {
@@ -209,6 +217,84 @@ async function createReconciliationRecordValue(
 }
 
 describe('activity operation helpers', () => {
+  it('reports inline invocation start without an interceptor and tags its generation', async () => {
+    const dispatched: Event[] = [];
+    const internals = createInternals({
+      engine: { dispatchEvent: (event: Event) => dispatched.push(event) },
+      durableInlineOperations: topLevelActivityOperation(),
+    });
+    const operation = createActivityOperation({
+      workflowExecutionToken: 'generation-a',
+      fn: () => 'inline-result',
+    });
+
+    await executeActivity(internals as never, 'workflow-id', operation, createCallbacks());
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toBeInstanceOf(ActivityStartedEvent);
+    expect(getWorkflowEventGeneration(dispatched[0]!)).toBe('generation-a');
+  });
+
+  it('reports start only when a forwarding interceptor invokes the implementation', async () => {
+    const dispatched: Event[] = [];
+    const internals = createInternals({
+      engine: { dispatchEvent: (event: Event) => dispatched.push(event) },
+      durableInlineOperations: topLevelActivityOperation(),
+    });
+    const execute = mock(async (_interception: unknown, next: (value: unknown) => unknown) =>
+      next('payload'),
+    );
+
+    await executeActivity(
+      internals as never,
+      'workflow-id',
+      createActivityOperation({ fn: () => 'inline-result' }),
+      createCallbacks({
+        getComposedActivityInterceptor: () => ({ execute }) as never,
+      }),
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('reports no start for a durableActivity helper running under ctx.memo', async () => {
+    const dispatched: Event[] = [];
+    const internals = createInternals({
+      engine: { dispatchEvent: (event: Event) => dispatched.push(event) },
+      // No coordinator commit reports a helper's completion, so it reports
+      // neither event rather than an unmatched start.
+      durableInlineOperations: topLevelActivityOperation('memo'),
+    });
+
+    await executeActivity(
+      internals as never,
+      'workflow-id',
+      createActivityOperation({ fn: () => 'helper-result' }),
+      createCallbacks(),
+    );
+
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it('does not report start when an interceptor short-circuits', async () => {
+    const dispatched: Event[] = [];
+    const internals = createInternals({
+      engine: { dispatchEvent: (event: Event) => dispatched.push(event) },
+      durableInlineOperations: topLevelActivityOperation(),
+    });
+
+    await executeActivity(
+      internals as never,
+      'workflow-id',
+      createActivityOperation(),
+      createCallbacks({
+        getComposedActivityInterceptor: () => ({ execute: async () => 'synthetic-result' }),
+      }),
+    );
+
+    expect(dispatched).toHaveLength(0);
+  });
   it('resolves global activities for unknown workflow ids', () => {
     const activityFunction = () => 'global-result';
     const operation = createActivityOperation();
@@ -568,6 +654,57 @@ describe('activity operation helpers', () => {
     });
   });
 
+  it('reconciles a keyed activity after the same engine relaunches before committing its receipt', async () => {
+    const workflowId = 'workflow-id';
+    const token = 'one-durable-run';
+    const storage = new MemoryStorage();
+    const internals = createInternals({ storage });
+    const options = { idempotencyKey: 'same-run-new-attempt' };
+    const callbacks = createCallbacks();
+    beginExecutionAttempt(internals as never, workflowId, token);
+    const first = await executeActivityOperationResult(
+      internals as never,
+      workflowId,
+      createActivityOperation({ fn: () => 'external-result', options }),
+      callbacks,
+    );
+    expect(first).toBe('external-result');
+    expect(await readSingleActivityReconciliationRecord(storage, workflowId)).toMatchObject({
+      status: 'started',
+    });
+
+    // The earlier attempt lost ownership before it could commit the staged completion.
+    internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+    beginExecutionAttempt(internals as never, workflowId, token);
+    const verify = mock(async () => ({
+      status: 'completed-with-result' as const,
+      result: 'external-result',
+    }));
+    const redispatch = mock(() => {
+      throw new Error('The external action already completed');
+    });
+    const replay = await executeActivityOperationResult(
+      internals as never,
+      workflowId,
+      createActivityOperation({
+        operationId: 'replayed-operation',
+        fn: Object.assign(redispatch, { verify }),
+        options,
+      }),
+      callbacks,
+    );
+    expect(replay).toBe('external-result');
+    expect(verify).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ phase: 'pre-dispatch-reconciliation' }),
+    );
+    expect(redispatch).not.toHaveBeenCalled();
+    expect(await readSingleActivityReconciliationRecord(storage, workflowId)).toMatchObject({
+      status: 'completed',
+      result: 'external-result',
+    });
+  });
+
   it('lease-fences immediate keyed activity completion writes', async () => {
     const storage = new RecordingConditionalBatchStorage();
     const epoch = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 1]);
@@ -776,11 +913,16 @@ describe('activity operation helpers', () => {
     const verify = mock(async (_result: unknown, context?: { phase?: string }) =>
       context?.phase === 'pre-dispatch-reconciliation' ? 'not-completed' : true,
     );
-    const secondExecute = mock(() => 'second-result');
+    let dispatched: unknown;
+    const secondExecute = mock((_input: unknown, context?: unknown) => {
+      dispatched = context;
+      return 'second-result';
+    });
     const replayActivity = Object.assign(secondExecute, { verify });
     const replayOperation = createActivityOperation({
       fn: replayActivity,
       operationId: 'replayed-after-not-completed',
+      workflowExecutionToken: 'owner-token',
       options: { idempotencyKey: 'crash-redo' },
     });
 
@@ -794,6 +936,7 @@ describe('activity operation helpers', () => {
     ).toBe('second-result');
 
     expect(secondExecute).toHaveBeenCalledTimes(1);
+    expect(dispatched).toMatchObject({ activityAttemptToken: expect.stringMatching(/:2$/) });
     expect(verify).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({ attempt: 1, phase: 'pre-dispatch-reconciliation' }),

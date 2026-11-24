@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import {
   createSingleWorkflowTagMutationOperation,
   createSingleWorkflowTagMutationRestBinding,
@@ -24,7 +24,9 @@ describe('single-workflow tag mutation helper', () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
+      description: 'Test workflow tag mutation, described.',
       destructive: false,
+      scope: 'tags:write',
       requiredEngineMethods: [],
       mutateTags: async (_engine, workflowId, tags) => {
         calls.push({ workflowId, tags: [...tags] });
@@ -54,7 +56,9 @@ describe('single-workflow tag mutation helper', () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
+      description: 'Test workflow tag mutation, described.',
       destructive: false,
+      scope: 'tags:write',
       requiredEngineMethods: [],
       mutateTags: async () => {},
     });
@@ -74,14 +78,19 @@ describe('single-workflow tag mutation helper', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Field "tags" must not contain empty tags' });
+    expect(await response.json()).toEqual({
+      error: 'Field "tags" must not contain empty tags',
+      retryable: false,
+    });
   });
 
   it('maps not-found failures to 404 with the engine message', async () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
+      description: 'Test workflow tag mutation, described.',
       destructive: false,
+      scope: 'tags:write',
       requiredEngineMethods: [],
       mutateTags: async () => {
         throw new Error('workflow not found');
@@ -106,6 +115,7 @@ describe('single-workflow tag mutation helper', () => {
     expect(await response.json()).toEqual({
       error: 'workflow not found',
       data: { resource: 'workflow', identifier: 'missing' },
+      retryable: false,
     });
   });
 
@@ -113,7 +123,9 @@ describe('single-workflow tag mutation helper', () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
+      description: 'Test workflow tag mutation, described.',
       destructive: false,
+      scope: 'tags:write',
       requiredEngineMethods: [],
       mutateTags: async () => {
         throw new Error('boom');
@@ -135,14 +147,16 @@ describe('single-workflow tag mutation helper', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('does not claim the bulk tag mutation route', async () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
+      description: 'Test workflow tag mutation, described.',
       destructive: false,
+      scope: 'tags:write',
       requiredEngineMethods: [],
       mutateTags: async () => {},
     });

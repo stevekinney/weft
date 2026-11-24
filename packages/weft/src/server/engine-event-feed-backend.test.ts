@@ -1,4 +1,4 @@
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
 /**
  * Tests for `createEngineEventFeedBackend` — the production
  * `WorkflowEventFeedBackend` implementation that wraps engine-owned
@@ -14,18 +14,14 @@ import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-s
 
 import { describe, expect, it } from 'bun:test';
 
+import { encodeCursor } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage, type ScanOptions } from "../embedded/storage/src/index.ts";
 import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { KEYS, type ScanOptions } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
+import { workflow, type WorkflowContext } from '../core/types.ts';
+import { KEYS } from '../storage/keys.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
-import {
-  createWorkflowEventFeed,
-  encodeCursor,
-  type EventEnvelope,
-} from './workflow-event-feed.ts';
+import { createWorkflowEventFeed, type EventEnvelope } from './workflow-event-feed.ts';
 
 class ScanCountingMemoryStorage extends MemoryStorage {
   readonly scanPrefixes: string[] = [];
@@ -71,7 +67,6 @@ async function waitForEventCount(
   engine: Engine,
   workflowId: string,
   expected: number,
-  timeoutMilliseconds = 500,
 ): Promise<void> {
   await waitForCondition(
     async () => {
@@ -80,7 +75,6 @@ async function waitForEventCount(
     },
     {
       label: `${expected} events for ${workflowId}`,
-      timeoutMs: timeoutMilliseconds,
       intervalMs: 5,
     },
   );
@@ -317,6 +311,7 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
     try {
       await engine.signal(handle.id, 'release', 'go');
       await handle.result();
+      // load-proof: negative window for a late rejection: load can only delay an unhandled rejection, never produce one earlier, so the absence check cannot flip
       await sleepForTesting(10);
     } finally {
       process.off('unhandledRejection', handler);
@@ -403,7 +398,6 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     engine: Engine,
     workflowId: string,
     expected: number,
-    timeoutMilliseconds = 500,
   ): Promise<void> {
     await waitForCondition(
       async () => {
@@ -412,7 +406,6 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
       },
       {
         label: `${expected} token chunks for ${workflowId}`,
-        timeoutMs: timeoutMilliseconds,
         intervalMs: 5,
       },
     );

@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { processStateCommitOperation } from './operations-state.ts';
 import { executeSubOperation, processWaitReviewOperation } from './sub-operation.ts';
 
@@ -193,6 +193,7 @@ describe('engine sub-operations', () => {
         'workflow-sub-operation',
         {
           operationId: 'race:1',
+          step: 1,
           operations: [
             { fn: () => 'winner', key: 'winner', operationId: 'memo:3', type: 'memo' },
             { fn: () => 'other', key: 'other', operationId: 'memo:4', type: 'memo' },
@@ -238,6 +239,7 @@ describe('engine sub-operations', () => {
       'workflow-race-abort',
       {
         operationId: 'race:abort',
+        step: 0,
         operations: [
           {
             activityName: 'slow',

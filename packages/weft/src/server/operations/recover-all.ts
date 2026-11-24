@@ -1,15 +1,14 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../../core/engine.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { assertOperationEngineMethods, shapeRestFault } from './operation-helpers.ts';
 
 // Intentionally accept no input fields. `acknowledgeUnknownWorkflowTypes` is
 // the dangerous opt-out that lets recovery silently skip unknown stored
-// workflow types — exposing it on this `kind: 'public'` operation would let
-// an unauthenticated caller abandon in-flight workflows over HTTP. The
+// workflow types — exposing it on this operation would let any caller holding
+// `workflows:admin` abandon in-flight workflows over HTTP. The
 // in-process flag is still available via `engine.recoverAll(...)` for code
 // paths that have already established the operator's intent.
 const recoverAllInput = z.object({});
@@ -25,15 +24,21 @@ export const recoverAllOperation = defineOperation({
   name: 'weft.recover.all',
   mcpExposable: false,
   summary: 'Recover all interrupted workflows',
+  description:
+    'Re-drive every workflow the engine finds interrupted in storage from its ' +
+    'persisted checkpoint, returning the ids it resumed. Takes no input. Faults with ' +
+    'Conflict when stored workflows belong to a type this engine has not registered; ' +
+    'the fault data names the missing types.',
   destructive: true,
   tags: ['System'],
   inputSchema: recoverAllInput,
   outputSchema: recoverAllOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:admin'] } },
+  discoverable: true,
   producibleFaults: ['Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine }): Promise<RecoverAllOutput> => {
+  invoke: async ({ host: engine }): Promise<RecoverAllOutput> => {
     assertOperationEngineMethods(engine, ['recoverAll']);
     const typedEngine = engine;
 

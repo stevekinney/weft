@@ -1,5 +1,5 @@
-import { MemoryStorage } from '../../storage/memory.ts';
-import { principalFromApiKey } from '../principal.ts';
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 
 export function encode(value: string): Uint8Array<ArrayBuffer> {
   return new Uint8Array(new TextEncoder().encode(value));

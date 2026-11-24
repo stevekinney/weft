@@ -40,9 +40,9 @@
 
 import { z } from 'zod';
 
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import type { WorkerRegistry } from '../../worker/registry.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import type { TaskQueue } from '../task-queue.ts';
 import { requireOperationStorage } from './operation-helpers.ts';
 import { collectTaskDiagnostics } from './task-diagnostics-collector.ts';
@@ -148,9 +148,17 @@ const getTaskDiagnosticsOutput = z
   .strict();
 
 const getTaskDiagnosticsInput = z.object({
-  operationId: z.string().min(1).optional(),
-  workflowId: z.string().min(1).optional(),
-  queue: z.string().min(1).optional(),
+  operationId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only the task with this operation id.'),
+  workflowId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only tasks that belong to this workflow id.'),
+  queue: z.string().min(1).optional().describe('Return only tasks on this task queue.'),
   /**
    * Execution-identity filters (COR-198), sourced from each matching task's
    * MOST RECENT `TaskAttemptRecord.executionIdentity` — never the ledger's
@@ -160,9 +168,21 @@ const getTaskDiagnosticsInput = z.object({
    * these; that is a bounded per-operation lookup, not a second unbounded
    * scan, so it only runs when at least one of these five is set.
    */
-  deploymentName: z.string().min(1).optional(),
-  buildId: z.string().min(1).optional(),
-  artifactDigest: z.string().min(1).optional(),
+  deploymentName: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only tasks whose latest attempt ran on this worker deployment name.'),
+  buildId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only tasks whose latest attempt ran on this worker build id.'),
+  artifactDigest: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only tasks whose latest attempt ran from this worker artifact digest.'),
   /**
    * The worker PROCESS identity that executed the attempt
    * (`executionIdentity.workerId`) — distinct from the ledger's
@@ -173,14 +193,59 @@ const getTaskDiagnosticsInput = z.object({
    * way it is already absent from `TaskAttemptRecord.executionIdentity`
    * itself — this filter never falls back to `workerSessionId`.
    */
-  workerId: z.string().min(1).optional(),
-  workflowRevision: z.string().min(1).optional(),
-  staleQueuedAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_QUEUED_AFTER_MS),
-  staleHeartbeatAfterMs: z.number().int().nonnegative().default(DEFAULT_STALE_HEARTBEAT_AFTER_MS),
-  retryStormMinimumAttempts: z.number().int().min(1).default(DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS),
-  includeExpectedDelayed: z.boolean().default(false),
-  unadoptedAfterMs: z.number().int().nonnegative().default(DEFAULT_UNADOPTED_AFTER_MS),
-  limit: z.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
+  workerId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Return only tasks whose latest attempt was executed by this worker process id. Tasks claimed by a worker with no registered manifest never match.',
+    ),
+  workflowRevision: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Return only tasks whose latest attempt ran on this workflow revision.'),
+  staleQueuedAfterMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(DEFAULT_STALE_QUEUED_AFTER_MS)
+    .describe('Milliseconds a task may sit queued before it is reported as stale; default 60000.'),
+  staleHeartbeatAfterMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(DEFAULT_STALE_HEARTBEAT_AFTER_MS)
+    .describe(
+      'Milliseconds without a heartbeat before an in-flight task is reported as stale; default 60000.',
+    ),
+  retryStormMinimumAttempts: z
+    .number()
+    .int()
+    .min(1)
+    .default(DEFAULT_RETRY_STORM_MINIMUM_ATTEMPTS)
+    .describe('Smallest number of attempts that makes a task a retry storm; default 3.'),
+  includeExpectedDelayed: z
+    .boolean()
+    .default(false)
+    .describe(
+      'When true, tasks that are queued only because they are scheduled for later are reported too; default false.',
+    ),
+  unadoptedAfterMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(DEFAULT_UNADOPTED_AFTER_MS)
+    .describe(
+      'Milliseconds a finished task may stay unadopted before it is reported; default 60000.',
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_LIMIT)
+    .default(DEFAULT_LIMIT)
+    .describe('Maximum number of diagnostic items to return, 1 to 200; default 50.'),
 });
 
 export type GetTaskDiagnosticsInput = z.infer<typeof getTaskDiagnosticsInput>;
@@ -204,6 +269,10 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
     name: 'weft.tasks.diagnostics',
     mcpExposable: false,
     summary: 'Get bounded task latency and stuck-work diagnostics',
+    description:
+      'Scan the task ledger for stuck or slow work and return a bounded list of ' +
+      'findings with a summary count per kind: stuck-queued and stale in-flight tasks, retry storms, queues with every worker at capacity, dead letters, unadopted terminal results, and optionally delayed tasks. Filter by operation, workflow, queue, or the worker identity that ' +
+      'ran the latest attempt; the thresholds are tunable. Read-only.',
     destructive: false,
     tags: ['Observability'],
     inputSchema: getTaskDiagnosticsInput,
@@ -216,7 +285,7 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
     discoverable: true,
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-    invoke: async ({ input, engine }): Promise<GetTaskDiagnosticsOutput> => {
+    invoke: async ({ input, host: engine }): Promise<GetTaskDiagnosticsOutput> => {
       const currentTime = options.now?.() ?? Date.now();
       // 'get' is only ever used for the optional execution-identity filters'
       // bounded per-operation attempt lookup — see `matchesTaskRecordFilter`.

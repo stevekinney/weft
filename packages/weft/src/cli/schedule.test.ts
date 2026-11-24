@@ -89,4 +89,23 @@ describe('schedule command validation and formatting', () => {
     expect(listed.exitCode).toBe(0);
     expect(listed.stdout).toContain('every 3600000ms');
   });
+
+  it('lists no schedules as text and as JSON when none exist', async () => {
+    const database = join(tmpdir(), `weft-schedule-${crypto.randomUUID()}.db`);
+    databases.push(database);
+    const base = {
+      command: 'schedule',
+      action: 'list',
+      database,
+      storage: 'sqlite',
+      help: false,
+    } as const;
+
+    const text = await executeSchedule({ ...base, json: false } satisfies ScheduleCommand);
+    expect(text).toEqual({ stdout: 'No schedules found.', exitCode: 0 });
+
+    const json = await executeSchedule({ ...base, json: true } satisfies ScheduleCommand);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({ items: [] });
+  });
 });

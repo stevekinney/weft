@@ -1,3 +1,19 @@
+import type { DiscoveryInfo, OperationFault, Principal } from "../../embedded/backchannel/src/index.ts";
+import {
+  FAULT_CODE_TO_HTTP_STATUS,
+  errorResponse,
+  executeOperation,
+  generateAsyncApiDocument,
+  generateOpenApiDocument,
+  generateOpenRpcDocument,
+  jsonResponse,
+  type AuthContext,
+  type ConnectionLease,
+  type OpenApiSecuritySchemeName,
+  type OperationRegistry,
+  type PipelineTrace,
+  type UnknownRestBinding,
+} from "../../embedded/backchannel/src/internals.ts";
 import type { Engine } from '../../core/engine.ts';
 import { listMcpTools } from '../../mcp/tools.ts';
 import {
@@ -7,36 +23,15 @@ import {
 import { resolveServerEnvironment } from '../../runtime/environment-configuration.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
 import { generateApiCatalog, originFromRequest, warnIfPublicOriginUnset } from '../api-catalog.ts';
-import { generateAsyncApiDocument } from '../asyncapi.ts';
-import type { AuthContext } from '../authentication.ts';
-import type { DiscoveryInfo } from '../discovery-info.ts';
-import { faultToHttpResponse } from '../fault-to-http.ts';
 import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import { generateMcpDiscovery } from '../mcp-discovery.ts';
-import { generateOpenApiDocument, type OpenApiSecuritySchemeName } from '../openapi.ts';
-import { generateOpenRpcDocument } from '../openrpc.ts';
-import {
-  executeOperation,
-  type OperationRegistry,
-  type PipelineTrace,
-} from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { FAULT_CODE_TO_HTTP_STATUS } from '../operation-fault.ts';
 import type { WorkflowStreamConnectionAcquirer } from '../operations/workflow-events-sse.ts';
-import type { Principal } from '../principal.ts';
-import {
-  createLiveOperationRegistry,
-  createLiveRestBindings,
-  type UnknownRestBinding,
-} from '../rest-bindings.ts';
+import { createLiveOperationRegistry, createLiveRestBindings } from '../rest-bindings.ts';
 import type { TaskQueue } from '../task-queue.ts';
+import { weftDiscoveryInfo } from '../weft-documents.ts';
+import { weftFaultToHttpResponse } from '../weft-operation-fault.ts';
 import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
-import {
-  defaultShapeSuccess,
-  errorResponse,
-  jsonResponse,
-  negotiatedResponse,
-} from './response-helpers.ts';
+import { defaultShapeSuccess, negotiatedResponse } from './response-helpers.ts';
 import type { DirectRouteHandlerName } from './route-matching.ts';
 import {
   dispatchServerSentEventsBinding,
@@ -128,6 +123,10 @@ export interface HandlerOptions {
   fleetEventFeed?: Pick<FleetEventFeed, 'subscribe'>;
   /** Shared per-workflow long-lived stream connection limiter. */
   acquireWorkflowStreamConnection?: WorkflowStreamConnectionAcquirer;
+  /** Internal server-owned lease for one fleet SSE subscriber. */
+  acquireFleetEventSubscriber?: () => ConnectionLease;
+  /** Internal server-owned lease for one workflow SSE subscriber. */
+  acquireWorkflowEventSubscriber?: () => ConnectionLease;
   /**
    * Optional pipeline-trace observer. **Internal test seam** used by the
    * dispatch-audit suite to prove every transport drives the full
@@ -262,11 +261,11 @@ export const DIRECT_ROUTE_EXECUTORS: Record<DirectRouteHandlerName, RouteExecuto
     jsonResponse(
       generateOpenApiDocument({
         registry: options?.operationRegistry ?? defaultOperationRegistry(options),
-        ...(options?.restBindings !== undefined ? { restBindings: options.restBindings } : {}),
+        restBindings: options?.restBindings ?? createLiveRestBindings(),
         ...(options?.supportedAuthenticationSchemes !== undefined
           ? { supportedSchemes: options.supportedAuthenticationSchemes }
           : {}),
-        ...(options?.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
+        discoveryInfo: weftDiscoveryInfo(options?.discoveryInfo),
       }),
     ),
   openRpcDocument: async ({ engine, options }) =>
@@ -275,15 +274,15 @@ export const DIRECT_ROUTE_EXECUTORS: Record<DirectRouteHandlerName, RouteExecuto
         registry: options?.operationRegistry ?? defaultOperationRegistry(options),
         transports: ['http', 'websocket'],
         mcpTools: listMcpTools(engine),
-        ...(options?.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
+        discoveryInfo: weftDiscoveryInfo(options?.discoveryInfo),
       }),
     ),
   asyncApiDocument: async ({ options }) =>
     jsonResponse(
       generateAsyncApiDocument({
         registry: options?.operationRegistry ?? defaultOperationRegistry(options),
-        ...(options?.restBindings !== undefined ? { restBindings: options.restBindings } : {}),
-        ...(options?.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
+        restBindings: options?.restBindings ?? createLiveRestBindings(),
+        discoveryInfo: weftDiscoveryInfo(options?.discoveryInfo),
       }),
     ),
 };
@@ -323,9 +322,10 @@ export async function dispatchViaExecuteOperation(
 
   const result = await executeOperation(binding.operationName, extracted.input, {
     principal,
-    engine,
+    host: engine,
     transport: 'http-rest',
     registry,
+    signal: request.signal,
     ...(pipelineTrace !== undefined ? { pipelineTrace } : {}),
   });
   if (result.ok) {
@@ -333,7 +333,9 @@ export async function dispatchViaExecuteOperation(
       ? binding.shapeSuccess(result.value, request)
       : defaultShapeSuccess(result.value, binding.success);
   }
-  return binding.shapeFault ? binding.shapeFault(result.fault) : faultToHttpResponse(result.fault);
+  return binding.shapeFault
+    ? binding.shapeFault(result.fault)
+    : weftFaultToHttpResponse(result.fault);
 }
 
 type RestBindingInputResult =
@@ -361,7 +363,9 @@ async function extractRestBindingInput(
     return { ok: true, input };
   } catch (error) {
     if (isOperationFaultLike(error)) {
-      const response = binding.shapeFault ? binding.shapeFault(error) : faultToHttpResponse(error);
+      const response = binding.shapeFault
+        ? binding.shapeFault(error)
+        : weftFaultToHttpResponse(error);
       return { ok: false, response };
     }
     const message = error instanceof Error ? error.message : String(error);

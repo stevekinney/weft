@@ -1,19 +1,12 @@
+import {
+  parseServerSentEventChunk,
+  type ServerSentEventFrame,
+} from "../embedded/backchannel/src/client/index.ts";
 import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
 import type { StreamCloseReason } from './event-stream.ts';
 import { WorkflowEventTailLifecycle } from './event-tail-lifecycle.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
-
-export type ServerSentEventFrame = {
-  readonly id?: string;
-  readonly event?: string;
-  readonly data: string;
-};
-
-export type ServerSentEventParseResult = {
-  readonly frames: ReadonlyArray<ServerSentEventFrame>;
-  readonly remainder: string;
-};
 
 export type SseWorkflowEventStreamOptions = {
   readonly maxReconnectAttempts?: number;
@@ -33,76 +26,12 @@ type WorkflowEventEnvelope = {
   readonly payload: unknown;
 };
 
-type ServerSentEventFrameParts = {
-  id: string | undefined;
-  event: string | undefined;
-  dataLines: string[];
-};
-
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_BACKOFF_MS = 50;
 
 export function workflowEventsSseUrl(baseUrl: string, workflowId: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   return `${trimmed}/v1/workflows/${encodeURIComponent(workflowId)}/events/sse`;
-}
-
-export function parseServerSentEventChunk(
-  text: string,
-  previousRemainder = '',
-): ServerSentEventParseResult {
-  const combined = `${previousRemainder}${text}`.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  const parts = combined.split('\n\n');
-  const remainder = parts.pop() ?? '';
-  const frames = parts.map(parseServerSentEventFrame).filter((frame) => frame !== null);
-  return { frames, remainder };
-}
-
-function parseServerSentEventFrame(block: string): ServerSentEventFrame | null {
-  const parts: ServerSentEventFrameParts = {
-    id: undefined,
-    event: undefined,
-    dataLines: [],
-  };
-
-  for (const rawLine of block.split('\n')) {
-    applyServerSentEventLine(parts, rawLine);
-  }
-
-  return frameFromParts(parts);
-}
-
-function applyServerSentEventLine(parts: ServerSentEventFrameParts, rawLine: string): void {
-  if (rawLine === '' || rawLine.startsWith(':')) return;
-  const { field, value } = splitServerSentEventLine(rawLine);
-  if (field === 'id') {
-    parts.id = value;
-  } else if (field === 'event') {
-    parts.event = value;
-  } else if (field === 'data') {
-    parts.dataLines.push(value);
-  }
-}
-
-function splitServerSentEventLine(rawLine: string): { field: string; value: string } {
-  const separator = rawLine.indexOf(':');
-  const field = separator === -1 ? rawLine : rawLine.slice(0, separator);
-  const rawValue = separator === -1 ? '' : rawLine.slice(separator + 1);
-  return {
-    field,
-    value: rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue,
-  };
-}
-
-function frameFromParts(parts: ServerSentEventFrameParts): ServerSentEventFrame | null {
-  if (parts.id === undefined && parts.event === undefined && parts.dataLines.length === 0) {
-    return null;
-  }
-  return {
-    ...(parts.id === undefined ? {} : { id: parts.id }),
-    ...(parts.event === undefined ? {} : { event: parts.event }),
-    data: parts.dataLines.join('\n'),
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

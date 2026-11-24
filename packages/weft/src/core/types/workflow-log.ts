@@ -21,12 +21,14 @@ export type WorkflowLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /**
  * The structured record a {@link WorkflowLogger} emits for one log call. Envelope
- * fields (`level`, `message`, `workflowId`, `workflowType`, `timestamp`) are
- * engine-owned and always present; caller `attributes` nest under their own key so
- * they can never shadow an envelope field. `timestamp` is wall-clock ms at emit —
- * observability metadata, never checkpointed or replayed. Weft does not retain
- * records for later engine/client/transport queries; a host that needs history
- * persists records received through `EngineOptions.onLog` in its logging system.
+ * fields (`level`, `message`, `workflowId`, `workflowType`, `timestamp`, `step`) are
+ * engine-owned; caller `attributes` nest under their own key so they can never shadow
+ * an envelope field. `timestamp` is wall-clock ms at emit — observability metadata,
+ * never checkpointed or replayed. Weft retains nothing by itself: a host that wants
+ * history persists the records it receives through `EngineOptions.onLog` in its
+ * logging system, or hands the engine a `createWorkflowLogStore` store, which writes
+ * them with the run and serves them through `Engine.getLogs` and the
+ * `weft.workflows.logs.list` operation.
  *
  * @example
  * ```ts
@@ -40,6 +42,25 @@ export interface WorkflowLogRecord {
   readonly workflowId: string;
   readonly workflowType: string;
   readonly timestamp: number;
+  /**
+   * The index of the durable step the workflow body was about to run when it logged: the
+   * number of durable operations it had completed or replayed so far. The engine sets it on
+   * every record it emits, inline and worker-forwarded; a record a host builds itself may
+   * omit it.
+   */
+  readonly step?: number;
+  /**
+   * True when the run was continued from a park (a signal, a review, a timer) or a recovery and
+   * this call sits in front of the operation it was parked on, and the run's checkpoint shows its
+   * earlier execution reached that operation: the call was already logged, so this record repeats
+   * a line that was delivered before. A run recovered before it took its first turn never carries
+   * the mark, because nothing was logged before; without that evidence a line is delivered unmarked,
+   * and a duplicate is preferred to a lost line. The engine
+   * delivers it all the same, because a host may rely on seeing the call again (the human-wait
+   * park marker does); a host that keeps one entry per call, as the persisted log store does,
+   * skips it. Absent on every other record.
+   */
+  readonly replayed?: boolean;
   readonly attributes?: Record<string, unknown>;
 }
 
@@ -50,19 +71,25 @@ export interface WorkflowLogRecord {
  * `workflowType`, `level`, and `timestamp` auto-attached. Caller-supplied
  * `attributes` are nested under their own key and cannot overwrite the envelope.
  *
- * Replay behavior: a workflow body re-executes from the start on recovery to
- * rebuild state. Log calls in the already-committed replay window are suppressed,
- * so a recovered run does not re-emit logs it already emitted. Suppression is
- * per-position: a log call sitting at a step the engine has already cached is
- * silenced; a log call at the live frontier emits. This holds in both inline and
- * worker execution modes.
+ * Replay behavior: a workflow body re-executes from the start on recovery, or
+ * when a parked run (a signal, a review, a timer) continues, to rebuild state.
+ * Log calls in the already-committed replay window are suppressed, so a
+ * continued run does not re-emit logs it already emitted: a log call sitting at
+ * a step the engine has already cached is silenced. The operation the run was
+ * parked on is not cached, so the log calls in front of it are delivered again
+ * (`ctx.log('before wait'); yield* ctx.waitForSignal('go')` reaches the sink on
+ * the first run and again on resume), marked {@link WorkflowLogRecord.replayed}.
+ * The persisted log store skips a marked record, so a line is stored once; a
+ * host `onLog` sink that wants one entry per call does the same. A log call past
+ * the parked operation is new work and carries no mark. This holds in both inline
+ * and worker execution modes.
  *
- * Two replay caveats. A log placed *after* the last committed step re-fires on
- * recovery, because there is no cached step to suppress it (the same caveat
- * Temporal's workflow logger carries); likewise a workflow with no committed
- * durable step has no replay position to suppress against, so its logs may
- * re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that
- * branch's re-execution semantics.
+ * One replay caveat. A log call that runs after an operation completed and before
+ * the next operation yields is logged again, unmarked, if the run crashes in that
+ * window (the checkpoint that would record the operation's result is written at
+ * the next yield, so recovery re-enters that operation and runs the log call
+ * again). Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's
+ * re-execution semantics.
  *
  * A host sink installed via `EngineOptions.onLog` receives records from BOTH execution
  * modes: inline records directly, and worker-mode records forwarded from the worker

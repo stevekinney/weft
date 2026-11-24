@@ -2,7 +2,7 @@ import type { HumanReviewOptions, HumanReviewResult } from '../review/index.ts';
 import { parseDuration } from '../scheduler.ts';
 import type { Duration } from '../types.ts';
 import type { Context } from './index.ts';
-import { getInternals, yieldOperation, type ContextInternals } from './internals.ts';
+import { getInternals, stepStateKey, yieldOperation, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { dropSleepFireAt, readOrInitSleepFireAt } from './sleep-deadline.ts';
 import type { OffloadReference, StreamReference, StreamSink } from './types.ts';
@@ -41,7 +41,7 @@ export function prepareSleepOperation(
   // restart of the same id at the same step, but that is handled at the engine:
   // a sleep resolver only settles for a timer whose `fireAt` reaches its run's
   // deadline, so a terminated run's stale timer is ignored (see resolveSleepTimer).
-  const operationId = `${internals.context.workflowId}:${step}`;
+  const operationId = `${internals.context.workflowId}:${stepStateKey(internals, step)}`;
   const callerStack = captureCallerStack();
 
   return {

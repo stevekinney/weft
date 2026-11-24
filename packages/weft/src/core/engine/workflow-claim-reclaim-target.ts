@@ -14,8 +14,8 @@
  * @module core/engine/workflow-claim-reclaim-target
  */
 
-import type { Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import type { Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decodeWorkflowState } from './validation.ts';
 import type { WorkflowClaimMetricsCollector } from './workflow-claim-metrics.ts';
 import { listWorkflowClaimReclaimCandidates } from './workflow-claim-reclaim-scan.ts';

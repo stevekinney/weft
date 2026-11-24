@@ -1,4 +1,5 @@
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 /**
  * End-to-end crash recovery tests.
  *
@@ -9,9 +10,9 @@ import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-s
 
 import { describe, expect, it } from 'bun:test';
 
-import { encodeStorageKeyComponent, KEYS as STORAGE_KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { encodeStorageKeyComponent, MemoryStorage } from "../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS as STORAGE_KEYS } from '../storage/keys.ts';
 import { encode } from './codec.ts';
 import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from './engine.ts';
 import { WorkflowRecoverySkippedEvent, WorkflowResumedEvent } from './events.ts';
@@ -26,7 +27,7 @@ import { DEFAULT_WORKFLOW_VERSION, VersionMismatchError } from './versioning.ts'
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 function createStoredWorkflowState(
@@ -613,7 +614,6 @@ describe('crash recovery', () => {
     // committed; recovery therefore cannot pass by consuming the original `ev` for
     // the first time.
     await waitForCondition(async () => !(await hasBufferedEv()), {
-      timeoutMs: 2000,
       label: 'race consumed the ev signal and checkpointed before the crash',
     });
     expect(await storage.get(STORAGE_KEYS.checkpoint('wf-race-signal'))).not.toBeNull();
@@ -663,7 +663,6 @@ describe('crash recovery', () => {
     await flush();
     await engine1.signal('wf-keyed-race', 'event', 'event-payload');
     await waitForCondition(async () => !(await hasBufferedEvent()), {
-      timeoutMs: 2000,
       label: 'keyed race consumed the event and checkpointed before the crash',
     });
     expect(await storage.get(STORAGE_KEYS.checkpoint('wf-keyed-race'))).not.toBeNull();
@@ -723,7 +722,6 @@ describe('crash recovery', () => {
     release();
 
     await waitForCondition(async () => !(await hasBufferedSignal()), {
-      timeoutMs: 2000,
       label: 'zero-duration drain consumed and checkpointed the buffered signal',
     });
     expect(await storage.get(STORAGE_KEYS.checkpoint('zero-duration-drain'))).not.toBeNull();
@@ -887,7 +885,7 @@ describe('crash recovery', () => {
   });
 
   it('resolves expired sleep immediately on resume via fast path', async () => {
-    const { MemoryStorage: TestMemoryStorage } = await import('../storage/memory.ts');
+    const { MemoryStorage: TestMemoryStorage } = await import("../embedded/storage/src/index.ts");
 
     const storage = new TestMemoryStorage();
     let currentTime = 1000;
@@ -929,7 +927,7 @@ describe('crash recovery', () => {
   });
 
   it('post-recovery sleeps use current time, not stale checkpoint time', async () => {
-    const { MemoryStorage: TestMemoryStorage } = await import('../storage/memory.ts');
+    const { MemoryStorage: TestMemoryStorage } = await import("../embedded/storage/src/index.ts");
 
     const storage = new TestMemoryStorage();
     let currentTime = 1000;
@@ -1099,7 +1097,7 @@ describe('crash recovery', () => {
 
     // The checkpoint should reflect the final state
     const { deserializeCheckpoint } = await import('./checkpoint.ts');
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     const bytes = await storage.get(KEYS.checkpoint('wf-step'));
     expect(bytes).not.toBeNull();
 
@@ -1139,7 +1137,7 @@ describe('crash recovery', () => {
     expect(activityCalls).toBe(activityCount);
 
     const { deserializeCheckpoint } = await import('./checkpoint.ts');
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     const bytes = await storage.get(KEYS.checkpoint('wf-accum'));
     expect(bytes).not.toBeNull();
 
@@ -1200,7 +1198,7 @@ describe('crash recovery', () => {
     await flush();
 
     const { deserializeCheckpoint } = await import('./checkpoint.ts');
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     const historySizes: number[] = [];
 
     for await (const [, checkpointBytes] of storage.scan(
@@ -1224,7 +1222,7 @@ describe('crash recovery', () => {
     await seedStoredWorkflowState(storage, 'wf-old-accum', 'old-accumulating', 'running');
 
     const { createCheckpoint, serializeCheckpoint } = await import('./checkpoint.ts');
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     await storage.put(
       KEYS.checkpoint('wf-old-accum'),
       serializeCheckpoint({
@@ -1287,7 +1285,7 @@ describe('crash recovery', () => {
     await flush();
     expect(activityCalls).toBe(activityCount);
 
-    const { KEYS } = await import('../storage/interface.ts');
+    const { KEYS } = await import('../storage/keys.ts');
     expect(await storage.get(KEYS.event('wf-compacted-accum', 0))).toBeNull();
 
     activityCalls = 0;
@@ -1383,7 +1381,7 @@ describe('crash recovery', () => {
   });
 
   it('resume uses BunSQLiteStorage as backend', async () => {
-    const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+    const { BunSQLiteStorage } = await import("../embedded/storage-bun-sqlite/src/index.ts");
 
     using storage = new BunSQLiteStorage(':memory:');
 
@@ -1420,7 +1418,7 @@ describe('crash recovery', () => {
   });
 
   it('Engine.create recovers by default against durable storage and resumes a parked workflow', async () => {
-    const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+    const { BunSQLiteStorage } = await import("../embedded/storage-bun-sqlite/src/index.ts");
 
     using storage = new BunSQLiteStorage(':memory:');
 
@@ -1467,7 +1465,7 @@ describe('crash recovery', () => {
   });
 
   it('Engine.create({ recover: false }) leaves a parked workflow dormant without executing its next step', async () => {
-    const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+    const { BunSQLiteStorage } = await import("../embedded/storage-bun-sqlite/src/index.ts");
 
     using storage = new BunSQLiteStorage(':memory:');
 
@@ -1576,7 +1574,7 @@ describe('crash recovery', () => {
         const state = await firstEngine.get('idem-crash-444');
         return state?.status === 'running' && executeCount === 1;
       },
-      { timeoutMs: 2000, label: 'keyed activity completed and workflow parked' },
+      { label: 'keyed activity completed and workflow parked' },
     );
     expect(executeCount).toBe(1);
     firstEngine[Symbol.dispose]();
@@ -1590,7 +1588,7 @@ describe('crash recovery', () => {
         const state = await recoveredEngine.get('idem-crash-444');
         return state?.status === 'completed';
       },
-      { timeoutMs: 2000, label: 'recovered workflow completed' },
+      { label: 'recovered workflow completed' },
     );
 
     const recovered = await recoveredEngine.get('idem-crash-444');
@@ -1648,7 +1646,7 @@ describe('crash recovery', () => {
         const state = await firstEngine.get('stc-crash-449');
         return state?.status === 'running' && executeCount === 1;
       },
-      { timeoutMs: 2000, label: 'attempt 1 failed and the workflow parked on the backoff sleep' },
+      { label: 'attempt 1 failed and the workflow parked on the backoff sleep' },
     );
     expect(executeCount).toBe(1);
     firstEngine[Symbol.dispose]();
@@ -1665,7 +1663,7 @@ describe('crash recovery', () => {
         const state = await recoveredEngine.get('stc-crash-449');
         return state?.status === 'failed';
       },
-      { timeoutMs: 2000, label: 'recovered workflow failed at the schedule-to-close boundary' },
+      { label: 'recovered workflow failed at the schedule-to-close boundary' },
     );
 
     const recovered = await recoveredEngine.get('stc-crash-449');

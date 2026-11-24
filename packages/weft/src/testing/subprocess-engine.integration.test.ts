@@ -1,0 +1,501 @@
+import { afterEach, describe, expect, it } from 'bun:test';
+import { mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { HANG_GUARD_MILLISECONDS } from "../../test-support/embedded/testing/src/hang-guard.ts";
+import { outcomeOf, rethrow } from "../../test-support/embedded/testing/src/module-scope-scenario.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
+import { HttpClient } from '../client/http-client.ts';
+import type { WorkflowState } from '../core/types.ts';
+import {
+  killAndReboot,
+  spawnServerSubprocess,
+  type SubprocessServerHandle,
+} from './subprocess-engine.ts';
+
+const repositoryRoot = new URL('../..', import.meta.url);
+const indexModuleUrl = new URL('src/index.ts', repositoryRoot).href;
+const serverModuleUrl = new URL('src/server/index.ts', repositoryRoot).href;
+const sqliteModuleUrl = import.meta.resolve('@lostgradient/storage-bun-sqlite');
+
+const createdFixtures: string[] = [];
+let handles: SubprocessServerHandle[] = [];
+
+async function stopHandlesAndRemoveFixtures(): Promise<void> {
+  await Promise.all(handles.map((handle) => handle.stop()));
+  handles = [];
+  for (const fixture of createdFixtures.splice(0)) {
+    rmSync(fixture, { force: true, recursive: true });
+    rmSync(`${fixture}-wal`, { force: true });
+    rmSync(`${fixture}-shm`, { force: true });
+  }
+}
+
+afterEach(stopHandlesAndRemoveFixtures);
+
+/** `outcomeOf` that stops a hung scenario's servers and removes its fixtures when its guard fires. */
+function serverScenario(scenario: () => Promise<void>): Promise<unknown> {
+  return outcomeOf(scenario, HANG_GUARD_MILLISECONDS, stopHandlesAndRemoveFixtures);
+}
+
+function createFixturePath(name: string): string {
+  const directory = join(tmpdir(), `weft-subprocess-${name}-${crypto.randomUUID()}`);
+  mkdirSync(directory, { recursive: true });
+  createdFixtures.push(directory);
+  return directory;
+}
+
+async function writeEntrypoint(name: string, source: string): Promise<string> {
+  const directory = createFixturePath(name);
+  const path = join(directory, 'entrypoint.ts');
+  await Bun.write(path, source);
+  return path;
+}
+
+function parseArgumentsSource(): string {
+  return `
+function readOption(name, fallback) {
+  const index = Bun.argv.indexOf(name);
+  if (index === -1) return fallback;
+  return Bun.argv[index + 1] ?? fallback;
+}
+const port = Number(readOption('--port', '0'));
+const databasePath = readOption('--database', ':memory:');
+`;
+}
+
+function durableEntrypointSource(): string {
+  return `
+import { Engine, activity, workflow } from ${JSON.stringify(indexModuleUrl)};
+import { serve } from ${JSON.stringify(serverModuleUrl)};
+import { BunSQLiteStorage } from ${JSON.stringify(sqliteModuleUrl)};
+
+${parseArgumentsSource()}
+
+async function waitForFile(path) {
+  while (!(await Bun.file(path).exists())) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function incrementFile(path) {
+  const current = (await Bun.file(path).exists()) ? Number(await Bun.file(path).text()) : 0;
+  const next = current + 1;
+  await Bun.write(path, String(next));
+  return next;
+}
+
+const countPath = Bun.env.WEFT_ACTIVITY_COUNT_PATH;
+const startedPath = Bun.env.WEFT_ACTIVITY_STARTED_PATH;
+const releasePath = Bun.env.WEFT_ACTIVITY_RELEASE_PATH;
+if (!countPath || !startedPath || !releasePath) {
+  throw new Error('missing subprocess durability environment paths');
+}
+
+const countedActivity = activity({
+  name: 'countedActivity',
+  execute: async () => incrementFile(countPath),
+});
+
+const blockingActivity = activity({
+  name: 'blockingActivity',
+  execute: async () => {
+    const attempt = await incrementFile(startedPath);
+    await waitForFile(releasePath);
+    return attempt;
+  },
+});
+
+const storage = new BunSQLiteStorage(databasePath);
+const engine = new Engine({ storage });
+engine.register(countedActivity);
+engine.register(blockingActivity);
+const activityThenSignal = workflow({ name: 'activity-then-signal' }).execute(async function* (ctx) {
+  const activityCount = yield* ctx.run('countedActivity');
+  const signalPayload = yield* ctx.waitForSignal('finish');
+  return { activityCount, signalPayload };
+});
+const blockingActivityWorkflow = workflow({ name: 'blocking-activity' }).execute(async function* (ctx) {
+  const attempt = yield* ctx.run('blockingActivity');
+  return { attempt };
+});
+const signalOnly = workflow({ name: 'signal-only' }).execute(async function* (ctx) {
+  const signalPayload = yield* ctx.waitForSignal('finish');
+  return { signalPayload };
+});
+engine.register(activityThenSignal);
+engine.register(blockingActivityWorkflow);
+engine.register(signalOnly);
+await engine.recoverAll();
+const server = serve({ engine, port, hostname: '127.0.0.1' });
+console.log('WEFT_SUBPROCESS_READY ' + server.url);
+
+async function stop(exitCode) {
+  await server.stop();
+  storage[Symbol.dispose]();
+  process.exit(exitCode);
+}
+process.on('SIGTERM', () => void stop(0));
+process.on('SIGINT', () => void stop(0));
+`;
+}
+
+async function waitForWorkflowStatus(
+  client: HttpClient,
+  workflowId: string,
+  predicate: (state: WorkflowState) => boolean,
+  label: string,
+): Promise<WorkflowState> {
+  let lastState: WorkflowState | null = null;
+  for await (const _turn of awakeTurns()) {
+    lastState = await client.get(workflowId);
+    if (lastState !== null && predicate(lastState)) return lastState;
+    await sleepForTesting(10);
+  }
+  throw new Error(`Timed out waiting for ${label}; last state: ${JSON.stringify(lastState)}`);
+}
+
+async function waitForFileText(path: string, expected: string, label: string): Promise<void> {
+  for await (const _turn of awakeTurns()) {
+    if ((await Bun.file(path).exists()) && (await Bun.file(path).text()) === expected) return;
+    await sleepForTesting(10);
+  }
+  const actual = (await Bun.file(path).exists()) ? await Bun.file(path).text() : '<missing>';
+  throw new Error(`Timed out waiting for ${label}; got ${actual}`);
+}
+
+async function readWorkflowResult(baseUrl: string, workflowId: string): Promise<unknown> {
+  const response = await fetch(`${baseUrl}/v1/workflows/${encodeURIComponent(workflowId)}/result`);
+  if (!response.ok) {
+    throw new Error(`Result request failed with ${response.status}: ${await response.text()}`);
+  }
+  const body = (await response.json()) as { result: unknown };
+  return body.result;
+}
+
+async function startDurableServer(
+  entrypoint: string,
+  databasePath: string,
+  port = 0,
+  options: { startupTimeoutMs?: number } = {},
+) {
+  const directory = dirname(databasePath);
+  const handle = await spawnServerSubprocess({
+    entrypoint,
+    databasePath,
+    port,
+    ...options,
+    env: {
+      WEFT_ACTIVITY_COUNT_PATH: join(directory, 'activity-count.txt'),
+      WEFT_ACTIVITY_STARTED_PATH: join(directory, 'activity-started.txt'),
+      WEFT_ACTIVITY_RELEASE_PATH: join(directory, 'activity-release.txt'),
+    },
+  });
+  handles.push(handle);
+  return handle;
+}
+
+// Each scenario below boots real server processes, which takes seconds on a loaded host, so it
+// runs here at module scope, off Bun's five-second per-test clock, and stops its servers and
+// removes its fixtures when it ends; its test rethrows the outcome.
+
+const scenario1 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'startup-crash',
+      "console.error('startup exploded'); process.exit(42);",
+    );
+
+    expect(
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('startup-crash-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/startup exploded/);
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario2 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'early-exit',
+      `
+  ${parseArgumentsSource()}
+  console.log('WEFT_SUBPROCESS_READY http://127.0.0.1:' + port);
+  // Exit well after the parent's post-readiness stabilization window
+  // (verifyProcessSurvivedReadiness waits up to 50ms); a short delay races that
+  // window under load and trips a spurious "exited after readiness" rejection.
+  setTimeout(() => process.exit(17), 1_000);
+  `,
+    );
+    const handle = await spawnServerSubprocess({
+      entrypoint,
+      databasePath: join(createFixturePath('early-exit-db'), 'weft.db'),
+    });
+    handles.push(handle);
+
+    await handle.process.exited;
+    expect(await throwingRejectionOf(killAndReboot(handle))).toThrow(/already exited/);
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario3 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'ready-then-exit',
+      `
+  ${parseArgumentsSource()}
+  console.log('WEFT_SUBPROCESS_READY http://127.0.0.1:' + port);
+  process.exit(0);
+  `,
+    );
+
+    expect(
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('ready-then-exit-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/after readiness/);
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario4 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'ready-without-port',
+      `
+  console.log('WEFT_SUBPROCESS_READY http://127.0.0.1');
+  setInterval(() => {}, 1000);
+  `,
+    );
+
+    expect(
+      await throwingRejectionOf(
+        spawnServerSubprocess({
+          entrypoint,
+          databasePath: join(createFixturePath('ready-without-port-db'), 'weft.db'),
+        }),
+      ),
+    ).toThrow(/explicit port/);
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario5 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint('bind-failure', durableEntrypointSource());
+    const databasePath = join(createFixturePath('bind-failure-db'), 'weft.db');
+    const handle = await startDurableServer(entrypoint, databasePath);
+    handle.process.kill('SIGKILL');
+    await handle.process.exited;
+    const portBlocker = Bun.serve({
+      hostname: '127.0.0.1',
+      port: handle.port,
+      fetch: () => new Response('blocked'),
+    });
+
+    try {
+      // A subprocess that cannot bind the reused port either exits before
+      // readiness or logs EADDRINUSE — both are causally tied to the port being
+      // occupied. The startup timeout is generous (5s) so that, under test-suite
+      // concurrency, the blocked subprocess has time to actually exit or log the
+      // bind error rather than tripping the readiness-timeout path. Keeping the
+      // assertion to these two messages preserves the test's intent: it must not
+      // pass merely because some unrelated startup delay timed out.
+      expect(
+        await throwingRejectionOf(
+          startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5000 }),
+        ),
+      ).toThrow(/before readiness|EADDRINUSE/);
+    } finally {
+      portBlocker.stop(true);
+    }
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario6 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'environment-allowlist',
+      `
+  ${parseArgumentsSource()}
+  if (Bun.env.WEFT_PARENT_SECRET === 'do-not-forward') {
+    console.error('secret leaked');
+    process.exit(9);
+  }
+  if (Bun.env.WEFT_EXPLICIT_VALUE !== 'forwarded') {
+    console.error('explicit environment missing');
+    process.exit(10);
+  }
+  console.log('WEFT_SUBPROCESS_READY http://127.0.0.1:' + port);
+  setInterval(() => {}, 1000);
+  `,
+    );
+    Bun.env['WEFT_PARENT_SECRET'] = 'do-not-forward';
+    try {
+      const handle = await spawnServerSubprocess({
+        entrypoint,
+        databasePath: join(createFixturePath('environment-allowlist-db'), 'weft.db'),
+        env: { WEFT_EXPLICIT_VALUE: 'forwarded' },
+      });
+      handles.push(handle);
+      expect(handle.stderr).not.toContain('secret leaked');
+    } finally {
+      delete Bun.env['WEFT_PARENT_SECRET'];
+    }
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario7 = await serverScenario(async () => {
+  try {
+    const entrypoint = await writeEntrypoint(
+      'sigterm-clean-exit',
+      `
+  ${parseArgumentsSource()}
+  console.log('WEFT_SUBPROCESS_READY http://127.0.0.1:' + port);
+  process.on('SIGTERM', () => process.exit(0));
+  setInterval(() => {}, 1000);
+  `,
+    );
+    let handle = await spawnServerSubprocess({
+      entrypoint,
+      databasePath: join(createFixturePath('sigterm-clean-exit-db'), 'weft.db'),
+    });
+    handles.push(handle);
+
+    expect(await throwingRejectionOf(killAndReboot(handle, 'SIGTERM'))).toThrow(
+      /Expected subprocess/,
+    );
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario8 = await serverScenario(async () => {
+  try {
+    const directory = createFixturePath('parked');
+    const databasePath = join(directory, 'weft.db');
+    const entrypoint = await writeEntrypoint('parked-entrypoint', durableEntrypointSource());
+    let handle = await startDurableServer(entrypoint, databasePath);
+    const client = new HttpClient({ baseUrl: handle.url });
+
+    const workflow = await client.start('activity-then-signal', null, { id: 'parked-workflow' });
+    await waitForWorkflowStatus(
+      client,
+      workflow.id,
+      (state) => state.status === 'running',
+      'workflow to park',
+    );
+    await waitForFileText(join(directory, 'activity-count.txt'), '1', 'activity count');
+
+    handle = await killAndReboot(handle);
+    handles.push(handle);
+    const rebootedClient = new HttpClient({ baseUrl: handle.url });
+    expect(handle.command).toContain('--port');
+    expect(handle.command).toContain('0');
+    await rebootedClient.signal(workflow.id, 'finish', 'done');
+
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({
+      activityCount: 1,
+      signalPayload: 'done',
+    });
+    expect(await Bun.file(join(directory, 'activity-count.txt')).text()).toBe('1');
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario9 = await serverScenario(async () => {
+  try {
+    const directory = createFixturePath('in-flight');
+    const databasePath = join(directory, 'weft.db');
+    const entrypoint = await writeEntrypoint('in-flight-entrypoint', durableEntrypointSource());
+    let handle = await startDurableServer(entrypoint, databasePath);
+    const client = new HttpClient({ baseUrl: handle.url });
+
+    const workflow = await client.start('blocking-activity', null, { id: 'in-flight-workflow' });
+    await waitForFileText(join(directory, 'activity-started.txt'), '1', 'first activity dispatch');
+
+    handle = await killAndReboot(handle);
+    handles.push(handle);
+    await waitForFileText(join(directory, 'activity-started.txt'), '2', 'second activity dispatch');
+    await Bun.write(join(directory, 'activity-release.txt'), 'go');
+
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({ attempt: 2 });
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+const scenario10 = await serverScenario(async () => {
+  try {
+    const directory = createFixturePath('queued-signal');
+    const databasePath = join(directory, 'weft.db');
+    const entrypoint = await writeEntrypoint('queued-signal-entrypoint', durableEntrypointSource());
+    let handle = await startDurableServer(entrypoint, databasePath);
+    const client = new HttpClient({ baseUrl: handle.url });
+
+    const workflow = await client.start('signal-only', null, { id: 'signal-only-workflow' });
+    await waitForWorkflowStatus(
+      client,
+      workflow.id,
+      (state) => state.status === 'running',
+      'signal-only workflow to park',
+    );
+
+    handle = await killAndReboot(handle);
+    handles.push(handle);
+    const rebootedClient = new HttpClient({ baseUrl: handle.url });
+    await rebootedClient.signal(workflow.id, 'finish', { ok: true });
+
+    expect(await readWorkflowResult(handle.url, workflow.id)).toEqual({
+      signalPayload: { ok: true },
+    });
+  } finally {
+    await stopHandlesAndRemoveFixtures();
+  }
+});
+
+describe('subprocess server harness', () => {
+  it('surfaces startup crashes with captured stderr', () => rethrow(scenario1));
+
+  it('rejects killAndReboot when the subprocess already exited without a signal', () =>
+    rethrow(scenario2));
+
+  it('rejects a subprocess that exits immediately after printing readiness', () =>
+    rethrow(scenario3));
+
+  it('rejects readiness URLs without explicit ports', () => rethrow(scenario4));
+
+  it('surfaces bind failures on a reused port', () => rethrow(scenario5));
+
+  it('does not forward parent secrets unless explicitly requested', () => rethrow(scenario6));
+
+  it('rejects clean exits that do not report signal termination', () => rethrow(scenario7));
+
+  it('recovers a parked workflow after SIGKILL without re-running a completed activity', () =>
+    rethrow(scenario8));
+
+  it('re-dispatches an in-flight activity after SIGKILL', () => rethrow(scenario9));
+
+  it('accepts a signal over the wire after reboot and completes the recovered workflow', () =>
+    rethrow(scenario10));
+});

@@ -20,10 +20,12 @@
  * Persistence model in the callers: the engine writes the partial entry
  * into `context.accumulatedResults` in place at the operation's parent
  * step; the existing checkpoint-persistence path picks it up on the
- * next yield boundary. This trades some durability under hard process
- * crashes for a much smaller blast radius into the engine's
- * checkpoint-write machinery — see the `parallel-execution.md` guide
- * for the precise durability contract.
+ * next yield boundary. A `ctx.all` branch that settles while a sibling
+ * is still pending commits its slot at once (`onSlotSettled`), so a
+ * branch that finished is not run again when a sibling keeps waiting;
+ * a failure with every branch settled still persists at the boundary,
+ * which trades some durability under hard process crashes for a much
+ * smaller blast radius into the engine's checkpoint-write machinery.
  */
 
 import type {
@@ -49,6 +51,16 @@ export type ParallelDispatchResult = {
    */
   firstError: unknown;
 };
+
+/**
+ * The durable, replay-stable form of a rejection reason: `Error` objects do not
+ * round-trip through MessagePack, and a string or number reason would fail the
+ * cache-entry validator, so every persisted or settled reason is `{ name, message }`.
+ */
+export function normalizeRejectionReason(error: unknown): { name: string; message: string } {
+  const reasonError = error instanceof Error ? error : new Error(String(error));
+  return { name: reasonError.name, message: reasonError.message };
+}
 
 /**
  * Mutable accumulator for the first rejection observed across a fan-out
@@ -83,6 +95,13 @@ export function captureFirstRejection(capture: FirstRejectionCapture, reason: un
 export type DispatchOneBranch = (index: number) => Promise<unknown>;
 
 /**
+ * Called after the branch at `index` settled and its slot in `slots` was set. The dispatch awaits
+ * it before the branch counts as done, so a caller that commits the slot durably has finished
+ * doing so by the time the dispatch resolves. It must not throw: the caller keeps its own failure.
+ */
+export type OnSlotSettled = (slots: readonly ParallelBranchSlot[], index: number) => Promise<void>;
+
+/**
  * Run every branch via `executeOne(index)`, capturing per-branch outcomes
  * in a slot table. Reused fulfilled slots (passed in via `resumedSlots`)
  * skip dispatch entirely; missing/rejected/aborted slots dispatch fresh.
@@ -99,6 +118,7 @@ export async function dispatchBranchesAllSettled(
   operationIds: string[],
   resumedSlots: ParallelBranchSlot[] | undefined,
   executeOne: DispatchOneBranch,
+  onSlotSettled?: OnSlotSettled,
 ): Promise<ParallelDispatchResult> {
   const slots: ParallelBranchSlot[] = operationIds.map((operationId, i) => {
     const cached = resumedSlots?.[i];
@@ -121,14 +141,10 @@ export async function dispatchBranchesAllSettled(
         // Persist normalized name/message because Error objects don't
         // round-trip through MessagePack, but capture the original
         // reason to rethrow.
-        const reasonError = error instanceof Error ? error : new Error(String(error));
-        slots[index] = {
-          status: 'rejected',
-          reason: { name: reasonError.name, message: reasonError.message },
-          operationId,
-        };
+        slots[index] = { status: 'rejected', reason: normalizeRejectionReason(error), operationId };
         captureFirstRejection(capture, error);
       }
+      await onSlotSettled?.(slots, index);
     }),
   );
 
@@ -140,7 +156,7 @@ export async function dispatchBranchesAllSettled(
  * Convenience wrapper used by every dispatch site.
  */
 export function buildEntryFromSlots(
-  variant: 'all' | 'race' | 'run-all',
+  variant: 'all' | 'all-settled' | 'race' | 'run-all',
   slots: ParallelBranchSlot[],
   branchNames?: string[],
 ): ParallelOperationCacheEntry {

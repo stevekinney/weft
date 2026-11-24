@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import type { WorkflowEvent } from '../core/types.ts';
-import { setPortableRuntimeTestOverridesForTesting } from '../runtime/portable.ts';
 import {
   defaultWebSocketFactory,
   dropOverlappingLiveFrames,
   eventsEqual,
+  headerCarryingWebSocketFactory,
+  parseWatchFrame,
+  selectWebSocketFactory,
+  type WebSocketFactory,
 } from './event-stream-transport.ts';
 
 function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
@@ -56,79 +59,133 @@ describe('dropOverlappingLiveFrames', () => {
   });
 });
 
-describe('defaultWebSocketFactory runtime behavior', () => {
-  const nodeOverrides = {
-    bun: undefined,
-    window: undefined,
-    document: undefined,
-    process: { versions: { node: '22.0.0' } } as unknown as typeof globalThis.process,
-  };
+/** Install a recording `WebSocket` global for the duration of `run`. */
+function withRecordingWebSocket(run: (constructed: unknown[][]) => void): void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+  const constructed: unknown[][] = [];
+  Object.defineProperty(globalThis, 'WebSocket', {
+    configurable: true,
+    value: class {
+      constructor(...args: unknown[]) {
+        constructed.push(args);
+      }
+      addEventListener(): void {}
+      close(): void {}
+    },
+  });
+  try {
+    run(constructed);
+  } finally {
+    if (descriptor === undefined) {
+      delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    } else {
+      Object.defineProperty(globalThis, 'WebSocket', descriptor);
+    }
+  }
+}
 
-  afterEach(() => {
-    setPortableRuntimeTestOverridesForTesting(undefined);
+describe('defaultWebSocketFactory', () => {
+  it('throws an actionable error when auth headers are configured (the platform WebSocket cannot send them)', () => {
+    // Regression (Copilot follow-up): Node 22+ and browsers have a global WebSocket whose
+    // constructor cannot send custom headers. Silently dropping a configured Authorization
+    // header would produce an unauthenticated socket; the factory must fail loudly pointing
+    // at webSocketFactory and webSocketCarriesHeaders instead.
+    withRecordingWebSocket((constructed) => {
+      expect(() =>
+        defaultWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' }),
+      ).toThrow(
+        /cannot send the configured auth headers.*webSocketCarriesHeaders.*webSocketFactory/s,
+      );
+      expect(constructed).toEqual([]);
+    });
   });
 
-  it('throws an actionable error on Node when auth headers are configured (headers cannot ride the socket)', () => {
-    // Regression (Copilot follow-up): Node 22+ has a global WebSocket but its
-    // constructor cannot send custom headers. Silently dropping a configured
-    // Authorization header would produce an unauthenticated socket; the factory
-    // must fail loudly pointing at webSocketFactory instead.
-    setPortableRuntimeTestOverridesForTesting(nodeOverrides);
-    expect(() => defaultWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' })).toThrow(
-      /cannot send the configured auth headers.*webSocketFactory/s,
+  it('constructs with the URL alone when no headers are configured', () => {
+    // No credentials to drop — a header-less socket is fine.
+    withRecordingWebSocket((constructed) => {
+      expect(() => defaultWebSocketFactory('ws://test/watch', {})).not.toThrow();
+      expect(constructed).toEqual([['ws://test/watch']]);
+    });
+  });
+});
+
+describe('headerCarryingWebSocketFactory', () => {
+  it('passes the headers in the options bag when the caller declared a header-carrying WebSocket', () => {
+    withRecordingWebSocket((constructed) => {
+      headerCarryingWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' });
+      expect(constructed).toEqual([
+        ['ws://test/watch', { headers: { Authorization: 'Bearer t' } }],
+      ]);
+    });
+  });
+
+  it('passes an empty header bag when no headers are configured', () => {
+    withRecordingWebSocket((constructed) => {
+      headerCarryingWebSocketFactory('ws://test/watch', {});
+      expect(constructed).toEqual([['ws://test/watch', { headers: {} }]]);
+    });
+  });
+
+  it('fails with the no-global-WebSocket error when none exists', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: undefined });
+    try {
+      expect(() => headerCarryingWebSocketFactory('ws://test/watch', {})).toThrow(
+        /No global WebSocket is available/,
+      );
+    } finally {
+      if (descriptor === undefined) {
+        delete (globalThis as { WebSocket?: unknown }).WebSocket;
+      } else {
+        Object.defineProperty(globalThis, 'WebSocket', descriptor);
+      }
+    }
+  });
+});
+
+describe('parseWatchFrame', () => {
+  it.each([
+    ['text that is not JSON', '{ not json'],
+    ['a frame that is not a string', 42],
+    ['JSON that is not an object', '[1, 2]'],
+    ['an object without a string type', '{"type":7}'],
+  ])('returns null for %s', (_label, raw) => {
+    expect(parseWatchFrame(raw)).toBeNull();
+  });
+
+  it('reads the type, timestamp and data, defaulting what is missing', () => {
+    expect(parseWatchFrame('{"type":"activity:started","timestamp":5,"data":{"a":1}}')).toEqual({
+      type: 'activity:started',
+      timestamp: 5,
+      data: { a: 1 },
+    });
+    const bare = parseWatchFrame('{"type":"workflow:started","data":"nope"}');
+    expect(bare).toMatchObject({ type: 'workflow:started', data: {} });
+    expect(typeof bare?.timestamp).toBe('number');
+  });
+});
+
+describe('selectWebSocketFactory', () => {
+  const custom: WebSocketFactory = () => {
+    throw new Error('custom factory');
+  };
+
+  it('prefers the caller-supplied factory over the declaration', () => {
+    expect(
+      selectWebSocketFactory({ webSocketFactory: custom, webSocketCarriesHeaders: true }),
+    ).toBe(custom);
+  });
+
+  it('uses the header-carrying factory only when the caller declared it', () => {
+    expect(selectWebSocketFactory({ webSocketCarriesHeaders: true })).toBe(
+      headerCarryingWebSocketFactory,
     );
   });
 
-  it('does not throw on Node when no auth headers are configured', () => {
-    // No credentials to drop — a header-less socket is fine.
-    setPortableRuntimeTestOverridesForTesting(nodeOverrides);
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
-    // Stub a constructible WebSocket so the header-less path can build one.
-    Object.defineProperty(globalThis, 'WebSocket', {
-      configurable: true,
-      value: class {
-        constructor(public url: string) {}
-        addEventListener(): void {}
-        close(): void {}
-      },
-    });
-    try {
-      expect(() => defaultWebSocketFactory('ws://test/watch', {})).not.toThrow();
-    } finally {
-      if (descriptor === undefined) {
-        delete (globalThis as { WebSocket?: unknown }).WebSocket;
-      } else {
-        Object.defineProperty(globalThis, 'WebSocket', descriptor);
-      }
-    }
-  });
-
-  it('does not throw on a browser even with headers (cookie/query auth is expected)', () => {
-    setPortableRuntimeTestOverridesForTesting({
-      bun: undefined,
-      process: undefined,
-      window: {} as unknown as typeof globalThis.window,
-      document: {} as unknown as typeof globalThis.document,
-    });
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
-    Object.defineProperty(globalThis, 'WebSocket', {
-      configurable: true,
-      value: class {
-        constructor(public url: string) {}
-        addEventListener(): void {}
-        close(): void {}
-      },
-    });
-    try {
-      expect(() =>
-        defaultWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' }),
-      ).not.toThrow();
-    } finally {
-      if (descriptor === undefined) {
-        delete (globalThis as { WebSocket?: unknown }).WebSocket;
-      } else {
-        Object.defineProperty(globalThis, 'WebSocket', descriptor);
-      }
-    }
+  it('defaults to the header-less factory, which cannot carry headers', () => {
+    expect(selectWebSocketFactory()).toBe(defaultWebSocketFactory);
+    expect(selectWebSocketFactory({ webSocketCarriesHeaders: false })).toBe(
+      defaultWebSocketFactory,
+    );
   });
 });

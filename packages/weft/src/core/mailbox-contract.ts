@@ -14,7 +14,7 @@
  * @module core/mailbox-contract
  */
 
-import type { BatchOperation, ConditionalBatchCondition, Storage } from '../storage/interface.ts';
+import type { BatchOperation, ConditionalBatchCondition, Storage } from "../embedded/storage/src/index.ts";
 import type { JSONValue } from './json.ts';
 import type {
   ApplicationCommandCausation,
@@ -38,7 +38,7 @@ import type {
  *
  * @example
  * ```ts
- * import { MemoryStorage } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  * import type { MailboxEventSink } from '@lostgradient/weft';
  * import { createFleetEventFeed } from '@lostgradient/weft';
  *
@@ -90,7 +90,8 @@ export type ApplicationCommandRejection = Readonly<{
  *
  * @example
  * ```ts
- * import { MemoryStorage, type MailboxOptions } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
+ * import { type MailboxOptions } from '@lostgradient/weft';
  *
  * const options: MailboxOptions = {
  *   storage: new MemoryStorage(),
@@ -217,7 +218,8 @@ export type ApplicationCommandAdmission =
     }
   | {
       readonly status: 'rejected';
-      readonly reason: 'backlog-full';
+      /** `purged`: the mailbox was purged (`Mailbox.purge`) and takes no further commands. */
+      readonly reason: 'backlog-full' | 'purged';
       readonly capacity: MailboxCapacity;
     };
 
@@ -302,6 +304,15 @@ export type MailboxCapacity = Readonly<{
 
 /** Bounded listing options. `limit` is clamped to 1000.
  *
+ * `afterSequence` resumes the listing after the receipt with that `sequence`,
+ * so a caller can walk the whole index page by page: list without a state
+ * filter, pass the last receipt's `sequence` to the next call, and stop at an
+ * empty page. One call still examines a bounded number of index entries, so a
+ * state-filtered page that comes back short is not proof that nothing more
+ * matches; only an unfiltered walk is exhaustive. `reverse` lists newest
+ * first, and the cursor then resumes toward older receipts, which lets a
+ * caller that wants the open commands, usually the newest, stop early.
+ *
  * @example
  * ```ts
  * import type { MailboxListOptions } from '@lostgradient/weft';
@@ -313,6 +324,8 @@ export type MailboxCapacity = Readonly<{
 export type MailboxListOptions = {
   readonly limit?: number | undefined;
   readonly states?: readonly ApplicationCommandState[] | undefined;
+  readonly afterSequence?: number | undefined;
+  readonly reverse?: boolean | undefined;
 };
 
 export type {

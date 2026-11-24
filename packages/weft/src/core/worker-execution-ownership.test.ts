@@ -48,4 +48,18 @@ describe('WorkerExecutionOwnership', () => {
 
     ownership.clear();
   });
+
+  it('refuses to activate a workflow that is not parked on that worker', () => {
+    const ownership = new WorkerExecutionOwnership();
+    const parkedWorker = {} as Worker;
+    const otherWorker = {} as Worker;
+
+    expect(ownership.activateParked('wf-unparked', parkedWorker)).toBe(false);
+
+    ownership.setActive('wf-parked', parkedWorker);
+    ownership.parkActive('wf-parked', parkedWorker);
+    expect(ownership.activateParked('wf-parked', otherWorker)).toBe(false);
+    expect(ownership.getParkedWorker('wf-parked')).toBe(parkedWorker);
+    expect(ownership.getActiveWorker('wf-parked')).toBeUndefined();
+  });
 });

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import {
+  createOperationRegistry,
+  handleJsonRpcHttpRequest,
+} from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { getStreamChunksOperation, getStreamChunksRestBinding } from './get-stream-chunks.ts';
 
 function createEngineWithChunks(): Engine {
@@ -15,6 +19,26 @@ function createEngineWithChunks(): Engine {
 
 const registry = createOperationRegistry([getStreamChunksOperation]);
 const bindings = [getStreamChunksRestBinding];
+
+async function callOverJsonRpc(
+  engine: Engine,
+  method: string,
+  params: unknown,
+  operation: Parameters<typeof createOperationRegistry>[0][number],
+): Promise<Response> {
+  return handleJsonRpcHttpRequest(
+    new Request('http://localhost/jsonrpc', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
+    }),
+    {
+      registry: createOperationRegistry([operation]),
+      host: engine,
+      principal: principalFromApiKey({ subject: 'streams-reader', scopes: ['streams:read'] }),
+    },
+  );
+}
 
 function request(method: string, path: string, accept?: string): Request {
   return new Request(`http://localhost${path}`, {
@@ -90,6 +114,7 @@ describe('weft.workflows.streams.chunks', () => {
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({
         error: `Invalid after query parameter: ${badValue}`,
+        retryable: false,
       });
     },
   );
@@ -110,6 +135,7 @@ describe('weft.workflows.streams.chunks', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: `Invalid after query parameter: ${badValue}`,
+      retryable: false,
     });
   });
 
@@ -123,7 +149,28 @@ describe('weft.workflows.streams.chunks', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid after query parameter: ' });
+    expect(await response.json()).toEqual({
+      error: 'Invalid after query parameter: ',
+      retryable: false,
+    });
+  });
+
+  it('rejects an `after` that is neither a string nor a number over JSON-RPC', async () => {
+    await using engine = createEngineWithChunks();
+    engine.getStreamChunks = async () => {
+      throw new Error('must not read chunks for an invalid cursor');
+    };
+
+    const response = await callOverJsonRpc(
+      engine,
+      'weft.workflows.streams.chunks',
+      { workflowId: 'wf-1', key: 'tokens', after: true },
+      getStreamChunksOperation,
+    );
+
+    const envelope = await response.json();
+    expect(envelope.error.code).toBe(-32602);
+    expect(envelope.error.message).toBe('Invalid after query parameter: ');
   });
 
   it('returns SSE when the Accept header requests text/event-stream', async () => {
@@ -179,7 +226,7 @@ describe('weft.workflows.streams.chunks', () => {
         { operationRegistry: registry, restBindings: bindings },
       );
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.getStreamChunks = original;
     }

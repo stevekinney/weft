@@ -18,13 +18,14 @@
  * @module core/outbox
  */
 
-import type { Storage } from '../storage/interface.ts';
+import type { Storage } from "../embedded/storage/src/index.ts";
 import {
   attemptControllerRegistry,
   releaseAttemptControllerRegistry,
 } from './application-primitive-attempt-registry.ts';
 import type { JSONValue } from './json.ts';
 import type {
+  ApplicationDeliveryAdapter,
   ApplicationDeliveryAdmission,
   ApplicationDeliveryCancellationResult,
   ApplicationDeliveryCleanupResult,
@@ -60,7 +61,7 @@ import {
   type OutboxRuntime,
 } from './outbox-internals.ts';
 import { listDeliveries } from './outbox-listing.ts';
-import { runOutboxMaintenance } from './outbox-maintenance.ts';
+import { purgeSettledDeliveries, runOutboxMaintenance } from './outbox-maintenance.ts';
 import { deadLetterDelivery, retryDelivery } from './outbox-operations.ts';
 import { deliverNext } from './outbox-runner.ts';
 import {
@@ -107,7 +108,8 @@ function requireOutboxStorage(storage: OutboxOptions['storage']): void {
  *
  * @example
  * ```ts
- * import { Outbox, MemoryStorage } from '@lostgradient/weft';
+ * import { Outbox } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/storage';
  *
  * await using storage = new MemoryStorage();
  * using outbox = new Outbox({
@@ -228,6 +230,16 @@ export class Outbox {
   /** The durable backend every transition compares and swaps against. */
   get storage(): Storage {
     return this.#runtime.storage;
+  }
+
+  /** The transport `deliverNext()` and `drain()` run, when one was configured. */
+  get adapter(): ApplicationDeliveryAdapter | undefined {
+    return this.#runtime.adapter;
+  }
+
+  /** The default ceiling on one attempt, in milliseconds from its claim. */
+  get attemptTimeoutMs(): number {
+    return this.#runtime.policy.attemptTimeoutMs;
   }
 
   #assertLive(): void {
@@ -420,6 +432,28 @@ export class Outbox {
   async runMaintenance(now = this.#runtime.now()): Promise<OutboxMaintenanceReport> {
     this.#assertLive();
     return runOutboxMaintenance(this.#runtime, requireMaintenanceInstant(now));
+  }
+
+  /**
+   * Delete every settled (terminal) delivery bound for `destinationRef`, with its listing entry
+   * and idempotency binding, whatever its age, and return how many. Open deliveries are never
+   * touched: cancel them first. A host calls this when the destination is gone, so neither the
+   * payloads nor the spent idempotency keys outlive it.
+   *
+   * @example
+   * ```ts
+   * import type { Outbox } from '@lostgradient/weft';
+   *
+   * declare const outbox: Outbox;
+   * console.log(await outbox.purge({ destinationRef: 'webhook:orders' }));
+   * ```
+   */
+  async purge(options: { readonly destinationRef: string }): Promise<number> {
+    this.#assertLive();
+    if (typeof options.destinationRef !== 'string' || options.destinationRef.length === 0) {
+      throw new ApplicationDeliveryValidationError('purge requires a non-empty destinationRef.');
+    }
+    return purgeSettledDeliveries(this.#runtime, options.destinationRef);
   }
 
   /**

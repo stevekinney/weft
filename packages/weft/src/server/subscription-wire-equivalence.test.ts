@@ -16,20 +16,17 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
+import { encodeCursor, principalFromApiKey } from "../embedded/backchannel/src/index.ts";
 import {
   createJsonRpcWebSocketSession,
+  createOperationRegistry,
   type JsonRpcWebSocketEmitter,
-} from './json-rpc-websocket.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
+} from "../embedded/backchannel/src/internals.ts";
+import { awakeTurns } from "../../test-support/embedded/testing/src/wait-until.ts";
+import { createInMemoryEventBackend } from './in-memory-event-feed-backend.test-support.ts';
 import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
-import { principalFromApiKey } from './principal.ts';
 import { jsonRecord, propertyRecord } from './protocol.test-support.ts';
-import {
-  createWorkflowEventFeed,
-  encodeCursor,
-  type WorkflowEventFeed,
-} from './workflow-event-feed.ts';
+import { createWorkflowEventFeed, type WorkflowEventFeed } from './workflow-event-feed.ts';
 
 const FIXTURE_DIR = new URL('./__fixtures__/subscription-wire/', import.meta.url).pathname;
 
@@ -101,12 +98,12 @@ function makeEnvelope(sequence: number, workflowId = 'wf-fixture') {
   };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error('timed out waiting for predicate');
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for await (const _turn of awakeTurns()) {
+    if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+  throw new Error('timed out waiting for predicate');
 }
 
 describe('subscription wire-format fixtures — current-contract', () => {

@@ -70,6 +70,8 @@ function parseWorkflowValues(args: string[]) {
       ...CONNECTION_OPTIONS,
       type: { type: 'string' },
       status: { type: 'string' },
+      'failed-step': { type: 'string' },
+      retrying: { type: 'boolean', default: false },
       limit: { type: 'string' },
       input: { type: 'string' },
       'input-file': { type: 'string' },
@@ -107,6 +109,8 @@ const WORKFLOW_ACTION_BUILDERS: Record<
       ...connectionFields(values),
       ...(values.type !== undefined ? { type: values.type } : {}),
       ...(values.status !== undefined ? { status: values.status } : {}),
+      ...(values['failed-step'] !== undefined ? { failedStep: values['failed-step'] } : {}),
+      ...(values.retrying ? { retrying: true } : {}),
       ...(limit !== undefined ? { limit } : {}),
     };
   },
@@ -160,7 +164,9 @@ export function parseWorkflowArguments(args: string[]): CliCommand {
   }
 
   const action = positionals[0] ?? (values.help ? 'ls' : '');
-  const builder = WORKFLOW_ACTION_BUILDERS[action];
+  const builder = Object.hasOwn(WORKFLOW_ACTION_BUILDERS, action)
+    ? WORKFLOW_ACTION_BUILDERS[action]
+    : undefined;
   if (builder === undefined) {
     throw new Error('workflow: expected a subcommand: ls, get, events, start, cancel, or signal');
   }

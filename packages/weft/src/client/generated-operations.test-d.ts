@@ -113,6 +113,22 @@ void sourceState;
 // @ts-expect-error Source enumeration never exposes a module location.
 void sourceEntry.location;
 
+// COR-1554: the definitions catalog pages like source enumeration and carries no
+// owner or author, only how Weft loaded the type.
+void operations['weft.workflows.definitions.list']({});
+void operations['weft.workflows.definitions.list']({ limit: 10, offset: 20 });
+void operations['weft.workflows.definitions.get']({ name: 'orders' });
+type DefinitionPage = Awaited<ReturnType<(typeof operations)['weft.workflows.definitions.list']>>;
+declare const definitionEntry: DefinitionPage['definitions'][number];
+const definitionOrigin: 'code' | 'source' = definitionEntry.origin;
+void definitionOrigin;
+const definitionRevision: string | null = definitionEntry.revision;
+void definitionRevision;
+// @ts-expect-error A definition never names who authored it.
+void definitionEntry.owner;
+// @ts-expect-error A definition never names who authored it.
+void definitionEntry.author;
+
 // COR-116: every `weft.tasks.diagnostics` threshold has a server-side Zod
 // default, so a caller may omit all of them and supply only a filter.
 type DiagnosticsInput = Parameters<(typeof operations)['weft.tasks.diagnostics']>[0];

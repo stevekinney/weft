@@ -7,7 +7,7 @@ import {
 } from './registry-fixtures.test-support.ts';
 import { WorkerRegistry } from './registry.ts';
 import { workerMatchesRequirement } from './registry/routing.ts';
-import type { WorkerInfo } from './registry/types.ts';
+import type { RoutingOptions, WorkerInfo } from './registry/types.ts';
 
 /**
  * Register `count` workers on the default queue, all capable of handling
@@ -421,6 +421,99 @@ describe('WorkerRegistry routing policies', () => {
       ).toBe(false);
     });
   });
+  describe('exact build routing', () => {
+    function registryWithTwoBuilds(): WorkerRegistry {
+      const registry = new WorkerRegistry();
+      for (const buildId of ['build-a', 'build-b']) {
+        registry.register({
+          manifest: manifestForActivities(['sendEmail'], {
+            deployment: { name: 'billing', buildId, artifactDigest: `sha256:${buildId}` },
+          }),
+          acceptedManifestDigest: TEST_ACCEPTED_MANIFEST_DIGEST,
+          id: `worker-${buildId}`,
+          queue: 'default',
+          activities: ['sendEmail'],
+          concurrency: 5,
+        });
+      }
+      return registry;
+    }
+
+    const routingTo = (
+      overrides: Partial<NonNullable<RoutingOptions['deploymentRouting']>> = {},
+    ): NonNullable<RoutingOptions['deploymentRouting']> => ({
+      deploymentName: 'billing',
+      currentBuildId: 'build-a',
+      rampBasisPoints: 0,
+      generation: 1,
+      updatedAt: 1,
+      ...overrides,
+    });
+
+    it('limits the choice to workers that satisfy an execution requirement', () => {
+      const registry = registryWithTwoBuilds();
+
+      expect(
+        registry.findWorker('sendEmail', { executionRequirement: { buildId: 'build-b' } })?.id,
+      ).toBe('worker-build-b');
+      expect(
+        registry.findWorker('sendEmail', { executionRequirement: { buildId: 'missing' } }),
+      ).toBeUndefined();
+    });
+
+    it('sends work to the current build, or to the ramping build once its share covers the work', () => {
+      const registry = registryWithTwoBuilds();
+
+      expect(registry.findWorker('sendEmail', { deploymentRouting: routingTo() })?.id).toBe(
+        'worker-build-a',
+      );
+      expect(
+        registry.findWorker('sendEmail', {
+          deploymentRouting: routingTo({ rampingBuildId: 'build-b', rampBasisPoints: 10_000 }),
+        })?.id,
+      ).toBe('worker-build-b');
+      expect(
+        registry.findWorker('sendEmail', {
+          deploymentRouting: routingTo({ rampingBuildId: 'build-b', rampBasisPoints: 0 }),
+        })?.id,
+      ).toBe('worker-build-a');
+    });
+
+    it('uses the workflow id, not the activity name, to place work in the ramp when it has one', () => {
+      const registry = registryWithTwoBuilds();
+      const ramping = routingTo({ rampingBuildId: 'build-b', rampBasisPoints: 5_000 });
+      const placements = new Set<string | undefined>();
+      for (let run = 0; run < 40; run += 1) {
+        placements.add(
+          registry.findWorker('sendEmail', { deploymentRouting: ramping, workflowId: `run-${run}` })
+            ?.id,
+        );
+      }
+
+      expect(placements).toEqual(new Set(['worker-build-a', 'worker-build-b']));
+    });
+
+    it('refuses every worker when the routed deployment is another deployment', () => {
+      const registry = registryWithTwoBuilds();
+
+      expect(
+        registry.findWorker('sendEmail', {
+          deploymentRouting: routingTo({ deploymentName: 'shipping' }),
+        }),
+      ).toBeUndefined();
+    });
+
+    it('refuses every worker when none runs the selected build', () => {
+      const registry = registryWithTwoBuilds();
+
+      expect(
+        registry.findWorker('sendEmail', {
+          deploymentRouting: routingTo({ currentBuildId: 'build-c' }),
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   describe('hasEligibleWorker', () => {
     it('answers without advancing the round-robin cursor', () => {
       const { registry, workerIds } = makeRegistryWithWorkers(3, 'sendEmail', {

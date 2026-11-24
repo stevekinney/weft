@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { ChildProcessRealm } from './child-process-realm.ts';
-import { RevisionRealmPool } from './revision-realm-pool.ts';
+import { RealmLifecycle } from './realm-lifecycle.ts';
+import { RevisionRealmPool, type RevisionRealmStateChange } from './revision-realm-pool.ts';
 import { WorkerRealm } from './worker-realm.ts';
 
 const workerUrl = new URL('./__fixtures__/revision-realm-worker-entry.ts', import.meta.url);
+const unresponsiveWorkerUrl = new URL(
+  './__fixtures__/revision-realm-unresponsive-worker.ts',
+  import.meta.url,
+);
 const childProcessScriptPath = new URL(
   './__fixtures__/revision-realm-child-process-entry.ts',
   import.meta.url,
@@ -112,6 +117,75 @@ describe('RevisionRealmPool', () => {
     expect(pool.isDrained).toBe(true);
   });
 
+  it('reclaims a realm that finished its handshake but was never activated when the revision goes inactive', async () => {
+    const terminateSpy = spyOn(Worker.prototype, 'terminate');
+    const originalMarkReady = RealmLifecycle.prototype.markReady;
+    const pool = makePool({ concurrency: 1 });
+    // Go inactive in the same turn the realm turns `ready`: after the transition, before the
+    // acquisition's continuation can activate it.
+    const markReadySpy = spyOn(RealmLifecycle.prototype, 'markReady').mockImplementation(function (
+      this: RealmLifecycle,
+      outcome: { ok: boolean },
+    ) {
+      originalMarkReady.call(this, outcome);
+      if (outcome.ok) pool.markInactive();
+    });
+    try {
+      const outcome = await pool.acquireForExecution('execution-1');
+
+      expect(outcome).toEqual({ ok: false, reason: 'revision-not-active' });
+      expect(pool.realmCount).toBe(0);
+      expect(pool.isDrained).toBe(true);
+      // Discarded once by the pool going inactive; the acquisition's own discard is a no-op.
+      expect(terminateSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      markReadySpy.mockRestore();
+      terminateSpy.mockRestore();
+      pool.dispose();
+    }
+  });
+
+  describe('realm options reach the realms the pool warms', () => {
+    it('gives a realm the ready-handshake timeout the pool was configured with', async () => {
+      const pool = new RevisionRealmPool({
+        workflowRevision: 'revision-a',
+        workerUrl: unresponsiveWorkerUrl,
+        expectedWorkflowTypes: ['order-workflow'],
+        concurrency: 1,
+        realmReadyTimeoutMs: 5,
+      });
+
+      const outcome = await pool.acquireForExecution('execution-1');
+
+      expect(outcome).toEqual({
+        ok: false,
+        reason: 'realm-ready-handshake-failed',
+        error: 'Worker realm did not send a ready message within 5ms',
+      });
+      pool.dispose();
+    });
+
+    it('gives a realm the protocol message size limit the pool was configured with', async () => {
+      const pool = new RevisionRealmPool({
+        workflowRevision: 'revision-a',
+        workerUrl,
+        expectedWorkflowTypes: ['order-workflow'],
+        workerName: 'digest-a',
+        concurrency: 1,
+        maxProtocolMessageBytes: 1,
+      });
+
+      const outcome = await pool.acquireForExecution('execution-1');
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        reason: 'realm-ready-handshake-failed',
+        error: expect.stringContaining('exceeding limit 1'),
+      });
+      pool.dispose();
+    });
+  });
+
   describe('markInactive racing a still-warming acquisition', () => {
     it('refuses, rather than activates, a realm whose handshake settles after markInactive was called mid-warm', async () => {
       const pool = makePool({ concurrency: 1 });
@@ -183,6 +257,56 @@ describe('RevisionRealmPool', () => {
 
     expect(outcome.realm.restart()).toEqual({ ok: false, reason: 'unreferenced' });
     pool.forgetCrashedRealm(outcome.realm);
+  });
+
+  it('reports every lifecycle transition under one stable realm id, including a restart (COR-1724)', async () => {
+    const changes: RevisionRealmStateChange[] = [];
+    const pool = new RevisionRealmPool({
+      workflowRevision: 'revision-a',
+      workerUrl,
+      expectedWorkflowTypes: ['order-workflow'],
+      expectedArtifactDigest: 'digest-a',
+      workerName: 'digest-a',
+      concurrency: 2,
+      maxRestarts: 1,
+      onRealmStateChanged: (change) => changes.push(change),
+    });
+    // A realm's construction is not a transition, so nothing is reported yet.
+    const outcome = await pool.acquireForExecution('execution-1');
+    if (!outcome.ok) throw new Error('unreachable');
+    expect(changes.map((change) => change.state)).toEqual(['ready', 'active']);
+
+    outcome.realm.crash();
+    expect(outcome.realm.restart()).toEqual({ ok: true });
+
+    expect(changes.map((change) => [change.state, change.restartCount])).toEqual([
+      ['ready', 0],
+      ['active', 0],
+      ['crashed', 0],
+      ['warming', 1],
+    ]);
+    expect(new Set(changes.map((change) => change.realmId)).size).toBe(1);
+    expect(changes.every((change) => change.revision === 'revision-a')).toBe(true);
+    pool.dispose();
+  });
+
+  it('gives each realm its own id', async () => {
+    const changes: RevisionRealmStateChange[] = [];
+    const pool = new RevisionRealmPool({
+      workflowRevision: 'revision-a',
+      workerUrl,
+      expectedWorkflowTypes: ['order-workflow'],
+      expectedArtifactDigest: 'digest-a',
+      workerName: 'digest-a',
+      concurrency: 2,
+      onRealmStateChanged: (change) => changes.push(change),
+    });
+    const first = await pool.acquireForExecution('execution-1');
+    const second = await pool.acquireForExecution('execution-2');
+    expect(first.ok && second.ok).toBe(true);
+
+    expect(new Set(changes.map((change) => change.realmId)).size).toBe(2);
+    pool.dispose();
   });
 
   describe('a failed realm-ready handshake', () => {

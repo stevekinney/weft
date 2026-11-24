@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import type { ActivityInterceptor } from '../core/interceptor.ts';
 import {
   restoreRealTimers,
   sleepForTesting,
   waitForCondition,
-} from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+} from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns, quietFor } from "../../test-support/embedded/testing/src/wait-until.ts";
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import type { ActivityInterceptor } from '../core/interceptor.ts';
 import { RemoteWorker } from './index.ts';
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,6 @@ function createTestServer(options?: {
 
 async function waitForTaskResult(messages: any[], label: string): Promise<any> {
   await waitForCondition(() => messages.some((message) => message.type === 'taskResult'), {
-    timeoutMs: 1_000,
     label,
   });
 
@@ -204,7 +204,8 @@ describe('RemoteWorker', () => {
     // Give time for the register message to arrive. The previous fixed
     // 50ms sleep flaked on slow CI runners; poll up to 2s instead.
     let registerMessage: any;
-    for (let attempt = 0; attempt < 40 && registerMessage === undefined; attempt++) {
+    for await (const _turn of awakeTurns()) {
+      if (!(registerMessage === undefined)) break;
       await sleepForTesting(50);
       registerMessage = messages.find((m) => m.type === 'register');
     }
@@ -248,7 +249,8 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     let registerMessage: any;
-    for (let attempt = 0; attempt < 40 && registerMessage === undefined; attempt++) {
+    for await (const _turn of awakeTurns()) {
+      if (!(registerMessage === undefined)) break;
       await sleepForTesting(50);
       registerMessage = messages.find((m) => m.type === 'register');
     }
@@ -288,7 +290,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => messages.some((message) => message.type === 'register'), {
-      timeoutMs: 1_000,
       label: 'identity register message',
     });
     const registerMessage = messages.find((message) => message.type === 'register');
@@ -353,7 +354,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => messages.some((message) => message.type === 'register'), {
-      timeoutMs: 1_000,
       label: 'real-manifest register message',
     });
     const registerMessage = messages.find((message) => message.type === 'register');
@@ -499,17 +499,12 @@ describe('RemoteWorker', () => {
 
     const connectPromise = worker.connect();
     await waitForCondition(() => registerReceived, {
-      timeoutMs: 1_000,
       label: 'register before dispose',
     });
 
     worker[Symbol.dispose]();
 
-    const pendingTimeout = sleepForTesting(250).then(() => {
-      throw new Error('connect() remained pending after worker disposal');
-    });
-
-    expect(await throwingRejectionOf(Promise.race([connectPromise, pendingTimeout]))).toThrow(
+    expect(await throwingRejectionOf(connectPromise)).toThrow(
       'Worker disposed before worker registration completed',
     );
   });
@@ -555,7 +550,6 @@ describe('RemoteWorker', () => {
 
       const connectPromise = worker.connect();
       await waitForCondition(() => messages.some((message) => message.type === 'register'), {
-        timeoutMs: 1_000,
         label: 'register before ack',
       });
       await sleepForTesting(0);
@@ -575,7 +569,6 @@ describe('RemoteWorker', () => {
       );
       await connectPromise;
       await waitForCondition(() => messages.some((message) => message.type === 'heartbeat'), {
-        timeoutMs: 1_000,
         label: 'heartbeat after ack',
       });
 
@@ -719,6 +712,48 @@ describe('RemoteWorker', () => {
     await worker.disconnect();
   });
 
+  it('reports an activity named after an inherited member as unknown', async () => {
+    const messages: any[] = [];
+
+    server = createTestServer({
+      onMessage(ws, message) {
+        const parsed = JSON.parse(message);
+        messages.push(parsed);
+
+        if (parsed.type === 'register') {
+          ws.send(
+            JSON.stringify({
+              type: 'task',
+              operationId: 'op-inherited',
+              attemptToken: 'attempt-token',
+              activityName: 'constructor',
+              input: null,
+            }),
+          );
+        }
+      },
+    });
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      deploymentName: 'test-deployment',
+      buildId: 'test-build',
+      workerId: 'test-worker-inherited',
+      workflows: workflowsOf({
+        processOrder: async (input) => input,
+      }),
+    });
+
+    await worker.connect();
+
+    const taskResult = await waitForTaskResult(messages, 'unknown activity task result');
+    expect(taskResult.operationId).toBe('op-inherited');
+    expect(taskResult.status).toBe('failed');
+    expect(taskResult.error).toBe('Unknown activity: constructor');
+
+    await worker.disconnect();
+  });
+
   it('handles a task that throws and sends failed result', async () => {
     const messages: any[] = [];
 
@@ -844,7 +879,6 @@ describe('RemoteWorker', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'worker inFlight increment',
     });
 
@@ -854,7 +888,6 @@ describe('RemoteWorker', () => {
     // Resolve the activity
     resolveActivity!();
     await waitForCondition(() => worker.inFlight === 0, {
-      timeoutMs: 1_000,
       label: 'worker inFlight drain',
     });
 
@@ -882,7 +915,6 @@ describe('RemoteWorker', () => {
     server.stop(true);
     server = undefined;
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'worker close event disconnect',
     });
 
@@ -912,7 +944,8 @@ describe('RemoteWorker', () => {
     });
 
     await worker.connect();
-    await sleepForTesting(100);
+    // load-proof: the worker must stay connected after the stray frame; a slow host can only delay a (wrong) disconnect
+    await quietFor(100);
 
     // Worker should still be connected and working fine
     expect(worker.connected).toBe(true);
@@ -987,7 +1020,7 @@ describe('RemoteWorker', () => {
         () =>
           messages.some((message) => message.type === 'register') &&
           messages.some((message) => message.type === 'heartbeat'),
-        { timeoutMs: 1_000, label: 'register and heartbeat both received' },
+        { label: 'register and heartbeat both received' },
       );
 
       expect(messages.some((message) => message.type === 'register')).toBe(true);
@@ -1043,7 +1076,6 @@ describe('RemoteWorker', () => {
     expect(worker.connected).toBe(true);
 
     await waitForCondition(() => worker.shuttingDown && !worker.connected, {
-      timeoutMs: 500,
       label: 'worker shutdown state transition',
     });
 
@@ -1100,7 +1132,6 @@ describe('RemoteWorker', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 500,
       label: 'slow activity to start',
     });
 
@@ -1108,7 +1139,6 @@ describe('RemoteWorker', () => {
     expect(worker.inFlight).toBe(1);
 
     await waitForCondition(() => worker.shuttingDown, {
-      timeoutMs: 500,
       label: 'shutdown message',
     });
     expect(worker.shuttingDown).toBe(true);
@@ -1119,7 +1149,6 @@ describe('RemoteWorker', () => {
     // Resolve the activity so the graceful shutdown can complete
     resolveActivity!();
     await waitForCondition(() => worker.inFlight === 0 && !worker.connected, {
-      timeoutMs: 500,
       label: 'graceful shutdown completion',
     });
 
@@ -1176,7 +1205,6 @@ describe('RemoteWorker', () => {
 
     await worker.connect();
     await waitForCondition(() => tasksSentCount === 1, {
-      timeoutMs: 500,
       label: 'post-shutdown task dispatch',
     });
 
@@ -1230,7 +1258,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 500,
       label: 'disconnect inFlight increment',
     });
     expect(worker.inFlight).toBe(1);
@@ -1294,21 +1321,15 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 500,
       label: 'hanging activity to start',
     });
     expect(worker.inFlight).toBe(1);
 
     await waitForCondition(() => worker.shuttingDown, {
-      timeoutMs: 500,
       label: 'shutdown acknowledgement',
     });
     expect(worker.shuttingDown).toBe(true);
-
-    // `waitForCondition` throws past this bound, so it is the deadline for the drain to give up.
-    const shutdownTimeoutMs = disconnectTimeoutMs + 500;
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: shutdownTimeoutMs,
       label: 'shutdown timeout completion',
     });
 
@@ -1406,7 +1427,6 @@ describe('RemoteWorker', () => {
     // First connection — server triggers shutdown
     await worker.connect();
     await waitForCondition(() => worker.shuttingDown && !worker.connected, {
-      timeoutMs: 1_000,
       label: 'graceful shutdown before reconnect',
     });
     expect(worker.shuttingDown).toBe(true);
@@ -1416,7 +1436,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
     expect(worker.shuttingDown).toBe(false);
     await waitForCondition(() => messages.some((message) => message.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'post-reconnect task result',
     });
 
@@ -1604,7 +1623,6 @@ describe('RemoteWorker', () => {
 
     await worker.connect();
     await waitForCondition(() => capturedHeaders !== undefined, {
-      timeoutMs: 500,
       label: 'interceptor headers',
     });
 
@@ -1702,7 +1720,6 @@ describe('RemoteWorker', () => {
 
     await worker.connect();
     await waitForCondition(() => capturedOperationId !== undefined, {
-      timeoutMs: 500,
       label: 'interceptor context',
     });
 
@@ -1773,7 +1790,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => messages.some((message) => message.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'cancelled task result',
     });
 
@@ -1820,7 +1836,8 @@ describe('RemoteWorker', () => {
     });
 
     await worker.connect();
-    await sleepForTesting(100);
+    // load-proof: no taskResult may be sent and the worker must stay connected; a slow host can only delay a wrong one
+    await quietFor(100);
 
     // Worker should still be connected and no taskResult should have been sent
     expect(worker.connected).toBe(true);
@@ -1913,7 +1930,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => taskStarted, {
-      timeoutMs: 1_000,
       label: 'cancellable activity started',
     });
 
@@ -1925,7 +1941,7 @@ describe('RemoteWorker', () => {
         messages.some(
           (message) => message.type === 'taskResult' && message.operationId === 'op-barrier',
         ),
-      { timeoutMs: 1_000, label: 'barrier task result observed' },
+      { label: 'barrier task result observed' },
     );
 
     expect(abortObserved).toBe(false);
@@ -1937,7 +1953,7 @@ describe('RemoteWorker', () => {
         messages.some(
           (message) => message.type === 'taskResult' && message.operationId === 'op-stale-cancel',
         ),
-      { timeoutMs: 1_000, label: 'task result after stale cancel' },
+      { label: 'task result after stale cancel' },
     );
 
     const taskResult = messages.find(
@@ -2051,7 +2067,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => attempt1Started && attempt2Started, {
-      timeoutMs: 1_000,
       label: 'both overlapping attempts started',
     });
 
@@ -2062,7 +2077,7 @@ describe('RemoteWorker', () => {
         messages.some(
           (message) => message.type === 'taskResult' && message.operationId === 'op-barrier',
         ),
-      { timeoutMs: 1_000, label: 'barrier task result observed' },
+      { label: 'barrier task result observed' },
     );
 
     // Let attempt-1 complete NORMALLY, running its `finally` cleanup — the
@@ -2076,7 +2091,7 @@ describe('RemoteWorker', () => {
             message.operationId === 'op-overlap' &&
             message.attemptToken === 'attempt-1',
         ),
-      { timeoutMs: 1_000, label: 'attempt-1 task result observed' },
+      { label: 'attempt-1 task result observed' },
     );
     expect(attempt1AbortObserved).toBe(false);
 
@@ -2091,7 +2106,6 @@ describe('RemoteWorker', () => {
     );
 
     await waitForCondition(() => attempt2AbortObserved, {
-      timeoutMs: 1_000,
       label: 'attempt-2 observed its own abort after attempt-1 completed and cleaned up',
     });
 
@@ -2104,7 +2118,7 @@ describe('RemoteWorker', () => {
             message.attemptToken === 'attempt-2' &&
             message.status === 'cancelled',
         ),
-      { timeoutMs: 1_000, label: 'attempt-2 task result observed as cancelled' },
+      { label: 'attempt-2 task result observed as cancelled' },
     );
 
     await worker.disconnect();
@@ -2166,7 +2180,7 @@ describe('RemoteWorker', () => {
             message.operationId === 'op-auto-heartbeat' &&
             message.attemptToken === 'attempt-auto-heartbeat',
         ),
-      { timeoutMs: 2_000, label: 'automatic activityHeartbeat observed' },
+      { label: 'automatic activityHeartbeat observed' },
     );
 
     const heartbeat = messages.find((message) => message.type === 'activityHeartbeat');
@@ -2225,7 +2239,6 @@ describe('RemoteWorker', () => {
     await worker.connect();
 
     await waitForCondition(() => taskStarted, {
-      timeoutMs: 1_000,
       label: 'cancellable activity started',
     });
 
@@ -2298,7 +2311,7 @@ describe('RemoteWorker', () => {
           (message) =>
             message.type === 'activityHeartbeat' && message.operationId === 'op-heartbeat-details',
         ),
-      { timeoutMs: 1_000, label: 'on-demand activityHeartbeat with details observed' },
+      { label: 'on-demand activityHeartbeat with details observed' },
     );
 
     const heartbeat = messages.find((message) => message.type === 'activityHeartbeat');
@@ -2732,22 +2745,15 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const first = worker.connect();
     await waitForCondition(() => registerCount === 1, {
-      timeoutMs: 1_000,
       label: 'first register received',
     });
 
     const second = worker.connect();
 
     // The first promise must settle (reject) rather than hang forever.
-    const firstHang = sleepForTesting(250).then(() => {
-      throw new Error('first connect() remained pending after supersession');
-    });
-    expect(await throwingRejectionOf(Promise.race([first, firstHang]))).toThrow(
-      'Superseded by a new connect() call',
-    );
+    expect(await throwingRejectionOf(first)).toThrow('Superseded by a new connect() call');
 
     await waitForCondition(() => registerCount === 2 && ackSocket !== undefined, {
-      timeoutMs: 1_000,
       label: 'second register received',
     });
     ackSocket.send(
@@ -2805,7 +2811,6 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const first = worker.connect();
     await waitForCondition(() => registerCount === 1, {
-      timeoutMs: 1_000,
       label: 'first register',
     });
     first.catch(() => {});
@@ -2815,7 +2820,6 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     // The prior socket must have been closed by the re-entrancy teardown.
     await waitForCondition(() => tracking.closeCount() >= 1, {
-      timeoutMs: 1_000,
       label: 'prior socket closed',
     });
     expect(tracking.closeCount()).toBeGreaterThanOrEqual(1);
@@ -2841,6 +2845,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
     // Redundant connect() must not open a second socket or close the live one.
     expect(await worker.connect()).toBeUndefined();
     // Give any stray socket activity a chance to surface.
+    // load-proof: negative window: asserts no extra socket, frame or settlement appears; load can only delay stray activity, never create it
     await sleepForTesting(50);
     expect(tracking.sockets.length).toBe(1);
     expect(tracking.closeCount()).toBe(0);
@@ -2874,14 +2879,12 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const first = worker.connect();
     await waitForCondition(() => firstSocket !== undefined, {
-      timeoutMs: 1_000,
       label: 'first socket',
     });
     first.catch(() => {});
 
     const second = worker.connect();
     await waitForCondition(() => secondSocket !== undefined, {
-      timeoutMs: 1_000,
       label: 'second socket',
     });
 
@@ -2907,6 +2910,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
         sessionGeneration: 1,
       }),
     );
+    // load-proof: negative window: asserts no extra socket, frame or settlement appears; load can only delay stray activity, never create it
     await sleepForTesting(50);
     expect(secondSettled).toBe(false);
 
@@ -2977,7 +2981,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'activity in flight',
     });
 
@@ -2985,14 +2988,12 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // confirmed in flight (no timer race).
     harness.socketFor(0).close();
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket down',
     });
 
     // Complete the activity while the socket is down → result must be buffered.
     resolveActivity!('buffered-value');
     await waitForCondition(() => worker.inFlight === 0, {
-      timeoutMs: 1_000,
       label: 'activity drained',
     });
     expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
@@ -3000,7 +3001,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // Reconnect to the same still-listening server.
     await worker.connect();
     await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'buffered result flushed on reconnect',
     });
 
@@ -3062,7 +3062,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'immediate result',
     });
     allFrames.push(...harness.allFrames());
@@ -3073,7 +3072,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // before disconnecting, so the outbox entry is gone by the time the
     // reconnect below would otherwise re-flush it.
     await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
-      timeoutMs: 1_000,
       label: 'result acknowledged',
     });
 
@@ -3099,7 +3097,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await waitForCondition(
       () =>
         harness.framesFor(1).some((m) => m.type === 'taskResult' && m.operationId === 'op-fence'),
-      { timeoutMs: 1_000, label: 'fence task result' },
+      { label: 'fence task result' },
     );
     const total = harness
       .allFrames()
@@ -3138,7 +3136,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'first send',
     });
     expect(worker.unacknowledgedResultCount).toBe(1);
@@ -3146,7 +3143,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await worker.disconnect();
     await worker.connect();
     await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'resend on reconnect',
     });
     expect(worker.unacknowledgedResultCount).toBe(1);
@@ -3204,7 +3200,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'first send',
     });
 
@@ -3214,7 +3209,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // since the reject can already have been processed by the time this
     // line runs.
     await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
-      timeoutMs: 1_000,
       label: 'outbox entry dropped after correlated rejection',
     });
 
@@ -3237,7 +3231,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     await waitForCondition(
       () =>
         harness.framesFor(1).some((m) => m.type === 'taskResult' && m.operationId === 'op-fence'),
-      { timeoutMs: 1_000, label: 'fence task result' },
+      { label: 'fence task result' },
     );
     expect(
       harness
@@ -3273,7 +3267,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'result sent, never acked',
     });
 
@@ -3309,7 +3302,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
-      timeoutMs: 1_000,
       label: 'result acknowledged',
     });
 
@@ -3344,7 +3336,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'result sent, never acked',
     });
 
@@ -3352,7 +3343,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
     // (unlike disconnect()), so it warns instead.
     harness.socketFor(0).send(JSON.stringify({ type: 'shutdown' }));
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'worker disconnected',
     });
 
@@ -3394,7 +3384,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'result sent, awaiting ack',
     });
     expect(worker.unacknowledgedResultCount).toBe(1);
@@ -3410,7 +3399,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     // Existing behavior, unchanged: a dead-lettered ack drains the entry.
     await waitForCondition(() => worker.unacknowledgedResultCount === 0, {
-      timeoutMs: 1_000,
       label: 'dead-lettered result acknowledged',
     });
 
@@ -3455,25 +3443,21 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'boom in flight',
     });
     harness.socketFor(0).close();
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket down before failure',
     });
 
     resolveBlock!();
     await waitForCondition(() => worker.inFlight === 0, {
-      timeoutMs: 1_000,
       label: 'boom drained',
     });
     expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'failed result flushed',
     });
 
@@ -3515,24 +3499,24 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'slow in flight before dispose',
     });
     harness.socketFor(0).close();
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket down before dispose',
     });
 
     worker[Symbol.dispose]();
     // Activity resolves AFTER disposal — its result must be dropped, not buffered.
     resolveActivity!('too-late');
+    // load-proof: negative window: asserts no extra socket, frame or settlement appears; load can only delay stray activity, never create it
     await sleepForTesting(50);
 
     // Post-dispose connect() rejects (terminal contract); nothing flushes.
     expect(await throwingRejectionOf(worker.connect())).toThrow(
       'RemoteWorker has been disposed and cannot reconnect',
     );
+    // load-proof: negative window: asserts no extra socket, frame or settlement appears; load can only delay stray activity, never create it
     await sleepForTesting(50);
     expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
   });
@@ -3568,7 +3552,6 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     await worker.connect();
     await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'result sent before ack ever arrives',
     });
     // The server harness never acks, so the result is still buffered.
@@ -3652,7 +3635,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'slow in flight',
     });
 
@@ -3662,7 +3644,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     // The send failure must fail the socket (worker becomes disconnected).
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket failed after send throw',
     });
     expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
@@ -3670,7 +3651,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     // Reconnect flushes the buffered result — no external trigger beyond connect().
     await worker.connect();
     await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'result flushed after send-throw recovery',
     });
     const flushed = harness.framesFor(1).find((m) => m.type === 'taskResult');
@@ -3711,17 +3691,14 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'flush-throw in flight',
     });
     harness.socketFor(0).close();
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket down (flush-throw)',
     });
     resolveActivity!('flush-value');
     await waitForCondition(() => worker.inFlight === 0, {
-      timeoutMs: 1_000,
       label: 'flush-throw drained',
     });
 
@@ -3736,7 +3713,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     // Registration 2: a fresh connect() re-registers and flushes the survivor.
     await worker.connect();
     await waitForCondition(() => harness.framesFor(2).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'survivor flushed on retry',
     });
     const flushed = harness.framesFor(2).find((m) => m.type === 'taskResult');
@@ -3826,29 +3802,26 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'preack in flight',
     });
     firstSocket.close();
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket down (preack)',
     });
     resolveActivity!('preack-value');
     await waitForCondition(() => worker.inFlight === 0, {
-      timeoutMs: 1_000,
       label: 'preack drained',
     });
 
     const connectPromise = worker.connect();
     await waitForCondition(() => ackSecond !== undefined, {
-      timeoutMs: 1_000,
       label: 'second register received (pre-ack)',
     });
 
     const framesFor = (index: number): any[] => messagesByRegistration[index] ?? [];
 
     // The socket is OPEN but not yet acked — no taskResult may have been sent.
+    // load-proof: negative window: asserts no extra socket, frame or settlement appears; load can only delay stray activity, never create it
     await sleepForTesting(50);
     expect(framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
 
@@ -3856,7 +3829,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     ackSecond!();
     await connectPromise;
     await waitForCondition(() => framesFor(1).some((m) => m.type === 'taskResult'), {
-      timeoutMs: 1_000,
       label: 'preack result flushed after ack',
     });
     const flushed = framesFor(1).find((m) => m.type === 'taskResult');
@@ -3906,7 +3878,6 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     // running the activity. Waiting on that observable condition (not a sleep)
     // proves the branch fired.
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket failed by backpressure decline',
     });
 
@@ -3945,21 +3916,18 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
-      timeoutMs: 1_000,
       label: 'failsock in flight',
     });
 
     armThrow();
     resolveActivity!('v');
     await waitForCondition(() => !worker.connected, {
-      timeoutMs: 1_000,
       label: 'socket failed (failsock)',
     });
 
     // Reconnect to the same still-listening server.
     await worker.connect();
     await waitForCondition(() => worker.connected, {
-      timeoutMs: 1_000,
       label: 'reconnected after failsock',
     });
 
@@ -3973,7 +3941,8 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
         // Socket already closed server-side — fine.
       }
     }
-    await sleepForTesting(50);
+    // load-proof: the detached socket's late frame must not shut the worker down; a slow host can only delay that
+    await quietFor(50);
     expect(worker.connected).toBe(true);
 
     await worker.disconnect();

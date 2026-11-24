@@ -17,8 +17,8 @@
  * @module core/event-log
  */
 
-import type { BatchOperation, Storage } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
+import type { BatchOperation, Storage } from "../embedded/storage/src/index.ts";
+import { KEYS } from '../storage/keys.ts';
 import { decode, encode } from './codec.ts';
 import {
   EMPTY_EVENT_HEAD,
@@ -61,10 +61,16 @@ export type AppendToBatchResult = {
 export class EventLog {
   readonly #storage: Storage;
   readonly #workflowId: string;
+  readonly #getNow: () => number;
 
-  constructor(storage: Storage, workflowId: string) {
+  /**
+   * @param getNow The clock each entry's `timestamp` is read from: the engine's `getNow`, so an
+   *   engine on an injected clock writes its events at that clock's time. Defaults to `Date.now`.
+   */
+  constructor(storage: Storage, workflowId: string, getNow: () => number = Date.now) {
     this.#storage = storage;
     this.#workflowId = workflowId;
+    this.#getNow = getNow;
   }
 
   // -------------------------------------------------------------------------
@@ -240,7 +246,7 @@ export class EventLog {
       sequence,
       prevHash,
       payload: event.payload,
-      timestamp: Date.now(),
+      timestamp: this.#getNow(),
     };
 
     if (versionTuple !== undefined) {

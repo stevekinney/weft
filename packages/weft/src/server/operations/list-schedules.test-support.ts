@@ -1,9 +1,8 @@
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
 import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -23,7 +22,7 @@ export function createListSchedulesApiKeyAuthContext() {
   return {
     authContext: {
       method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: [] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['schedules:read'] }),
     },
   };
 }

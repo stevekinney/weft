@@ -11,17 +11,20 @@
  * - EngineFailure fault shaper returns 500.
  *
  * REST tests inject an authContext with an api-key principal so the
- * `access:authenticated` check passes.
+ * `schedules:read` check passes.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import {
+  type OperationFault,
+  anonymousPrincipal,
+  defineOperation,
+  principalFromApiKey,
+} from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
 import { Engine } from '../../core/engine.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import {
   createListSchedulesApiKeyAuthContext,
@@ -65,6 +68,30 @@ describe('weft.schedules.list', () => {
     expect(typeof body.offset).toBe('number');
   });
 
+  it('returns each schedule’s metadata, and none for one created without (COR-2546)', async () => {
+    engine = createListSchedulesTestEngine();
+    await engine.schedule('echo', null, '0 * * * *', {
+      id: 'sched-owned',
+      metadata: { owner: 'ada' },
+    });
+    await engine.schedule('echo', null, '30 * * * *', { id: 'sched-plain' });
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/schedules', { method: 'GET' }),
+      engine,
+      {
+        operationRegistry: listSchedulesTestRegistry,
+        restBindings: [listSchedulesRestBinding],
+        ...createListSchedulesApiKeyAuthContext(),
+      },
+    );
+
+    const body = (await response.json()) as { items: Array<Record<string, unknown>> };
+    const byId = new Map(body.items.map((item) => [item['id'], item]));
+    expect(byId.get('sched-owned')?.['metadata']).toEqual({ owner: 'ada' });
+    expect(byId.get('sched-plain') && 'metadata' in byId.get('sched-plain')!).toBe(false);
+  });
+
   it('registers an executable echo workflow in the test engine', async () => {
     engine = createListSchedulesTestEngine();
 
@@ -95,12 +122,12 @@ describe('weft.schedules.list', () => {
     engine = createListSchedulesTestEngine();
 
     const liveRegistry = createLiveOperationRegistry();
-    const principal = principalFromApiKey({ subject: 'svc', scopes: [] });
+    const principal = principalFromApiKey({ subject: 'svc', scopes: ['schedules:read'] });
 
     const result = await executeOperation(
       'weft.schedules.list',
       { workflowType: 42 },
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
+      { principal, host: engine, transport: 'jsonRpcStdio', registry: liveRegistry },
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected invalid workflowType fault');
@@ -186,7 +213,7 @@ describe('weft.schedules.list', () => {
       {},
       {
         principal: anonymousPrincipal(),
-        engine,
+        host: engine,
         transport: 'jsonRpcStdio',
         registry: liveRegistry,
       },
@@ -223,7 +250,7 @@ describe('weft.schedules.list', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'Internal server error' });
+    expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
   });
 
   it('shapes Unauthorized faults as 401', async () => {
@@ -251,7 +278,7 @@ describe('weft.schedules.list', () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'missing credentials' });
+    expect(await response.json()).toEqual({ error: 'missing credentials', retryable: false });
   });
 
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
@@ -279,6 +306,6 @@ describe('weft.schedules.list', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: 'schedule conflict' });
+    expect(await response.json()).toEqual({ error: 'schedule conflict', retryable: false });
   });
 });

@@ -1,9 +1,10 @@
 import {
-  KEYS,
   requireStorageCapability,
   type BatchOperation,
   type ConditionalBatchCondition,
-} from '../../storage/interface.ts';
+} from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
+import type { WorkerBuildIdentity } from '../../worker/deployment-records.ts';
 import { assertScopedBulkWorkflowFilter } from '../bulk-workflow-filter.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import { decode, encode } from '../codec.ts';
@@ -20,6 +21,7 @@ import type {
   WorkflowState,
   WorkflowStatus,
 } from '../types.ts';
+import { reactivationRetryingOperation } from './activity-retrying-record.ts';
 import { buildTerminalWorkflowIndexOperations } from './attributes-tags.ts';
 import {
   buildActionableBulkWorkflowFilter,
@@ -32,16 +34,21 @@ import {
   validateBulkConfirmation,
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
+import { bindReactivation, throwIfReactivationLostToRemoval } from './bulk-retry-build-binding.ts';
+import { assertBulkRunNotReplaced, type ScannedRuns } from './bulk-scanned-runs.ts';
 import { ensureWorkflowCatalogReady, isWorkflowCatalogReady } from './catalog-readiness.ts';
 import { resolveExecutableRegistrationForRetry } from './dynamic-source-execution.ts';
 import {
   assertLeaseHeldForEngineWork,
   commitFencedEngineWriteAllowingPreconditionFailure,
 } from './fenced-write.ts';
+import { fileWorkflowRetryReceiptResets } from './file-workflow-history.ts';
 import type { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { startWorkflow, type LifecycleCallbacks } from './lifecycle.ts';
 import { buildCatalogEntryRevisionCondition } from './lifecycle/start-commit.ts';
+import { buildReactivatedWorkflowState } from './reactivated-workflow-state.ts';
+import { ReactivationCleanupError } from './reactivation-cleanup-error.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
 import { decodeWorkflowState } from './validation.ts';
@@ -107,7 +114,7 @@ export async function runBulkFailedWorkflowRetry(
     preparation.workflowIds,
     bulkConcurrency,
     async (workflowId) => {
-      await retryFailedWorkflow(internals, workflowId, callbacks);
+      await retryFailedWorkflow(internals, workflowId, callbacks, preparation.runs);
       return { status: 'retried' as const };
     },
   );
@@ -130,11 +137,13 @@ async function retryFailedWorkflow(
   internals: EngineInternals,
   workflowId: string,
   callbacks: LifecycleCallbacks | undefined,
+  runs: ScannedRuns,
 ): Promise<void> {
   const state = await loadWorkflowState(internals, workflowId);
   if (state === null) {
     throw new Error('Workflow no longer exists');
   }
+  assertBulkRunNotReplaced(runs, workflowId, state);
   if (state.status !== 'failed') {
     throw new Error(`Workflow is ${state.status}, not failed`);
   }
@@ -210,7 +219,8 @@ type ReactivatedFailedWorkflow = {
   terminalCleanupTimerId: string | undefined;
 };
 
-async function reactivateFailedWorkflowFromCheckpoint(
+/** Reactivate a failed run from its checkpoint; shared with `engine.retryFailed` (`retry-failed-workflow.ts`). */
+export async function reactivateFailedWorkflowFromCheckpoint(
   internals: EngineInternals,
   state: WorkflowState,
 ): Promise<void> {
@@ -219,7 +229,11 @@ async function reactivateFailedWorkflowFromCheckpoint(
   );
 
   if (reactivated.terminalCleanupTimerId !== undefined) {
-    await internals.scheduler.cancel(reactivated.terminalCleanupTimerId, state.id);
+    await internals.scheduler
+      .cancel(reactivated.terminalCleanupTimerId, state.id)
+      .catch((error: unknown) => {
+        throw new ReactivationCleanupError(state.id, error);
+      });
   }
 }
 
@@ -248,6 +262,7 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
       commit.conditions,
     );
 
+    if (!committed) await throwIfReactivationLostToRemoval(internals, commit.binding);
     if (committed) {
       return {
         terminalCleanupTimerId:
@@ -299,6 +314,7 @@ type ReactivationCommit = {
   operations: BatchOperation[];
   conditions: ConditionalBatchCondition[];
   concurrencyStateKey: string | undefined;
+  binding: { build: WorkerBuildIdentity | undefined };
 };
 
 /**
@@ -363,24 +379,29 @@ async function buildReactivationCommit(
 
   const reactivatedState = buildReactivatedWorkflowState(internals, currentState);
   const currentAttributes = await loadSearchAttributes(internals, workflowId);
-  const operations = buildReactivationBatchOperations(
-    internals,
-    workflowId,
-    currentState,
-    reactivatedState,
-    checkpoint,
-    currentAttributes,
-    concurrencyStartOperations?.operations,
-  );
+  const operations = [
+    ...buildReactivationBatchOperations(
+      internals,
+      workflowId,
+      currentState,
+      reactivatedState,
+      checkpoint,
+      currentAttributes,
+      concurrencyStartOperations?.operations,
+    ),
+    // The history of a file workflow writes each event once; the failed step's starts and the run's
+    // end are written again by the retry.
+    ...(await fileWorkflowRetryReceiptResets(internals, workflowId)),
+  ];
 
-  return {
+  return bindReactivation(internals, currentState, {
     operations,
     conditions: [
       ...(concurrencyStartOperations?.conditions ?? []),
       ...(catalogEntryCondition === undefined ? [] : [catalogEntryCondition]),
     ],
     concurrencyStateKey: concurrencyStartOperations?.stateKey,
-  };
+  });
 }
 
 function buildReactivationBatchOperations(
@@ -404,6 +425,8 @@ function buildReactivationBatchOperations(
   return [
     ...buildTerminalWorkflowIndexOperations(currentState, reactivatedState),
     { type: 'put', key: KEYS.workflow(workflowId), value: encode(reactivatedState) },
+    // The re-run resumes from this checkpoint, so its retry state says what is retrying (COR-2529).
+    reactivationRetryingOperation(workflowId, checkpoint, reactivatedState),
     ...visibilityIndexOperations(internals, currentState, reactivatedState),
     ...buildRetrySearchAttributeOperations(
       workflowId,
@@ -446,25 +469,6 @@ async function commitFailedWorkflowReactivation(
   );
   if (result.status === 'committed') return true;
   return result.claimConflict ? throwWorkflowClaimUnavailable(internals, workflowId) : false;
-}
-
-function buildReactivatedWorkflowState(
-  internals: EngineInternals,
-  state: WorkflowState,
-): WorkflowState {
-  const reactivatedState: WorkflowState = {
-    ...state,
-    status: 'running',
-    updatedAt: internals.options.getNow(),
-  };
-  delete reactivatedState.error;
-  delete reactivatedState.errorStack;
-  delete reactivatedState.failureCategory;
-  delete reactivatedState.result;
-  delete reactivatedState.terminationReason;
-  delete reactivatedState.terminalCleanupToken;
-  delete reactivatedState.terminalCommittedBy;
-  return reactivatedState;
 }
 
 async function loadSearchAttributes(

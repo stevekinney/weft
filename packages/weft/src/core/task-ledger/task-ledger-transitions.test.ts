@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { WorkerExecutionIdentity } from '../../worker/manifest/types.ts';
+import { digestAttemptToken } from './task-attempt-runtime.ts';
+import { retryDeadLetteredTask } from './task-ledger-transitions-retry.ts';
 import {
   beginCompletion,
   canClearDeadLetteredTask,
@@ -212,6 +214,22 @@ describe('claimQueued', () => {
     const result = claimQueued(queuedFixture({ startedAt: 500 }), claimInput, 1_000);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.nextRecord.startedAt).toBe(500);
+  });
+
+  it('carries the schedule-to-close deadline onto the leased record', () => {
+    const result = claimQueued(
+      queuedFixture({ scheduleToCloseDeadline: 90_000 }),
+      claimInput,
+      1_000,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.nextRecord.scheduleToCloseDeadline).toBe(90_000);
+  });
+
+  it('leaves the leased record without a deadline when the queued task has none', () => {
+    const result = claimQueued(queuedFixture(), claimInput, 1_000);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect('scheduleToCloseDeadline' in result.nextRecord).toBe(false);
   });
 
   it('rejects when the task is not queued', () => {
@@ -803,6 +821,89 @@ describe('canClearDeadLetteredTask', () => {
 
   it('rejects when no record exists', () => {
     expect(canClearDeadLetteredTask(null).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. Retry dead letter (COR-1973)
+// ---------------------------------------------------------------------------
+
+describe('retryDeadLetteredTask', () => {
+  it('retryDeadLetteredTask turns a deadLettered record into queued with attempt+1, requeueCount+1 and firstQueuedAt = createdAt, and refuses every other state', () => {
+    const deadLettered = deadLetteredFixture({
+      attempt: 2,
+      retryCount: 1,
+      requeueCount: 3,
+      lastRequeueReason: 'visibility-timeout',
+      lastHeartbeatDetails: { step: 4 },
+    });
+    const result = retryDeadLetteredTask(deadLettered, {}, 9_000);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const next = result.nextRecord;
+    expect(next.state).toBe('queued');
+    expect(next.operationId).toBe(deadLettered.operationId);
+    expect(next.generation).toBe(deadLettered.generation + 1);
+    expect(next.attempt).toBe(3);
+    expect(next.availableAt).toBe(9_000);
+    expect(next.firstQueuedAt).toBe(deadLettered.createdAt);
+    expect(next.lastQueuedAt).toBe(9_000);
+    expect(next.requeueCount).toBe(4);
+    expect(next.retryCount).toBe(2);
+    expect(next.lastRequeueReason).toBe('dead-letter-retry');
+    expect(next.lastHeartbeatDetails).toEqual({ step: 4 });
+    expect(next.startedAt).toBeUndefined();
+    expect('attemptToken' in next).toBe(false);
+    expect('value' in next).toBe(false);
+    expect('error' in next).toBe(false);
+    expect('pendingResultDigest' in next).toBe(false);
+    expect(decodeRemoteTaskRecord(encodeRemoteTaskRecord(next))).toEqual(next);
+
+    expect(retryDeadLetteredTask(queuedFixture(), {}, 9_000).ok).toBe(false);
+    expect(retryDeadLetteredTask(leasedFixture(), {}, 9_000).ok).toBe(false);
+    expect(retryDeadLetteredTask(completingFixture(), {}, 9_000).ok).toBe(false);
+    expect(retryDeadLetteredTask(cancellingFixture(), {}, 9_000).ok).toBe(false);
+    expect(retryDeadLetteredTask(terminalFixture(), {}, 9_000).ok).toBe(false);
+    expect(retryDeadLetteredTask(null, {}, 9_000).ok).toBe(false);
+  });
+
+  it('keeps retryCount at the number of attempts already made when it is behind', () => {
+    const result = retryDeadLetteredTask(deadLetteredFixture({ attempt: 4, retryCount: 0 }), {}, 1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.nextRecord.retryCount).toBe(4);
+  });
+
+  it('does not check retryPolicy.maxAttempts, so a task at the cap stays retryable', () => {
+    const result = retryDeadLetteredTask(
+      deadLetteredFixture({
+        attempt: 3,
+        retryPolicy: {
+          maxAttempts: 3,
+          initialBackoff: '1s',
+          backoffMultiplier: 2,
+          maxBackoff: '30s',
+        },
+      }),
+      {},
+      1,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a matching attemptTokenDigest and refuses a different one', () => {
+    const deadLettered = deadLetteredFixture({ attemptToken: 'attempt-9' });
+    expect(
+      retryDeadLetteredTask(
+        deadLettered,
+        { attemptTokenDigest: digestAttemptToken('attempt-9') },
+        1,
+      ).ok,
+    ).toBe(true);
+    const mismatch = retryDeadLetteredTask(deadLettered, { attemptTokenDigest: 'other' }, 1);
+    expect(mismatch.ok).toBe(false);
+    if (mismatch.ok) return;
+    expect(mismatch.reason).toBe('dead-letter-changed');
   });
 });
 

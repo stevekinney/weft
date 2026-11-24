@@ -1,9 +1,9 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { settleInlineLaunches } from '../../testing/inline-launch-settle.test-support.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -24,8 +24,55 @@ import {
   type TerminationCallbacks,
 } from './termination.ts';
 
+class TerminalCommitGateStorage extends MemoryStorage {
+  gate:
+    | {
+        entered: ReturnType<typeof Promise.withResolvers<void>>;
+        released: ReturnType<typeof Promise.withResolvers<void>>;
+      }
+    | undefined;
+  committed = false;
+
+  arm(): Promise<void> {
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    this.gate = { entered, released };
+    return entered.promise;
+  }
+
+  release(): void {
+    this.gate?.released.resolve();
+  }
+
+  override async batch(operations: Parameters<MemoryStorage['batch']>[0]): Promise<void> {
+    const gate = this.gate;
+    if (gate) {
+      gate.entered.resolve();
+      await gate.released.promise;
+      this.gate = undefined;
+    }
+    await super.batch(operations);
+    this.committed = true;
+  }
+
+  override async conditionalBatch(
+    conditions: Parameters<MemoryStorage['conditionalBatch']>[0],
+    operations: Parameters<MemoryStorage['conditionalBatch']>[1],
+  ): Promise<boolean> {
+    const gate = this.gate;
+    if (gate) {
+      gate.entered.resolve();
+      await gate.released.promise;
+      this.gate = undefined;
+    }
+    const committed = await super.conditionalBatch(conditions, operations);
+    this.committed = committed;
+    return committed;
+  }
+}
+
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 function createTerminationCallbacks(
@@ -274,6 +321,7 @@ describe('termination helpers', () => {
       promise: new Promise(() => {}),
       resolve: () => {},
       reject,
+      boundToRun: false,
     });
 
     expect(
@@ -373,6 +421,7 @@ describe('termination helpers', () => {
       promise: new Promise(() => {}),
       resolve: () => {},
       reject,
+      boundToRun: false,
     });
 
     expect(
@@ -432,8 +481,42 @@ describe('termination helpers', () => {
     expect(cleanupReviews).not.toHaveBeenCalled();
   });
 
-  it('completeWorkflow pins the post-commit notify-waiters ordering', async () => {
+  it('runDeferredTerminalCleanup cleans a terminal run on a storage without conditional batches', async () => {
     const storage = new MemoryStorage();
+    storage.capabilities = () => ({
+      ...MemoryStorage.prototype.capabilities.call(storage),
+      conditionalBatch: false,
+    });
+    const workflowId = 'deferred-cleanup-unconditional';
+    const cleanupReviews = mock(async () => {});
+    await storage.put(KEYS.scheduleRun(workflowId), new Uint8Array([1]));
+
+    await runDeferredTerminalCleanup(
+      { storage } as never,
+      workflowId,
+      'terminal-cleanup:full:token',
+      createTerminationCallbacks({
+        cleanupReviews,
+        loadWorkflowState: async () => ({
+          createdAt: 1,
+          id: workflowId,
+          input: null,
+          startedAt: 1,
+          status: 'completed',
+          terminalCleanupToken: 'token',
+          type: 'workflow',
+          updatedAt: 1,
+          versionTuple: { workflowVersion: '1' },
+        }),
+      }),
+    );
+
+    expect(cleanupReviews).toHaveBeenCalled();
+    expect(await storage.get(KEYS.scheduleRun(workflowId))).toBeNull();
+  });
+
+  it('completeWorkflow pins the post-commit notify-waiters ordering', async () => {
+    const storage = new TerminalCommitGateStorage();
     const engine = new Engine({ storage });
 
     const completionOrderingWorkflow = workflow({ name: 'completion-ordering' }).execute(
@@ -451,6 +534,24 @@ describe('termination helpers', () => {
 
     const internals = getInternals(engine);
     const events: string[] = [];
+    const terminalToken = internals.checkpoints.get(handle.id)?.workflowExecutionToken;
+    internals.durableInlineOperations.set(handle.id, {
+      operationId: 'activity-terminal',
+      type: 'activity',
+      ...(terminalToken === undefined ? {} : { workflowExecutionToken: terminalToken }),
+    });
+    internals.pendingTimelineEntries.set(handle.id, {
+      startedAt: 1,
+      entry: {
+        step: 1,
+        operationType: 'activity',
+        operationLabel: 'finish-activity',
+        inputSummary: 'input',
+        timestamp: 1,
+        status: 'completed',
+        duration: 10,
+      },
+    });
 
     // Install a resolver so we can witness when resolve fires relative to
     // dispatch/broadcast/forward/finalize.
@@ -461,6 +562,7 @@ describe('termination helpers', () => {
       promise: new Promise(() => {}),
       resolve: resolveSpy,
       reject: () => {},
+      boundToRun: false,
     });
 
     const callbacks = createTerminationCallbacks({
@@ -471,7 +573,8 @@ describe('termination helpers', () => {
         events.push('commit');
         await commitSelfWorkflowStateOperations(internals, state, operations);
       },
-      dispatchEvent: () => events.push('dispatchEvent'),
+      dispatchEvent: (event) =>
+        events.push(event.type === 'activity:completed' ? 'dispatchActivity' : 'dispatchEvent'),
       forwardEventToHandle: () => events.push('forwardEventToHandle'),
       broadcast: () => events.push('broadcast'),
       handleScheduledWorkflowTerminal: async () => {
@@ -479,7 +582,12 @@ describe('termination helpers', () => {
       },
     });
 
-    await completeWorkflow(internals, handle.id, 'done', callbacks);
+    const entered = storage.arm();
+    const completion = completeWorkflow(internals, handle.id, 'done', callbacks);
+    await entered;
+    expect(events).not.toContain('dispatchActivity');
+    storage.release();
+    await completion;
     await flush();
 
     // Required ordering invariants:
@@ -489,18 +597,23 @@ describe('termination helpers', () => {
     // - scheduled-terminal handoff is best-effort and fires last
     expect(events[0]).toBe('commit');
     const dispatchIndex = events.indexOf('dispatchEvent');
+    const activityDispatchIndex = events.indexOf('dispatchActivity');
     const forwardIndex = events.indexOf('forwardEventToHandle');
     const broadcastIndex = events.indexOf('broadcast');
     const resolveIndex = events.indexOf('resolver.resolve');
     const finalizeIndex = events.indexOf('handleScheduledWorkflowTerminal');
 
-    expect(dispatchIndex).toBeGreaterThan(0);
+    expect(activityDispatchIndex).toBe(1);
+    expect(dispatchIndex).toBeGreaterThan(activityDispatchIndex);
     expect(forwardIndex).toBe(dispatchIndex + 1);
     expect(broadcastIndex).toBe(forwardIndex + 1);
     expect(resolveIndex).toBe(broadcastIndex + 1);
     expect(finalizeIndex).toBeGreaterThan(resolveIndex);
 
     expect(internals.resultResolvers.has(handle.id)).toBe(false);
+
+    await completeWorkflow(internals, handle.id, 'done-again', callbacks);
+    expect(events.filter((event) => event === 'dispatchActivity')).toHaveLength(1);
 
     engine[Symbol.dispose]();
   });

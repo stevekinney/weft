@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { requireOperationStorage } from './operation-helpers.ts';
 
 const storageCapabilitiesInput = z.object({});
@@ -23,6 +23,11 @@ export const storageCapabilitiesOperation = defineOperation({
   name: 'weft.storage.capabilities',
   mcpExposable: false,
   summary: "Report the connected storage backend's capability profile",
+  description:
+    'Report what the connected storage backend guarantees: persistence level, read- ' +
+    'after-write and scan consistency, and whether it supports atomic batches, ' +
+    'conditional batches, and bounded range deletes. Read-only; available to callers ' +
+    'holding storage:read or storage:admin.',
   destructive: false,
   tags: ['Storage'],
   inputSchema: storageCapabilitiesInput,
@@ -34,7 +39,8 @@ export const storageCapabilitiesOperation = defineOperation({
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ engine }) => requireOperationStorage(engine, ['capabilities']).capabilities(),
+  invoke: async ({ host: engine }) =>
+    requireOperationStorage(engine, ['capabilities']).capabilities(),
 });
 
 export const storageCapabilitiesRestBinding: UnknownRestBinding = {

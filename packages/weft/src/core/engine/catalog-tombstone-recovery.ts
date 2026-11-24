@@ -40,8 +40,8 @@
  * @module core/engine/catalog-tombstone-recovery
  */
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
-import { tryDecodeStorageKeyComponent } from '../../storage/key-encoding.ts';
+import { type Storage, tryDecodeStorageKeyComponent } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import {
   decodeCatalogEntryRecord,
   finalizeCatalogTombstone,

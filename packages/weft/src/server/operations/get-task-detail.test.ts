@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { encode } from '../../core/codec.ts';
+import { encodeTaskAttemptRecord, taskAttemptKey } from '../../core/task-ledger/task-attempt.ts';
 import { encodeRemoteTaskRecord, taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { sha256HexSync } from '../../worker/manifest/content-digest.ts';
 import * as fixture from './get-task-detail.test-support.ts';
+import { executionIdentityFixture } from './get-task-diagnostics.test-support.ts';
 
 describe('weft.tasks.get', () => {
   it('faults NotFound for an operationId that was never dispatched', async () => {
@@ -187,6 +190,103 @@ describe('weft.tasks.get', () => {
       fairShareKey: 'tenant-1',
       stickyWorkflowId: 'wf-1',
     });
+  });
+
+  it('reports every optional retry policy and execution requirement field when all are set', async () => {
+    const storage = new MemoryStorage();
+    await using engine = fixture.createEngine(storage);
+    const executionRequirement = {
+      deploymentName: 'billing-service',
+      buildId: 'build-42',
+      artifactDigest: 'sha256:build-42',
+      workflowRevision: 'rev-7',
+      activityContractHash: 'contract-hash-9',
+    };
+    await fixture.putLedgerRecord(
+      storage,
+      fixture.queuedFixture({
+        retryPolicy: {
+          maxAttempts: 4,
+          initialBackoff: '1s',
+          backoffMultiplier: 2,
+          maxBackoff: '30s',
+          nonRetryableErrors: ['ValidationError', 'CardDeclined'],
+        },
+        executionRequirement,
+      }),
+    );
+
+    const result = await fixture.runGetTaskDetail(engine, 'op-queued');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value).toMatchObject({
+      retryPolicy: { nonRetryableErrors: ['ValidationError', 'CardDeclined'] },
+      executionRequirement,
+    });
+  });
+
+  it('reports an execution requirement that names only some of its fields without inventing the rest', async () => {
+    const storage = new MemoryStorage();
+    await using engine = fixture.createEngine(storage);
+    await fixture.putLedgerRecord(
+      storage,
+      fixture.queuedFixture({ executionRequirement: { buildId: 'build-42' } }),
+    );
+
+    const result = await fixture.runGetTaskDetail(engine, 'op-queued');
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value).toMatchObject({ executionRequirement: { buildId: 'build-42' } });
+    expect(result.value).toHaveProperty('executionRequirement', { buildId: 'build-42' });
+  });
+
+  it("projects an attempt's requirement, identity, session generation, reason and heartbeat from attempt history", async () => {
+    const storage = new MemoryStorage();
+    await using engine = fixture.createEngine(storage);
+    const leased = fixture.leasedFixture();
+    await fixture.putLedgerRecord(storage, leased);
+    const digest = sha256HexSync(leased.attemptToken);
+    const executionRequirement = { deploymentName: 'billing-service', buildId: 'build-42' };
+    await storage.put(
+      taskAttemptKey(leased.operationId, digest),
+      encodeTaskAttemptRecord({
+        recordVersion: 1,
+        operationId: leased.operationId,
+        attempt: leased.attempt,
+        attemptTokenDigest: digest,
+        workerSessionId: leased.workerSessionId,
+        sessionGeneration: 3,
+        executionIdentity: executionIdentityFixture(),
+        executionRequirement,
+        claimedAt: 2_000,
+        disposition: 'requeued',
+        dispositionAt: 2_600,
+        dispositionReason: 'worker disconnected',
+        lastHeartbeatAt: 2_500,
+      }),
+    );
+
+    const result = await fixture.runGetTaskDetail(engine, leased.operationId);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value.attempts).toEqual([
+      {
+        attempt: leased.attempt,
+        attemptTokenDigest: digest,
+        sessionGeneration: 3,
+        executionIdentity: executionIdentityFixture(),
+        executionRequirement,
+        claimedAt: 2_000,
+        disposition: 'requeued',
+        dispositionAt: 2_600,
+        dispositionReason: 'worker disconnected',
+        lastHeartbeatAt: 2_500,
+      },
+    ]);
+    expect(JSON.stringify(result.value)).not.toContain(leased.attemptToken);
   });
 
   it('omits the retry and routing envelope fields entirely when not configured', async () => {

@@ -4,8 +4,8 @@ import {
   advanceTimersByTime,
   restoreRealTimers,
   useFakeTimers,
-} from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { WorkerRealm, type WorkerRealmActivation } from './worker-realm.ts';
 
 const workerUrl = new URL('./__fixtures__/revision-realm-worker-entry.ts', import.meta.url);
@@ -145,6 +145,68 @@ describe('WorkerRealm', () => {
 
     expect(realm.lifecycle.state).toBe('terminated');
     expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
+  });
+
+  it('refuses a turn while the realm is not Active, naming the state it is in', async () => {
+    const realm = makeRealm({ workerName: 'digest-a' });
+    const envelope = {
+      workflowRevision: 'revision-a',
+      realmGeneration: 'g',
+      executionToken: 't',
+      turnId: 1,
+    };
+
+    expect(realm.lifecycle.state).toBe('warming');
+    expect(await throwingRejectionOf(realm.dispatchTurn(envelope, {}))).toThrow(
+      'Worker realm cannot accept a turn while warming',
+    );
+    await realm.waitUntilReady();
+    expect(await throwingRejectionOf(realm.dispatchTurn(envelope, {}))).toThrow(
+      'Worker realm cannot accept a turn while ready',
+    );
+    expect(realm.pendingTurnCount).toBe(0);
+    realm.discard();
+  });
+
+  it('discard() on a Draining realm finishes the drain: Terminated, with its pending turn rejected', async () => {
+    const realm = makeRealm({ workerName: 'digest-a' });
+    const activation = await readyAndActive(realm);
+
+    const pending = realm.dispatchTurn({ ...activation, turnId: 1 }, {});
+    realm.beginDrain();
+    expect(realm.lifecycle.state).toBe('draining');
+    realm.discard();
+
+    expect(realm.lifecycle.state).toBe('terminated');
+    expect(realm.pendingTurnCount).toBe(0);
+    expect(await throwingRejectionOf(pending)).toThrow('realm-not-active');
+  });
+
+  it('takes an Active realm down like any other Worker failure when the Worker reports a message it cannot deserialize', async () => {
+    const OriginalWorker = globalThis.Worker;
+    const spawned: Worker[] = [];
+    globalThis.Worker = class RecordingWorker extends OriginalWorker {
+      constructor(...parameters: ConstructorParameters<typeof Worker>) {
+        super(...parameters);
+        spawned.push(this);
+      }
+    };
+    let realm: WorkerRealm;
+    try {
+      realm = makeRealm({ workerName: 'digest-a' });
+    } finally {
+      globalThis.Worker = OriginalWorker;
+    }
+    await readyAndActive(realm);
+    const activation = realm.activation!;
+    const pending = realm.dispatchTurn({ ...activation, turnId: 1 }, {});
+
+    const rejection = throwingRejectionOf(pending);
+    spawned[0]!.dispatchEvent(new Event('messageerror'));
+
+    expect(realm.lifecycle.state).toBe('terminated');
+    expect(realm.pendingTurnCount).toBe(0);
+    expect(await rejection).toThrow('realm-not-active');
   });
 
   it('discard() ends an idle, never-activated Ready realm in Crashed (no Terminated exit exists from Ready)', async () => {

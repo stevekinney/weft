@@ -1,17 +1,23 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import { type UnknownRestBinding, invalidParamsFault } from "../../embedded/backchannel/src/internals.ts";
 import {
   IdempotencyKeyPurgedError,
   WorkflowAlreadyExistsError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
-import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
+import {
+  StartWorkflowValidationError,
+  WorkerStartOverrideRejectedError,
+} from '../../core/start-workflow-validation.ts';
 import type { SearchAttributeSchema, StartOptions } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { standardSchemaValidationFault } from '../standard-schema-validation-fault.ts';
+import {
+  workerStartOverrideRejectedFault,
+  workerVersionRemovedFault,
+} from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 import {
   extractSharedStartWorkflowRestFields,
@@ -24,15 +30,58 @@ import {
 // All field validation lives in `invoke()` to keep one cross-transport contract.
 const startWorkflowInput = z.object({
   type: z.unknown().describe('Workflow type name. Runtime validation requires a non-empty string.'),
-  input: z.unknown().optional(),
-  id: z.unknown().optional(),
-  executionTimeout: z.unknown().optional(),
-  startAt: z.unknown().optional(),
-  startAfter: z.unknown().optional(),
-  tags: z.unknown().optional(),
-  idempotencyKey: z.unknown().optional(),
-  searchAttributes: z.unknown().optional(),
-  workerStartOverridePreview: z.unknown().optional(),
+  input: z
+    .unknown()
+    .optional()
+    .describe(
+      'Input payload handed to the workflow body. Omit it for a workflow that takes no input.',
+    ),
+  id: z
+    .unknown()
+    .optional()
+    .describe(
+      'Client-chosen workflow id. Omit it to have one generated; a start with an id that already exists faults with Conflict.',
+    ),
+  executionTimeout: z
+    .unknown()
+    .optional()
+    .describe(
+      'Total time the run may take before it times out: milliseconds, or a duration string such as "30s".',
+    ),
+  startAt: z
+    .unknown()
+    .optional()
+    .describe(
+      'Absolute start time as a non-negative integer millisecond timestamp. Mutually exclusive with startAfter.',
+    ),
+  startAfter: z
+    .unknown()
+    .optional()
+    .describe(
+      'Delay before the run starts: milliseconds, or a duration string such as "5m". Mutually exclusive with startAt.',
+    ),
+  tags: z
+    .unknown()
+    .optional()
+    .describe('Tags to attach to the run, as an array of non-empty strings.'),
+  idempotencyKey: z
+    .unknown()
+    .optional()
+    .describe(
+      'At-most-once key: a repeated key returns the existing run instead of starting another.',
+    ),
+  searchAttributes: z
+    .unknown()
+    .optional()
+    .describe(
+      "Search attributes to index the run under, keyed by attribute name. Validated against the workflow type's declared schema; date-time values are ISO 8601 strings.",
+    ),
+  workerStartOverridePreview: z
+    .unknown()
+    .optional()
+    .describe(
+      'Signed preview that authorises starting on a worker deployment other than the routed one. Supply the object an override preview returned.',
+    ),
 });
 
 const startWorkflowOutput = z.object({
@@ -83,8 +132,11 @@ function validateStartWorkflowInput(
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. WorkflowAlreadyExistsError   → Conflict
  *   3. IdempotencyKeyPurgedError    → Conflict (key maps to a purged run)
- *   4. StartWorkflowValidationError → InvalidParams
- *   5. otherwise                    → EngineFailure
+ *   4. WorkerStartOverrideRejectedError → Conflict (`reason: "override-token-rejected"`)
+ *   5. WorkerDeploymentVersionRemovedError → Conflict (`reason: "version-removed"`)
+ *   6. StartWorkflowValidationError → InvalidParams
+ *   7. StandardSchemaValidationError → InvalidParams (declared input schema)
+ *   8. otherwise                    → EngineFailure
  */
 function resolveStartWorkflowAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -104,9 +156,16 @@ function resolveStartWorkflowAccess(error: unknown): never {
     };
     throw fault;
   }
+  if (error instanceof WorkerStartOverrideRejectedError) {
+    throw workerStartOverrideRejectedFault(message);
+  }
+  const removedFault = workerVersionRemovedFault(error);
+  if (removedFault !== undefined) throw removedFault;
   if (error instanceof StartWorkflowValidationError) {
     throw invalidParamsFault(message);
   }
+  const schemaFault = standardSchemaValidationFault(error);
+  if (schemaFault !== undefined) throw schemaFault;
 
   const fault: OperationFault = {
     code: 'EngineFailure',
@@ -134,11 +193,12 @@ export function createStartWorkflowOperation(configuration: StartWorkflowOperati
     tags: ['Workflows'],
     inputSchema: startWorkflowInput,
     outputSchema: startWorkflowOutput,
-    access: { kind: 'public' },
+    access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:write'] } },
+    discoverable: true,
     producibleFaults: ['Conflict'],
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-    invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
+    invoke: async ({ input, host: engine }): Promise<StartWorkflowOutput> => {
       const typedEngine = runtimeWorkflowEngine(engine);
 
       // The validator checks `input.type` first and only then calls the

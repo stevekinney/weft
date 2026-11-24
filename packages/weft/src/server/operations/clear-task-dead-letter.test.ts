@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
+import { type AuthorizationScope, principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import { taskLedgerKey } from '../../core/task-ledger/task-ledger.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import type { AuthorizationScope } from '../authorization-scope.ts';
-import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
 import { clearTaskDeadLetterOperation } from './clear-task-dead-letter.ts';
 import {
   createEngine,
@@ -21,7 +20,7 @@ function runClear(engine: Engine, operationId: string, scopes: ReadonlyArray<Aut
     { operationId },
     {
       principal: principalFromApiKey({ subject: 'operator', scopes }),
-      engine,
+      host: engine,
       transport: 'http-rest',
       registry: operationRegistry,
     },

@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 /**
  * Tests for WorkflowState.failureCategory — populated on all failed workflows
  * and indexed so it can be queried via engine.list({ attributes: ... }).
@@ -6,9 +6,9 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../storage/keys.ts';
 import { encode } from './codec/api.ts';
 import { Engine } from './engine.ts';
 import { classifyErrorAsFailureCategory } from './failure-categories.ts';
@@ -17,7 +17,7 @@ import { workflow } from './types.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
-  await sleepForTesting(10);
+  await settleInlineLaunches();
 }
 
 describe('failureCategory on WorkflowState', () => {

@@ -17,9 +17,9 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { restoreRealTimers } from "../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { flushPortableMicrotasks, yieldToPortableEventLoop } from '../testing/event-loop.ts';
-import { restoreRealTimers } from '../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
 import { TestEngine } from '../testing/test-engine.ts';
 import {
   DurableMutex,

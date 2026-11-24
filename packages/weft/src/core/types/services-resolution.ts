@@ -67,6 +67,11 @@ export interface WorkflowServicesResolverLaunchOptions {
 export interface WorkflowServicesResolverScheduleInfo {
   id: string;
   occurrence?: number;
+  /**
+   * Present and `true` when a person started this run by hand with `engine.triggerSchedule`
+   * instead of the cadence. A manual run has no `occurrence`.
+   */
+  manual?: true;
 }
 
 /**

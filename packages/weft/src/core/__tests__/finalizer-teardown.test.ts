@@ -16,12 +16,12 @@
  * disposed, so no background work leaks past a test.
  */
 
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { rejectionOf, throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { rejectionOf, throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine, WorkflowTeardownPendingError } from '../engine.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
@@ -80,7 +80,6 @@ async function waitForRecordedState(engine: Engine, workflowId: string): Promise
     async () => (await engine.storage.get(KEYS.finalizerState(workflowId))) !== null,
     {
       label: `workflow ${workflowId} recorded finalizer state and parked`,
-      timeoutMs: 2000,
       intervalMs: 5,
     },
   );
@@ -96,7 +95,6 @@ async function waitForParked(engine: Engine, workflowId: string): Promise<void> 
     async () => (await engine.storage.get(KEYS.checkpoint(workflowId))) !== null,
     {
       label: `workflow ${workflowId} parked on waitForSignal (checkpoint committed)`,
-      timeoutMs: 2000,
       intervalMs: 5,
     },
   );

@@ -1,15 +1,18 @@
 import { z } from 'zod';
 
+import { type OperationFault, defineOperation } from "../../embedded/backchannel/src/index.ts";
+import {
+  type UnknownRestBinding,
+  isOperationFault,
+  readRestJsonBody,
+} from "../../embedded/backchannel/src/internals.ts";
 import {
   UpdateTimeoutError,
   UpdateValidationError,
   WorkflowTerminalError,
 } from '../../core/updates.ts';
-import type { OperationFault } from '../operation-fault.ts';
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { readRestJsonBody } from '../rest-body.ts';
-import { assertOperationEngineMethods, isOperationFault } from './operation-helpers.ts';
+import { standardSchemaValidationFault } from '../standard-schema-validation-fault.ts';
+import { assertOperationEngineMethods, undeclaredMessageFault } from './operation-helpers.ts';
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
 
@@ -19,11 +22,19 @@ const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
 // "ignore-and-default" semantic. The same typeof checks live in `invoke()` so
 // REST and JSON-RPC callers share one contract.
 const updateWorkflowInput = z.object({
-  workflowId: z.string().min(1),
-  updateName: z.string().min(1),
-  payload: z.unknown().optional(),
-  timeout: z.unknown().optional(),
-  idempotencyKey: z.unknown().optional(),
+  workflowId: z.string().min(1).describe('Id of the workflow to send the update to.'),
+  updateName: z.string().min(1).describe('Name of the update handler to invoke.'),
+  payload: z.unknown().optional().describe('Payload passed to the update handler.'),
+  timeout: z
+    .unknown()
+    .optional()
+    .describe('Milliseconds to wait for the update to be answered; defaults to 30000.'),
+  idempotencyKey: z
+    .unknown()
+    .optional()
+    .describe(
+      "At-most-once key: a repeated key returns the first update's outcome instead of applying the update again.",
+    ),
 });
 
 const updateWorkflowOutput = z.object({
@@ -34,6 +45,47 @@ const updateWorkflowOutput = z.object({
 export type UpdateWorkflowInput = z.infer<typeof updateWorkflowInput>;
 export type UpdateWorkflowOutput = z.infer<typeof updateWorkflowOutput>;
 
+/** Map an error from `submitCoordinatedUpdate` to the operation fault the update surfaces. */
+function toUpdateWorkflowFault(error: unknown): OperationFault {
+  if (isOperationFault(error)) return error;
+  const undeclared = undeclaredMessageFault(error);
+  if (undeclared !== undefined) return undeclared;
+  const schemaFault = standardSchemaValidationFault(error);
+  if (schemaFault !== undefined) return schemaFault;
+  if (error instanceof UpdateValidationError) {
+    const fault: OperationFault = {
+      code: 'Unprocessable',
+      message: error.message,
+      data: { reason: error.message },
+    };
+    return fault;
+  }
+  if (error instanceof WorkflowTerminalError) {
+    const fault: OperationFault = {
+      code: 'Unprocessable',
+      message: error.message,
+      data: { reason: error.message },
+    };
+    return fault;
+  }
+  if (error instanceof UpdateTimeoutError) {
+    const fault: OperationFault = {
+      code: 'Timeout',
+      message: error.message,
+      data: { updateId: error.updateId },
+    };
+    return fault;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  const fault: OperationFault = {
+    code: 'EngineFailure',
+    message,
+    data: {},
+  };
+  return fault;
+}
+
 export const updateWorkflowOperation = defineOperation({
   name: 'weft.workflows.update',
   mcpExposable: false,
@@ -42,16 +94,20 @@ export const updateWorkflowOperation = defineOperation({
     'Invoke a named update handler on a workflow and wait for its result. Requires the ' +
     'workflow `id` and the update `name`; `payload` is optional. Unlike signals, updates ' +
     'return the handler result synchronously. Faults with NotFound when the workflow is not ' +
-    'visible and InvalidParams when the payload exceeds the size limit.',
+    'visible, InvalidParams when the payload exceeds the size limit, and Unprocessable when ' +
+    'the workflow declares its updates and this name is not one of them. A Timeout fault carries ' +
+    'the `updateId` in its `data`: the update stays queued, and its answer is read later with ' +
+    '`weft.updates.result.get` or listed by `weft.workflows.updates.list`.',
   destructive: true,
   tags: ['Updates'],
   inputSchema: updateWorkflowInput,
   outputSchema: updateWorkflowOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['updates:write'] } },
+  discoverable: true,
   producibleFaults: ['Unprocessable', 'Timeout'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<UpdateWorkflowOutput> => {
+  invoke: async ({ input, host: engine }): Promise<UpdateWorkflowOutput> => {
     assertOperationEngineMethods(engine, ['submitCoordinatedUpdate']);
     const typedEngine = engine;
 
@@ -86,41 +142,7 @@ export const updateWorkflowOperation = defineOperation({
         result: result.result,
       };
     } catch (error) {
-      if (isOperationFault(error)) {
-        throw error;
-      }
-      if (error instanceof UpdateValidationError) {
-        const fault: OperationFault = {
-          code: 'Unprocessable',
-          message: error.message,
-          data: { reason: error.message },
-        };
-        throw fault;
-      }
-      if (error instanceof WorkflowTerminalError) {
-        const fault: OperationFault = {
-          code: 'Unprocessable',
-          message: error.message,
-          data: { reason: error.message },
-        };
-        throw fault;
-      }
-      if (error instanceof UpdateTimeoutError) {
-        const fault: OperationFault = {
-          code: 'Timeout',
-          message: error.message,
-          data: {},
-        };
-        throw fault;
-      }
-
-      const message = error instanceof Error ? error.message : String(error);
-      const fault: OperationFault = {
-        code: 'EngineFailure',
-        message,
-        data: {},
-      };
-      throw fault;
+      throw toUpdateWorkflowFault(error);
     }
   },
 });

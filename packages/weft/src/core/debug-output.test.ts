@@ -142,4 +142,205 @@ describe('debug output sanitization', () => {
       JSON.stringify = originalStringify;
     }
   });
+
+  it('redacts a loose sensitive key only when its value could carry a secret', () => {
+    expect(
+      sanitizeDebugValueForDisplay({
+        inputTokens: 12,
+        outputTokens: 3,
+        passed: true,
+        cardinality: 3,
+        sessionId: 's',
+        token: 'x',
+        authCount: 2,
+        refreshToken: null,
+        authorization: undefined,
+      }),
+    ).toEqual({
+      inputTokens: 12,
+      outputTokens: 3,
+      passed: true,
+      cardinality: 3,
+      sessionId: '[REDACTED]',
+      token: '[REDACTED]',
+      authCount: 2,
+      refreshToken: null,
+      authorization: undefined,
+    });
+  });
+
+  it('redacts a strong secret key whatever its value is', () => {
+    expect(
+      sanitizeDebugValueForDisplay({
+        card: 4111111111111111,
+        cardNumber: 4111111111111111,
+        creditCard: 4111111111111111,
+        cvv: 123,
+        cvc: 123,
+        ssn: 123456789,
+        pin: 1234,
+        password: 12345678,
+        passwd: 12345678,
+        secret: true,
+        clientSecret: 12345,
+        apiKey: 987654,
+        api_key: 987654,
+        'api-key': 987654,
+        API_KEY: 987654,
+        APIKey: 987654,
+        privateKey: 1,
+        private_key: 1,
+        accessKey: 1,
+        accessKeyId: 1,
+        credentials: false,
+        userSSN: 123456789,
+        cards: 1,
+        pinCode: 1234,
+        secretKey: null,
+      }),
+    ).toEqual(
+      Object.fromEntries(
+        [
+          'card',
+          'cardNumber',
+          'creditCard',
+          'cvv',
+          'cvc',
+          'ssn',
+          'pin',
+          'password',
+          'passwd',
+          'secret',
+          'clientSecret',
+          'apiKey',
+          'api_key',
+          'api-key',
+          'API_KEY',
+          'APIKey',
+          'privateKey',
+          'private_key',
+          'accessKey',
+          'accessKeyId',
+          'credentials',
+          'userSSN',
+          'cards',
+          'pinCode',
+          'secretKey',
+        ].map((key) => [key, '[REDACTED]']),
+      ),
+    );
+  });
+
+  it('matches strong keys by word, so look-alike names stay readable', () => {
+    expect(
+      sanitizeDebugValueForDisplay({
+        cardinality: 3,
+        passed: true,
+        passCount: 2,
+        spinning: 1,
+        pinned: true,
+        secretary: 4,
+        accessCount: 9,
+        keyCount: 1,
+        discard: 5,
+      }),
+    ).toEqual({
+      cardinality: 3,
+      passed: true,
+      passCount: 2,
+      spinning: 1,
+      pinned: true,
+      secretary: 4,
+      accessCount: 9,
+      keyCount: 1,
+      discard: 5,
+    });
+  });
+
+  it('redacts an object, array, bigint, symbol, or function under a loose sensitive key', () => {
+    expect(
+      sanitizeDebugValueForDisplay({
+        authContext: { user: 'ada', count: 3 },
+        tokens: ['a', 'b'],
+        tokenBigint: 1n,
+        sessionSymbol: Symbol('s'),
+        authCallback: () => undefined,
+      }),
+    ).toEqual({
+      authContext: '[REDACTED]',
+      tokens: '[REDACTED]',
+      tokenBigint: '[REDACTED]',
+      sessionSymbol: '[REDACTED]',
+      authCallback: '[REDACTED]',
+    });
+  });
+
+  it('applies the same rule to Map entries', () => {
+    expect(
+      sanitizeDebugValueForDisplay(
+        new Map<string, unknown>([
+          ['apiKey', 'x'],
+          ['tokenCount', 7],
+        ]),
+      ),
+    ).toEqual({ apiKey: '[REDACTED]', tokenCount: 7 });
+  });
+
+  it('labels an invalid Date instead of throwing', () => {
+    expect(sanitizeDebugValueForDisplay({ when: new Date('not a date'), id: 'wf-1' })).toEqual({
+      when: '[Invalid Date]',
+      id: 'wf-1',
+    });
+    expect(sanitizeDebugValueForDisplay(new Date('not a date'))).toBe('[Invalid Date]');
+  });
+
+  it('keeps the rest of an object when one property getter throws', () => {
+    const hostile: Record<string, unknown> = { id: 'wf-1', apiKey: 'x' };
+    Object.defineProperty(hostile, 'broken', {
+      enumerable: true,
+      get() {
+        throw new Error('getter exploded');
+      },
+    });
+    Object.defineProperty(hostile, 'secretBroken', {
+      enumerable: true,
+      get() {
+        throw new Error('getter exploded');
+      },
+    });
+
+    expect(sanitizeDebugValueForDisplay(hostile)).toEqual({
+      id: 'wf-1',
+      apiKey: '[REDACTED]',
+      broken: '[unserializable]',
+      secretBroken: '[REDACTED]',
+    });
+  });
+
+  it('labels an object whose keys cannot be read instead of throwing', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('ownKeys exploded');
+        },
+      },
+    );
+
+    expect(sanitizeDebugValueForDisplay({ id: 'wf-1', hostile })).toEqual({
+      id: 'wf-1',
+      hostile: '[unserializable]',
+    });
+  });
+
+  it('labels an Error whose message getter throws instead of throwing', () => {
+    const failure = new Error('x');
+    Object.defineProperty(failure, 'message', {
+      get() {
+        throw new Error('message exploded');
+      },
+    });
+
+    expect(sanitizeDebugValueForDisplay({ failure })).toEqual({ failure: '[unserializable]' });
+  });
 });

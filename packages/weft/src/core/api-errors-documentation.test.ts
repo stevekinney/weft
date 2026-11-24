@@ -9,11 +9,12 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import * as root from '../index.ts';
 import {
+  FAULT_CODE_RETRYABLE,
   FAULT_CODE_TO_HTTP_STATUS,
   FAULT_CODE_TO_JSON_RPC_CODE,
-} from '../server/operation-fault.ts';
+} from "../embedded/backchannel/src/internals.ts";
+import * as root from '../index.ts';
 import { FAULT_CODE_TO_FAILURE_CATEGORY } from './fault-code.ts';
 import { WeftError, isWeftErrorCode } from './weft-error.ts';
 
@@ -60,12 +61,13 @@ function publicWeftErrorCodes(): string[] {
 }
 
 describe('documentation/reference/api-errors.md', () => {
-  it('lists every FaultCode with its HTTP status, JSON-RPC code, and failure category', () => {
-    const documented = tableRows('FaultCode').map(([code, status, rpc, category]) => [
+  it('lists every FaultCode with its HTTP status, JSON-RPC code, failure category, and retryable', () => {
+    const documented = tableRows('FaultCode').map(([code, status, rpc, category, retryable]) => [
       code,
       Number(status),
       Number(rpc),
       category,
+      retryable === 'true',
     ]);
     const expected = Object.keys(FAULT_CODE_TO_FAILURE_CATEGORY).map((code) => {
       const faultCode = code as keyof typeof FAULT_CODE_TO_FAILURE_CATEGORY;
@@ -74,12 +76,40 @@ describe('documentation/reference/api-errors.md', () => {
         FAULT_CODE_TO_HTTP_STATUS[faultCode],
         FAULT_CODE_TO_JSON_RPC_CODE[faultCode],
         FAULT_CODE_TO_FAILURE_CATEGORY[faultCode],
+        FAULT_CODE_RETRYABLE[faultCode],
       ];
     });
 
     const byCode = (left: readonly unknown[], right: readonly unknown[]): number =>
       String(left[0]).localeCompare(String(right[0]));
     expect(documented.toSorted(byCode)).toEqual(expected.toSorted(byCode));
+  });
+
+  it('names source files that exist and documents retryable and remediation on every transport', () => {
+    const repositoryRoot = join(sourceDirectory, '..', '..', '..');
+    const backchannelFiles = [
+      'packages/backchannel/src/fault-code.ts',
+      'packages/backchannel/src/operation-fault.ts',
+      'packages/backchannel/src/fault-to-json-rpc.ts',
+    ];
+    for (const file of backchannelFiles) {
+      expect(documentation).toContain(file);
+      expect(existsSync(join(repositoryRoot, file))).toBe(true);
+    }
+    expect(documentation).toContain('src/server/weft-operation-fault.ts');
+    expect(existsSync(join(sourceDirectory, 'server', 'weft-operation-fault.ts'))).toBe(true);
+    // The moved Weft paths are gone.
+    expect(documentation).not.toContain('`src/server/operation-fault.ts`');
+    expect(documentation).not.toContain('`src/server/fault-to-json-rpc.ts`');
+
+    for (const transport of ['### REST', '### JSON-RPC', '### MCP']) {
+      const start = documentation.indexOf(`\n${transport}\n`);
+      expect(start).toBeGreaterThan(-1);
+      const end = documentation.indexOf('\n### ', start + 1);
+      const section = documentation.slice(start, end === -1 ? undefined : end);
+      expect(section).toContain('retryable');
+      expect(section).toContain('remediation');
+    }
   });
 
   it('lists every public WeftErrorCode exactly once, each in the file that defines it', () => {

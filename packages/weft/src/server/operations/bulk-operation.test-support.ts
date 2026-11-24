@@ -12,11 +12,11 @@
  * build) and must never be imported by production server code.
  */
 
+import { principalFromApiKey } from "../../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
 import type { AnyWorkflowDefinition } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import type { HandlerOptions } from '../handler/route-dispatch.ts';
-import { principalFromApiKey } from '../principal.ts';
 
 /**
  * Build a `MemoryStorage`-backed engine with the given workflow definitions

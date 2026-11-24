@@ -36,8 +36,10 @@ wss://server.example.com/api/v1/tasks/:queue/stream
 
 The TypeScript `RemoteWorker` accepts the full URL via its `serverUrl` option:
 
-```ts partial
-import { RemoteWorker } from '@lostgradient/weft';
+```ts
+import { RemoteWorker, type RemoteWorkerActivityFunction } from '@lostgradient/weft';
+
+declare const sendEmail: RemoteWorkerActivityFunction;
 
 using worker = new RemoteWorker({
   serverUrl: 'ws://localhost:7233/api/v1/tasks/default/stream',
@@ -105,7 +107,7 @@ Worker                              Server
 
 The server tracks the worker by `workerId` in an in-memory registry. While a worker socket is live, another socket cannot claim the same `workerId`: the duplicate registration receives `registerError` with code `invalid_registration` and the server closes that socket. This blocks same-id task hijacking when authentication is disabled, but it also means a legitimate reconnect can be rejected until the old socket's close is observed.
 
-If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. A same-`workerId` `register` inside that grace window is either a PROVEN or an UNPROVEN resume (protocol v6, COR-220):
+If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. While that window is open, `weft.workers.diagnostics` reports the instant it closes as `instance.reconnectGraceEndsAt`; the field is absent for a worker that is not inside a grace window. A same-`workerId` `register` inside that grace window is either a PROVEN or an UNPROVEN resume (protocol v6, COR-220):
 
 - **Proven** — the reconnecting `register` echoes `resumeSessionGeneration` equal to the `sessionGeneration` the server handed back on the `registerAck` for the session that just disconnected. The pending requeue is cancelled, the session's generation is left unchanged, and every in-flight attempt — its attempt token, its heartbeat-renewable lease deadline, and its absolute attempt deadline — is preserved exactly as it was at disconnect. Nothing is reclaimed and no lease is reset.
 - **Unproven** — `resumeSessionGeneration` is absent or does not match. The server treats this exactly as if the grace window had already lapsed: it forfeits the disconnected session's in-flight work immediately (the same requeue the grace timer would eventually have run) and then registers a brand new session, with `sessionGeneration` incremented, before acknowledging.
@@ -406,13 +408,23 @@ Server rejection of registration. The server sends this message, then closes the
 }
 ```
 
-| Field                       | Type                                                                                                           | Required | Description                                                                                                                                                                                                                                                    |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `type`                      | `"registerError"`                                                                                              | Yes      | Message discriminator.                                                                                                                                                                                                                                         |
-| `code`                      | `"invalid_registration" \| "unsupported_protocol_version" \| "deployment_conflict" \| "registration_rejected"` | Yes      | Machine-readable registration failure. `deployment_conflict` means the manifest's `(deploymentName, buildId)` was already registered with a different `artifactDigest`; `registration_rejected` means a configured `WorkerAdmissionPolicy` refused the worker. |
-| `message`                   | string                                                                                                         | Yes      | Human-readable diagnostic.                                                                                                                                                                                                                                     |
-| `supportedProtocolVersions` | number[]                                                                                                       | Yes      | The _server's_ supported protocol versions—not narrowed to the requesting worker's own, so a mismatched value can still be parsed and diagnosed.                                                                                                               |
-| `requestedProtocolVersion`  | number                                                                                                         | No       | Version sent by the worker when it was a finite number.                                                                                                                                                                                                        |
+| Field                       | Type                                                                                                           | Required | Description                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`                      | `"registerError"`                                                                                              | Yes      | Message discriminator.                                                                                                                                                                                                                                                                                                                                         |
+| `code`                      | `"invalid_registration" \| "unsupported_protocol_version" \| "deployment_conflict" \| "registration_rejected"` | Yes      | Machine-readable registration failure. `deployment_conflict` means the manifest's `(deploymentName, buildId)` was already registered with a different `artifactDigest`, either by a connected worker or by the durable deployment catalog from an earlier registration; `registration_rejected` means a configured `WorkerAdmissionPolicy` refused the worker. |
+| `message`                   | string                                                                                                         | Yes      | Human-readable diagnostic.                                                                                                                                                                                                                                                                                                                                     |
+| `supportedProtocolVersions` | number[]                                                                                                       | Yes      | The _server's_ supported protocol versions—not narrowed to the requesting worker's own, so a mismatched value can still be parsed and diagnosed.                                                                                                                                                                                                               |
+| `requestedProtocolVersion`  | number                                                                                                         | No       | Version sent by the worker when it was a finite number.                                                                                                                                                                                                                                                                                                        |
+
+### Deployment version recording
+
+An accepted registration also records the worker's `(deploymentName, buildId)` as a `ready` version in the durable deployment catalog that `weft.worker.deployments.*` lists and routes between. The record is made once, and a build's identity is its `artifactDigest`: another worker of the same build and artifact, a reconnect, or two workers registering at the same moment leave the first record (and its first-seen manifest) as it was, even when their manifests differ in runtime version or capabilities. Only a different artifact for a recorded build is a `deployment_conflict`.
+
+The record is written only for a registration the server will admit. It comes after the in-memory digest check and the live-socket and `workerId` checks, so a build that conflicts with a connected worker, or a socket that tries to take over a live worker id, is refused before anything is stored.
+
+The stored state governs the worker that registers. `ready` registers normally. A build the catalog records as `draining` or `removed` still accepts the worker, but applies the build's drain marker first, so the worker takes no new untargeted work (the state is the same one `weft.worker.deployments.drain` gives a build); a build drained or removed by an operator stays out of service across a worker restart and a server restart. A stored version is never made `ready` again by a registration.
+
+If the catalog cannot be written, the registration is not accepted and the server never half-registers the worker. A WebSocket worker's socket is closed with code `1013` (Try Again Later); `RemoteWorker` does not read the code, so its `connect()` rejects and the caller's own retry loop registers again once the catalog recovers. A long-poll registration is answered `503` with `Retry-After: 1` and `code: "catalog_unavailable"`, and `LongPollWorker` retries on its next poll cycle.
 
 ### `protocolError`
 
@@ -494,16 +506,23 @@ The conformance runner verifies registration acknowledgement, echo task completi
 The JSON report has this shape. A run that aborts before its first verdict, such as a worker that never registers, reports a single failed check named `conformance` that carries the error message.
 
 ```ts
-type ConformanceReport = {
-  ok: boolean; // true only when every check passed
-  protocolVersion: number; // the protocol the sandbox server spoke
-  supportedProtocolVersions: number[];
-  checks: Array<{
-    name: string; // 'register', 'task completion', 'heartbeat', 'cancellation',
+import type { ClientOperationTypes } from '@lostgradient/weft';
+
+// The CLI's JSON report is the operation's report without its target and timestamps.
+type ConformanceReport = Omit<
+  ClientOperationTypes['weft.conformance.report']['output'],
+  'target' | 'startedAt' | 'completedAt'
+>;
+
+const report: ConformanceReport = {
+  ok: false, // true only when every check passed
+  protocolVersion: 8, // the protocol the sandbox server spoke
+  supportedProtocolVersions: [8],
+  checks: [
+    // name is 'register', 'task completion', 'heartbeat', 'cancellation',
     // 'reconnect', 'revision echo', 'graceful shutdown', or 'conformance'
-    ok: boolean;
-    message: string;
-  }>;
+    { name: 'conformance', ok: false, message: 'worker never registered' },
+  ],
 };
 ```
 
@@ -519,7 +538,8 @@ A server can run the same checks on request through two operations, so a console
 A request selects a **target** by name and supplies nothing else. Targets are worker commands that the host registers when it starts the server. The host builds them with `createConformanceTargets` from `@lostgradient/weft/testing` and passes the result to `serve()`:
 
 ```ts
-import { Engine, MemoryStorage, serve } from '@lostgradient/weft';
+import { Engine, serve } from '@lostgradient/weft';
+import { MemoryStorage } from '@lostgradient/storage';
 import { createConformanceTargets } from '@lostgradient/weft/testing';
 
 const engine = new Engine({ storage: new MemoryStorage() });
@@ -590,6 +610,7 @@ The `manifest` body is the same strict worker manifest the WebSocket transport s
 | `400`    | Invalid JSON, malformed manifest, unsupported protocol version, invalid queue, or invalid concurrency.                                                                                 |
 | `403`    | Authentication was present but did not include `workers:write`.                                                                                                                        |
 | `409`    | The manifest conflicts with an existing deployment identity.                                                                                                                           |
+| `503`    | The deployment catalog could not record the build (`code: "catalog_unavailable"`, `Retry-After: 1`). No session was created; retry registration.                                       |
 
 Readiness is false until this registration succeeds. A worker that cannot register retries registration; it does not poll anonymously and a session id never replaces authentication. The session token is returned only in this registration response and is not exposed by diagnostics.
 
@@ -664,7 +685,7 @@ A result transport failure never turns a completed activity into a failed activi
 
 ### Heartbeat and control
 
-Session heartbeat and activity heartbeat are separate from each other and from the activity's absolute deadline. Session heartbeat keeps the accepted worker registration live; activity heartbeat renews only one in-flight attempt's visibility lease; an absolute activity deadline still caps execution.
+Session heartbeat and activity heartbeat are separate from each other and from the activity's absolute deadline. Session heartbeat keeps the accepted worker registration live; activity heartbeat renews only one in-flight attempt's visibility lease; an absolute activity deadline still caps execution. The session lease lasts 60 seconds from the session's last task poll or bare session heartbeat; a session that goes that long with neither is expired and its next request is answered `410`. `weft.workers.diagnostics` reports the current expiry as `instance.sessionLeaseExpiresAt` for a long-poll worker and omits it for a WebSocket worker.
 
 ```text
 POST /api/v1/worker-sessions/:sessionId/heartbeat

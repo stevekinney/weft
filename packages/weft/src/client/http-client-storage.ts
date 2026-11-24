@@ -1,11 +1,13 @@
-import { readBoundedNdjsonResponse } from '../storage/bounded-ndjson-response.ts';
-import { decodeBase64ToBytes, encodeBytesToBase64, isRecord } from '../storage/byte-encoding.ts';
 import {
   assertStorageBatchOperationCount,
+  decodeBase64ToBytes,
+  encodeBytesToBase64,
+  isRecord,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
-} from '../storage/interface.ts';
+} from "../embedded/storage/src/index.ts";
+import { readBoundedNdjsonResponse } from '../storage/bounded-ndjson-response.ts';
 import type { WeftClientStorage } from './client-storage.ts';
 import { request, requestResponse } from './http-request.ts';
 

@@ -41,6 +41,7 @@ export {
 } from './lifecycle/start-state.ts';
 
 export {
+  getRunByIdempotencyKey,
   startOrSignal,
   startWithIdempotency,
   type StartOrSignalCallbacks,

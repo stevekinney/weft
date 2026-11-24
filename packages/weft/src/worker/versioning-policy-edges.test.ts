@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  MemoryStorage,
+} from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { encode } from '../core/codec.ts';
-import type { BatchOperation, ConditionalBatchCondition } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { KEYS } from '../storage/keys.ts';
 import { WorkerDeploymentCatalog } from './deployment-routing.ts';
 import type { WorkerManifest } from './manifest/types.ts';
 import {
@@ -31,6 +34,39 @@ describe('workflow worker versioning edge policies', () => {
         resolveWorkflowWorkerStartBinding(storage, {
           workflowId: WORKFLOW_ID,
           workflowType: WORKFLOW_TYPE,
+          workflowRevision: WORKFLOW_REVISION,
+          policy: { mode: 'pinned' },
+          checkpointId: WORKFLOW_ID,
+          boundAt: 1,
+        }),
+      ),
+    ).toThrow('No accepted routed worker deployment provides workflow');
+  });
+
+  it('does not route a workflow type the ready manifest only inherits, such as constructor', async () => {
+    using storage = new MemoryStorage();
+    const catalog = new WorkerDeploymentCatalog(storage);
+    await catalog.registerVersion({
+      deploymentName: 'orders-edge',
+      buildId: 'build-1',
+      artifactDigest: 'sha256:build-1',
+      manifestDigest: 'sha256:manifest-build-1',
+      manifest: manifestWithoutActivities('build-1'),
+      state: 'ready',
+      firstSeenAt: 1,
+    });
+    await catalog.setRouting({
+      deploymentName: 'orders-edge',
+      currentBuildId: 'build-1',
+      rampBasisPoints: 10_000,
+      updatedAt: 1,
+    });
+
+    expect(
+      await throwingRejectionOf(
+        resolveWorkflowWorkerStartBinding(storage, {
+          workflowId: WORKFLOW_ID,
+          workflowType: 'constructor',
           workflowRevision: WORKFLOW_REVISION,
           policy: { mode: 'pinned' },
           checkpointId: WORKFLOW_ID,

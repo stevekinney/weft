@@ -37,7 +37,7 @@
  * @module core/engine/ownership-bootstrap
  */
 
-import type { Storage } from '../../storage/interface.ts';
+import type { Storage } from "../../embedded/storage/src/index.ts";
 import type { OwnerSideSignalPollTarget, ParkedSignalWait } from './owner-side-signal-poll.ts';
 import type { OwnerSideUpdatePollTarget } from './owner-side-update-poll.ts';
 import { bootstrapOwnershipGates } from './ownership-mode-marker.ts';
@@ -164,6 +164,8 @@ export type OwnerSideSignalPollSources = {
   hasBufferedSignal(workflowId: string, signalName: string): Promise<boolean>;
   /** `inline-parking.ts`'s `resumeParkedInlineWorkflow`, bound to this engine. */
   resumeParkedInlineWorkflow(workflowId: string): Promise<void>;
+  /** Dispatch after a parked workflow has resumed successfully. */
+  dispatchSignalDelivered?(workflowId: string, signalName: string): void;
   /**
    * Wake exactly the in-memory signal waiter registered under `waiterKey` —
    * mirrors `signals.ts`'s (unexported) `deliverBufferedSignals` waiter
@@ -230,6 +232,15 @@ export type OwnerSideSignalPollSources = {
 export function buildOwnerSideSignalPollTarget(
   sources: OwnerSideSignalPollSources,
 ): OwnerSideSignalPollTarget {
+  async function wakeParked(workflowId: string, signalName?: string): Promise<boolean> {
+    if (!sources.isParkedInlineWorkflow(workflowId)) return false;
+    if (signalName !== undefined && sources.parkedSignalName(workflowId) !== signalName)
+      return true;
+    await sources.resumeParkedInlineWorkflow(workflowId);
+    if (signalName !== undefined) sources.dispatchSignalDelivered?.(workflowId, signalName);
+    return true;
+  }
+
   return {
     listParkedSignalWaits(): readonly ParkedSignalWait[] {
       const waits: ParkedSignalWait[] = [];
@@ -246,15 +257,13 @@ export function buildOwnerSideSignalPollTarget(
     },
     hasBufferedSignal: (workflowId, signalName) =>
       sources.hasBufferedSignal(workflowId, signalName),
-    async wakeWorkflow(workflowId: string): Promise<void> {
-      if (sources.isParkedInlineWorkflow(workflowId)) {
-        await sources.resumeParkedInlineWorkflow(workflowId);
-        return;
-      }
+    async wakeWorkflow(workflowId: string, signalName?: string): Promise<void> {
+      if (await wakeParked(workflowId, signalName)) return;
       for (const [waiterWorkflowId, waiterKey] of sources.listSignalWaiterEntries()) {
         if (waiterWorkflowId !== workflowId) continue;
-        const signalName = waiterKey.slice(workflowId.length + 1);
-        if (await sources.hasBufferedSignal(workflowId, signalName)) {
+        const waiterSignalName = waiterKey.slice(workflowId.length + 1);
+        if (signalName !== undefined && waiterSignalName !== signalName) continue;
+        if (await sources.hasBufferedSignal(workflowId, waiterSignalName)) {
           if ((await sources.confirmSignalWakeOwnership(workflowId)) === 'discard') continue;
           sources.wakeSignalWaiter(workflowId, waiterKey);
         }

@@ -25,13 +25,17 @@ type ListFilterDimension =
   | 'attributes'
   | 'idPrefix'
   | 'failureCategory'
+  | 'failedStep'
+  | 'retrying'
   | 'createdAt'
   | 'updatedAt'
   | 'executionDeadline';
 
-type ListFilterQueryInput = Omit<ListFilter, 'status' | 'failureCategory'> & {
+type ListFilterQueryInput = Omit<ListFilter, 'status' | 'failureCategory' | 'retrying'> & {
   status?: string | string[];
   failureCategory?: string | string[];
+  /** `true` or `false` for those two query values; any other text, so validation refuses it. */
+  retrying?: boolean | string;
 };
 
 /** Parser for one `ListFilter` dimension. `undefined` means "not present in the query". */
@@ -102,6 +106,19 @@ function parseFailureCategory(
   return categories;
 }
 
+function parseFailedStep(params: URLSearchParams): ListFilter['failedStep'] | undefined {
+  const failedStep = params.get('failed_step');
+  return failedStep === null ? undefined : failedStep;
+}
+
+function parseRetrying(params: URLSearchParams): ListFilterQueryInput['retrying'] | undefined {
+  const retrying = params.get('retrying');
+  if (retrying === null) return undefined;
+  if (retrying === 'true') return true;
+  if (retrying === 'false') return false;
+  return retrying;
+}
+
 function parseCreatedAt(params: URLSearchParams): TimeRange | undefined {
   return extractTimeRangeFromQuery(params, 'created_at');
 }
@@ -130,6 +147,8 @@ const LIST_FILTER_QUERY_PARSERS = {
   attributes: parseAttributes,
   idPrefix: parseIdPrefix,
   failureCategory: parseFailureCategory,
+  failedStep: parseFailedStep,
+  retrying: parseRetrying,
   createdAt: parseCreatedAt,
   updatedAt: parseUpdatedAt,
   executionDeadline: parseExecutionDeadline,

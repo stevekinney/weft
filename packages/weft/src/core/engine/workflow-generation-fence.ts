@@ -12,7 +12,8 @@
  * @module core/engine/workflow-generation-fence
  */
 
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
+import { type BatchOperation } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decodeGeneration, encodeGeneration } from './generation-codec.ts';
 import type { EngineInternals } from './internals.ts';
 import type { WorkflowClaimTransitionFragment } from './workflow-claim-transitions.ts';

@@ -10,7 +10,7 @@
  * @module storage/lease-keys
  */
 
-import { encodeStorageKeyComponent } from './key-encoding.ts';
+import { encodeStorageKeyComponent } from "../embedded/storage/src/index.ts";
 
 /**
  * Engine liveness heartbeat keys plus the lease-fenced single-writer ownership

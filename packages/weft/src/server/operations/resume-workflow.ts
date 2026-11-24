@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
 } from './single-workflow-control-operation.ts';
 
 const resumeWorkflowInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z
+    .string()
+    .min(1)
+    .describe('Id of the workflow to resume from its persisted checkpoint.'),
 });
 
 const resumeWorkflowOutput = z.object({
@@ -27,6 +30,7 @@ export const resumeWorkflowOperation = createSingleWorkflowControlOperation({
     'part of resuming. Faults with NotFound when the workflow is not visible, or Conflict when it ' +
     'is in a status that cannot be resumed (terminal or pending).',
   destructive: false,
+  scope: 'workflows:write',
   tags: ['Workflows'],
   inputSchema: resumeWorkflowInput,
   outputSchema: resumeWorkflowOutput,

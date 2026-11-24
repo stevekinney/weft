@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { Engine } from '../../core/engine.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import type { AnyActivityDefinition, WorkflowContext } from '../../core/types.ts';
-import { activity, workflow } from '../../core/types.ts';
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
-import { handleRequest } from '../handler.ts';
+import {
+  activity,
+  signal,
+  workflow,
+  type AnyActivityDefinition,
+  type WorkflowContext,
+} from '../../core/types.ts';
+import { KEYS } from '../../storage/keys.ts';
 import { serve, type WeftServer } from '../index.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { jsonRequest } from './operation-test-helpers.test-support.ts';
 import {
   startOrSignalWorkflowOperation,
@@ -79,15 +84,21 @@ async function waitForRecordedFinalizerState(engine: Engine, workflowId: string)
     async () => (await engine.storage.get(KEYS.finalizerState(workflowId))) !== null,
     {
       label: `workflow ${workflowId} recorded finalizer state`,
-      timeoutMs: 2000,
       intervalMs: 5,
     },
   );
 }
 
+const declaredRelease = workflow({ name: 'declared-release' })
+  .signals({ release: signal<string>('release') })
+  .execute(async function* (ctx: WorkflowContext) {
+    return yield* ctx.waitForSignal<string>('release');
+  });
+
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
   engine.register(waitForRelease);
+  engine.register(declaredRelease);
   engine.register(completesImmediately);
   engine.register(waitWithSearchAttributes);
   return engine;
@@ -108,6 +119,24 @@ describe('weft.workflows.startorsignal', () => {
       await engine[Symbol.asyncDispose]();
       engine = undefined;
     }
+  });
+
+  it('answers 422 and creates nothing for a signal name the workflow does not declare', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'declared-release',
+        signalName: 'reject',
+        signalId: 'sig-undeclared',
+        id: 'sos-rest-undeclared',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(422);
+    expect(await engine.storage.get(KEYS.workflow('sos-rest-undeclared'))).toBeNull();
   });
 
   it('creates the workflow and returns 201 with its id when the target is absent', async () => {
@@ -229,6 +258,7 @@ describe('weft.workflows.startorsignal', () => {
       expect(await response.json()).toEqual({
         error: expect.stringContaining('tearing down a resource'),
         weftCode: 'WorkflowTeardownPendingError',
+        retryable: false,
       });
     } finally {
       finalizer.release();
@@ -314,7 +344,10 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Provide only one of startAt or startAfter' });
+    expect(await response.json()).toEqual({
+      error: 'Provide only one of startAt or startAfter',
+      retryable: false,
+    });
   });
 
   it('returns 400 when the request body is invalid JSON', async () => {
@@ -331,7 +364,7 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+    expect(await response.json()).toEqual({ error: 'Invalid JSON body', retryable: false });
   });
 
   it('returns 400 when the request body is JSON null (not an object)', async () => {
@@ -343,7 +376,10 @@ describe('weft.workflows.startorsignal', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+    expect(await response.json()).toEqual({
+      error: 'Request body must be a JSON object',
+      retryable: false,
+    });
   });
 
   it('returns 400 InvalidParams when body is a JSON array', async () => {
@@ -366,6 +402,7 @@ describe('weft.workflows.startorsignal', () => {
           },
         ],
       },
+      retryable: false,
     });
   });
 
@@ -383,7 +420,10 @@ describe('weft.workflows.startorsignal', () => {
         { operationRegistry: registry, restBindings: bindings },
       );
       expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: 'Field "id" must be a string' });
+      expect(await response.json()).toEqual({
+        error: 'Field "id" must be a string',
+        retryable: false,
+      });
     } finally {
       engine.startOrSignal = original;
     }
@@ -512,7 +552,10 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: type' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: type',
+      retryable: false,
+    });
   });
 
   it('returns 400 when the signalName is missing (rejected by the schema)', async () => {
@@ -538,6 +581,7 @@ describe('weft.workflows.startorsignal', () => {
           },
         ],
       },
+      retryable: false,
     });
   });
 
@@ -562,6 +606,7 @@ describe('weft.workflows.startorsignal', () => {
           },
         ],
       },
+      retryable: false,
     });
   });
 
@@ -669,7 +714,7 @@ describe('weft.workflows.startorsignal', () => {
         { operationRegistry: registry, restBindings: bindings },
       );
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.startOrSignal = original;
     }

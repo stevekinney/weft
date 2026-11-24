@@ -17,8 +17,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { encode } from '../codec.ts';
 import { bootstrapWorkflowResultResolver, createWorkflowResultWaiter } from './handle-result.ts';
 
@@ -30,6 +30,7 @@ function createInternals(storage: unknown) {
     // A claim registry tracking no epoch — this engine owns nothing.
     workflowClaimRegistry: { engineId: 'observer-engine', currentEpoch: () => null },
     resultResolvers: new Map(),
+    pendingTerminalSettlements: new Set(),
     disposed: false,
   } as any;
 }

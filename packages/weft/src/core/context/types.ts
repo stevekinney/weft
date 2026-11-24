@@ -167,7 +167,26 @@ export interface ContextOptions {
   abortController: AbortController;
   deadline?: number;
   initialStep?: number;
+  /**
+   * The `step` every `ctx.log` record from this context carries, in place of the live step index.
+   * A speculative child sets it to the step of the `ctx.speculate` call that owns it, so a line
+   * logged inside the speculation lands beside that call's timeline entry whether the speculation
+   * commits or rolls back: the child's own steps are rolled back with it and have no entries.
+   */
+  logStep?: number;
   accumulatedResults?: Map<number, unknown>;
+  /**
+   * Set when the body is relaunched from its checkpoint to continue a run that already executed
+   * up to its next uncached operation (a signal, a review, a timer, or a recovery), which the
+   * checkpoint proves by being numbered past zero. Leave it out when no earlier execution took a
+   * turn (a run saved and recovered before its first turn). The body
+   * replays its cached prefix and then reaches that operation, which is where the earlier
+   * execution parked; every `ctx.log` call before the operation yields was emitted by that
+   * earlier execution, so its record is delivered marked `replayed` (the log store skips those).
+   * Leave it out for
+   * a fresh run, and for a fork, which is a new run that logs from its start.
+   */
+  resumed?: boolean;
   locals?: Record<string, unknown>;
   searchAttributes?: Record<string, SearchAttributeValue>;
   searchAttributeSchema?: SearchAttributeSchema;

@@ -1,8 +1,9 @@
+import { sleepForTesting } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { settleInlineLaunches } from '../testing/inline-launch-settle.test-support.ts';
 
-import { MemoryStorage } from '../storage/memory.ts';
-import { throwingRejectionOf } from '../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { throwingRejectionOf } from "../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
 import { asConcreteContext } from './context/run-operation.ts';
 import { Engine } from './engine.ts';
 import {
@@ -72,10 +73,12 @@ describe('step-context', () => {
     const asyncStepsWorkflow = workflow({ name: 'async-steps' }).execute(
       compileStepWorkflow(async (ctx: StepWorkflowContext, _input: unknown) => {
         const value = await ctx.step('fetch', async () => {
+          // load-proof: simulated async step work inside a workflow body; handle.result() is awaited before anything is asserted
           await sleepForTesting(1);
           return 42;
         });
         const doubled = await ctx.step('double', async () => {
+          // load-proof: simulated async step work inside a workflow body; handle.result() is awaited before anything is asserted
           await sleepForTesting(1);
           return value * 2;
         });
@@ -105,6 +108,38 @@ describe('step-context', () => {
 
     const handle = await engine.start('error-step', {});
     expect(await throwingRejectionOf(handle.result())).toThrow('Step failed intentionally');
+  });
+
+  it('fails the workflow with a string rejection as its message', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+
+    engine.register(
+      workflow({ name: 'string-rejection' }).execute(
+        compileStepWorkflow(async (_ctx: StepWorkflowContext, _input: unknown) => {
+          return Promise.reject('plain string failure');
+        }),
+      ),
+    );
+
+    const handle = await engine.start('string-rejection', {});
+    expect(await throwingRejectionOf(handle.result())).toThrow('plain string failure');
+  });
+
+  it('fails the workflow with the JSON form of a non-Error object rejection', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+
+    engine.register(
+      workflow({ name: 'object-rejection' }).execute(
+        compileStepWorkflow(async (_ctx: StepWorkflowContext, _input: unknown) => {
+          return Promise.reject({ code: 'E_BAD', retryable: false });
+        }),
+      ),
+    );
+
+    const handle = await engine.start('object-rejection', {});
+    expect(await throwingRejectionOf(handle.result())).toThrow(
+      '{"code":"E_BAD","retryable":false}',
+    );
   });
 
   it('auto-detects step functions in register()', async () => {
@@ -262,7 +297,7 @@ describe('step-context', () => {
 describe('step-context durability', () => {
   /** Drain microtasks so fire-and-forget engine work settles. */
   async function flush(): Promise<void> {
-    await sleepForTesting(10);
+    await settleInlineLaunches();
   }
 
   it('does not re-execute completed steps after a crash and recovery', async () => {
@@ -417,7 +452,7 @@ describe('step-context durability', () => {
     expect(await throwingRejectionOf(handle.result())).toThrow('lone boom');
 
     engine[Symbol.dispose]();
-  }, 5_000);
+  });
 
   it('rejects a non-concrete (worker-mode) context with an actionable inline-only error', () => {
     // Worker execution mode drives the handler with a minimal

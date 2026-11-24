@@ -12,10 +12,12 @@
 import { RegExpExtensionDecodeError } from '../../codec/extension-codec.ts';
 import { VersionMismatchError } from '../../versioning.ts';
 import { DynamicWorkflowSourceUnavailableError } from '../dynamic-source-errors.ts';
+import { TERMINAL_STATUSES } from '../guards.ts';
 import type { WorkflowHandle } from '../handles.ts';
 import { WorkflowClaimUnavailableError } from '../lease-errors.ts';
 import { WorkflowRevisionUnavailableError } from '../revision-errors.ts';
 import type { LifecycleCallbacks, RecoverAllOptions } from './shared.ts';
+import { WorkflowNotResumableError } from './workflow-not-resumable-error.ts';
 
 /**
  * Isolate one `recoverAll()` entry's failure to just this workflow when it
@@ -39,6 +41,13 @@ export async function isolateRecoveryFailure(
     return null;
   }
   if (error instanceof WorkflowClaimUnavailableError) {
+    return null;
+  }
+  if (error instanceof WorkflowNotResumableError && TERMINAL_STATUSES.has(error.status)) {
+    // The preflight read this run as `running`, and the resume found it terminal: another drive,
+    // the claim reclaim's for a lapsed claim in this very batch, say, completed it in between. The
+    // run was recovered elsewhere, which is not a failure of this batch, and the batch goes on. A
+    // non-terminal status that a resume cannot continue is still surfaced (COR-1593).
     return null;
   }
   if (error instanceof WorkflowRevisionUnavailableError) {

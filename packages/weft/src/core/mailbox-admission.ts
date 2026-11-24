@@ -93,6 +93,16 @@ export async function admitCommand(
       runtime.policy.namespace,
       runtime.policy.resourceId,
     );
+    // A purged mailbox keeps a sealed header (COR-1934): an admission that read the header a purge
+    // replaced loses its compare-and-swap, reads the seal here, and is refused rather than
+    // recreating the mailbox.
+    if (header.record.purgedAt !== undefined) {
+      return {
+        status: 'rejected',
+        reason: 'purged',
+        capacity: capacityOf(runtime, header.record.openCount, header.record.admittedCount),
+      };
+    }
     if (header.record.openCount >= runtime.policy.maxBacklog) {
       return {
         status: 'rejected',

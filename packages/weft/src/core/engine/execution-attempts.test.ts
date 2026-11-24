@@ -7,14 +7,14 @@
 import { Glob } from 'bun';
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import {
   createDeferred,
+  drainMicrotasks,
   waitForCondition,
-  yieldToEventLoop,
-} from '../../testing/fake-timers.test-support.ts';
-import type { Checkpoint } from '../types.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { KEYS } from '../../storage/keys.ts';
+import { workflow, type Checkpoint, type WorkflowContext } from '../types.ts';
 import {
   adoptLaunchCheckpoint,
   releaseAllCheckpoints,
@@ -26,9 +26,11 @@ import {
   abandonedExecutionAttemptCount,
   abandonExecutionAttempt,
   beginExecutionAttempt,
+  completeExecutionAttemptLaunch,
   currentExecutionAttempt,
   isGenerationAbandoned,
   isHeldGenerationAbandoned,
+  isLaunchedUnderClaim,
   retireAllExecutionAttempts,
   retireExecutionAttempt,
 } from './execution-attempts.ts';
@@ -45,13 +47,96 @@ describe('the execution attempt registry', () => {
 
     beginExecutionAttempt(internals, 'run', 'generation-1');
     const first = currentExecutionAttempt(internals, 'run');
-    expect(first).toEqual({ workflowExecutionToken: 'generation-1', abandoned: false });
+    expect(first).toEqual({
+      workflowExecutionToken: 'generation-1',
+      abandoned: false,
+      claimEpoch: null,
+      identity: undefined,
+      pendingIdentity: undefined,
+    });
 
     // The same generation launched again is a different attempt, and the earlier one is gone.
     beginExecutionAttempt(internals, 'run', 'generation-1');
     const second = currentExecutionAttempt(internals, 'run');
     expect(second).not.toBe(first);
     expect(currentExecutionAttempt(internals, 'other-run')).toBeUndefined();
+  });
+
+  it('knows the claim an attempt launched under, and whether it still holds that generation', async () => {
+    await using engine = await Engine.create({
+      storage: new MemoryStorage(),
+      ownership: 'workflow-lease',
+      backgroundTasks: 'manual',
+      startScheduler: false,
+      recover: false,
+    });
+    const internals = getInternals(engine);
+    const registry = internals.workflowClaimRegistry!;
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(false);
+
+    // An attempt whose generator does not exist yet drives nothing, whatever claim the engine holds.
+    expect(await registry.acquire('run')).toMatchObject({ status: 'acquired', epoch: 1 });
+    beginExecutionAttempt(internals, 'run', 'generation-1');
+    expect(currentExecutionAttempt(internals, 'run')).toMatchObject({ claimEpoch: null });
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(false);
+
+    // Completing the launch of another generation leaves it alone.
+    completeExecutionAttemptLaunch(internals, 'run', 'generation-2');
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(false);
+
+    // The epoch is the claim held when the generator is created. The inline strategy holds the run
+    // (here, parked on a signal) for as long as the engine drives it.
+    completeExecutionAttemptLaunch(internals, 'run', 'generation-1');
+    internals.parkedInlineWorkflows.add('run');
+    expect(currentExecutionAttempt(internals, 'run')).toMatchObject({ claimEpoch: 1 });
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(true);
+    expect(isLaunchedUnderClaim(internals, 'run', 1, 'generation-1')).toBe(true);
+    // A claim taken after the launch is not the claim it launched under, nor is another generation's.
+    expect(isLaunchedUnderClaim(internals, 'run', 2)).toBe(false);
+    expect(isLaunchedUnderClaim(internals, 'run', 1, 'generation-2')).toBe(false);
+    expect(isLaunchedUnderClaim(internals, 'other-run', 1)).toBe(false);
+
+    // A run the strategy no longer holds is not driven, whatever its attempt recorded.
+    internals.parkedInlineWorkflows.delete('run');
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(false);
+    internals.parkedInlineWorkflows.add('run');
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(true);
+
+    // A generation this engine lost is the winner's, whatever claim it launched under.
+    abandonExecutionAttempt(internals, 'run', 'generation-1');
+    expect(isLaunchedUnderClaim(internals, 'run', 1)).toBe(false);
+    internals.parkedInlineWorkflows.delete('run');
+  });
+
+  it('records the claim a started run holds once its queued launch creates the generator', async () => {
+    await using engine = await Engine.create({
+      storage: new MemoryStorage(),
+      workflows: {
+        parked: workflow({ name: 'parked' }).execute(async function* (ctx: WorkflowContext) {
+          yield* ctx.waitForSignal('go');
+          return 'done';
+        }),
+      },
+      ownership: 'workflow-lease',
+      backgroundTasks: 'manual',
+      startScheduler: false,
+      recover: false,
+      inlineLaunchScheduling: 'manual',
+    });
+    const internals = getInternals(engine);
+    await engine.start('parked', null, { id: 'started-run' });
+
+    // The start folds its claim into the create batch, after it adopted the checkpoint, and then
+    // only queues its launch: the attempt carries no epoch and drives nothing until the queue
+    // flushes and the generator exists.
+    const epoch = internals.workflowClaimRegistry!.currentEpoch('started-run');
+    expect(epoch).not.toBeNull();
+    expect(currentExecutionAttempt(internals, 'started-run')?.claimEpoch).toBeNull();
+    expect(isLaunchedUnderClaim(internals, 'started-run', epoch!)).toBe(false);
+
+    await engine.flushInlineLaunches();
+    expect(currentExecutionAttempt(internals, 'started-run')?.claimEpoch).toBe(epoch);
+    expect(isLaunchedUnderClaim(internals, 'started-run', epoch!)).toBe(true);
   });
 
   it('abandons only the attempt that launched the named generation, and only once', async () => {
@@ -228,7 +313,7 @@ describe('the execution attempt registry', () => {
     await second[Symbol.asyncDispose]();
     releaseRead.resolve();
     await resuming.catch(() => {});
-    await yieldToEventLoop();
+    await drainMicrotasks();
 
     // A launch that finishes after disposal holds nothing: no checkpoint, and no attempt for a
     // later loss to abandon.

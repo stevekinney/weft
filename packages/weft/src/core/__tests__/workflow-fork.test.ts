@@ -1,8 +1,9 @@
+import { sleepForTesting } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
-import { KEYS } from '../../storage/interface.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { awakeTurns } from "../../../test-support/embedded/testing/src/wait-until.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { ActivityRegistry } from '../activity-registry.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
@@ -21,7 +22,7 @@ async function waitForCheckpointStep(
   workflowId: string,
   step: number,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for await (const _turn of awakeTurns()) {
     const checkpoints = await engine.listCheckpoints(workflowId);
     if (checkpoints.some((checkpoint) => checkpoint.step === step)) {
       return;

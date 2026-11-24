@@ -1,11 +1,16 @@
 import { z } from 'zod';
 import { assertOperationEngineMethods } from './operation-helpers.ts';
 
-import { defineOperation } from '../operation-registry.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { defineOperation } from "../../embedded/backchannel/src/index.ts";
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 
 const getUpdateResultInput = z.object({
-  updateId: z.string().min(1),
+  updateId: z
+    .string()
+    .min(1)
+    .describe(
+      'Id of the update request whose result is read, as returned when the update was submitted.',
+    ),
 });
 const getUpdateResultOutput = z.unknown();
 
@@ -17,14 +22,19 @@ export const getUpdateResultOperation = defineOperation({
   name: 'weft.updates.result.get',
   mcpExposable: false,
   summary: 'Get the result of an update request',
+  description:
+    'Read the outcome of an update request by update id. Returns status `pending` ' +
+    "until the workflow has answered, then status `completed` with the handler's " +
+    'result, or an error message when the handler failed. Read-only.',
   destructive: false,
   tags: ['Updates'],
   inputSchema: getUpdateResultInput,
   outputSchema: getUpdateResultOutput,
-  access: { kind: 'public' },
+  access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['workflows:read'] } },
+  discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }): Promise<GetUpdateResultOutput> => {
+  invoke: async ({ input, host: engine }): Promise<GetUpdateResultOutput> => {
     assertOperationEngineMethods(engine, ['getUpdateResult']);
     const e = engine;
     const response = await e.getUpdateResult(input.updateId);

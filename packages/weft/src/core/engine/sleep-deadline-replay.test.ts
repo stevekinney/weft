@@ -13,8 +13,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { MemoryStorage } from '../../storage/memory.ts';
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../../test-support/embedded/testing/src/fake-timers.ts";
 import { decode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
 import { activity, workflow } from '../types.ts';
@@ -84,7 +84,6 @@ async function waitUntilParkedOnSleep(storage: MemoryStorage, workflowId: string
     },
     {
       label: `"${workflowId}" parked on its sleep`,
-      timeoutMs: 2_000,
     },
   );
 }
@@ -117,7 +116,6 @@ async function maintainAt(
   await engine.runMaintenance(now);
   await waitForCondition(() => settled(engine), {
     label: `"${workflowId}" settled at ${now}`,
-    timeoutMs: 2_000,
   });
   const state = await engine.get(workflowId);
   await engine.shutdown();
@@ -165,7 +163,6 @@ describe('a parked durable sleep replayed before its deadline', () => {
     await recovering.recoverAll();
     await waitForCondition(() => reparkedAt(recovering, workflowId, recoveredAt), {
       label: `"${workflowId}" recovered`,
-      timeoutMs: 2_000,
     });
     await recovering.shutdown();
     expect(await storedSleepDeadlines(storage, workflowId)).toEqual([ORIGINAL_DEADLINE]);

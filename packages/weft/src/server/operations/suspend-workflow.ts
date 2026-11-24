@@ -1,14 +1,14 @@
 import { z } from 'zod';
 
+import type { UnknownRestBinding } from "../../embedded/backchannel/src/internals.ts";
 import { WorkflowSuspendNotSupportedError } from '../../core/engine/errors.ts';
-import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
 } from './single-workflow-control-operation.ts';
 
 const suspendWorkflowInput = z.object({
-  workflowId: z.string().min(1),
+  workflowId: z.string().min(1).describe('Id of the workflow to suspend.'),
 });
 const suspendWorkflowOutput = z.undefined();
 
@@ -26,6 +26,7 @@ export const suspendWorkflowOperation = createSingleWorkflowControlOperation({
     'Faults with Unprocessable when the engine runs in worker execution mode (which cannot pause ' +
     'a run without cancelling it).',
   destructive: false,
+  scope: 'workflows:write',
   tags: ['Workflows'],
   inputSchema: suspendWorkflowInput,
   outputSchema: suspendWorkflowOutput,

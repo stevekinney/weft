@@ -1,4 +1,5 @@
-import { KEYS, type Storage } from '../../storage/interface.ts';
+import { type Storage } from "../../embedded/storage/src/index.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode, encode } from '../codec.ts';
 import type { StoredStreamChunk } from '../context.ts';
 

@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import {
-  createDeferred,
-  waitForCondition,
-  waitForever,
-} from '../../testing/fake-timers.test-support.ts';
-import { throwingRejectionOf } from '../../testing/promise-outcome.test-support.ts';
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
+import { createDeferred, waitForCondition, waitForever } from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { throwingRejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec.ts';
 import { durableActivity } from '../context/durable-activity.ts';
 import type { Context } from '../context/index.ts';
@@ -527,6 +523,158 @@ describe('ctx.memo durableActivity helper', () => {
     expect(await throwingRejectionOf(handle.result())).toThrow(
       'ActivityContext.completeAsync() is not supported from durableActivity()',
     );
+  });
+
+  it('calls the memo function directly when the workflow has no inline context', async () => {
+    const internals = { inlineStrategy: null } as unknown as EngineInternals;
+
+    expect(
+      await callMemoFunctionWithDurableActivityScope(
+        internals,
+        'no-inline-context-1',
+        { fn: () => 'direct', key: 'step-0', operationId: 'memo-direct', step: 0, type: 'memo' },
+        { persistCheckpoint: async () => {} },
+      ),
+    ).toBe('direct');
+  });
+
+  it('rejects a second helper activity started before the first one settles', async () => {
+    const slowTool = activity({ name: 'sequentialTool', execute: async () => 'first-result' });
+    let secondMessage = '';
+    const definition = workflow({ name: 'overlapping-helpers' })
+      .activities({ sequentialTool: slowTool })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.memo('step-0', async () => {
+          const first = durableActivity('sequentialTool', 'one', { idempotencyKey: 'first' });
+          const second = await durableActivity('sequentialTool', 'two', {
+            idempotencyKey: 'second',
+          }).catch((error: unknown) => error as Error);
+          secondMessage = (second as Error).message;
+          return await first;
+        });
+      });
+
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(definition);
+    const handle = await engine.start('overlapping-helpers', null, { id: 'overlapping-helpers-1' });
+
+    expect(await handle.result()).toBe('first-result');
+    expect(secondMessage).toContain('must be awaited sequentially');
+  });
+
+  it('rejects a helper activity started after the memo scope has closed', async () => {
+    const tool = activity({ name: 'lateTool', execute: async () => 'late' });
+    const late = createDeferred<Error>();
+    const definition = workflow({ name: 'late-helper' })
+      .activities({ lateTool: tool })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.memo('step-0', async () => {
+          setTimeout(() => {
+            durableActivity('lateTool', 'x', { idempotencyKey: 'late' })
+              .then(() => late.resolve(new Error('the late helper unexpectedly ran')))
+              .catch((error: unknown) => late.resolve(error as Error));
+          }, 0);
+          return 'memo-done';
+        });
+      });
+
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(definition);
+    const handle = await engine.start('late-helper', null, { id: 'late-helper-1' });
+
+    expect(await handle.result()).toBe('memo-done');
+    const lateError = await late.promise;
+    expect(lateError.message).toBe('durableActivity() scope closed before completion.');
+  });
+
+  it('defers closing the scope until an in-flight reconciliation commit finishes', async () => {
+    const tool = activity({ name: 'gatedTool', execute: async () => 'gated-result' });
+    let completedCommitApplied = false;
+    let commitReleased = false;
+    const commitStarted = createDeferred();
+    const releaseCommit = createDeferred();
+    class GatedReconciliationStorage extends MemoryStorage {
+      override async conditionalBatch(
+        ...args: Parameters<MemoryStorage['conditionalBatch']>
+      ): Promise<boolean> {
+        const [, operations] = args;
+        const isCompletedRecord = operations.some(
+          (operation) =>
+            operation.type === 'put' &&
+            operation.key.startsWith('actrec:v1:') &&
+            (decode(operation.value) as { status?: string }).status === 'completed',
+        );
+        if (isCompletedRecord) {
+          commitStarted.resolve();
+          await releaseCommit.promise;
+        }
+        const applied = await super.conditionalBatch(...args);
+        if (isCompletedRecord) completedCommitApplied = applied;
+        return applied;
+      }
+    }
+    const definition = workflow({ name: 'deferred-close' })
+      .activities({ gatedTool: tool })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.memo('step-0', async () => {
+          void durableActivity('gatedTool', 'x', { idempotencyKey: 'deferred-close' });
+          await commitStarted.promise;
+          setTimeout(() => {
+            commitReleased = true;
+            releaseCommit.resolve();
+          }, 10);
+          return 'memo-returned';
+        });
+      });
+
+    const storage = new GatedReconciliationStorage();
+    await using engine = new Engine({ storage });
+    engine.register(definition);
+    const handle = await engine.start('deferred-close', null, { id: 'deferred-close-1' });
+
+    expect(await throwingRejectionOf(handle.result())).toThrow(
+      'durableActivity() calls started inside ctx.memo() must be awaited',
+    );
+    // The memo failed only after the held commit was released and applied: the scope waited for
+    // the write instead of closing at once (an immediate close settles the memo before the
+    // release timer fires). Terminal cleanup then removes the record, so the commit is observed
+    // as it lands.
+    expect(commitReleased).toBe(true);
+    expect(completedCommitApplied).toBe(true);
+  });
+
+  it('closes a pending helper activity with a generic reason when the memo throws a non-Error', async () => {
+    const waiting = activity({
+      name: 'waitingTool',
+      execute: async (_input: string, context?: ActivityContext) => {
+        await new Promise<void>((resolve) =>
+          context?.signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return 'aborted';
+      },
+    });
+    const pendingFailure = createDeferred<Error>();
+    const definition = workflow({ name: 'non-error-throw-pending' })
+      .activities({ waitingTool: waiting })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.memo('step-0', async () => {
+          durableActivity('waitingTool', 'x', { idempotencyKey: 'non-error-throw' })
+            .then(() => pendingFailure.resolve(new Error('the helper unexpectedly completed')))
+            .catch((error: unknown) => pendingFailure.resolve(error as Error));
+          await Promise.resolve();
+          throw { code: 'E_OBJECT' };
+        });
+      });
+
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(definition);
+    const handle = await engine.start('non-error-throw-pending', null, {
+      id: 'non-error-throw-pending-1',
+    });
+    handle.result().catch(() => {});
+
+    const pendingError = await pendingFailure.promise;
+    expect(pendingError.message).toBe('durableActivity() scope closed before completion.');
   });
 
   it('removes memo-scope abort listeners when a later forwarded signal is already aborted', async () => {

@@ -1,4 +1,4 @@
-import type { Storage as WeftStorage } from '../../storage/interface.ts';
+import type { Storage as WeftStorage } from "../../embedded/storage/src/index.ts";
 import type { ConstraintDefinition } from '../constraint.ts';
 import type { ExecutionStrategy } from '../execution-strategy.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
@@ -16,11 +16,13 @@ import type {
   SearchAttributeSchema,
   SignalDefinition,
   UpdateDefinition,
+  UsedActivityDefinition,
   WorkflowConcurrencyOptions,
   WorkflowFunction,
   WorkflowTimelineEntry,
 } from '../types.ts';
 import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
+import type { PendingLaunch } from './local-execution.ts';
 
 /**
  * The identity a running workflow instance was launched under, cached by
@@ -34,6 +36,13 @@ import type { WorkflowWorkerVersioningPolicy } from '../versioning.ts';
  */
 export type WorkflowExecutionIdentity = { type: string; revision: string | undefined };
 
+/** Per message kind, each builder key that aliases a different wire name, mapped to that wire name. */
+export type MessageAliases = Readonly<{
+  signal?: Readonly<Record<string, string>>;
+  update?: Readonly<Record<string, string>>;
+  query?: Readonly<Record<string, string>>;
+}>;
+
 export interface RegistrationEntry {
   handler: WorkflowFunction;
   version: string;
@@ -44,6 +53,14 @@ export interface RegistrationEntry {
   signals?: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
   updates?: Readonly<Record<string, Readonly<UpdateDefinition<unknown>>>>;
   queries?: Readonly<Record<string, Readonly<QueryDefinition<unknown>>>>;
+  /**
+   * Builder keys that alias a different wire name, per message kind
+   * (`.signals({ localAlias: signal('wireName') })`). The maps above are keyed
+   * by wire name; an alias resolves through this to its declared definition.
+   */
+  messageAliases?: MessageAliases;
+  /** Engine-provided activities the workflow declared with `.uses()`, keyed by name. */
+  uses?: Readonly<Record<string, UsedActivityDefinition>>;
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;
   concurrency?: WorkflowConcurrencyOptions;
@@ -57,17 +74,36 @@ export interface RegistrationEntry {
   workerVersioningPolicy?: WorkflowWorkerVersioningPolicy;
 }
 
+/** Resolved form of `EngineOptions.runConcurrency`: the cap and which top-level runs count. */
+export interface ResolvedRunConcurrency {
+  /** The most counted runs executing at once. */
+  readonly max: number;
+  /** Whether a top-level run of `workflowType` counts; every one does when the option omits it. */
+  readonly counts: (workflowType: string) => boolean;
+}
+
 export interface ResolvedOptions {
   storage: WeftStorage;
   development: boolean;
   backgroundTaskMode: 'automatic' | 'manual';
   /** Resolved form of `EngineOptions.inlineLaunchScheduling` (COR-74). */
   inlineLaunchSchedulingMode: 'event-loop' | 'manual';
+  /** Resolved form of `EngineOptions.schemas`. */
+  schemaPolicy: 'optional' | 'required';
+  /** Resolved form of `EngineOptions.payloadValidation`. */
+  payloadValidation: 'none' | 'inbound';
   checkpointHistory: number;
   checkpointSizeWarningThreshold: number;
   maxNestingDepth: number;
+  /**
+   * Resolved form of `EngineOptions.runConcurrency`: the cap and which workflow types count, or
+   * `null` for no cap. Optional so hand-built test internals without it read as no cap.
+   */
+  runConcurrency?: ResolvedRunConcurrency | null;
   /** Durable-timer scheduler poll interval (ms). */
   schedulerPollIntervalMs: number;
+  /** Storage-size report interval (ms); zero disables reporting. */
+  storageSizeReportIntervalMs: number;
   /** Server-side authority for destructive worker start override previews. */
   workerStartOverrideSigningSecret: string | null;
   broadcastEvents: boolean;
@@ -115,12 +151,31 @@ export interface ResolvedOptions {
    * was created without one (the default console behavior).
    */
   onLog: EngineOptions['onLog'] | null;
+  /**
+   * The persisted-log store (`EngineOptions.workflowLogs`); `null` when the engine was created
+   * without one, in which case `Engine.getLogs` answers no lines.
+   */
+  workflowLogs: EngineOptions['workflowLogs'] | null;
 }
 
 export interface WorkflowResultWaiter {
   promise: Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
+  /**
+   * Whether the waiter is bound to a run yet. Set when the waiter is created while this engine
+   * holds the run, or from the first durable read otherwise. Kept apart from the token because a
+   * run recorded before tokens existed is bound with no token, and must still not match a later
+   * token-bearing run (COR-1604).
+   */
+  boundToRun: boolean;
+  /**
+   * The {@link WorkflowState.workflowExecutionToken} of the run this waiter is bound to.
+   * `resultResolvers` is keyed by workflow id, and a `start-new` replacement reuses the id, so
+   * this is what keeps a settle that belongs to a different run from reaching the waiter.
+   * `undefined` while unbound, or when bound to a run recorded before tokens existed.
+   */
+  workflowExecutionToken?: string | undefined;
 }
 
 export type EngineConstructorOptions<TServices = unknown> = Partial<EngineOptions<TServices>> & {
@@ -160,4 +215,13 @@ export type QueuedInlineWorkflowExecutionStart = {
    * the dispose path so the `defer: false` awaiter never hangs.
    */
   onStarted?: () => void;
+  /**
+   * The record the queue made for this start when it enqueued it (`local-execution.ts`), which its
+   * flush transitions and settles through, never by id: a later start of the same id makes its own
+   * record.
+   */
+  launch: PendingLaunch;
 };
+
+/** What a caller hands the inline launch queue; the queue makes the entry's record itself. */
+export type QueuedInlineWorkflowStartRequest = Omit<QueuedInlineWorkflowExecutionStart, 'launch'>;

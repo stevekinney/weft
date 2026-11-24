@@ -50,8 +50,9 @@ export function executionRequirementFromWorkflowWorkerBinding(
   binding: WorkflowWorkerBinding,
   activityName = binding.activityName,
 ): WorkerExecutionRequirement {
-  const activityContractHash =
-    binding.activityContracts[activityName] ?? binding.activityContractHash;
+  const activityContractHash = Object.hasOwn(binding.activityContracts, activityName)
+    ? binding.activityContracts[activityName]!
+    : binding.activityContractHash;
   return {
     deploymentName: binding.deploymentName,
     buildId: binding.buildId,

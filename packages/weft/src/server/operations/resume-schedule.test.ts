@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { createOperationRegistry } from "../../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../../embedded/storage/src/index.ts";
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
+import { type WorkflowContext, workflow } from '../../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from '../local-user-request.test-support.ts';
 import { resumeScheduleOperation, resumeScheduleRestBinding } from './resume-schedule.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -71,6 +70,7 @@ describe('weft.schedules.resume', () => {
     expect(await response.json()).toEqual({
       error: 'Schedule "does-not-exist" not found',
       data: { resource: 'schedule', identifier: 'does-not-exist' },
+      retryable: false,
     });
   });
 
@@ -94,6 +94,7 @@ describe('weft.schedules.resume', () => {
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({
         error: 'Schedule cannot be resumed after cancellation',
+        retryable: false,
       });
     } finally {
       engine.resumeSchedule = originalResumeSchedule;
@@ -118,7 +119,7 @@ describe('weft.schedules.resume', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'Internal server error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error', retryable: false });
     } finally {
       engine.resumeSchedule = originalResumeSchedule;
     }

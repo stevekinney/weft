@@ -32,6 +32,7 @@ import { WorkflowSourceNotRegisteredError } from './dynamic-source-errors.ts';
 import { EngineDisposedError } from './errors.ts';
 import type { Engine } from './index.ts';
 import { getInternals, getWorkflowCatalog, type EngineInternals } from './internals.ts';
+import { assertWorkflowSchemas } from './schema-policy.ts';
 import {
   beginSourceWaiter,
   endSourceWaiterAndDispatchCancellation,
@@ -134,6 +135,7 @@ async function runSharedSourceLoad(
   if (!outcome.ok) {
     throw new WorkflowSourceValidationError(name, revision, outcome.reasons);
   }
+  assertWorkflowSchemas(internals.options, outcome.loadedDefinition);
 
   if (internals.disposed) {
     throw new EngineDisposedError();

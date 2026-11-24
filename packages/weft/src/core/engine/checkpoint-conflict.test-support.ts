@@ -6,13 +6,14 @@
  */
 import { afterEach, beforeEach, spyOn } from 'bun:test';
 
-import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
+import { type BatchOperation, type Storage } from "../../embedded/storage/src/index.ts";
 import {
   createDeferred,
   waitForCondition,
   yieldToEventLoop,
-} from '../../testing/fake-timers.test-support.ts';
-import { rejectionOf } from '../../testing/promise-outcome.test-support.ts';
+} from "../../../test-support/embedded/testing/src/fake-timers.ts";
+import { rejectionOf } from "../../../test-support/embedded/testing/src/helpers/promise-outcome.ts";
+import { KEYS } from '../../storage/keys.ts';
 import { decode } from '../codec/api.ts';
 import { workflow, type WorkflowContext, type WorkflowState } from '../types.ts';
 import { abandonWorkflowAfterCheckpointConflict } from './checkpoint-conflict-abandon.ts';

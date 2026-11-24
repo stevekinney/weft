@@ -26,12 +26,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from "../embedded/backchannel/src/index.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
-import { workflow } from '../core/types.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { handleRequest } from './handler.ts';
-import { principalFromApiKey } from './principal.ts';
+import { type WorkflowContext, workflow } from '../core/types.ts';
+import { handleRequestAsLocalUser as handleRequest } from './local-user-request.test-support.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -76,7 +75,7 @@ const AUDIT_CASES: ReadonlyArray<AuditCase> = [
     name: 'POST /v1/workflows/purge (purgeWorkflows)',
     method: 'POST',
     path: '/v1/workflows/purge',
-    baselineBody: {},
+    baselineBody: { dryRun: true },
     expectedBaselineStatuses: [200],
   },
   {

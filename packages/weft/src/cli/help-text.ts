@@ -26,7 +26,7 @@ Version (leading token only; a subcommand owns its own option line):
 Serve Options:
   -p, --port <port>           Server port (default: 7233)
   -d, --database <path>       Database file path (default: ./weft.db)
-  -s, --storage <backend>     Storage backend: sqlite, lmdb, memory (default: sqlite)
+  -s, --storage <backend>     Storage backend: sqlite, memory (default: sqlite)
   -w, --workflows <path>      Path to workflow module to register on startup
   -h, --help                  Show this help message
 `;
@@ -54,7 +54,7 @@ weft api - Inspect and invoke catalog operations on a running server
 Usage:
   weft api --list [options]
   weft api --describe <operation-name> [options]
-  weft api <operation-name> [--input <json> | --input-file <path|->] [options]
+  weft api <operation-name> [--input <json> | --input-file <path|->] [--dry-run] [options]
 
 Options:
       --server <url>       Server URL (default: WEFT_ADDR, profile, run lockfile, or localhost)
@@ -65,6 +65,8 @@ Options:
       --list               List catalog operations
       --describe <name>    Print one operation's schema and metadata
       --yes                Confirm destructive operations without prompting
+      --dry-run            Set dryRun: true on the input, to preview an operation whose input has
+                           that field (it needs no --yes); a usage error for one that does not
   -j, --json               Emit machine-readable JSON output
   -h, --help               Show this help message
 
@@ -146,7 +148,7 @@ period after that.
 
 Options:
   -d, --database <path>     Database file path (default: ./weft.db)
-  -s, --storage <backend>   Storage backend: sqlite, lmdb (default: sqlite)
+  -s, --storage <backend>   Storage backend: sqlite (default: sqlite)
   -w, --workflows <path>    Path to workflow definitions module (required for create)
       --every <duration>    Interval cadence for create (e.g. 30s, 5m, 1h); mutually exclusive with the cron positional
       --input <json>        JSON input payload for create (default: null)
@@ -156,6 +158,9 @@ Options:
       --jitter <duration>   Deterministic dispatch jitter for create (e.g. 30s, 5m)
   -j, --json                Output results as JSON
   -h, --help                Show this help message
+
+With --json, a failure prints { "ok": false, "error": { "code", "message", "retryable",
+"remediation"? } } on stdout; the exit code is 1 either way.
 `;
 
 export const VALIDATE_HELP_TEXT = `
@@ -212,7 +217,7 @@ export const WORKFLOW_HELP_TEXT = `
 weft workflow - List, inspect, start, signal, and cancel workflows on a server
 
 Usage:
-  weft workflow ls [--type <type>] [--status <status>] [--limit <n>] [options]
+  weft workflow ls [--type <type>] [--status <status>] [--failed-step <step>] [--retrying] [--limit <n>] [options]
   weft workflow get <workflow-id> [options]
   weft workflow events <workflow-id> [options]
   weft workflow start <workflow-type> [--input <json> | --input-file <path|->] [--id <id>] [options]
@@ -225,12 +230,14 @@ Options:
       --profile <name>     Profile from ~/.weft/config
       --type <type>        (ls) Filter by workflow type
       --status <status>    (ls) Filter by workflow status
+      --failed-step <step> (ls) Only failed workflows that stopped at the step with this label
+      --retrying           (ls) Only running workflows that are retrying an activity
       --limit <n>          (ls) Maximum number of rows
       --input <json>       (start/signal) JSON input payload
       --input-file <path>  (start/signal) Read JSON input from a file, or '-' for stdin
       --id <id>            (start) Explicit workflow id
   -y, --yes                (cancel) Confirm without prompting
-      --dry-run            (cancel) Print affected count without cancelling
+      --dry-run            (cancel) Ask the server whether the workflow can be cancelled, without cancelling
   -j, --json               Emit machine-readable output (NDJSON for lists)
   -q, --quiet              Print ids only / suppress success text
   -h, --help               Show this help message
@@ -241,6 +248,13 @@ Exit codes:
   2   Connection error
   3   Usage or input error
   4   Operation unavailable on this server (version skew)
+  5   (cancel --dry-run) The workflow was not found
+
+Failures:
+  Without --json, stderr holds the message, then a 'Try:' line when there is a next step.
+  With --json, stdout holds one object and stderr stays empty:
+    { "ok": false, "error": { "code", "message", "retryable", "remediation"? } }
+  "code" is the server's fault code (for example NotFound, Unavailable, InvalidParams).
 `;
 
 export const TAIL_HELP_TEXT = `

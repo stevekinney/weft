@@ -12,6 +12,7 @@
  */
 
 import type { FailureCategory, ListFilter } from '../types.ts';
+import { queryRetryingIndex } from './activity-retrying-record.ts';
 import type { EngineInternals } from './internals.ts';
 import { intersectIdentifierSets } from './state-utilities.ts';
 import {
@@ -34,7 +35,7 @@ import {
  * visibility watermark is stale — see {@link resolveListCandidateIds}.
  */
 type ListFilterDimension =
-  'status' | 'type' | 'createdAt' | 'updatedAt' | 'executionDeadline' | 'idPrefix';
+  'status' | 'type' | 'createdAt' | 'updatedAt' | 'executionDeadline' | 'idPrefix' | 'failedStep';
 
 type VisibilityQueryHelper<TDimension extends ListFilterDimension> = (
   internals: EngineInternals,
@@ -85,6 +86,17 @@ function queryIdPrefixDimension(
 }
 
 /**
+ * A run records a failing step only in the write that fails it, so every run with a `failedStep`
+ * is in the `failed` status index. The loaded state still decides the label.
+ */
+function queryFailedStepDimension(
+  internals: EngineInternals,
+  _value: NonNullable<ListFilter['failedStep']>,
+): Promise<Set<string>> {
+  return queryWorkflowStatusIndex(internals.storage, ['failed']);
+}
+
+/**
  * Exhaustive table from each visibility-index-backed `ListFilter`
  * dimension to its query helper. `satisfies` keeps the mapping pinned to
  * the {@link ListFilterDimension} union — adding a new indexed dimension
@@ -97,6 +109,7 @@ const LIST_FILTER_DIMENSION_QUERIES = {
   updatedAt: queryUpdatedAtDimension,
   executionDeadline: queryExecutionDeadlineDimension,
   idPrefix: queryIdPrefixDimension,
+  failedStep: queryFailedStepDimension,
 } satisfies { [K in ListFilterDimension]: VisibilityQueryHelper<K> };
 
 function collectVisibilityQueries(
@@ -125,10 +138,16 @@ export async function resolveListCandidateIds(
   filter: ListFilter | undefined,
   normalizedTagFilters: readonly string[] | undefined,
 ): Promise<Set<string> | null> {
-  const [baseConstrainedIds, failureCategoryCandidateIds] = await Promise.all([
-    resolveConstrainedIds(internals, filter, normalizedTagFilters),
-    resolveFailureCategoryCandidateIds(internals, filter?.failureCategory),
-  ]);
+  const [baseConstrainedIds, failureCategoryCandidateIds, retryingCandidateIds] = await Promise.all(
+    [
+      resolveConstrainedIds(internals, filter, normalizedTagFilters),
+      resolveFailureCategoryCandidateIds(internals, filter?.failureCategory),
+      // The retrying records are written in the checkpoint batch, not by the visibility sweep, so
+      // like the search-attribute index this source does not wait on the visibility watermark.
+      resolveRetryingCandidateIds(internals, filter?.retrying),
+    ],
+  );
+  const independentSets = [baseConstrainedIds, failureCategoryCandidateIds, retryingCandidateIds];
 
   const watermark = await getCachedWorkflowVisibilityWatermark(internals);
   const withoutVisibilityIndexes = async () => {
@@ -136,11 +155,7 @@ export async function resolveListCandidateIds(
     const queries =
       filter === undefined ? [] : collectVisibilityQueries(internals, filter, ['idPrefix']);
     const visibilitySets = await Promise.all(queries.map((query) => query()));
-    return combineCandidateSets([
-      baseConstrainedIds,
-      failureCategoryCandidateIds,
-      ...visibilitySets,
-    ]);
+    return combineCandidateSets([...independentSets, ...visibilitySets]);
   };
 
   if (watermark === 'stale') {
@@ -154,12 +169,13 @@ export async function resolveListCandidateIds(
     'updatedAt',
     'executionDeadline',
     'idPrefix',
+    'failedStep',
   ];
   const visibilityQueries =
     filter === undefined ? [] : collectVisibilityQueries(internals, filter, indexedDimensions);
 
   if (visibilityQueries.length === 0) {
-    return combineCandidateSets([baseConstrainedIds, failureCategoryCandidateIds]);
+    return combineCandidateSets(independentSets);
   }
 
   // The cached watermark says the index was live a moment ago, not that it still is. Read the
@@ -178,7 +194,19 @@ export async function resolveListCandidateIds(
   if (!sameWorkflowVisibilityBuild(buildBefore, buildAfter)) {
     return withoutVisibilityIndexes();
   }
-  return combineCandidateSets([baseConstrainedIds, failureCategoryCandidateIds, ...visibilitySets]);
+  return combineCandidateSets([...independentSets, ...visibilitySets]);
+}
+
+/**
+ * Candidates for `retrying: true`: the runs that hold a retrying record. `false` is a negation no
+ * index narrows, so it returns `null` and the loaded state decides.
+ */
+async function resolveRetryingCandidateIds(
+  internals: EngineInternals,
+  retrying: boolean | undefined,
+): Promise<Set<string> | null> {
+  if (retrying !== true) return null;
+  return queryRetryingIndex(internals);
 }
 
 async function resolveFailureCategoryCandidateIds(

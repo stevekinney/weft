@@ -1,7 +1,9 @@
 import { decode } from '../../codec.ts';
 import { isRecord } from '../../debug-output.ts';
-import type { ScheduleState } from '../../types.ts';
+import { isValidTimeZone } from '../../schedule.ts';
+import type { ScheduleQueuedRun, ScheduleState } from '../../types.ts';
 import { decodeScheduleCadence } from './schedule-cadence.ts';
+import { isScheduleMetadata } from './schedule-options.ts';
 import { decodeScheduleRevisionPolicyFields } from './schedule-revision.ts';
 import { rejectInvalidScheduleRecord } from './schedule-warnings.ts';
 import {
@@ -54,18 +56,22 @@ export function decodeScheduleIdentityFields(decoded: Record<string, unknown>):
 type ScheduleRuntimeFields = Pick<
   ScheduleState,
   | 'description'
+  | 'metadata'
   | 'backfill'
   | 'jitterMs'
+  | 'timeZone'
   | 'createdAt'
   | 'updatedAt'
   | 'lastFireAt'
   | 'lastMissedFireAt'
   | 'nextFireAt'
+  | 'skippedOccurrences'
   | 'currentWorkflowId'
   | 'missedFireCount'
   | 'skippedCount'
   | 'lastSkippedAt'
   | 'queuedRuns'
+  | 'revision'
 >;
 
 function decodeScheduleBackfill(
@@ -95,6 +101,25 @@ function decodeScheduleDescription(
   return description;
 }
 
+/**
+ * A record written before schedules had metadata has none. A value that is not a plain JSON object
+ * rejects the record, as a description that is not a string does.
+ */
+function decodeScheduleMetadata(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): Record<string, unknown> | undefined | null {
+  const metadata = decoded['metadata'];
+  if (metadata === undefined) {
+    return undefined;
+  }
+  if (!isScheduleMetadata(metadata)) {
+    rejectInvalidScheduleRecord(scheduleId, 'with invalid metadata');
+    return null;
+  }
+  return metadata;
+}
+
 function decodeScheduleJitterMs(
   decoded: Record<string, unknown>,
   scheduleId: string,
@@ -108,6 +133,26 @@ function decodeScheduleJitterMs(
     return null;
   }
   return jitterMs;
+}
+
+/**
+ * A record written before schedules had a time zone has none, and reads as `UTC`, the zone every
+ * such schedule was run in. A value that is not a zone the runtime knows rejects the record, as a
+ * cron expression that does not parse does: the schedule could not compute its next occurrence.
+ */
+function decodeScheduleTimeZone(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): string | null {
+  const timeZone = decoded['timeZone'];
+  if (timeZone === undefined) {
+    return 'UTC';
+  }
+  if (!isValidTimeZone(timeZone)) {
+    rejectInvalidScheduleRecord(scheduleId, 'with invalid timeZone');
+    return null;
+  }
+  return timeZone;
 }
 
 function decodeScheduleTimestamps(
@@ -154,6 +199,31 @@ function decodeScheduleNextFireAt(
   return { ok: true, value: nextFireAt };
 }
 
+/**
+ * The occurrences a person asked to skip (COR-2018), ascending and without repeats. Absent on every
+ * schedule nothing is skipped on, and then reads as absent. A record written before the set
+ * replaced the single skipped occurrence (COR-1829's `skipUntil`) reads as a set of that one. Every
+ * value must be a valid timestamp.
+ */
+function decodeScheduleSkippedOccurrences(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): { ok: true; value: number[] | undefined } | { ok: false } {
+  const skipped = decoded['skippedOccurrences'];
+  const legacy = decoded['skipUntil'];
+  const values = skipped ?? (legacy === undefined ? undefined : [legacy]);
+  if (values === undefined) return { ok: true, value: undefined };
+  if (!Array.isArray(values) || !values.every((value) => isValidScheduleTimestamp(value))) {
+    rejectInvalidScheduleRecord(
+      scheduleId,
+      skipped === undefined ? 'with invalid skipUntil' : 'with invalid skippedOccurrences',
+    );
+    return { ok: false };
+  }
+  const sorted = [...new Set(values)].toSorted((left, right) => left - right);
+  return { ok: true, value: sorted.length === 0 ? undefined : sorted };
+}
+
 function decodeScheduleCurrentWorkflowId(
   decoded: Record<string, unknown>,
   scheduleId: string,
@@ -169,6 +239,25 @@ function decodeScheduleCurrentWorkflowId(
   return { ok: true, value: currentWorkflowId };
 }
 
+/** One persisted queued run, or `null` when a field is invalid: `manual` is only ever `true`. */
+function decodeQueuedRun(queuedRun: Record<string, unknown>): ScheduleQueuedRun | null {
+  const { workflowId, queuedAt, occurrence, manual } = queuedRun;
+  if (
+    !isValidScheduleIdentifier(workflowId) ||
+    !isValidScheduleTimestamp(queuedAt) ||
+    (occurrence !== undefined && !isValidScheduleTimestamp(occurrence)) ||
+    (manual !== undefined && manual !== true)
+  ) {
+    return null;
+  }
+  return {
+    workflowId,
+    queuedAt,
+    ...(occurrence !== undefined && { occurrence }),
+    ...(manual === true && { manual }),
+  };
+}
+
 function decodeScheduleQueuedRuns(
   decoded: Record<string, unknown>,
   scheduleId: string,
@@ -182,26 +271,17 @@ function decodeScheduleQueuedRuns(
   const result: ScheduleState['queuedRuns'] = [];
   const workflowIds = new Set<string>();
   for (const queuedRun of queuedRuns) {
-    if (!isRecord(queuedRun)) {
+    const run = isRecord(queuedRun) ? decodeQueuedRun(queuedRun) : null;
+    if (run === null) {
       rejectInvalidScheduleRecord(scheduleId, 'with invalid queuedRuns');
       return null;
     }
-    const { workflowId, queuedAt, occurrence } = queuedRun;
-    if (
-      !isValidScheduleIdentifier(workflowId) ||
-      !isValidScheduleTimestamp(queuedAt) ||
-      (occurrence !== undefined && !isValidScheduleTimestamp(occurrence))
-    ) {
-      rejectInvalidScheduleRecord(scheduleId, 'with invalid queuedRuns');
-      return null;
-    }
-    if (workflowIds.has(workflowId)) {
+    if (workflowIds.has(run.workflowId)) {
       rejectInvalidScheduleRecord(scheduleId, 'with duplicate queued workflow ids');
       return null;
     }
-    workflowIds.add(workflowId);
-
-    result.push({ workflowId, queuedAt, ...(occurrence !== undefined && { occurrence }) });
+    workflowIds.add(run.workflowId);
+    result.push(run);
   }
   return result;
 }
@@ -251,6 +331,49 @@ function decodeScheduleSkipFields(
   };
 }
 
+/**
+ * A record written before the schedule `revision` existed has none, and reads as `0`: it counts
+ * no change yet, so its first transition makes it `1`. Any other value must be a non-negative
+ * safe integer.
+ */
+function decodeScheduleRevision(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): number | null {
+  const revision = decoded['revision'];
+  if (revision === undefined) return 0;
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) {
+    return rejectInvalidScheduleRecord(scheduleId, 'with invalid revision');
+  }
+  return revision;
+}
+
+/**
+ * The counters and marks a schedule keeps: what its overlap policy skipped, its own revision, and
+ * the occurrence a person asked to skip.
+ */
+function decodeScheduleCounterFields(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): Pick<
+  ScheduleRuntimeFields,
+  'skippedCount' | 'lastSkippedAt' | 'revision' | 'skippedOccurrences'
+> | null {
+  const skipFields = decodeScheduleSkipFields(decoded, scheduleId);
+  if (skipFields === null) return null;
+  const revision = decodeScheduleRevision(decoded, scheduleId);
+  if (revision === null) return null;
+  const skippedOccurrences = decodeScheduleSkippedOccurrences(decoded, scheduleId);
+  if (!skippedOccurrences.ok) return null;
+  return {
+    ...skipFields,
+    revision,
+    ...(skippedOccurrences.value !== undefined && {
+      skippedOccurrences: skippedOccurrences.value,
+    }),
+  };
+}
+
 function decodeScheduleQueueFields(
   decoded: Record<string, unknown>,
   scheduleId: string,
@@ -267,9 +390,15 @@ function decodeScheduleQueueFields(
 function decodeScheduleOptionFields(
   decoded: Record<string, unknown>,
   scheduleId: string,
-): Pick<ScheduleRuntimeFields, 'backfill' | 'description' | 'jitterMs'> | null {
+): Pick<
+  ScheduleRuntimeFields,
+  'backfill' | 'description' | 'metadata' | 'jitterMs' | 'timeZone'
+> | null {
   const description = decodeScheduleDescription(decoded, scheduleId);
   if (description === null) return null;
+
+  const metadata = decodeScheduleMetadata(decoded, scheduleId);
+  if (metadata === null) return null;
 
   const backfill = decodeScheduleBackfill(decoded, scheduleId);
   if (backfill === null) return null;
@@ -277,10 +406,15 @@ function decodeScheduleOptionFields(
   const jitterMs = decodeScheduleJitterMs(decoded, scheduleId);
   if (jitterMs === null) return null;
 
+  const timeZone = decodeScheduleTimeZone(decoded, scheduleId);
+  if (timeZone === null) return null;
+
   return {
     ...(description !== undefined && { description }),
+    ...(metadata !== undefined && { metadata }),
     backfill,
     ...(jitterMs !== undefined && { jitterMs }),
+    timeZone,
   };
 }
 
@@ -303,8 +437,8 @@ export function decodeScheduleRuntimeFields(
   const queueFields = decodeScheduleQueueFields(decoded, scheduleId);
   if (queueFields === null) return null;
 
-  const skipFields = decodeScheduleSkipFields(decoded, scheduleId);
-  if (skipFields === null) return null;
+  const counterFields = decodeScheduleCounterFields(decoded, scheduleId);
+  if (counterFields === null) return null;
   if (
     currentWorkflow.value !== undefined &&
     queueFields.queuedRuns.some((queuedRun) => queuedRun.workflowId === currentWorkflow.value)
@@ -318,7 +452,7 @@ export function decodeScheduleRuntimeFields(
     nextFireAt: nextFireAt.value,
     ...(currentWorkflow.value !== undefined && { currentWorkflowId: currentWorkflow.value }),
     ...queueFields,
-    ...skipFields,
+    ...counterFields,
   };
 }
 

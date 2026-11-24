@@ -7,6 +7,10 @@
 
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { principalFromApiKey, type AuthorizationScope } from "../embedded/backchannel/src/index.ts";
+import { createOperationRegistry, executeOperation } from "../embedded/backchannel/src/internals.ts";
+import { MemoryStorage } from "../embedded/storage/src/index.ts";
+import { waitForCondition } from "../../test-support/embedded/testing/src/fake-timers.ts";
 import { encode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
 import { TaskResultDeliveryEvent } from '../core/events.ts';
@@ -17,15 +21,11 @@ import {
   type RemoteTaskLeased,
 } from '../core/task-ledger/task-ledger.ts';
 import { taskResultDeliveryKey } from '../core/task-ledger/task-result-delivery.ts';
-import { MemoryStorage } from '../storage/memory.ts';
-import { waitForCondition } from '../testing/fake-timers.test-support.ts';
 import { sha256HexSync } from '../worker/manifest/content-digest.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../worker/protocol.ts';
 import { manifestForActivities } from '../worker/registry-fixtures.test-support.ts';
-import type { AuthorizationScope } from './authorization-scope.ts';
 import type { ServeOptions } from './index.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
-import { createOperationRegistry, executeOperation } from './operation-catalog.ts';
 import { clearTaskDeadLetterOperation } from './operations/clear-task-dead-letter.ts';
 import {
   getTaskDeadLetterOperation,
@@ -42,7 +42,6 @@ import {
   putLedgerRecord,
   runGetTaskDetail,
 } from './operations/get-task-detail.test-support.ts';
-import { principalFromApiKey } from './principal.ts';
 import { minimalServerContext } from './runtime/server-context.test-support.ts';
 import { handleTaskResultRequest } from './runtime/task-result-submission.ts';
 import { handleWorkerWebSocketMessage } from './runtime/websocket-worker.ts';
@@ -130,7 +129,7 @@ async function invoke(
 ) {
   return executeOperation(name, input, {
     principal: principalFromApiKey({ subject: 'operator', scopes }),
-    engine,
+    host: engine,
     transport: 'jsonRpcStdio',
     registry: createOperationRegistry([
       getTaskResultDeliveriesOperation,
@@ -289,7 +288,6 @@ describe('weft.tasks.deliveries over WebSocket', () => {
       concurrency: 2,
     });
     await waitForCondition(() => context.registry.getWorker('w-1') !== undefined, {
-      timeoutMs: 1_000,
       label: 'worker registration',
     });
     context.registry.assignTask('w-1', 'op-ws', 30_000, undefined, 'secret-attempt-token');
@@ -299,7 +297,6 @@ describe('weft.tasks.deliveries over WebSocket', () => {
     send({ ...result, attemptToken: 'wrong-token' });
     send({ ...result, attemptToken: 'secret-attempt-token' });
     await waitForCondition(() => sent.some((message) => message.includes('"applied"')), {
-      timeoutMs: 1_000,
       label: 'applied ack',
     });
     send({ ...result, attemptToken: 'secret-attempt-token' });
@@ -308,7 +305,7 @@ describe('weft.tasks.deliveries over WebSocket', () => {
         const recorded = await readDeliveries(engine, 'op-ws');
         return recorded.deliveries.length === 3;
       },
-      { timeoutMs: 1_000, label: 'three recorded deliveries' },
+      { label: 'three recorded deliveries' },
     );
 
     const history = await readDeliveries(engine, 'op-ws');
@@ -444,7 +441,7 @@ describe('delivery history retention', () => {
       { operationId: 'op-dead' },
       {
         principal: principalFromApiKey({ subject: 'operator', scopes: ['system:admin'] }),
-        engine,
+        host: engine,
         transport: 'http-rest',
         registry: createOperationRegistry([clearTaskDeadLetterOperation]),
       },

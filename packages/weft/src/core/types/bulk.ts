@@ -17,7 +17,7 @@ export const MAX_BULK_CONFIRMATION_TOKEN_LENGTH = 256;
  * ```
  */
 export type BulkOperationAction =
-  'cancel' | 'signal' | 'delete' | 'tag:add' | 'tag:remove' | 'retry-failed';
+  'cancel' | 'signal' | 'delete' | 'tag:add' | 'tag:remove' | 'retry-failed' | 'purge';
 
 /**
  * Credential-safe caller summary recorded on bulk audit events. Claims,
@@ -67,6 +67,10 @@ export type BulkOperationFilterSummary = {
     gte?: AttributeFilterScalarValue;
     lte?: AttributeFilterScalarValue;
   }>;
+  /** The step a failed run stopped at, when the filter named one (COR-2530). */
+  failedStep?: string;
+  /** Whether the filter asked for runs that are retrying an activity, or for runs that are not. */
+  retrying?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -246,7 +250,8 @@ export type BulkSignalAllCommitOptions = BulkOperationCommitOptions;
 export type BulkSignalAllOptions = BulkSignalAllDryRunOptions | BulkSignalAllCommitOptions;
 
 /**
- * Durable audit record persisted after a committed bulk operation succeeds.
+ * Durable audit record persisted after a committed bulk operation, whether it succeeded or failed
+ * part-way (a purge that deleted some runs and failed for others writes one before it throws).
  *
  * @example
  * ```ts
@@ -285,6 +290,13 @@ export type BulkOperationAuditEvent = {
   affectedCount: number;
   sampleWorkflowIds: WorkflowId[];
   confirmationToken: string;
+  /**
+   * Present only on the event of a bulk operation that failed part-way and threw: how many
+   * workflows it failed for. `affectedCount` is then what did commit.
+   */
+  failedCount?: number;
+  /** With `failedCount`, the first failures (at most 20), as the result of the other bulk operations lists them. */
+  errors?: BulkOperationError[];
 };
 
 /**
@@ -294,6 +306,8 @@ export type BulkOperationAuditEvent = {
 export type BulkOperationError = {
   id: WorkflowId;
   error: string;
+  /** A machine-readable cause when one is known; `version-removed` when the run's deployment build has been removed. */
+  reason?: string;
 };
 
 /**
@@ -368,8 +382,12 @@ export type BulkTagResult = {
 
 /**
  * Result of a purge operation (`engine.purge`). Reports how many workflow
- * records were permanently removed from storage.
+ * records were permanently removed from storage. `auditEvent` is present
+ * when the purge was committed with a confirmation token, request id, or
+ * principal, as for the other bulk operations.
  */
-export interface PurgeResult {
+export type PurgeResult = {
   deleted: number;
-}
+  /** The recorded purge audit when commit metadata was supplied. */
+  auditEvent?: BulkOperationAuditEvent;
+};
