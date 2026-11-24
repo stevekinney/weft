@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 
 import { type Message, Role, TaskState } from '@a2a-js/sdk';
 import {
@@ -406,14 +406,21 @@ describe('continuing a task with SendMessage', () => {
     const task = await startTask(agent, alice());
     const answer = userMessage({ messageId: 'replay-answer', taskId: task.id, text: 'answer' });
     const originalSignal = engine.signal.bind(engine);
-    engine.signal = (async (...args: Parameters<typeof engine.signal>) => {
-      await originalSignal(...args);
-      throw new Error('response lost before history commit');
-    }) as typeof engine.signal;
+    const signal = spyOn(engine, 'signal').mockImplementationOnce(
+      async (
+        id: string,
+        name: string | { readonly name: string },
+        payload?: unknown,
+        options?: Parameters<typeof engine.signal>[3],
+      ) => {
+        await originalSignal(id, typeof name === 'string' ? name : name.name, payload, options);
+        throw new Error('response lost before history commit');
+      },
+    );
     expect(await throwingRejectionOf(startTask(agent, alice(), answer))).toThrow(
       'response lost before history commit',
     );
-    engine.signal = originalSignal;
+    signal.mockRestore();
     for await (const event of agent.requestHandler.resubscribe(
       { tenant: '', id: task.id },
       alice(),
