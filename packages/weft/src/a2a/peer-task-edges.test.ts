@@ -73,6 +73,80 @@ describe('a streaming peer that closes before answering', () => {
   });
 });
 
+test('aborts an opening stream when its first task fails validation', async () => {
+  let openingSignal: AbortSignal | undefined;
+  const { client } = connect({
+    intercept: async (request, method) => {
+      if (method !== 'SendStreamingMessage') return undefined;
+      openingSignal = request.signal;
+      const body = (await request.clone().json()) as { id: number };
+      const result = {
+        task: {
+          id: 'x'.repeat(1025),
+          contextId: 'context-1',
+          status: { state: 'TASK_STATE_WORKING' },
+        },
+      };
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ jsonrpc: '2.0', id: body.id, result })}\n\n`,
+              ),
+            );
+            request.signal.addEventListener(
+              'abort',
+              () => controller.error(request.signal.reason),
+              { once: true },
+            );
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    },
+  });
+
+  expect((await failureOf(client.send({ text: 'hi' }))).code).toBe('protocol');
+  expect(openingSignal?.aborted).toBe(true);
+});
+
+test('accepts a continuation whose first response already contains its next question', async () => {
+  const task = { id: 'task-1', contextId: 'context-1' };
+  function question(text: string) {
+    return {
+      ...task,
+      status: {
+        state: 'TASK_STATE_INPUT_REQUIRED',
+        message: { messageId: text, role: 'ROLE_AGENT', parts: [{ text }] },
+      },
+    };
+  }
+  let receivedContinuation = false;
+  const { client, peer } = connect(
+    {
+      card: nonStreaming,
+      intercept: (request, method) => {
+        if (method === 'GetTask') {
+          return answer(request, { task: question(receivedContinuation ? 'second' : 'first') });
+        }
+        if (method !== 'SendMessage') return undefined;
+        receivedContinuation = true;
+        return answer(request, { task: question('second') });
+      },
+    },
+    { taskTimeoutMs: 100 },
+  );
+
+  const continuation = await client.send({ text: 'answer', taskId: task.id });
+  expect(await continuation.result()).toMatchObject({
+    state: 'input-required',
+    taskId: task.id,
+    message: 'second',
+  });
+  expect(peer.methods().filter((method) => method === 'GetTask')).toHaveLength(1);
+});
+
 describe('a polling peer that answers with a message instead of a task', () => {
   test('settles with the message, which leaves nothing to cancel', async () => {
     const { peer, client } = connect({

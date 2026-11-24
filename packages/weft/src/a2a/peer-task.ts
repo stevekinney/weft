@@ -84,33 +84,46 @@ export class PeerTaskRun implements A2APeerTask {
 
   /** The first request: a streaming peer opens its stream here, a polling peer answers at once. */
   async open(request: SendMessageRequest): Promise<void> {
-    if (this.context.streaming) {
-      const first = await this.withRetry(async () => {
-        const opening = new AbortController();
-        const opened = this.context.client.sendMessageStream(request, {
-          ...this.context.requestOptions,
-          signal: AbortSignal.any([this.follow.signal, opening.signal]),
-        });
-        const head = await this.boundedRead(opened, opening);
-        if (head.done === true) {
-          throw new A2APeerError('protocol', 'The peer closed the stream without a response.');
-        }
-        return { opened, head: head.value };
-      }, this.follow.signal);
-      this.stream = first.opened;
-      this.tracker.apply(first.head);
-    } else {
-      const response = await this.withRetry(() => this.boundedSend(request), this.follow.signal);
-      if (isTask(response)) this.tracker.applyTask(response);
-      else this.tracker.apply({ payload: { $case: 'message', value: response } });
-    }
-    // A first response that names no task leaves nothing to follow or cancel.
-    if (this.tracker.taskId() === '' && !this.tracker.stopped()) {
+    try {
+      const priorTaskId = request.message?.taskId;
+      if (priorTaskId) {
+        const before = await this.withRetry(
+          () => this.boundedGetTask(priorTaskId),
+          this.follow.signal,
+        );
+        this.tracker.rememberBeforeContinuation(before);
+      }
+      if (this.context.streaming) {
+        const first = await this.withRetry(async () => {
+          const opening = new AbortController();
+          const opened = this.context.client.sendMessageStream(request, {
+            ...this.context.requestOptions,
+            signal: AbortSignal.any([this.follow.signal, opening.signal]),
+          });
+          const head = await this.boundedRead(opened, opening);
+          if (head.done === true) {
+            throw new A2APeerError('protocol', 'The peer closed the stream without a response.');
+          }
+          return { opened, head: head.value };
+        }, this.follow.signal);
+        this.stream = first.opened;
+        this.tracker.apply(first.head);
+      } else {
+        const response = await this.withRetry(() => this.boundedSend(request), this.follow.signal);
+        if (isTask(response)) this.tracker.applyTask(response);
+        else this.tracker.apply({ payload: { $case: 'message', value: response } });
+      }
+
+      this.tracker.markHeadSeen();
+      if (this.tracker.taskId() === '' && !this.tracker.stopped()) {
+        throw new A2APeerError('protocol', "The peer's first response did not name a task.");
+      }
+      this.opened = true;
+    } catch (error) {
+      this.follow.abort();
       this.closeStream();
-      throw new A2APeerError('protocol', "The peer's first response did not name a task.");
+      throw error;
     }
-    this.tracker.markHeadSeen();
-    this.opened = true;
   }
 
   /**

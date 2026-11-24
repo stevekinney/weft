@@ -65,10 +65,11 @@ export class PeerTaskTracker {
   private headSeen = false;
   private stamp = '';
   private headStamp = '';
+  private beforeContinuationStamp: string | undefined;
 
   /**
-   * `awaitFollowUp` is true for a continuation, whose first response is a snapshot of the
-   * state the task was in before the new message: a stop state counts only once the status differs from that snapshot.
+   * A continuation can initially see a snapshot from before the new message. A stop state
+   * counts once the status differs from what the peer reported before the message was sent.
    */
   constructor(
     private readonly peer: Omit<A2APeerProvenance, 'taskId'>,
@@ -120,10 +121,19 @@ export class PeerTaskTracker {
     return isTerminalState(this.state());
   }
 
+  /** Records the peer's status before sending a continuation. */
+  rememberBeforeContinuation(task: Task): void {
+    this.identity(task.id, task.contextId);
+    this.beforeContinuationStamp = ingestStatus(task.status, this.artifactLimit).stamp;
+  }
+
   /** Records that the first response has been applied. */
   markHeadSeen(): void {
     this.headSeen = true;
     this.headStamp = this.stamp;
+    if (this.beforeContinuationStamp !== undefined && this.stamp !== this.beforeContinuationStamp) {
+      this.fresh = true;
+    }
   }
 
   /** Whether the task is cancelled here. */
